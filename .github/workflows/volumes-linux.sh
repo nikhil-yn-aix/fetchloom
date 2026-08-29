@@ -52,6 +52,7 @@ mkdir -p "$memory"
   echo "FETCHLOOM_TEST_SMALL_VOLUMES=$root/small"
   echo "FETCHLOOM_TEST_READ_ONLY_VOLUMES=$root/readonly"
   echo "FETCHLOOM_TEST_SECOND_VOLUMES=$root/second"
+  echo "FETCHLOOM_TEST_OTHER_OWNER=nobody"
 } >> "$GITHUB_ENV"
 
 findmnt --noheadings --output TARGET,FSTYPE,OPTIONS --types btrfs,xfs,vfat,ext4,nfs4,nfs

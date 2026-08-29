@@ -158,3 +158,97 @@ pub fn write_foreign_owner(entry: &Path) {
     )
     .unwrap();
 }
+
+/// A property a test needs from a volume, rather than a filesystem name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Property {
+    /// The volume is reached over a network protocol.
+    Network,
+    /// The volume cannot be written to.
+    ReadOnly,
+    /// The volume is small enough to fill.
+    Small,
+    /// The volume is not the one the temporary directory is on.
+    Second,
+}
+
+impl Property {
+    fn variable(self) -> &'static str {
+        match self {
+            Self::Network => "FETCHLOOM_TEST_NETWORK_VOLUMES",
+            Self::ReadOnly => "FETCHLOOM_TEST_READ_ONLY_VOLUMES",
+            Self::Small => "FETCHLOOM_TEST_SMALL_VOLUMES",
+            Self::Second => "FETCHLOOM_TEST_SECOND_VOLUMES",
+        }
+    }
+
+    fn promised_here(self) -> bool {
+        let linux = cfg!(target_os = "linux");
+        match self {
+            Self::Small | Self::Second => true,
+            Self::Network | Self::ReadOnly => linux,
+        }
+    }
+}
+
+/// Every volume the environment offers with the given property.
+pub fn volumes(property: Property) -> Vec<std::path::PathBuf> {
+    let named = std::env::var_os(property.variable()).unwrap_or_default();
+    let found: Vec<std::path::PathBuf> = std::env::split_paths(&named)
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect();
+    assert!(
+        !(found.is_empty() && std::env::var_os("CI").is_some() && property.promised_here()),
+        "{} is unset on a runner that builds this filesystem",
+        property.variable()
+    );
+    found
+}
+
+/// A directory inside each volume offering the given property.
+pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
+    volumes(property)
+        .iter()
+        .map(|volume| {
+            tempfile::TempDir::new_in(volume)
+                .unwrap_or_else(|reason| panic!("{} is not writable: {reason}", volume.display()))
+        })
+        .collect()
+}
+
+/// Points a name at a directory on another volume.
+///
+/// Returns whether the platform allowed it, because a symbolic link needs a
+/// privilege on one of the three.
+pub fn link_directory(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+}
+
+/// The user a test hands an object to, when the environment names one.
+///
+/// Continuous integration names a user this process can give a file to, which
+/// is what makes the ownership rule in contracts.md Cache testable at all.
+pub fn another_owner() -> Option<String> {
+    std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok()
+}
+
+/// Gives a file to another user through the platform's own tool.
+pub fn give_away(path: &Path, owner: &str) {
+    let status = std::process::Command::new("sudo")
+        .args(["-n", "chown", owner])
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "{} could not be given away",
+        path.display()
+    );
+}
