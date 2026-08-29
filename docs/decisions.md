@@ -1545,3 +1545,203 @@ run rather than by a claim here.
 
 Sources: `mkfs.btrfs(8)`; `mkfs.xfs(8)` on the reflink option; `hdiutil(1)`;
 Microsoft Learn on Dev Drive and `Format-Volume`; the phase 0 gate record.
+
+## Asking whether an object is present takes no lock
+
+Question: whether the question "does the cache hold this object" takes the
+shared lock that a read takes.
+
+Options: take the shared lock, so the answer cannot go stale; take nothing, and
+make the answer advisory.
+
+Chosen: take nothing. The lock is taken by opening the object, which looks
+again once it is held. The presence question is only ever a reason to open.
+
+Because: the first version took the shared lock and deadlocked, which the tests
+found by hanging rather than failing. A writer holds a digest exclusively and
+then asks whether the object is already there, which is the whole of the
+wait-and-reuse sequence, and a shared acquisition from the same process blocks
+against the exclusive one the same process is holding. The lock is per open file
+description on Unix and per handle on Windows, so a process cannot be told that
+it is itself the holder.
+
+Making the answer advisory loses nothing, because a caller that acts on a hit
+opens the object, and opening takes the lease before it looks. Prune removes
+only under the exclusive lock, so an object that was present a moment ago and is
+gone by the time it is opened produces an absent error rather than a torn read.
+
+Costs: a caller that trusts the answer without opening the object is wrong, and
+nothing in the type system says so. The docstring does.
+
+Uncertain: nothing.
+
+Sources: contracts.md Cache; the lease record above; a hung test run in this
+session.
+
+## Bytes whose digest is not known until they are read
+
+Question: how a local source enters the cache, given that a lease is taken on a
+digest and a local file's digest is not known until it has been read.
+
+Options: hash the source, then transfer it, which reads every byte twice; write
+to the cache under a name of this process's own and rename it to the digest once
+the digest is known.
+
+Chosen: the second. The bytes are read once, hashed as they are written to
+`partial/<pid>-<start>.ingest`, and renamed to `partial/<hex>` and then into
+`objects/` once the digest is known and the lease on it is held. A digest the
+cache already holds discards the scratch file and reports a hit.
+
+Because: standards.md says hashing runs on the bytes as they arrive and there is
+never a second read to compute a digest. A manifest transfer knows its digest
+before it starts and takes the lease first, which is the path phase 2 uses; a
+local source and phase 8's inference do not, and this is the one operation that
+covers them. Renaming into `partial/<hex>` before publishing keeps the format
+statement about what a partial is named true, and costs one same-volume rename.
+
+Nothing appears under a digest it does not hash to, because the name is given
+after the hash is known and the publication into `objects/` is the same rename
+every other object goes through.
+
+Costs: a scratch name in `partial/` that recovery treats like any other entry,
+and one extra rename per ingest.
+
+Uncertain: nothing.
+
+Sources: standards.md Optimization, CPU; contracts.md Cache; the format record
+above.
+
+## Ownership is one question, not two values
+
+Question: whether the platform reports who owns a file and who this process is,
+or answers directly whether a file belongs to this process.
+
+Options: two queries returning an opaque identity, compared by the caller; one
+query answering the question.
+
+Chosen: one query, `owns`. Unix compares the file's user against the effective
+user. Windows compares the file's owner against both the token's user and the
+token's owner.
+
+Because: the two-value form was wrong on Windows and continuous integration
+proved it. A process running with an elevated token creates files owned by the
+administrators group rather than by the user, so prune compared the object it
+had just written against the token user, found them different, and skipped every
+object in the cache as another user's. Both Windows runners failed and no other
+platform did. Windows has two identities that both mean this process, and only
+the platform can say so, which is exactly what a seam is for.
+
+Costs: a caller that wants to report who owns a file cannot, and would need a
+second query added when a command needs to print it.
+
+Uncertain: whether a service account or an impersonating token has a third
+identity that means the same process. The question is answered by the platform
+rather than by the caller, so a third one is added where the other two are.
+
+Sources: a continuous integration run in this session failing
+`a_pinned_object_survives_a_prune_that_removes_everything_else` on both Windows
+targets; Microsoft Learn `TokenOwner`, which documents it as the identifier
+applied to objects the process creates.
+
+## A volume with no room is a resource failure wherever it is found
+
+Question: what error kind a cache operation produces when the volume is full,
+given that the same call can fail for a permission, a missing directory, or no
+space.
+
+Options: report the kind the operation belongs to; recognize the platform's
+no-space report and produce a resource failure instead.
+
+Chosen: the second, in one helper each in the platform crate and the cache
+crate, so every filesystem failure passes through one place that asks the
+question.
+
+Because: a macOS runner ran out of room while creating a lock file and reported
+`cache.locked`, which says contended and means something a user would act on
+differently. The condition is the volume, not the lock. Matching on the standard
+library's own storage-full kind rather than on a platform error number keeps one
+rule on three platforms.
+
+Costs: a filesystem that reports something else for exhaustion is reported as
+whatever kind the operation belongs to, and reads as a corruption rather than a
+full volume.
+
+Uncertain: whether every filesystem in use reports exhaustion as the standard
+library's storage-full kind. The small-volume regime in continuous integration
+is what answers that per platform.
+
+Sources: a continuous integration run in this session failing
+`a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache` on both
+Apple targets with `No space left on device` inside a `cache.locked`.
+
+## A record is written beside its name and renamed onto it
+
+Question: how a record another process may be reading at the same moment is
+written.
+
+Options: write in place, which truncates and then fills; write beside it and
+rename onto it.
+
+Chosen: the second, for every record the cache writes.
+
+Because: eight processes racing for one digest found this immediately. A waiter
+read the owner record of the lock it was waiting on while the holder was part
+way through writing it, and parsed an empty file, which failed the run over a
+file that was correct a moment later and correct a moment after. Writing beside
+and renaming means a reader sees the previous record or the next one, never
+half of either, which is the same rule publication already follows.
+
+The strict parse stays. A record that does not parse is now evidence of
+corruption rather than of a race, which is what makes failing on it correct.
+
+Costs: one extra file and one extra rename per record write, and a scratch name
+in the directory if a process is killed between the two.
+
+Uncertain: nothing.
+
+Sources: a failing race in this session reporting `EOF while parsing a value at
+line 1 column 0` on a lock's owner record.
+
+## The lock probe carries the identity of the process that makes it
+
+Question: what a cache opening writes to learn whether its volume can express
+advisory locking.
+
+Options: one shared probe name; a probe named for this process.
+
+Chosen: a probe named for this process, removed as soon as it is answered.
+
+Because: a shared name is a file every process creates, locks, and removes under
+the others. With eight processes opening one cache at once, the acquisition's
+identity check saw the name replaced under it on attempt after attempt and gave
+up, failing a run for a reason that had nothing to do with the digest it wanted.
+A probe is a question about the volume, so nothing is gained by sharing it.
+
+Costs: a killed process leaves a zero-length probe file behind, which nothing
+reads and `cache clear` removes.
+
+Uncertain: nothing.
+
+Sources: the same failing race in this session.
+
+## A verification that quarantined something exits eighty
+
+Question: what `cache verify` exits with when it moved an object to quarantine.
+
+Options: zero, because the command did what it was asked; the cache code,
+because the cache turned out to hold something that had failed verification.
+
+Chosen: the cache code, eighty. Nothing quarantined exits zero.
+
+Because: contracts.md maps `cache.corrupt` to the cache layer and the layer to
+the code, and verify reports each mismatch as `cache.corrupt`. A script that
+verifies a cache and checks the exit code is asking whether the cache is sound,
+and a run that found and quarantined damage should not answer yes.
+
+Costs: a run that quarantines one object out of a million exits non-zero, which
+reads as a failure of the command rather than a finding about the cache. The
+result names the count either way.
+
+Uncertain: nothing.
+
+Sources: contracts.md Errors, Exit codes, and the Cache paragraph on verify.
