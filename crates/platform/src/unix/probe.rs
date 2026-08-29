@@ -113,13 +113,11 @@ fn fold_probe(directory: &Path) -> Result<(CaseFolding, Normalization), Error> {
     std::fs::File::create_new(&first).map_err(|reason| failure(&first, &reason))?;
     let folds_normalization = std::fs::File::create_new(&second).is_err();
 
-    let stored_as_written = std::fs::read_dir(directory)
-        .map(|entries| {
-            entries
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy() == composed)
-        })
-        .unwrap_or(false);
+    let stored_as_written = std::fs::read_dir(directory).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy() == composed)
+    });
 
     let _ = std::fs::remove_file(&second);
     let _ = std::fs::remove_file(&first);
@@ -216,9 +214,7 @@ fn sparse_probe(directory: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 fn max_component_length(directory: &Path) -> u32 {
-    rustix::fs::statfs(directory)
-        .map(|found| u32::try_from(found.f_namelen).unwrap_or(255))
-        .unwrap_or(255)
+    rustix::fs::statfs(directory).map_or(255, |found| u32::try_from(found.f_namelen).unwrap_or(255))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -252,7 +248,7 @@ fn backing(directory: &Path) -> Backing {
     let Ok(found) = rustix::fs::statfs(directory) else {
         return Backing::Unknown;
     };
-    let kind = i64::from(found.f_type);
+    let kind = found.f_type;
     if NETWORK_KINDS.contains(&kind) {
         Backing::Network
     } else if kind == FUSE {

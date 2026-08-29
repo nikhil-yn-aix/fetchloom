@@ -140,6 +140,17 @@ fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
         println!("baseline written to {}", path.display());
     }
     if compare {
+        if !path.exists() {
+            if let Err(error) = bench::save(&current, &path) {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+            println!(
+                "no baseline existed for this target, so this run was recorded as one at {}",
+                path.display()
+            );
+            return ExitCode::SUCCESS;
+        }
         let baseline = match bench::load(&path) {
             Ok(baseline) => baseline,
             Err(error) => {
