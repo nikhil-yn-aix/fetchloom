@@ -150,6 +150,29 @@ impl<P: Platform> Cache<P> {
     }
 
     fn check_bytes(&self, digest: ContentDigest) -> Result<(), Error> {
+        let found = self.hash_object(digest)?;
+        if found == digest {
+            return Ok(());
+        }
+        Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            format!(
+                "run cache verify, because {} holds {found} rather than {digest}",
+                self.layout.object(digest).display()
+            ),
+        ))
+    }
+
+    /// Reports whether an object still hashes to the name it is stored under.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the object cannot be read.
+    pub fn object_is_its_digest(&self, digest: ContentDigest) -> Result<bool, Error> {
+        Ok(self.hash_object(digest)? == digest)
+    }
+
+    fn hash_object(&self, digest: ContentDigest) -> Result<ContentDigest, Error> {
         let path = self.layout.object(digest);
         let mut file = std::fs::File::open(&path).map_err(|reason| {
             Error::new(
@@ -171,17 +194,7 @@ impl<P: Platform> Cache<P> {
             }
             hasher.update(&buffer[..filled]);
         }
-        let found = ContentDigest::from_bytes(*hasher.finalize().as_bytes());
-        if found == digest {
-            return Ok(());
-        }
-        Err(Error::new(
-            ErrorKind::CacheCorrupt,
-            format!(
-                "run cache verify, because {} holds {found} rather than {digest}",
-                path.display()
-            ),
-        ))
+        Ok(ContentDigest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
     /// Returns where the fingerprint of an object is recorded.
@@ -189,6 +202,14 @@ impl<P: Platform> Cache<P> {
         self.layout.meta().join("fingerprint").join(name_of(digest))
     }
 
+    /// Lists every object that failed verification.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the cache cannot be read.
+    pub fn quarantined(&self) -> Result<Vec<ContentDigest>, Error> {
+        Self::digests_in(&self.layout.quarantine())
+    }
     /// Lists the digests a directory of the cache names.
     pub(crate) fn digests_in(directory: &std::path::Path) -> Result<Vec<ContentDigest>, Error> {
         let entries = std::fs::read_dir(directory).map_err(|reason| {
@@ -413,6 +434,7 @@ impl<P: Platform> Store for Cache<P> {
             bytes,
             partials: Self::digests_in(&self.layout.partial())?.len() as u64,
             pins: Self::digests_in(&self.layout.pins())?.len() as u64,
+            quarantined: Self::digests_in(&self.layout.quarantine())?.len() as u64,
         })
     }
 }

@@ -5,8 +5,15 @@ use std::path::{Path, PathBuf};
 use fetchloom_engine::digest::ContentDigest;
 
 /// The directories a cache root holds.
-pub(crate) const DIRECTORIES: [&str; 7] = [
-    "objects", "outboard", "partial", "staging", "meta", "locks", "pins",
+pub(crate) const DIRECTORIES: [&str; 8] = [
+    "objects",
+    "outboard",
+    "partial",
+    "staging",
+    "quarantine",
+    "meta",
+    "locks",
+    "pins",
 ];
 
 /// The paths of one cache root.
@@ -50,6 +57,18 @@ impl Layout {
     #[must_use]
     pub fn staging(&self) -> PathBuf {
         self.root.join("staging")
+    }
+
+    /// Returns the directory holding objects that failed verification.
+    #[must_use]
+    pub fn quarantine(&self) -> PathBuf {
+        self.root.join("quarantine")
+    }
+
+    /// Returns the quarantined object with the given digest.
+    #[must_use]
+    pub fn quarantined(&self, digest: ContentDigest) -> PathBuf {
+        self.quarantine().join(name_of(digest))
     }
 
     /// Returns the directory holding resolution metadata.

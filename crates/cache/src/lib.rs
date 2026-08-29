@@ -16,6 +16,7 @@ pub mod layout;
 pub mod prune;
 pub mod record;
 pub mod store;
+pub mod verify;
 
 use std::path::{Path, PathBuf};
 

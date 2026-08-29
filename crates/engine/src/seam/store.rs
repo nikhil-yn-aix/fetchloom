@@ -22,6 +22,8 @@ pub struct PruneReport {
     pub kept: u64,
     /// How many objects were kept because another user created them.
     pub skipped_other_owner: u64,
+    /// How many quarantined objects were removed.
+    pub quarantined_removed: u64,
 }
 
 /// What the cache currently holds.
@@ -37,6 +39,8 @@ pub struct CacheStatus {
     pub partials: u64,
     /// How many pin records it holds.
     pub pins: u64,
+    /// How many objects failed verification and are kept for diagnosis.
+    pub quarantined: u64,
 }
 
 /// Content-addressed storage that one run reads from and writes to.

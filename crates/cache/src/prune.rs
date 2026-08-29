@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::identity::OwnerId;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::{PruneReport, Store};
 
@@ -81,7 +82,37 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
         remove(&cache.layout().lock_owner_of(digest))?;
     }
 
+    sweep_quarantine(cache, &ours, &mut report)?;
     Ok(report)
+}
+
+/// Removes the quarantined objects this user created.
+///
+/// A quarantined object is never served, so nothing can claim one between a
+/// mark and a sweep, which is the only thing the grace period protects. It is
+/// removed under its lock so a repair reading one is never removed underneath.
+fn sweep_quarantine<P: Platform>(
+    cache: &Cache<P>,
+    ours: &OwnerId,
+    report: &mut PruneReport,
+) -> Result<(), Error> {
+    for digest in cache.quarantined()? {
+        let path = cache.layout().quarantined(digest);
+        if cache.platform().owner(&path)? != *ours {
+            report.skipped_other_owner += 1;
+            continue;
+        }
+        let Some(held) = cache.platform().try_lock(&cache.layout().lock_of(digest))? else {
+            report.kept += 1;
+            continue;
+        };
+        let size = std::fs::metadata(&path).map_or(0, |found| found.len());
+        remove(&path)?;
+        report.quarantined_removed += 1;
+        report.bytes_removed += size;
+        drop(held);
+    }
+    Ok(())
 }
 
 /// Removes a mark, because the object it named is referenced again.

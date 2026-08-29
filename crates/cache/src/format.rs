@@ -17,7 +17,7 @@ const FORMAT_CONTEXT: &str = "fetchloom cache format";
 /// and that change makes every existing cache fail with `cache.format_mismatch`.
 fn statements() -> Vec<String> {
     vec![
-        "the cache root holds objects, outboard, partial, staging, meta, locks, pins, and format"
+        "the cache root holds objects, outboard, partial, staging, quarantine, meta, locks, pins, and format"
             .to_owned(),
         "an object is objects/<hex>, where hex is the lowercase hexadecimal of the content digest"
             .to_owned(),
@@ -27,6 +27,7 @@ fn statements() -> Vec<String> {
         "a staging tree is staging/<name> and its owner record is staging/<name>.owner".to_owned(),
         "a lock is locks/<hex>.lock and is empty, and its holder is locks/<hex>.owner".to_owned(),
         "a pin is pins/<hex> and is empty".to_owned(),
+        "an object that failed verification is quarantine/<hex>".to_owned(),
         "a prune mark is meta/prune/<hex> and holds the instant it was marked".to_owned(),
         "the boot of the last recovery is meta/recovered".to_owned(),
         "the content digest is BLAKE3 over the object bytes".to_owned(),

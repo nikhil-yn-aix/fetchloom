@@ -284,3 +284,56 @@ fn an_object_changed_on_disk_is_refused_by_the_default_policy() {
     let refused = reopened.open(digest).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::CacheCorrupt);
 }
+
+#[test]
+fn verify_moves_a_damaged_object_to_quarantine_and_never_serves_it_again() {
+    let (scratch, held) = cache();
+    let digest = support::publish(&held, &bytes_of(4096, 19));
+    let object = held.layout().object(digest);
+
+    support::make_writable(&object);
+    std::fs::write(&object, bytes_of(4096, 20)).unwrap();
+
+    let reopened = support::open_cache(scratch.path()).unwrap();
+    let report = fetchloom_cache::verify::run(&reopened).unwrap();
+
+    assert_eq!(report.quarantined, vec![digest.to_string()]);
+    assert_eq!(report.verified, 0);
+    assert!(
+        !reopened.contains(digest).unwrap(),
+        "a damaged object was left where a hit would serve it"
+    );
+    assert!(
+        reopened.layout().quarantined(digest).is_file(),
+        "a damaged object was not kept for diagnosis"
+    );
+    assert_eq!(reopened.status().unwrap().quarantined, 1);
+}
+
+#[test]
+fn verify_reports_an_object_that_is_still_its_digest() {
+    let (_scratch, held) = cache();
+    support::publish(&held, &bytes_of(2048, 21));
+    let report = fetchloom_cache::verify::run(&held).unwrap();
+    assert_eq!(report.verified, 1);
+    assert!(report.quarantined.is_empty());
+}
+
+#[test]
+fn prune_removes_a_quarantined_object() {
+    let (scratch, held) = cache();
+    let digest = support::publish(&held, &bytes_of(4096, 23));
+    let object = held.layout().object(digest);
+    support::make_writable(&object);
+    std::fs::write(&object, bytes_of(4096, 24)).unwrap();
+
+    let reopened = support::open_cache(scratch.path()).unwrap();
+    fetchloom_cache::verify::run(&reopened).unwrap();
+    let report = reopened.prune(Duration::ZERO).unwrap();
+
+    assert_eq!(report.quarantined_removed, 1);
+    assert!(
+        !reopened.layout().quarantined(digest).exists(),
+        "prune left a quarantined object behind"
+    );
+}
