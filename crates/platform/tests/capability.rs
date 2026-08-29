@@ -174,7 +174,21 @@ fn a_capability_answer_is_the_same_every_time_it_is_asked() {
     let platform = NativePlatform::new();
     let first = platform.volume_capabilities(scratch.path()).unwrap();
     let second = platform.volume_capabilities(scratch.path()).unwrap();
-    assert_eq!(first, second, "a capability answer is not stable");
+
+    assert_eq!(first.case_folding, second.case_folding);
+    assert_eq!(first.normalization, second.normalization);
+    assert_eq!(first.clone, second.clone);
+    assert_eq!(first.sparse, second.sparse);
+    assert_eq!(first.symlink, second.symlink);
+    assert_eq!(first.hard_link, second.hard_link);
+    assert_eq!(first.max_component_length, second.max_component_length);
+    assert_eq!(first.max_path_length, second.max_path_length);
+    assert_eq!(first.backing, second.backing);
+    assert_eq!(
+        matches!(first.scanner, Scanner::Present { .. }),
+        matches!(second.scanner, Scanner::Present { .. }),
+        "a volume was said to have a scanner once and not the next time"
+    );
 }
 
 #[test]

@@ -53,6 +53,7 @@ allow = [
   { crate = "either", reason = "the two-branch iterator rayon returns" },
   { crate = "errno", reason = "the error number reader rustix returns failures through" },
   { crate = "fastrand", reason = "the unique name generation tempfile needs" },
+  { crate = "fetchloom-cache", reason = "the workspace Store seam implementation" },
   { crate = "fetchloom-cli", reason = "the workspace binary" },
   { crate = "fetchloom-engine", reason = "the workspace engine" },
   { crate = "fetchloom-faults", reason = "the workspace fault injection library" },
