@@ -7,7 +7,7 @@ use fetchloom_engine::canonical;
 
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Layer};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::redact::SafeUrl;
@@ -226,6 +226,7 @@ fn fill_staging(
 
     let mut entries = Vec::with_capacity(walked.files.len());
     let mut copied = 0u64;
+    let gave_up = std::cell::Cell::new(false);
     for file in &walked.files {
         let from = source.join(&file.relative);
         let to = staging.join(file.entry.as_str());
@@ -233,9 +234,26 @@ fn fill_staging(
             std::fs::create_dir_all(parent)
                 .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
         }
-        let (size, content) = match cache {
+        let usable = cache.filter(|_| !gave_up.get());
+        let (size, content) = match usable {
             None => materialize::copy_file(processor, &from, &to)?,
-            Some(held) => through_cache(held, platform, &from, &to, emit)?,
+            Some(held) => match through_cache(held, platform, &from, &to, emit) {
+                Ok(measured) => measured,
+                Err(refused)
+                    if refused.layer() == Layer::Cache || refused.layer() == Layer::Resource =>
+                {
+                    gave_up.set(true);
+                    emit(EventPayload::Degrade {
+                        requested: "keeping this object in the cache".to_owned(),
+                        used: "no cache for the rest of this run, so nothing more is retained"
+                            .to_owned(),
+                        reason: refused.next_action().to_owned(),
+                    });
+                    let _ = std::fs::remove_file(&to);
+                    materialize::copy_file(processor, &from, &to)?
+                }
+                Err(refused) => return Err(refused),
+            },
         };
         copied += size;
         emit(EventPayload::TransferProgress { bytes: copied });
@@ -268,6 +286,11 @@ fn through_cache(
     emit: &dyn Fn(EventPayload),
 ) -> Result<(u64, ContentDigest), Error> {
     let ingested = cache.ingest(from)?;
+    if ingested.waited_for.is_some() {
+        emit(EventPayload::CacheWait {
+            digest: ingested.digest,
+        });
+    }
     if ingested.was_present {
         emit(EventPayload::CacheHit {
             digest: ingested.digest,

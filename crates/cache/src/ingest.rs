@@ -9,7 +9,7 @@ use std::path::Path;
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::seam::platform::Platform;
+use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
@@ -20,7 +20,7 @@ use crate::{Cache, failure, seal_object};
 const BUFFER: usize = 1 << 20;
 
 /// What one ingest did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Ingested {
     /// The digest the bytes hash to.
     pub digest: ContentDigest,
@@ -28,6 +28,8 @@ pub struct Ingested {
     pub size: u64,
     /// Whether the cache already held them.
     pub was_present: bool,
+    /// The writer this ingest waited for, when another process held the digest.
+    pub waited_for: Option<OwnerToken>,
 }
 
 impl<P: Platform> Cache<P> {
@@ -78,6 +80,7 @@ impl<P: Platform> Cache<P> {
         let digest = ContentDigest::from_bytes(*hasher.finalize().as_bytes());
 
         let lease = self.lease(digest)?;
+        let waited_for = lease.waited_for().cloned();
         if self.contains(digest)? {
             drop(lease);
             let _ = std::fs::remove_file(&scratch);
@@ -85,6 +88,7 @@ impl<P: Platform> Cache<P> {
                 digest,
                 size: written,
                 was_present: true,
+                waited_for,
             });
         }
 
@@ -104,6 +108,7 @@ impl<P: Platform> Cache<P> {
             digest,
             size: written,
             was_present: false,
+            waited_for,
         })
     }
 

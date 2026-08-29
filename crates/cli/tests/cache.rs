@@ -343,3 +343,51 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
         1
     );
 }
+
+#[test]
+fn a_cache_that_fills_part_way_through_degrades_and_the_run_completes() {
+    let Some(small) = std::env::var_os("FETCHLOOM_TEST_SMALL_VOLUMES")
+        .and_then(|named| std::env::split_paths(&named).next())
+    else {
+        return;
+    };
+    let scratch = TempDir::new_in(&small).unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    let cache = scratch.path().join("cache");
+
+    let source = elsewhere.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    for index in 0..64 {
+        std::fs::write(
+            source.join(format!("file-{index}.bin")),
+            vec![b'a'; 1 << 20],
+        )
+        .unwrap();
+    }
+
+    let done = run(
+        &cache,
+        &[
+            "get",
+            source.to_str().unwrap(),
+            "--output",
+            elsewhere.path().join("out").to_str().unwrap(),
+            "--events",
+            "-",
+        ],
+    );
+    assert!(
+        done.status.success(),
+        "a cache that filled stopped the run: {}",
+        events(&done)
+    );
+    assert!(
+        events(&done).contains("degrade"),
+        "a cache that filled did not say so: {}",
+        events(&done)
+    );
+    assert!(
+        elsewhere.path().join("out").exists(),
+        "the destination was not materialized"
+    );
+}
