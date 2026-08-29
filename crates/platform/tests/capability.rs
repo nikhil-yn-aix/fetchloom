@@ -2,12 +2,14 @@
 //!
 //! Every probe is checked against what the filesystem itself does, never
 //! against a value hardcoded for one machine, so these assertions are the same
-//! on all three platforms. A capability this machine has no filesystem for
-//! carries an ignored test naming the filesystem, so the gap is listed rather
-//! than silently passing.
+//! on all three platforms. A capability that needs a filesystem this machine
+//! does not have runs against the volumes the environment names, and a runner
+//! that promised such a volume and did not build it fails rather than passing
+//! quietly.
 
 #![expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -210,37 +212,130 @@ fn a_thread_ceiling_above_the_detected_count_is_clamped_and_reported() {
 }
 
 #[test]
-#[ignore = "needs a ReFS or Dev Drive volume, which this machine does not have"]
-fn clone_is_reported_on_a_volume_that_supports_block_cloning() {}
+fn cloning_shares_blocks_on_a_volume_that_supports_it() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::Clone) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert!(
+            reported.clone,
+            "{} was built for block sharing and the probe reported none",
+            scratch.path().display()
+        );
+
+        let from = scratch.path().join("source");
+        let to = scratch.path().join("target");
+        let bytes = vec![0x5au8; 1 << 20];
+        support::write_file(&from, &bytes);
+        let mechanism = platform.clone_or_copy(&from, &to).unwrap();
+
+        assert_eq!(
+            mechanism,
+            CopyMechanism::Clone,
+            "{} supports block sharing and the copy fell back",
+            scratch.path().display()
+        );
+        assert_eq!(
+            std::fs::read(&to).unwrap(),
+            bytes,
+            "a clone did not reproduce the bytes"
+        );
+    }
+}
 
 #[test]
-#[ignore = "needs a Btrfs or reflink-enabled XFS volume, reachable only on a Linux runner"]
-fn clone_is_reported_on_a_reflink_volume() {}
+fn case_folding_is_reported_on_a_case_sensitive_volume() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::CaseSensitive) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        platform
+            .create_file_exclusive(&scratch.path().join("FetchloomCaseCheck"))
+            .unwrap();
+        platform
+            .create_file_exclusive(&scratch.path().join("fetchloomcasecheck"))
+            .unwrap_or_else(|reason| {
+                panic!(
+                    "{} was built case sensitive and refused the other case: {reason}",
+                    scratch.path().display()
+                )
+            });
+        assert_eq!(reported.case_folding, CaseFolding::Sensitive);
+    }
+}
 
 #[test]
-#[ignore = "needs an APFS volume, reachable only on a macOS runner"]
-fn clone_is_reported_on_apfs() {}
+fn case_folding_is_reported_on_a_case_insensitive_volume() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::CaseInsensitive) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        platform
+            .create_file_exclusive(&scratch.path().join("FetchloomCaseCheck"))
+            .unwrap();
+        assert!(
+            platform
+                .create_file_exclusive(&scratch.path().join("fetchloomcasecheck"))
+                .is_err(),
+            "{} was built case insensitive and accepted both cases",
+            scratch.path().display()
+        );
+        assert_eq!(reported.case_folding, CaseFolding::Folding);
+    }
+}
 
 #[test]
-#[ignore = "needs a case-insensitive APFS volume, reachable only on a macOS runner"]
-fn case_folding_is_reported_on_case_insensitive_apfs() {}
+fn normalization_is_reported_on_a_volume_that_normalizes() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::Normalizing) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert_eq!(
+            reported.normalization,
+            Normalization::Normalizing,
+            "{} stores a normalized form and the probe said otherwise",
+            scratch.path().display()
+        );
+    }
+}
 
 #[test]
-#[ignore = "needs an HFS+ volume, which normalizes rather than preserves, reachable only on a macOS runner"]
-fn normalization_is_reported_as_normalizing_on_hfs_plus() {}
+fn a_network_volume_is_reported_as_network_backed() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::Network) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert_eq!(
+            reported.backing,
+            Backing::Network,
+            "{} is a network mount and the probe called it something else",
+            scratch.path().display()
+        );
+    }
+}
 
 #[test]
-#[ignore = "needs an ext4 directory carrying the case-folding flag, reachable only on a Linux runner"]
-fn case_folding_is_reported_on_a_casefolded_ext4_directory() {}
+fn a_memory_volume_is_reported_as_local() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::Memory) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert_eq!(
+            reported.backing,
+            Backing::Local,
+            "{} is memory and the probe called it network backed",
+            scratch.path().display()
+        );
+    }
+}
 
 #[test]
-#[ignore = "needs a mounted NFS or SMB share, which this machine does not have"]
-fn a_network_share_is_reported_as_network_backed() {}
+fn sparse_support_is_reported_where_it_is_absent() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::NoSparse) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert!(
+            !reported.sparse,
+            "{} stores no holes and the probe reported sparse support",
+            scratch.path().display()
+        );
+    }
+}
 
 #[test]
-#[ignore = "needs a FUSE mount, reachable only on a Linux or macOS runner"]
+#[ignore = "needs a FUSE mount, which no runner builds yet"]
 fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {}
-
-#[test]
-#[ignore = "needs a volume without sparse file support, which this machine does not have"]
-fn sparse_support_is_reported_where_it_is_absent() {}

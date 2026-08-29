@@ -36,6 +36,19 @@ jobs:
         if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
 
+      - name: Build the test filesystems
+        if: runner.os == 'Linux'
+        run: bash .github/workflows/volumes-linux.sh
+
+      - name: Build the test filesystems
+        if: runner.os == 'macOS'
+        run: bash .github/workflows/volumes-macos.sh
+
+      - name: Build the test filesystems
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .github/workflows/volumes-windows.ps1
+
       - name: Add the target
         run: rustup target add ${{ matrix.target }}
 
