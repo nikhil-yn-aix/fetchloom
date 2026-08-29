@@ -272,3 +272,170 @@ fn binary_name(stem: &str) -> String {
         stem.to_owned()
     }
 }
+
+/// How many files the cache regimes materialize.
+const CORPUS_FILES: usize = 64;
+
+/// How many bytes each of those files holds.
+const CORPUS_FILE_BYTES: usize = 256 * 1024;
+
+/// Runs the cold cache and warm cache regimes and returns what they measured.
+///
+/// A cold run starts with an empty cache and writes every object into it. A warm
+/// run uses the cache the cold run filled and writes nothing into it, which is
+/// the deterministic difference between the two: the warm run's cache growth is
+/// zero. Both runs materialize the same tree, so the timing difference is the
+/// work the cache saved.
+///
+/// # Errors
+///
+/// Fails when the corpus cannot be written, when a run does not exit zero, and
+/// when the cache cannot be measured.
+pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
+    let mut cold_times = Vec::with_capacity(iterations as usize);
+    let mut warm_times = Vec::with_capacity(iterations as usize);
+    let mut cold_growth = 0u64;
+    let mut warm_growth = 0u64;
+
+    for round in 0..iterations {
+        let scratch = scratch_directory(round)?;
+        let source = scratch.join("source");
+        let cache = scratch.join("cache");
+        write_corpus(&source)?;
+
+        let cold = measure_get(binary, &source, &scratch.join("cold"), &cache)?;
+        let after_cold = directory_bytes(&cache.join("objects"));
+        let warm = measure_get(binary, &source, &scratch.join("warm"), &cache)?;
+        let after_warm = directory_bytes(&cache.join("objects"));
+
+        cold_times.push(cold);
+        warm_times.push(warm);
+        cold_growth = after_cold;
+        warm_growth = after_warm - after_cold;
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    cold_times.sort_by(f64::total_cmp);
+    warm_times.sort_by(f64::total_cmp);
+
+    Ok(vec![
+        RegimeResult {
+            regime: "cold-cache".to_owned(),
+            iterations,
+            metrics: vec![
+                Metric {
+                    name: "wall".to_owned(),
+                    value: cold_times[cold_times.len() / 2],
+                    unit: "ms".to_owned(),
+                    kind: MetricKind::Timing,
+                },
+                Metric {
+                    name: "cache-growth".to_owned(),
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "a corpus below two to the fifty-third bytes is exact"
+                    )]
+                    value: cold_growth as f64,
+                    unit: "bytes".to_owned(),
+                    kind: MetricKind::Deterministic,
+                },
+            ],
+        },
+        RegimeResult {
+            regime: "warm-cache".to_owned(),
+            iterations,
+            metrics: vec![
+                Metric {
+                    name: "wall".to_owned(),
+                    value: warm_times[warm_times.len() / 2],
+                    unit: "ms".to_owned(),
+                    kind: MetricKind::Timing,
+                },
+                Metric {
+                    name: "cache-growth".to_owned(),
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "a corpus below two to the fifty-third bytes is exact"
+                    )]
+                    value: warm_growth as f64,
+                    unit: "bytes".to_owned(),
+                    kind: MetricKind::Deterministic,
+                },
+            ],
+        },
+    ])
+}
+
+/// Reports whether the warm regime was faster than the cold one.
+///
+/// Takes the regimes a run measured. Returns nothing when the two are not both
+/// present, which is what a run that measured neither answers.
+#[must_use]
+pub fn warm_beat_cold(regimes: &[RegimeResult]) -> Option<(f64, f64)> {
+    let wall = |name: &str| {
+        regimes
+            .iter()
+            .find(|regime| regime.regime == name)?
+            .metrics
+            .iter()
+            .find(|metric| metric.name == "wall")
+            .map(|metric| metric.value)
+    };
+    Some((wall("cold-cache")?, wall("warm-cache")?))
+}
+
+fn scratch_directory(round: u32) -> Result<PathBuf, BenchError> {
+    let path = std::env::temp_dir().join(format!("fetchloom-bench-{}-{round}", std::process::id()));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).map_err(BenchError::Process)?;
+    Ok(path)
+}
+
+fn write_corpus(into: &Path) -> Result<(), BenchError> {
+    fs::create_dir_all(into).map_err(BenchError::Process)?;
+    for index in 0..CORPUS_FILES {
+        let seed = u8::try_from(index % 251).unwrap_or(1);
+        let bytes: Vec<u8> = (0..CORPUS_FILE_BYTES)
+            .map(|offset| {
+                let offset = u8::try_from(offset % 251).unwrap_or(0);
+                offset.wrapping_mul(seed).wrapping_add(seed)
+            })
+            .collect();
+        fs::write(into.join(format!("file-{index}.bin")), bytes).map_err(BenchError::Process)?;
+    }
+    Ok(())
+}
+
+fn measure_get(
+    binary: &Path,
+    source: &Path,
+    destination: &Path,
+    cache: &Path,
+) -> Result<f64, BenchError> {
+    let started = Instant::now();
+    let status = Command::new(binary)
+        .arg("get")
+        .arg(source)
+        .arg("--output")
+        .arg(destination)
+        .env("FETCHLOOM_CACHE_DIR", cache)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(BenchError::Process)?;
+    let elapsed = started.elapsed();
+    if !status.success() {
+        return Err(BenchError::NonZeroExit(status.code().unwrap_or(-1)));
+    }
+    Ok(elapsed.as_secs_f64() * 1000.0)
+}
+
+fn directory_bytes(directory: &Path) -> u64 {
+    fs::read_dir(directory).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|found| found.len())
+            .sum()
+    })
+}

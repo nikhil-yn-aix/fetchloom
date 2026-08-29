@@ -3,11 +3,35 @@
   "regimes": [
     {
       "regime": "no-op",
-      "iterations": 9,
+      "iterations": 3,
       "metrics": [
         {
           "name": "binary-size",
-          "value": 1571328.0,
+          "value": 1839104.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "cold-cache",
+      "iterations": 3,
+      "metrics": [
+        {
+          "name": "cache-growth",
+          "value": 16777216.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "warm-cache",
+      "iterations": 3,
+      "metrics": [
+        {
+          "name": "cache-growth",
+          "value": 0.0,
           "unit": "bytes",
           "kind": "deterministic"
         }

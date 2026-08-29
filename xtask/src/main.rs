@@ -108,9 +108,15 @@ fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let cache = match measure_cache(&binary, iterations) {
+        Ok(regimes) => regimes,
+        Err(code) => return code,
+    };
+    let mut regimes = vec![regime];
+    regimes.extend(cache);
     let mut current = bench::Baseline {
         target: target_triple(),
-        regimes: vec![regime],
+        regimes,
     };
     for regime in &current.regimes {
         for metric in &regime.metrics {
@@ -240,4 +246,23 @@ fn host_triple() -> String {
 
 fn continuous_integration() -> bool {
     std::env::var_os("CI").is_some()
+}
+
+fn measure_cache(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
+    let measured = match bench::run_cache(binary, iterations.min(3)) {
+        Ok(regimes) => regimes,
+        Err(error) => {
+            eprintln!("{error}");
+            return Err(ExitCode::from(1));
+        }
+    };
+    if let Some((cold, warm)) = bench::warm_beat_cold(&measured)
+        && warm >= cold
+    {
+        eprintln!(
+            "a warm cache took {warm} ms and a cold one took {cold} ms, so reuse saved nothing"
+        );
+        return Err(ExitCode::from(1));
+    }
+    Ok(measured)
 }
