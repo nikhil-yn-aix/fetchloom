@@ -1112,3 +1112,427 @@ Uncertain: the portable corpus is constructed by the same code on every target
 rather than transported between them, so the agreement proves the canonical
 encoding is platform-independent, not that a materialized tree survives a
 physical move. Phase 4 moves a bundle between machines and settles that.
+
+## A lease is a shared advisory lock, not a record on disk
+
+Question: what "leased by a running process" means on disk, so that prune can
+tell a lease held by a living reader from one left behind by a process that was
+killed.
+
+Options: a lease file carrying an owner token and an expiry, swept by the same
+liveness ladder the write lock uses; a shared advisory lock on the digest's
+existing lock file, held for as long as the reader has the object open.
+
+Chosen: the second. A reader takes `lock_shared` on `locks/<digest>.lock`
+before it looks for `objects/<digest>`, and holds it until it is finished with
+the object. A writer takes the exclusive lock on the same file. Prune attempts
+the exclusive lock without waiting, and an object whose lock is held by anyone
+survives that sweep.
+
+This adds one method pair to the Platform seam, `try_lock_shared` and
+`lock_shared`, alongside the exclusive pair already there. The seam's shape is
+unchanged: the same concrete lock type, released by dropping it.
+
+Because: a lease record has to answer whether the holder is alive, and the only
+answers available are the liveness ladder, which is evidence about a process
+identifier rather than about a lease, and an expiry, which contracts.md Cache
+forbids by requiring liveness to be decided from recorded identity and never
+from a modification time. A kernel-held lock answers it directly: both `flock`
+and `LockFileEx` are released when the last descriptor closes or the process
+dies, so a killed reader releases its lease with no record to sweep and no way
+for prune to be wrong about it. It is also the primitive already chosen for the
+writer, so leases and writes are one mechanism rather than two.
+
+Ordering matters and is part of the contract this record fixes: a reader locks
+first and looks second. Prune deletes only while holding the exclusive lock, so
+a reader that holds the shared lock cannot have the object removed underneath
+it, and a reader that finds the object present has already made it unremovable.
+
+Costs: a reader holds a lock file open for as long as it reads, so a cache with
+many concurrent readers keeps many descriptors open, bounded by the objects in
+flight. A wedged reader keeps an object alive indefinitely, which is the same
+tradeoff the write lock already carries.
+
+Uncertain: nothing. The shared and exclusive pairs are the standard library's,
+stable since 1.89, and their platform mapping is documented.
+
+Sources: `std::fs::File` `lock_shared`, `try_lock_shared`, `TryLockError`;
+contracts.md Cache; the advisory locking record above.
+
+## A lock is valid only while its file is still the file that was locked
+
+Question: prune removes a lock file while holding its lock, and a name that has
+been unlinked can be recreated by another process. What stops two processes
+each believing they hold the same digest's lock.
+
+Options: never remove lock files, so the race cannot happen and the directory
+grows by two files for every digest the cache ever held; remove them and verify
+after acquisition that the locked handle is still the file the name refers to.
+
+Chosen: the second. After the lock is taken, the identity of the locked handle
+is compared against the identity of the path. They differ when the file was
+unlinked and recreated between the open and the lock, and the acquisition then
+starts again from the open. This adds `file_id_of`, taking an open file, to the
+Platform seam, and the existing path-taking query is written in terms of it.
+
+Because: the race is real on all three platforms and was measured here rather
+than assumed. On Windows, `std::fs::remove_file` succeeded against a file this
+process held open and exclusively locked, and an immediate reopen of the same
+name created a new file rather than failing with a sharing violation or a
+pending deletion. Unix has always behaved this way. Without the identity check,
+prune removing a lock file is a single-writer violation; with it, the loser of
+the race notices and retries, which is what makes prune able to reclaim
+`locks/` at all.
+
+Costs: one identity query per acquisition, and a retry loop that is bounded by
+attempts rather than by time.
+
+Uncertain: whether every Windows build behaves as this one did. The check is
+correct whether the platform unlinks immediately or defers, so the behavior it
+guards against does not have to be predicted.
+
+Sources: a probe run on `x86_64-pc-windows-msvc` in this session, printing
+`remove while holding open+locked: ok` and `reopen after remove: ok`;
+`std::fs::File` locking documentation; the advisory locking record above.
+
+## A waiter learns the outcome by taking the lock and looking again
+
+Question: how a process that waited on another process's transfer learns
+whether that writer finished, failed, or died.
+
+Options: the writer records an outcome the waiter reads; the waiter watches for
+the object to appear; the waiter takes the lock the writer held and asks the
+cache the same question it asked before it waited.
+
+Chosen: the third, and there is no other channel. The sequence is: take the
+shared lock, look for the object, and use it if it is there. Otherwise take the
+exclusive lock, which blocks until the writer releases it, and look again. The
+object being present means the writer finished, because nothing enters
+`objects/` except a completed verification and rename. The object being absent
+means the writer failed or died, and the process now holding the exclusive lock
+is the writer.
+
+Because: an outcome record is a second source of truth about whether an object
+exists, and it can disagree with the directory. It also cannot be written by a
+process that was killed, so the failed case and the died case would need
+different handling for no gain: both mean the object is absent and someone has
+to transfer it. Waiting for the object to appear needs a timer or a watch, and
+contracts.md forbids deciding anything from a clock. Taking the lock is the
+wait, the kernel releases it however the writer ended, and the directory is the
+answer.
+
+The `cache.wait` event fires when the exclusive lock blocks, and it names the
+holder from the owner record, which is what the owner record is for.
+
+Costs: a waiter that loses a race to a third process waits a second time. The
+loop is bounded by the wait timeout, not by attempts.
+
+Uncertain: nothing.
+
+Sources: contracts.md Cache, a second process wanting an object being written
+waits and reuses the result; contracts.md Events `cache.wait`.
+
+## Startup recovery is one boot generation sweep, run once per boot
+
+Question: which partial and staging entries are orphans, when the sweep runs,
+and what it costs a run that has nothing to recover.
+
+Options: sweep whenever the cache is opened; sweep entries whose writer is not
+live; sweep entries recorded in a previous boot, once per boot.
+
+Chosen: the third, exactly as contracts.md words it. Every entry in `partial/`
+and `staging/` is created together with an owner record naming the machine, the
+boot, the process and its start time, which is the token the locking record
+already defines. Recovery removes an entry whose recorded machine is this
+machine and whose recorded boot is not this boot. An entry from another machine
+is left alone, because a shared cache is not this machine's to recover. An
+entry from this boot is left alone whether or not its writer is still running:
+a partial from this boot is resume material, and its writer's lock is what
+keeps a second writer off it.
+
+The sweep runs at most once per boot per cache. `meta/recovered` holds the boot
+identity of the last sweep, and a cache whose file already names this boot skips
+the sweep after one read. The file is written after the sweep, under the lock
+that guards it, so two processes racing to recover perform one sweep between
+them.
+
+Because: contracts.md says orphaned staging and partial entries from a previous
+boot are removed at startup, and the boot generation is the whole rule. It also
+says the binary does no work at startup that a command does not need, so a sweep
+on every cache open would put a directory enumeration in front of the no-op
+regime; one file read is what remains after the first run of a boot. Removing
+entries by liveness rather than by boot would delete the partial belonging to a
+run the user just killed, which is the transfer the resume ladder exists to
+continue.
+
+Staging directories are never resumable, so a staging entry from a previous boot
+is removed outright. A partial entry from a previous boot is also removed,
+because contracts.md names it as an orphan; resume across a boot would need the
+partial's recorded source identity to be revalidated, which is phase 2's work
+and not a reason to keep bytes nothing points at.
+
+Costs: one owner record written beside every partial and staging entry, and a
+file read per cache open. A machine whose boot identity cannot be read never
+recovers, which the liveness ladder already treats as undecidable, and the sweep
+reports that it did not run rather than guessing.
+
+Uncertain: whether a cache shared between machines wants a per-machine recovery
+marker rather than one file. One file per machine identity under `meta/` is the
+obvious answer if it does, and it is not needed until a second machine writes.
+
+Sources: contracts.md Cache; the advisory locking record's owner token; the
+atomic publication record on the sibling directory a killed tree publish leaves.
+
+## The cache format fingerprint is an unordered hash of named format facts
+
+Question: what exactly is hashed to produce the value in `format`, given that
+standards.md requires an unordered hash of the format definition that nothing
+can branch on.
+
+Options: hash the source of the cache crate; hash a hand-written version string;
+hash a set of statements describing the format, combined so that order cannot
+matter.
+
+Chosen: the third. The format definition is a set of short ASCII statements,
+each naming one fact about the on-disk format: the name of every directory, the
+naming rule for every file in it, the digest algorithm and its text encoding,
+the field list of the owner record, the field list of a pin record, the outboard
+group size and threshold, and the canonical form the records are written in.
+Each statement is hashed with BLAKE3 `derive_key` under the context
+`fetchloom cache format`, the resulting 32-byte values are combined by exclusive
+or, and the fingerprint is the derived-key hash of that accumulator.
+
+Because: exclusive or of hashes is the standard unordered combination, so the
+value cannot depend on the order the statements are written in, which is what
+standards.md means by an unordered hash and what stops the list from acquiring
+an implicit sequence that looks like a version. Hashing the crate's source
+would change the fingerprint when a comment or a test changed, which would
+force a cache clear for a change that cannot affect any byte on disk. A version
+string is a version field wearing a different hat.
+
+A statement is added or edited only when the on-disk format changes, and that
+change makes every existing cache fail with `cache.format_mismatch` and the
+instruction to run `cache clear`. Nothing reads the fingerprint for anything
+but equality, and the type carries no ordering that a branch could use.
+
+The test that keeps this honest asserts two things: changing any statement
+changes the fingerprint, and permuting the statements does not.
+
+Costs: the statement list is written by hand, so a format change that nobody
+records in it produces a fingerprint that does not move and a cache that is
+silently wrong. That is the one failure this construction cannot detect, and
+the review gate for any change under the cache crate is to ask whether a
+statement belongs with it.
+
+Uncertain: nothing.
+
+Sources: standards.md One thing; contracts.md Cache and Errors
+`cache.format_mismatch`; docs.rs `blake3` `Hasher::new_derive_key`.
+
+## Ownership in a shared cache is the filesystem's answer, not a recorded one
+
+Question: how prune in a shared cache tells which objects the invoking user
+created, and which filesystems cannot express the ownership rule contracts.md
+states.
+
+Options: record the creating user in a file beside each object; ask the
+filesystem who owns the object.
+
+Chosen: ask the filesystem. The Platform seam gains one query returning the
+owner of a path and one returning this process's own owner identity, both as an
+opaque identity that is only ever compared for equality. On Unix that identity
+is the numeric user identifier from `stat`, and this process's is `geteuid`. On
+Windows it is the owner security identifier read with `GetSecurityInfo` for
+`OWNER_SECURITY_INFORMATION`, and this process's is the user in its own access
+token, compared as bytes.
+
+Permissions written by a shared cache, on Unix: `objects/`, `outboard/`,
+`partial/`, `staging/`, `meta/`, `locks/` and `pins/` are mode 0777 with the
+sticky bit, so every user may add entries and only an entry's owner may remove
+it; objects are published mode 0444, because an object is immutable once it is
+in `objects/` and no user has cause to write one; the two lock files stay mode
+0666 as the locking record already fixed. On Windows the cache root carries an
+inheritable access control entry granting the configured shared-cache group read
+and write, which the locking record already requires for `locks/`, and the
+sticky bit has no equivalent, so removal by another user is prevented by prune's
+ownership check rather than by the filesystem.
+
+Filesystems that cannot express it, and are refused for a shared cache: any
+volume with no ownership model at all, which is FAT and exFAT; any volume mounted
+so that every file reports one identity regardless of who wrote it, which is
+what an SMB or CIFS mount with a fixed user option does and what a network mount
+of a Windows share looks like from Unix; and every volume already refused by the
+locking record, because a shared cache without cross-user locking is refused
+before ownership is even asked about. The probe is empirical and matches the
+capability record's shape: create a file in the cache's own staging directory,
+ask who owns it, and refuse the volume when the answer is not this process's own
+identity.
+
+Because: a recorded owner is a claim by whoever wrote the record, and in a
+shared cache the other users are exactly the parties the record would be
+protecting against. The filesystem's answer is the only one that is not
+self-asserted. Comparing opaque identities for equality keeps one rule on three
+platforms and never needs a user name, which would be a lookup that can fail and
+a string that can collide.
+
+Costs: one ownership query per object prune considers, which makes a prune of a
+shared cache slower than a prune of a private one in proportion to the objects
+it examines. On Windows the removal rule is enforced by Fetchloom rather than by
+the filesystem, so a user with permission to delete another user's object could
+do so with any other tool.
+
+Uncertain: the exact Windows call sequence for reading an owner from an open
+handle and for reading the token user was chosen from the documented API surface
+and has not been compiled or run in this session. Whether a given SMB mount
+reports a fixed identity is discovered by the probe rather than predicted, which
+is why the probe exists.
+
+Sources: contracts.md Cache Modes, the shared cache rules; the advisory locking
+record on `locks/` permissions; Microsoft Learn `GetSecurityInfo`,
+`GetTokenInformation`; `stat(2)`; `geteuid(2)`.
+
+## A cache that cannot be used is a degradation, never a failure
+
+Question: what a run does when the cache directory is missing, read-only, or
+out of space, and how each of the three is detected.
+
+Options: check the cache up front with a free-space query and a permission
+probe; discover each condition at the point of the operation that fails.
+
+Chosen: discover at the point of failure, then degrade once. The cache is
+opened lazily by the first operation that needs it. A missing directory is
+created, and a failure to create it is the missing case. A read-only cache is
+the failure to create the format file or an entry, reported by the platform as
+a permission or read-only-filesystem error. A full cache is the failure of the
+preallocation or the write, reported as no space left. Each of the three emits
+one `degrade` event naming the cache as requested, no-cache behavior as used,
+and the platform's own reason, and the run continues exactly as `--no-cache`
+would: the partial transfer lives beside the destination and is discarded on
+success.
+
+The degradation is decided once per run and latched. A cache that failed is not
+retried later in the same run, so one run cannot emit the same degradation for
+every object.
+
+Reading is separate from writing. A cache that can be read but not written is
+still used for hits; only the writing side degrades. That is the read-only case
+and it is the common one, a cache directory shared read-only or on a read-only
+mount.
+
+Because: a free-space query up front is a guess with a race behind it, since
+another process may consume the space between the check and the write, so the
+write has to handle exhaustion anyway and the check adds a second code path
+that can be wrong. contracts.md Disk accounting requires a space check before a
+transfer begins, and that check is about the destination, which is the real
+copy and must fail rather than degrade. The cache is an optimization, so the
+same condition has a different answer there, and the two are not one mechanism.
+
+Costs: the first failing operation is the one that discovers the condition, so a
+run degrades partway rather than at its start, and the degrade event may arrive
+after some objects were already cached. Latching means a cache that becomes
+writable again mid-run stays unused for the rest of it.
+
+Uncertain: which error the platform reports for a full volume during
+preallocation as opposed to during a write differs per filesystem, so the
+detection matches on the error kind the standard library reports rather than on
+a code, and a volume that reports something else degrades through the generic
+path with its own message rather than being misreported.
+
+Sources: contracts.md Cache Modes, a cache that is missing, read-only, or out of
+space does not stop a run; contracts.md Disk accounting; standards.md on
+fallbacks and `degrade`.
+
+## Prune sweeps under the lock, and the clock only sets the pace
+
+Question: what the grace period in mark, grace, sweep protects, how long it is,
+and where a mark lives.
+
+Options: grace as a retention window, so recently used objects survive; grace as
+the interval between marking an object unreferenced and removing it.
+
+Chosen: the second. A mark is a record under `meta/prune/` naming a digest and
+the instant it was marked. A sweep removes an object only when it is still
+unpinned, its exclusive lock can be taken without waiting, and its mark is older
+than the grace period. Taking the lock is what makes the removal safe; the grace
+period only stops a prune from removing an object a run is about to lease.
+
+The default grace is sixty seconds. It is a race window, not a retention policy:
+the window between a process deciding it will use an object and taking its
+shared lock is bounded by a resolution step, not by anything a user does.
+
+Because: correctness cannot come from the clock, and contracts.md Determinism
+says so directly. The lock is the authority in both directions: an object under
+any lock is never swept, and an object being swept is under the sweeper's
+exclusive lock, so no reader can be part-way through opening it. If the grace
+period were zero the invariants would still hold, and the only thing lost would
+be objects a starting run was about to want. Sixty seconds is chosen to exceed
+that window by a wide margin while being far below any interval at which a user
+would notice prune deferring work to a second run.
+
+A mark that is younger than the grace survives, and the object is swept by a
+later prune. A mark for an object that has since been leased or pinned is
+removed along with the mark, because the object is now referenced and marking it
+again later is one directory read.
+
+Costs: reclaiming space takes two prune runs when the first one marks. A crash
+between mark and sweep leaves marks behind, which the next prune reads and acts
+on, so they are not orphans.
+
+Uncertain, and raised rather than invented: contracts.md Limits does not list a
+grace period and Flags names no way to set one, so this build compiles the
+default in and offers no flag, which is what the rule about a flag existing only
+when it performs requires. Whether the grace belongs in Limits as a configurable
+default is a contract question.
+
+Also uncertain and named here rather than worked around: contracts.md requires
+that an object referenced by a lock in the working directory survives prune. No
+build writes a lock yet, so in this phase nothing is referenced by one and the
+rule has no subject. It is implemented when locks are, in phase 4, and the test
+for it is written then.
+
+Sources: contracts.md Cache, Determinism, Limits, Flags; the lease record above.
+
+## Filesystems come from images the workflow builds
+
+Question: how btrfs, XFS with reflink, ReFS, APFS in both case forms, HFS+,
+tmpfs and a network-backed volume are made to exist on hosted runners, so that
+cloning, locking and the capability probes are exercised rather than skipped.
+
+Options: pay for runners with those filesystems attached; build each filesystem
+on the runner from a loopback or virtual disk image.
+
+Chosen: build them on the runner. Linux creates a file, formats it, and mounts
+it: `mkfs.btrfs` for btrfs and `mkfs.xfs -m reflink=1` for XFS, both from
+packages the workflow installs, plus `/dev/shm` for tmpfs and a loopback NFS
+export mounted from localhost for the network-backed volume. macOS creates
+sparse disk images with `hdiutil create -type SPARSE -fs APFS`, the same with
+`Case-sensitive APFS`, and the same with `HFS+`, each attached at a named mount
+point. Windows creates a virtual disk with `New-VHD`, mounts it, and formats it
+with `Format-Volume -DevDrive`, which is ReFS with block cloning, supported on
+the `windows-2025` image.
+
+Each job exports the mount points it created through environment variables named
+for the property they carry rather than for the filesystem, and every test that
+is skipped today reads the variable that names what it needs. A variable that is
+not set leaves the test skipped, so a runner that cannot build an image reports
+a skip rather than a failure, and the test itself is unchanged.
+
+Because: the phase 0 gate closed with block cloning never having succeeded on
+any machine and fourteen named skips, and this phase clones and locks
+constantly. A runner that cannot clone would let every clone path stay unproven
+until the phase ended. Building the images costs seconds per job and turns the
+skips into runs on the same suite.
+
+Costs: three more setup steps per platform, each of which can fail for reasons
+that have nothing to do with Fetchloom, and a Windows step that depends on the
+virtual disk cmdlets being present on the image. The network-backed case is
+covered on Linux only; a macOS or Windows network volume is not built here and
+stays a named skip.
+
+Uncertain: whether the arm Linux and arm Windows images carry the same tools as
+their x86 counterparts, and whether a hosted runner permits the loopback mounts
+and the virtual disk attach at all. Every one of those is answered by the first
+run rather than by a claim here.
+
+Sources: `mkfs.btrfs(8)`; `mkfs.xfs(8)` on the reflink option; `hdiutil(1)`;
+Microsoft Learn on Dev Drive and `Format-Volume`; the phase 0 gate record.
