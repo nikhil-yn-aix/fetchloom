@@ -177,3 +177,20 @@ pub fn names(directory: &Path) -> Vec<String> {
     found.sort();
     found
 }
+
+/// A directory this test owns inside each volume offering a property, where
+/// the directory is the volume's own rather than one created inside it.
+///
+/// Windows carries case sensitivity on the directory itself and does not pass
+/// it to a directory created inside one, so a test about case has to work in
+/// the directory the environment named.
+pub fn volume_directories(property: Property) -> Vec<PathBuf> {
+    volumes(property)
+}
+
+/// Removes the names a test made in a directory it does not own.
+pub fn remove_all(names: &[PathBuf]) {
+    for name in names {
+        let _ = std::fs::remove_file(name);
+    }
+}

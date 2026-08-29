@@ -23,6 +23,7 @@ use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
+use fetchloom_engine::verification::VerificationPolicy;
 
 use support::{bytes_of, cache, cache_in};
 
@@ -31,7 +32,14 @@ fn a_cache_writes_every_directory_the_contract_names() {
     let scratch = tempfile::TempDir::new().unwrap();
     let held = cache_in(scratch.path());
     for name in [
-        "objects", "outboard", "partial", "staging", "meta", "locks", "pins",
+        "objects",
+        "outboard",
+        "partial",
+        "staging",
+        "quarantine",
+        "meta",
+        "locks",
+        "pins",
     ] {
         assert!(
             held.layout().root().join(name).is_dir(),
@@ -271,7 +279,21 @@ fn status_counts_what_the_cache_holds() {
 }
 
 #[test]
-fn an_object_changed_on_disk_is_refused_by_the_default_policy() {
+fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
+    let (scratch, held) = cache();
+    let digest = support::publish(&held, &bytes_of(4096, 13));
+    let object = held.layout().object(digest);
+
+    support::make_writable(&object);
+    std::fs::write(&object, bytes_of(2048, 14)).unwrap();
+
+    let reopened = support::open_cache(scratch.path()).unwrap();
+    let refused = reopened.open(digest).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::CacheCorrupt);
+}
+
+#[test]
+fn an_object_changed_within_one_tick_is_refused_only_by_rereading_it() {
     let (scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(4096, 13));
     let object = held.layout().object(digest);
@@ -279,9 +301,19 @@ fn an_object_changed_on_disk_is_refused_by_the_default_policy() {
     support::make_writable(&object);
     std::fs::write(&object, bytes_of(4096, 14)).unwrap();
 
-    let reopened = support::open_cache(scratch.path()).unwrap();
-    let refused = reopened.open(digest).unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::CacheCorrupt);
+    let rereading = support::open_cache_with(scratch.path(), VerificationPolicy::Always).unwrap();
+    let refused = rereading.open(digest).unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        ErrorKind::CacheCorrupt,
+        "rereading the object did not notice bytes that changed"
+    );
+
+    let trusting = support::open_cache_with(scratch.path(), VerificationPolicy::Never).unwrap();
+    assert!(
+        trusting.open(digest).is_ok(),
+        "an object was checked under a policy that trusts it unconditionally"
+    );
 }
 
 #[test]

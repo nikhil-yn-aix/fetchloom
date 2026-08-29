@@ -22,11 +22,19 @@ use serde_json as _;
 
 /// Opens a cache under a directory, which is where every test puts one.
 pub fn open_cache(under: &Path) -> Result<Cache<NativePlatform>, Error> {
+    open_cache_with(under, VerificationPolicy::Fingerprint)
+}
+
+/// Opens a cache under a directory with a given check on a hit.
+pub fn open_cache_with(
+    under: &Path,
+    policy: VerificationPolicy,
+) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         under.join("cache"),
         NativePlatform::new(),
         DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
+        policy,
     )
 }
 

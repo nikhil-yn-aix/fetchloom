@@ -259,19 +259,21 @@ fn cloning_shares_blocks_on_a_volume_that_supports_it() {
 #[test]
 fn case_folding_is_reported_on_a_case_sensitive_volume() {
     let platform = NativePlatform::new();
-    for scratch in support::scratch_on(support::Property::CaseSensitive) {
-        let reported = platform.volume_capabilities(scratch.path()).unwrap();
-        platform
-            .create_file_exclusive(&scratch.path().join("FetchloomCaseCheck"))
-            .unwrap();
-        platform
-            .create_file_exclusive(&scratch.path().join("fetchloomcasecheck"))
-            .unwrap_or_else(|reason| {
-                panic!(
-                    "{} was built case sensitive and refused the other case: {reason}",
-                    scratch.path().display()
-                )
-            });
+    for directory in support::volume_directories(support::Property::CaseSensitive) {
+        let reported = platform.volume_capabilities(&directory).unwrap();
+        let upper = directory.join("FetchloomCaseCheck");
+        let lower = directory.join("fetchloomcasecheck");
+        support::remove_all(&[upper.clone(), lower.clone()]);
+
+        platform.create_file_exclusive(&upper).unwrap();
+        let both = platform.create_file_exclusive(&lower).is_ok();
+        support::remove_all(&[upper, lower]);
+
+        assert!(
+            both,
+            "{} was built case sensitive and refused the other case",
+            directory.display()
+        );
         assert_eq!(reported.case_folding, CaseFolding::Sensitive);
     }
 }
@@ -279,7 +281,8 @@ fn case_folding_is_reported_on_a_case_sensitive_volume() {
 #[test]
 fn case_folding_is_reported_on_a_case_insensitive_volume() {
     let platform = NativePlatform::new();
-    for scratch in support::scratch_on(support::Property::CaseInsensitive) {
+    for directory in support::volume_directories(support::Property::CaseInsensitive) {
+        let scratch = tempfile::TempDir::new_in(&directory).unwrap();
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         platform
             .create_file_exclusive(&scratch.path().join("FetchloomCaseCheck"))
@@ -294,7 +297,6 @@ fn case_folding_is_reported_on_a_case_insensitive_volume() {
         assert_eq!(reported.case_folding, CaseFolding::Folding);
     }
 }
-
 #[test]
 fn normalization_is_reported_on_a_volume_that_normalizes() {
     let platform = NativePlatform::new();
