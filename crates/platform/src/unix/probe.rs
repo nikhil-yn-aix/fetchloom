@@ -188,8 +188,7 @@ fn clone_probe(directory: &Path) -> bool {
 #[cfg(target_vendor = "apple")]
 fn clone_probe(directory: &Path) -> bool {
     super::macos::volume_capability_bits(directory)
-        .map(|bits| super::macos::has_interface(&bits, super::macos::VOL_CAP_INT_CLONE))
-        .unwrap_or(false)
+        .is_ok_and(|bits| super::macos::has_interface(&bits, super::macos::VOL_CAP_INT_CLONE))
 }
 
 #[cfg(target_os = "linux")]
@@ -217,8 +216,7 @@ fn sparse_probe(directory: &Path) -> bool {
 #[cfg(target_vendor = "apple")]
 fn sparse_probe(directory: &Path) -> bool {
     super::macos::volume_capability_bits(directory)
-        .map(|bits| super::macos::has_format(&bits, super::macos::VOL_CAP_FMT_SPARSE_FILES))
-        .unwrap_or(false)
+        .is_ok_and(|bits| super::macos::has_format(&bits, super::macos::VOL_CAP_FMT_SPARSE_FILES))
 }
 
 #[cfg(target_os = "linux")]

@@ -42,17 +42,8 @@ const VOL_CAPABILITIES_INTERFACES: usize = 1;
 /// The bit saying a volume can share blocks between files.
 pub(super) const VOL_CAP_INT_CLONE: u32 = 0x0001_0000;
 
-/// The bit saying a volume can reserve blocks without writing them.
-pub(super) const VOL_CAP_INT_ALLOCATE: u32 = 0x0000_0040;
-
-/// The bit saying a volume can order writes without flushing to the device.
-pub(super) const VOL_CAP_INT_BARRIERFSYNC: u32 = 0x0100_0000;
-
 /// The bit saying a volume stores files with holes.
 pub(super) const VOL_CAP_FMT_SPARSE_FILES: u32 = 0x0000_0040;
-
-/// The bit saying a volume links one file under two names.
-pub(super) const VOL_CAP_FMT_HARDLINKS: u32 = 0x0000_0004;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -101,11 +92,11 @@ pub(super) fn identity(path: &Path) -> Result<Identity, Error> {
             format!("{}: {reason}", path.display()),
         )
     })?;
-    let device = found.st_dev as u64;
+    let device = u64::from(found.st_dev.cast_unsigned());
     Ok(Identity {
         volume: device,
         file: (u128::from(device) << 64) | u128::from(found.st_ino),
-        size: found.st_size as u64,
+        size: found.st_size.cast_unsigned(),
         modified_nanos: i128::from(found.st_mtime) * 1_000_000_000
             + i128::from(found.st_mtime_nsec),
         changed_nanos: i128::from(found.st_ctime) * 1_000_000_000 + i128::from(found.st_ctime_nsec),
@@ -363,7 +354,7 @@ pub(super) fn process_start(pid: u32) -> ProcessState {
     // SAFETY: the buffer is a whole record and the size passed is its own size, so the call cannot write past it.
     let written = unsafe {
         libc::proc_pidinfo(
-            pid as libc::c_int,
+            pid.cast_signed(),
             libc::PROC_PIDTBSDINFO,
             0,
             found.as_mut_ptr().cast::<c_void>(),
@@ -397,11 +388,11 @@ pub(super) fn identity_of(file: &File) -> Result<Identity, Error> {
             format!("an open file does not report an identity: {reason}"),
         )
     })?;
-    let device = found.st_dev as u64;
+    let device = u64::from(found.st_dev.cast_unsigned());
     Ok(Identity {
         volume: device,
         file: (u128::from(device) << 64) | u128::from(found.st_ino),
-        size: found.st_size as u64,
+        size: found.st_size.cast_unsigned(),
         modified_nanos: i128::from(found.st_mtime) * 1_000_000_000
             + i128::from(found.st_mtime_nsec),
         changed_nanos: i128::from(found.st_ctime) * 1_000_000_000 + i128::from(found.st_ctime_nsec),

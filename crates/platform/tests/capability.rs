@@ -9,7 +9,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
