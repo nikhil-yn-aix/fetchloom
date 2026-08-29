@@ -20,6 +20,7 @@ clap_complete = { workspace = true }
 fetchloom-cache = { workspace = true }
 fetchloom-engine = { workspace = true }
 fetchloom-platform = { workspace = true }
+fetchloom-sources = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

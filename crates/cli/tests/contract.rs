@@ -14,11 +14,12 @@ use clap_complete as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
 use fetchloom_engine as _;
-use fetchloom_faults as _;
 use fetchloom_platform as _;
+use fetchloom_sources as _;
 use serde as _;
 use toml as _;
 
+use fetchloom_faults::{Reply, Script, TestServer};
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
@@ -26,16 +27,20 @@ fn binary() -> &'static str {
 }
 
 fn run(arguments: &[&str]) -> Output {
+    let cache = TempDir::new().unwrap();
     Command::new(binary())
         .args(arguments)
+        .env("FETCHLOOM_CACHE_DIR", cache.path())
         .stdin(Stdio::null())
         .output()
         .unwrap()
 }
 
 fn run_in(directory: &Path, arguments: &[&str]) -> Output {
+    let cache = TempDir::new().unwrap();
     Command::new(binary())
         .args(arguments)
+        .env("FETCHLOOM_CACHE_DIR", cache.path())
         .current_dir(directory)
         .stdin(Stdio::null())
         .output()
@@ -132,6 +137,105 @@ fn get_materializes_a_tree_and_verify_reproduces_its_digest() {
     assert_eq!(verified.status.code(), Some(0));
     let body: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
     assert_eq!(body["tree"].as_str().unwrap(), materialized);
+}
+
+#[test]
+fn get_materializes_a_reference_naming_one_file() {
+    let temporary = corpus();
+    let source = temporary.path().join("source").join("a.txt");
+    let destination = temporary.path().join("destination");
+
+    let got = run(&[
+        "get",
+        source.to_str().unwrap(),
+        "--output",
+        destination.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        got.status.code(),
+        Some(0),
+        "stderr was {}",
+        String::from_utf8_lossy(&got.stderr)
+    );
+    let result: serde_json::Value =
+        serde_json::from_slice(&got.stdout).expect("the result is JSON");
+
+    assert_eq!(result["entries"].as_u64(), Some(1));
+    assert_eq!(result["bytes"].as_u64(), Some(5));
+    assert!(
+        destination.join("a.txt").is_file(),
+        "a reference naming one file materialized {:?}",
+        std::fs::read_dir(&destination).map(|entries| entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>())
+    );
+    assert_eq!(std::fs::read(destination.join("a.txt")).unwrap(), b"hello");
+
+    let verified = run(&["verify", destination.to_str().unwrap(), "--json"]);
+    assert_eq!(verified.status.code(), Some(0));
+    let body: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
+    assert_eq!(
+        body["tree"].as_str().unwrap(),
+        result["tree"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn get_on_a_file_url_names_one_file_the_same_way_a_path_does() {
+    let temporary = corpus();
+    let source = temporary.path().join("source").join("a.txt");
+    let by_path = temporary.path().join("by-path");
+    let by_url = temporary.path().join("by-url");
+
+    let url = format!(
+        "file:///{}",
+        source.display().to_string().replace('\\', "/")
+    );
+    let first = run(&[
+        "get",
+        source.to_str().unwrap(),
+        "--output",
+        by_path.to_str().unwrap(),
+        "--json",
+    ]);
+    let second = run(&["get", &url, "--output", by_url.to_str().unwrap(), "--json"]);
+
+    assert_eq!(first.status.code(), Some(0));
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr was {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let one: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let two: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(one["tree"], two["tree"], "the two spellings disagreed");
+}
+
+#[test]
+fn a_reference_naming_nothing_fails_as_unresolved_rather_than_as_unreadable() {
+    let temporary = corpus();
+    let missing = temporary.path().join("source").join("absent.txt");
+    let destination = temporary.path().join("destination");
+
+    let got = run(&[
+        "get",
+        missing.to_str().unwrap(),
+        "--output",
+        destination.to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert_eq!(got.status.code(), Some(10));
+    let body: serde_json::Value = serde_json::from_slice(&got.stdout).unwrap();
+    assert_eq!(body["kind"].as_str(), Some("reference.unresolved"));
+    let action = body["next_action"].as_str().unwrap();
+    assert!(
+        !action.contains("readable"),
+        "a missing name was reported as a permission problem: {action}"
+    );
 }
 
 #[test]
@@ -452,4 +556,93 @@ fn a_credential_never_reaches_any_stream() {
         "the secret reached the event stream"
     );
     let _ = source;
+}
+
+#[test]
+fn get_over_http_materializes_the_object_it_was_pointed_at() {
+    let bytes: Vec<u8> = (0..4096u32)
+        .map(|value| u8::try_from(value % 256).unwrap_or(0))
+        .collect();
+    let server = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let temporary = TempDir::new().unwrap();
+    let destination = temporary.path().join("destination");
+
+    let got = run(&[
+        "get",
+        &format!("{}/object.bin", server.origin()),
+        "--output",
+        destination.to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert_eq!(
+        got.status.code(),
+        Some(0),
+        "stderr was {}",
+        String::from_utf8_lossy(&got.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&got.stdout).unwrap();
+    assert_eq!(result["entries"].as_u64(), Some(1));
+    assert_eq!(result["bytes"].as_u64(), Some(4096));
+    assert_eq!(
+        std::fs::read(destination.join("object.bin")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn get_over_http_reports_a_terminal_status_as_a_network_failure() {
+    let server = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Status {
+        code: 404,
+        retry_after: None,
+    }]))
+    .unwrap();
+    let temporary = TempDir::new().unwrap();
+    let destination = temporary.path().join("destination");
+
+    let got = run(&[
+        "get",
+        &format!("{}/object.bin", server.origin()),
+        "--output",
+        destination.to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert_eq!(got.status.code(), Some(20));
+    let body: serde_json::Value = serde_json::from_slice(&got.stdout).unwrap();
+    assert_eq!(body["kind"].as_str(), Some("network.status"));
+    assert!(
+        !destination.exists(),
+        "a failed transfer left a destination"
+    );
+}
+
+#[test]
+fn get_over_http_says_that_it_cannot_resume() {
+    let bytes = vec![7u8; 1024];
+    let server = TestServer::start(Script::serving(bytes)).unwrap();
+    let temporary = TempDir::new().unwrap();
+    let destination = temporary.path().join("destination");
+
+    let got = run(&[
+        "get",
+        &format!("{}/object.bin", server.origin()),
+        "--output",
+        destination.to_str().unwrap(),
+        "--events",
+        "-",
+    ]);
+
+    assert_eq!(got.status.code(), Some(0));
+    let events = String::from_utf8_lossy(&got.stdout);
+    let said = events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|event| {
+            event["event"] == "degrade"
+                && event["requested"]
+                    .as_str()
+                    .is_some_and(|requested| requested.contains("resume"))
+        });
+    assert!(said, "the run did not say that it cannot resume: {events}");
 }

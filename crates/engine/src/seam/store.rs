@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::digest::ContentDigest;
 use crate::error::Error;
 use crate::identity::CacheFormatFingerprint;
+use crate::source_record::SourceRecord;
 
 /// What one prune run did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -90,6 +91,42 @@ pub trait Store {
     /// Fails when the volume has no room and when the claim is not held.
     fn begin(&self, lease: &Self::Lease, length: u64) -> Result<Self::Writer, Error>;
 
+    /// Opens an in-progress object for writing, keeping the first `valid` bytes
+    /// and hashing them back into the digest as it goes.
+    ///
+    /// Takes the claim, the length the source stated, and how many bytes of the
+    /// partial are known to have arrived. Discards anything past `valid`,
+    /// because a preallocated file is longer than what was written.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the partial cannot be read back, when the volume has no room,
+    /// and when the claim is not held.
+    fn resume(&self, lease: &Self::Lease, length: u64, valid: u64) -> Result<Self::Writer, Error>;
+
+    /// Records where the bytes of an in-progress object came from.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the record cannot be written beside the partial.
+    fn record_source(&self, digest: ContentDigest, record: &SourceRecord) -> Result<(), Error>;
+
+    /// Reads what a partial recorded about where its bytes came from.
+    ///
+    /// Returns nothing when no partial exists or none was recorded.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a record exists and cannot be read.
+    fn recorded_source(&self, digest: ContentDigest) -> Result<Option<SourceRecord>, Error>;
+
+    /// Discards an in-progress object and everything recorded beside it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the partial exists and cannot be removed.
+    fn discard_partial(&self, digest: ContentDigest) -> Result<(), Error>;
+
     /// Publishes an in-progress object as a completed one.
     ///
     /// # Errors
@@ -97,6 +134,17 @@ pub trait Store {
     /// Fails when the bytes do not match the digest, when the two directories
     /// are on different volumes, and when the rename does not complete.
     fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<(), Error>;
+
+    /// Reports whether an outboard tree is stored for an object.
+    ///
+    /// Takes no lock, for the same reason asking whether an object is present
+    /// takes none: the answer is only ever a reason to open the tree, and
+    /// opening it takes the lease and looks again.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the cache cannot be read.
+    fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error>;
 
     /// Opens the outboard tree for an object.
     ///

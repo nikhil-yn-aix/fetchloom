@@ -22,6 +22,7 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_platform::NativePlatform;
+use fetchloom_sources as _;
 
 use fetchloom_cli::observer::{EventStream, Fanout, Renderer};
 use fetchloom_cli::settings::{Environment, ProcessEnvironment};
@@ -216,66 +217,30 @@ fn run_get(
         ));
         return report(&error, json);
     }
-    let source = match run::local_path(&references[0]) {
-        Ok(source) => source,
-        Err(error) => return report(&error, json),
+    let remote = run::is_remote(&references[0]);
+    let source = if remote {
+        PathBuf::from(run::remote_name(&references[0]))
+    } else {
+        match run::local_path(&references[0]) {
+            Ok(source) => source,
+            Err(error) => return report(&error, json),
+        }
     };
     let destination = transfer
         .output
         .clone()
         .unwrap_or_else(|| run::default_destination(&source));
 
-    let durability = match transfer.durability {
-        Some(surface::DurabilityChoice::Strict) => DurabilityTier::Strict,
-        Some(surface::DurabilityChoice::Normal) | None => DurabilityTier::Normal,
-        Some(surface::DurabilityChoice::Fast) => DurabilityTier::Fast,
-    };
-
-    let budget = ThreadBudget::resolve(
-        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
-        parsed
-            .global
-            .threads
-            .and_then(|value| usize::try_from(value).ok())
-            .and_then(std::num::NonZeroUsize::new),
-    );
-    let Ok(processor) = Processor::new(budget) else {
+    let durability = durability_of(transfer);
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
-
     let platform = NativePlatform::new();
-
-    let policy = match transfer.verify {
-        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
-        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
-        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
-    };
     let root = resolved.cache_dir.value.clone();
-    let opened = if transfer.no_cache {
-        cache::Opened::Degraded {
-            reason: "this run asked for no cache".to_owned(),
-        }
-    } else {
-        cache::open(&root, durability, policy)
-    };
-    let held = match opened {
-        cache::Opened::Ready(held) => Some(held),
-        cache::Opened::Refused(refused) => {
-            observer.emit(&Event::new(
-                sequence,
-                EventPayload::Failure {
-                    error: (*refused).clone(),
-                },
-            ));
-            return report(&refused, json);
-        }
-        cache::Opened::Degraded { reason } => {
-            if !transfer.no_cache {
-                cache::report_degrade(observer, sequence, &root, &reason);
-            }
-            None
-        }
+    let held = match open_cache(transfer, &root, durability, observer, sequence) {
+        Ok(held) => held,
+        Err(refused) => return report(&refused, json),
     };
 
     let with = run::Materialization {
@@ -284,7 +249,12 @@ fn run_get(
         durability,
         cache: held.as_deref(),
     };
-    match run::materialize_local(&with, &source, &destination, observer, sequence) {
+    let produced = if remote {
+        run::materialize_remote(&with, &references[0], &destination, observer, sequence)
+    } else {
+        run::materialize_local(&with, &source, &destination, observer, sequence)
+    };
+    match produced {
         Ok(result) => {
             if json {
                 match serde_json::to_string(&result) {
@@ -305,5 +275,64 @@ fn run_get(
             ExitCode::Success
         }
         Err(error) => report(&error, json),
+    }
+}
+
+fn durability_of(transfer: &surface::TransferFlags) -> DurabilityTier {
+    match transfer.durability {
+        Some(surface::DurabilityChoice::Strict) => DurabilityTier::Strict,
+        Some(surface::DurabilityChoice::Normal) | None => DurabilityTier::Normal,
+        Some(surface::DurabilityChoice::Fast) => DurabilityTier::Fast,
+    }
+}
+
+fn thread_budget(parsed: &CommandLine) -> ThreadBudget {
+    ThreadBudget::resolve(
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        parsed
+            .global
+            .threads
+            .and_then(|value| usize::try_from(value).ok())
+            .and_then(std::num::NonZeroUsize::new),
+    )
+}
+
+fn open_cache(
+    transfer: &surface::TransferFlags,
+    root: &std::path::Path,
+    durability: DurabilityTier,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
+{
+    let policy = match transfer.verify {
+        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
+        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
+        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
+    };
+    let opened = if transfer.no_cache {
+        cache::Opened::Degraded {
+            reason: "this run asked for no cache".to_owned(),
+        }
+    } else {
+        cache::open(root, durability, policy)
+    };
+    match opened {
+        cache::Opened::Ready(held) => Ok(Some(held)),
+        cache::Opened::Refused(refused) => {
+            observer.emit(&Event::new(
+                sequence,
+                EventPayload::Failure {
+                    error: (*refused).clone(),
+                },
+            ));
+            Err(refused)
+        }
+        cache::Opened::Degraded { reason } => {
+            if !transfer.no_cache {
+                cache::report_degrade(observer, sequence, root, &reason);
+            }
+            Ok(None)
+        }
     }
 }

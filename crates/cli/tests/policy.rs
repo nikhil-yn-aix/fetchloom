@@ -5,12 +5,11 @@
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
-use std::collections::HashMap;
-
 use clap as _;
 use clap_complete as _;
 use fetchloom_cache as _;
 use fetchloom_platform as _;
+use fetchloom_sources as _;
 use serde as _;
 use serde_json as _;
 use tempfile as _;
@@ -30,25 +29,9 @@ use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::policy::Policy;
 use fetchloom_faults::RecordingObserver;
 
-#[derive(Default)]
-struct FakeEnvironment(HashMap<String, String>);
+mod support;
 
-impl FakeEnvironment {
-    fn with(pairs: &[(&str, &str)]) -> Self {
-        Self(
-            pairs
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                .collect(),
-        )
-    }
-}
-
-impl Environment for FakeEnvironment {
-    fn get(&self, name: &str) -> Option<String> {
-        self.0.get(name).cloned()
-    }
-}
+use support::FakeEnvironment;
 
 fn settings_for(flags: &GlobalFlags, environment: &dyn Environment) -> settings::Settings {
     settings::resolve_all(flags, &Discovered::default(), environment)

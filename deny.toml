@@ -1,5 +1,13 @@
 [graph]
 all-features = true
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]
 
 [advisories]
 version = 2
@@ -9,6 +17,8 @@ yanked = "deny"
 version = 2
 allow = [
   "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
   "MIT",
   "Unicode-3.0",
   "Unlicense",
@@ -22,6 +32,9 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [bans]
 multiple-versions = "deny"
+skip = [
+  { crate = "windows-sys@0.52.0", reason = "ring links the Windows syscall surface through an older release than the workspace does, and ring is the cryptography rustls performs the handshake with" },
+]
 wildcards = "deny"
 allow-wildcard-paths = true
 allow = [
@@ -98,4 +111,36 @@ allow = [
   { crate = "winnow", reason = "the parser combinators toml_parser is built on" },
   { crate = "xtask", reason = "the workspace check and measurement driver" },
   { crate = "zmij", reason = "float formatting for serde_json" },
+  { crate = "base64", reason = "the credential and header encoding ureq performs" },
+  { crate = "bytes", reason = "the reference-counted byte buffers ureq-proto passes bodies through" },
+  { crate = "fetchloom-sources", reason = "the workspace Source seam implementation" },
+  { crate = "getrandom", reason = "the operating system entropy ring seeds from" },
+  { crate = "http", reason = "the request and response types ureq exposes headers through" },
+  { crate = "httparse", reason = "the response head parsing ureq-proto does" },
+  { crate = "itoa", reason = "integer formatting for serde_json and http" },
+  { crate = "log", reason = "the logging facade ureq writes through, with no subscriber installed" },
+  { crate = "once_cell", reason = "the one-time initialization rustls and ureq hold their state in" },
+  { crate = "percent-encoding", reason = "the path escaping ureq applies to a location" },
+  { crate = "ring", reason = "the cryptography rustls performs the handshake with, chosen in the client record" },
+  { crate = "rustls", reason = "the TLS implementation, chosen in the trust record" },
+  { crate = "rustls-pki-types", reason = "the certificate and key types rustls takes" },
+  { crate = "rustls-platform-verifier", reason = "verification delegated to the platform, chosen in the trust record" },
+  { crate = "rustls-webpki", reason = "the certificate path building rustls performs" },
+  { crate = "subtle", reason = "the timing-independent comparison rustls uses" },
+  { crate = "untrusted", reason = "the bounded input reading ring parses through" },
+  { crate = "ureq", reason = "the one blocking HTTP client, chosen in the client record" },
+  { crate = "ureq-proto", reason = "the protocol state machine ureq drives" },
+  { crate = "utf8-zero", reason = "the string validation ureq-proto performs on a header" },
+  { crate = "winreg", reason = "the Windows proxy configuration ureq reads" },
+  { crate = "zeroize", reason = "the key material clearing rustls performs on drop" },
+  { crate = "core-foundation", reason = "the Apple types rustls-platform-verifier hands a certificate to the platform through" },
+  { crate = "core-foundation-sys", reason = "the raw Apple bindings core-foundation wraps" },
+  { crate = "openssl-probe", reason = "the system certificate bundle location rustls-platform-verifier reads on Linux" },
+  { crate = "rustls-native-certs", reason = "the system certificate bundle rustls-platform-verifier falls back to on Linux, which has no verification service" },
+  { crate = "schannel", reason = "the Windows certificate verification rustls-platform-verifier delegates to" },
+  { crate = "security-framework", reason = "the Apple certificate verification rustls-platform-verifier delegates to" },
+  { crate = "security-framework-sys", reason = "the raw Apple bindings security-framework wraps" },
+  { crate = "windows-targets", reason = "the per-architecture import libraries the older windows-sys ring links through" },
+  { crate = "windows_aarch64_msvc", reason = "the aarch64 import library windows-targets selects" },
+  { crate = "windows_x86_64_msvc", reason = "the x86_64 import library windows-targets selects" },
 ]

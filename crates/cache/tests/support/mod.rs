@@ -21,11 +21,19 @@ use fetchloom_platform::NativePlatform;
 use serde_json as _;
 
 /// Opens a cache under a directory, which is where every test puts one.
+///
+/// # Errors
+///
+/// Fails when the cache cannot be opened.
 pub fn open_cache(under: &Path) -> Result<Cache<NativePlatform>, Error> {
     open_cache_with(under, VerificationPolicy::Fingerprint)
 }
 
 /// Opens a cache under a directory with a given check on a hit.
+///
+/// # Errors
+///
+/// Fails when the cache cannot be opened.
 pub fn open_cache_with(
     under: &Path,
     policy: VerificationPolicy,
@@ -82,6 +90,10 @@ pub fn make_writable(path: &Path) {
 }
 
 /// Opens a cache at an exact path.
+///
+/// # Errors
+///
+/// Fails when the cache cannot be opened.
 pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         root,
@@ -194,7 +206,8 @@ impl Property {
         let linux = cfg!(target_os = "linux");
         match self {
             Self::Small | Self::Second => true,
-            Self::Network | Self::ReadOnly => linux,
+            Self::ReadOnly => linux,
+            Self::Network => false,
         }
     }
 }
@@ -206,8 +219,10 @@ pub fn volumes(property: Property) -> Vec<std::path::PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
         .collect();
     assert!(
-        !(found.is_empty() && std::env::var_os("CI").is_some() && property.promised_here()),
-        "{} is unset on a runner that builds this filesystem",
+        !(found.is_empty()
+            && std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()
+            && property.promised_here()),
+        "{} is unset in a verification run that builds this filesystem",
         property.variable()
     );
     found
@@ -241,16 +256,25 @@ pub fn link_directory(target: &Path, link: &Path) -> bool {
 
 /// The user a test hands an object to, when the environment names one.
 ///
-/// Continuous integration names a user this process can give a file to, which
-/// is what makes the ownership rule in contracts.md Cache testable at all.
+/// The volume script names a user this process can give a file to, which is
+/// what makes the ownership rule in contracts.md Cache testable at all. A
+/// verification run on Linux promised that user, so an absent name there is a
+/// provisioning failure rather than a reason to skip.
 pub fn another_owner() -> Option<String> {
-    std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok()
+    let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
+    assert!(
+        !(named.is_none()
+            && std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()
+            && cfg!(target_os = "linux")),
+        "FETCHLOOM_TEST_OTHER_OWNER is unset in a verification run that creates the user"
+    );
+    named
 }
 
 /// Gives a file to another user through the platform s own tool.
 pub fn give_away(path: &Path, owner: &str) {
-    let status = std::process::Command::new("sudo")
-        .args(["-n", "chown", owner])
+    let status = std::process::Command::new("chown")
+        .arg(owner)
         .arg(path)
         .status()
         .unwrap();
@@ -259,4 +283,40 @@ pub fn give_away(path: &Path, owner: &str) {
         "{} could not be given away",
         path.display()
     );
+}
+
+/// Reports whether a directory holds no entries at all.
+pub fn is_empty(directory: &std::path::Path) -> bool {
+    std::fs::read_dir(directory).is_ok_and(|mut entries| entries.next().is_none())
+}
+
+/// Lists the names a directory holds, sorted.
+pub fn names(directory: &std::path::Path) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// A source record a test writes beside a partial.
+pub fn a_source_record() -> fetchloom_engine::source_record::SourceRecord {
+    fetchloom_engine::source_record::SourceRecord {
+        location: fetchloom_engine::redact::SafeUrl::new("https://example.invalid/object"),
+        host: "example.invalid".to_owned(),
+        size: Some(4096),
+        identity: fetchloom_engine::seam::source::SourceIdentity::StrongValidator(
+            "\"one\"".to_owned(),
+        ),
+        etag: Some("\"one\"".to_owned()),
+        last_modified: None,
+        accepts_ranges: true,
+        written: 4096,
+        rung: fetchloom_engine::resume::ResumeRung::StrongValidator,
+    }
 }

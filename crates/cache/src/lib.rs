@@ -152,14 +152,19 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// The name an owner record for an entry is written under.
+/// The name a source record for an entry is written under.
+fn source_record_of(entry: &Path) -> PathBuf {
+    let mut name = entry.as_os_str().to_owned();
+    name.push(".source");
+    PathBuf::from(name)
+}
+
 fn owner_record_of(entry: &Path) -> PathBuf {
     let mut name = entry.as_os_str().to_owned();
     name.push(".owner");
     PathBuf::from(name)
 }
 
-/// Reports whether this boot has already recovered this cache.
 fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
     match std::fs::read(layout.recovered()) {
         Ok(bytes) => Ok(bytes == boot.as_str().as_bytes()),
@@ -179,7 +184,10 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
         .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|kind| kind == "owner") {
+        if path
+            .extension()
+            .is_some_and(|kind| kind == "owner" || kind == "source")
+        {
             continue;
         }
         let record = owner_record_of(&path);
@@ -191,6 +199,7 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
         }
         remove(&path)?;
         remove(&record)?;
+        remove(&source_record_of(&path))?;
     }
     Ok(())
 }

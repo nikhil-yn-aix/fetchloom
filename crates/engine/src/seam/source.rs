@@ -3,7 +3,7 @@
 use std::io::Read;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::credential::Credential;
 use crate::digest::{ContentDigest, InteropDigest};
@@ -29,7 +29,7 @@ impl ByteRange {
 }
 
 /// What a source says identifies the bytes it is serving.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceIdentity {
     /// The source addresses the bytes by their content.
     ContentAddress(ContentDigest),

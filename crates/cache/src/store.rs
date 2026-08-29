@@ -10,11 +10,15 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::CacheFormatFingerprint;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::store::{CacheStatus, PruneReport, Store};
+use fetchloom_engine::source_record::SourceRecord;
 use fetchloom_engine::verification::VerificationPolicy;
 
 use crate::layout::{digest_of, name_of};
 use crate::record::{self, RecordedFingerprint};
-use crate::{Cache, failure, owner_record_of, seal_object};
+use crate::{Cache, failure, owner_record_of, seal_object, source_record_of};
+
+/// How many bytes a resume reads back at a time to rebuild the digest.
+const RESUME_BUFFER_BYTES: usize = 1 << 20;
 
 /// A completed object held open, with the lease that keeps it from being
 /// pruned while it is being read.
@@ -284,6 +288,73 @@ impl<P: Platform> Store for Cache<P> {
         })
     }
 
+    fn resume(&self, lease: &Self::Lease, length: u64, valid: u64) -> Result<Self::Writer, Error> {
+        let path = self.layout.partial_of(lease.digest);
+        if !path.exists() || valid == 0 {
+            return self.begin(lease, length);
+        }
+        let shortened = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+        shortened
+            .set_len(valid)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+        drop(shortened);
+
+        let mut existing = std::fs::File::open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = vec![0u8; RESUME_BUFFER_BYTES];
+        let mut written = 0u64;
+        loop {
+            let taken = existing
+                .read(&mut buffer)
+                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            if taken == 0 {
+                break;
+            }
+            hasher.update(&buffer[..taken]);
+            written += taken as u64;
+        }
+        drop(existing);
+
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+        record::write(&owner_record_of(&path), &self.token)?;
+        Ok(PartialWriter {
+            file,
+            path,
+            hasher,
+            written,
+        })
+    }
+
+    fn record_source(&self, digest: ContentDigest, record: &SourceRecord) -> Result<(), Error> {
+        record::write(&source_record_of(&self.layout.partial_of(digest)), record)
+    }
+
+    fn recorded_source(&self, digest: ContentDigest) -> Result<Option<SourceRecord>, Error> {
+        let partial = self.layout.partial_of(digest);
+        if !partial.exists() {
+            return Ok(None);
+        }
+        record::read(&source_record_of(&partial))
+    }
+
+    fn discard_partial(&self, digest: ContentDigest) -> Result<(), Error> {
+        let partial = self.layout.partial_of(digest);
+        let _ = std::fs::remove_file(source_record_of(&partial));
+        let _ = std::fs::remove_file(owner_record_of(&partial));
+        match std::fs::remove_file(&partial) {
+            Ok(()) => Ok(()),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(reason) => Err(failure(ErrorKind::CacheCorrupt, partial.as_path(), &reason)),
+        }
+    }
+
     fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<(), Error> {
         let found = ContentDigest::from_bytes(*writer.hasher.finalize().as_bytes());
         if found != lease.digest {
@@ -311,6 +382,10 @@ impl<P: Platform> Store for Cache<P> {
         let _ = std::fs::remove_file(self.layout.mark_of(lease.digest));
         drop(lease);
         Ok(())
+    }
+
+    fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error> {
+        Ok(self.layout.outboard_of(digest).is_file())
     }
 
     fn open_outboard(&self, digest: ContentDigest) -> Result<Self::Reader, Error> {

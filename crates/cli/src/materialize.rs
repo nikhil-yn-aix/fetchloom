@@ -3,9 +3,7 @@
 //! The file operations here go through the standard library rather than the
 //! Platform seam, because no implementation of that seam exists yet. Atomic
 //! publication, capability detection, and advisory locking are therefore absent
-//! and every one of them is reported as a degradation rather than assumed. When
-//! the Platform seam is implemented this module calls it and the direct calls
-//! are deleted.
+//! and every one of them is reported as a degradation rather than assumed.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -37,6 +35,12 @@ pub struct Walked {
     pub files: Vec<SourceFile>,
     /// How many bytes those files hold.
     pub bytes: u64,
+    /// The directory every relative path is taken from.
+    ///
+    /// A reference naming a directory walks that directory. A reference naming
+    /// one object walks its parent and takes only that object, so a single
+    /// object materializes as a destination holding one entry.
+    pub root: PathBuf,
 }
 
 fn unrepresentable(path: &Path, reason: &str) -> Error {
@@ -81,19 +85,37 @@ fn mode_of(metadata: &fs::Metadata) -> Mode {
 ///
 /// Takes the root of the tree. Returns every directory, file, and symbolic link
 /// under it as an entry, with files also listed for copying. The root itself is
-/// not an entry. Fails when the tree cannot be read and when an entry cannot be
-/// named identically on every platform.
+/// not an entry.
 ///
 /// # Errors
 ///
 /// Returns the entry that cannot be represented, or the read that failed.
 pub fn walk(root: &Path) -> Result<Walked, Error> {
+    let metadata = fs::symlink_metadata(root).map_err(|reason| read_failure(root, &reason))?;
     let mut walked = Walked::default();
-    walk_into(root, root, &mut walked)?;
+    if metadata.is_dir() {
+        walked.root = root.to_path_buf();
+        walk_into(root, root, &mut walked)?;
+        return Ok(walked);
+    }
+    walked.root = root
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let one = walked.root.clone();
+    walk_one(&one, root, &metadata, &mut walked)?;
     Ok(walked)
 }
 
 fn read_failure(path: &Path, reason: &std::io::Error) -> Error {
+    if reason.kind() == std::io::ErrorKind::NotFound {
+        return Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!(
+                "name a path that exists, because nothing is at {}",
+                path.display()
+            ),
+        );
+    }
     Error::new(
         ErrorKind::ReferenceUnresolved,
         format!("make {} readable: {reason}", path.display()),
@@ -110,32 +132,42 @@ fn walk_into(root: &Path, directory: &Path, walked: &mut Walked) -> Result<(), E
     children.sort();
 
     for path in children {
-        let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-        let entry_path = entry_path_of(&relative)?;
         let metadata =
             fs::symlink_metadata(&path).map_err(|reason| read_failure(&path, &reason))?;
+        walk_one(root, &path, &metadata, walked)?;
+    }
+    Ok(())
+}
 
-        if metadata.is_symlink() {
-            let target = fs::read_link(&path).map_err(|reason| read_failure(&path, &reason))?;
-            let bytes = target.to_string_lossy().replace('\\', "/").into_bytes();
-            walked.entries.push(TreeEntry::Symlink {
-                path: entry_path,
-                size: bytes.len() as u64,
-                content: hashing::hash_bytes(&bytes),
-            });
-        } else if metadata.is_dir() {
-            walked
-                .entries
-                .push(TreeEntry::Directory { path: entry_path });
-            walk_into(root, &path, walked)?;
-        } else {
-            walked.bytes += metadata.len();
-            walked.files.push(SourceFile {
-                relative,
-                entry: entry_path,
-                mode: mode_of(&metadata),
-            });
-        }
+fn walk_one(
+    root: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+    walked: &mut Walked,
+) -> Result<(), Error> {
+    let relative = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+    let entry_path = entry_path_of(&relative)?;
+
+    if metadata.is_symlink() {
+        let target = fs::read_link(path).map_err(|reason| read_failure(path, &reason))?;
+        let bytes = target.to_string_lossy().replace('\\', "/").into_bytes();
+        walked.entries.push(TreeEntry::Symlink {
+            path: entry_path,
+            size: bytes.len() as u64,
+            content: hashing::hash_bytes(&bytes),
+        });
+    } else if metadata.is_dir() {
+        walked
+            .entries
+            .push(TreeEntry::Directory { path: entry_path });
+        walk_into(root, path, walked)?;
+    } else {
+        walked.bytes += metadata.len();
+        walked.files.push(SourceFile {
+            relative,
+            entry: entry_path,
+            mode: mode_of(metadata),
+        });
     }
     Ok(())
 }

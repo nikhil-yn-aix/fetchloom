@@ -45,13 +45,35 @@ impl<P: Platform> Cache<P> {
     /// Fails when the source cannot be read, when the cache cannot be written,
     /// and when the volume has no room.
     pub fn ingest(&self, source: &Path) -> Result<Ingested, Error> {
-        let mut reading = std::fs::File::open(source)
+        let reading = std::fs::File::open(source)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
         let length = reading
             .metadata()
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?
             .len();
+        self.ingest_from(reading, length, &|reason| {
+            failure(ErrorKind::CacheCorrupt, source, reason)
+        })
+    }
 
+    /// Reads a stream once, hashing it as it is written into the cache.
+    ///
+    /// Takes the bytes, the length to reserve, which may be zero when the source
+    /// did not state one, and what a failure to read those bytes means, which
+    /// only the caller knows. Returns the digest the bytes hash to, their
+    /// length, and whether the cache already held them.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the stream cannot be read, when the cache cannot be written,
+    /// and when the volume has no room.
+    pub fn ingest_from(
+        &self,
+        reading: impl Read,
+        length: u64,
+        read_failure: &dyn Fn(&std::io::Error) -> Error,
+    ) -> Result<Ingested, Error> {
+        let mut reading = reading;
         let scratch = self.layout().partial().join(format!(
             "{}-{}.ingest",
             self.token().pid,
@@ -67,7 +89,7 @@ impl<P: Platform> Cache<P> {
         loop {
             let filled = reading
                 .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+                .map_err(|reason| read_failure(&reason))?;
             if filled == 0 {
                 break;
             }

@@ -36,10 +36,23 @@ pub struct Limits {
     pub retry_ceiling: Duration,
     /// Most entries one listing may return.
     pub listing_entries: u64,
+    /// Largest directory index that will be read.
+    ///
+    /// An index is parsed as one document rather than streamed, so it is the
+    /// one response this build holds whole and it carries its own ceiling.
+    pub listing_bytes: u64,
     /// Most candidate sources probed in parallel.
     pub probed_candidates: u32,
     /// Projected transfer time above which an optional credential is offered.
     pub credential_offer_threshold: Duration,
+    /// Connections held to one host.
+    pub connections_per_host: usize,
+    /// Longest a connection may take to open.
+    pub connect_timeout: Duration,
+    /// Longest a source may take to answer with its headers.
+    pub response_timeout: Duration,
+    /// Longest a body may go without producing a byte.
+    pub idle_timeout: Duration,
 }
 
 impl Default for Limits {
@@ -56,8 +69,13 @@ impl Default for Limits {
             retry_attempts: 5,
             retry_ceiling: Duration::from_secs(60),
             listing_entries: 500_000,
+            listing_bytes: 16_777_216,
             probed_candidates: 4,
             credential_offer_threshold: Duration::from_secs(120),
+            connections_per_host: 4,
+            connect_timeout: Duration::from_secs(10),
+            response_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(30),
         }
     }
 }

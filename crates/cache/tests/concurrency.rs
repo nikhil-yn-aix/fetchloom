@@ -257,6 +257,38 @@ fn recovery_keeps_what_this_boot_wrote_and_removes_what_a_previous_boot_left() {
         !layout.partial_of(digest).exists(),
         "a partial from a previous boot survived recovery"
     );
+    assert!(
+        support::is_empty(&layout.partial()),
+        "recovery left something beside the partial it removed: {:?}",
+        support::names(&layout.partial())
+    );
+    drop(after);
+}
+
+#[test]
+fn recovery_removes_the_source_record_beside_a_partial_it_removes() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let layout = Layout::new(scratch.path().join("cache"));
+    let held = cache_in(scratch.path());
+
+    let bytes = bytes_of(4096, 43);
+    let digest = hash_bytes(&bytes);
+    let lease = held.lease(digest).unwrap();
+    let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
+    writer.write_all(&bytes).unwrap();
+    drop(writer);
+    held.record_source(digest, &support::a_source_record())
+        .unwrap();
+    drop(lease);
+    drop(held);
+
+    support::pretend_a_previous_boot(&layout);
+    let after = cache_in(scratch.path());
+    assert!(
+        support::is_empty(&layout.partial()),
+        "recovery left {:?} behind",
+        support::names(&layout.partial())
+    );
     drop(after);
 }
 

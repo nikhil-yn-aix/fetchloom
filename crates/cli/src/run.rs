@@ -3,19 +3,24 @@
 use std::path::{Path, PathBuf};
 
 use fetchloom_cache::Cache;
+use fetchloom_cache::ingest::Ingested;
 use fetchloom_engine::canonical;
 
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Layer};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
+use fetchloom_engine::limits::Limits;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
+use fetchloom_engine::seam::source::Source;
 use fetchloom_engine::threads::ThreadBudget;
-use fetchloom_engine::tree::TreeEntry;
+use fetchloom_engine::transfer::{Retry, SleepingPause};
+use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_platform::NativePlatform;
+use fetchloom_sources::HttpSource;
 
 use crate::materialize;
 
@@ -130,10 +135,9 @@ pub fn materialize_local(
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
     let Materialization {
-        processor,
         platform,
         durability,
-        cache,
+        ..
     } = *with;
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
 
@@ -160,7 +164,7 @@ pub fn materialize_local(
     std::fs::create_dir_all(&staging)
         .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
 
-    let outcome = fill_staging(processor, platform, cache, source, &staging, &walked, &emit);
+    let outcome = fill_staging(with, &staging, &walked, &emit);
     let mut entries = match outcome {
         Ok(entries) => entries,
         Err(error) => {
@@ -203,14 +207,18 @@ pub fn materialize_local(
 }
 
 fn fill_staging(
-    processor: &Processor,
-    platform: &NativePlatform,
-    cache: Option<&Cache<NativePlatform>>,
-    source: &Path,
+    with: &Materialization<'_>,
     staging: &Path,
     walked: &materialize::Walked,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
+    let Materialization {
+        processor,
+        platform,
+        cache,
+        ..
+    } = *with;
+    let source = walked.root.as_path();
     emit(EventPayload::TransferStart {
         source: fetchloom_engine::redact::SafeUrl::new(&source.to_string_lossy()),
         expected_bytes: Some(walked.bytes),
@@ -392,4 +400,195 @@ pub fn allowed_offline(reference: &str, offline: bool) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// Materializes one object named by an HTTP or HTTPS reference.
+///
+/// Takes what the materialization runs against, the location, and the
+/// destination. Streams the object into the cache, hashing it as it arrives,
+/// and publishes a destination holding that one entry.
+///
+/// # Errors
+///
+/// Fails when the source is unreachable or refuses the request, when the cache
+/// cannot be written, and when the destination already exists.
+pub fn materialize_remote(
+    with: &Materialization<'_>,
+    location: &str,
+    destination: &Path,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<RunResult, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let name = object_name(location);
+
+    emit(EventPayload::ResolveStart);
+    let source = HttpSource::new(Limits::default());
+    let metadata = {
+        let pause = SleepingPause;
+        let limits = Limits::default();
+        let retry = Retry {
+            limits: &limits,
+            pause: &pause,
+            observer,
+            sequence,
+        };
+        retry.until_spent(|_| source.probe(location, None))?
+    };
+    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::PlanReady);
+    emit(EventPayload::Degrade {
+        requested: "a transfer that can resume where an interrupted one stopped".to_owned(),
+        used: "a transfer that restarts from zero".to_owned(),
+        reason:
+            "a partial is named by the digest it will hold, and this reference states no digest, so nothing on disk can be matched to what the source is serving"
+                .to_owned(),
+    });
+
+    if destination.exists() {
+        return Err(Error::new(
+            ErrorKind::DestinationForeign,
+            format!(
+                "remove {} or choose another destination with --output",
+                destination.display()
+            ),
+        ));
+    }
+
+    emit(EventPayload::TransferStart {
+        source: metadata.location.clone(),
+        expected_bytes: metadata.size,
+    });
+    let pause = SleepingPause;
+    let limits = Limits::default();
+    let retry = Retry {
+        limits: &limits,
+        pause: &pause,
+        observer,
+        sequence,
+    };
+    let ingested = retry.until_spent(|_| {
+        let body = source.fetch(location, None, None)?;
+        fetched_into_cache(with, body, metadata.size.unwrap_or(0), location)
+    })?;
+    emit(EventPayload::TransferEnd {
+        bytes: ingested.size,
+        duration_ms: 0,
+    });
+    for entry in source.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: entry.requested,
+            used: entry.used,
+            reason: entry.reason,
+        });
+    }
+
+    let tree = publish_one_object(with, &ingested, &name, destination)?;
+    emit(EventPayload::PublishCommit);
+
+    Ok(RunResult {
+        status: "materialized",
+        dataset: name,
+        tree,
+        destination: destination.to_path_buf(),
+        entries: 1,
+        bytes: ingested.size,
+    })
+}
+
+fn fetched_into_cache(
+    with: &Materialization<'_>,
+    body: impl std::io::Read,
+    length: u64,
+    location: &str,
+) -> Result<Ingested, Error> {
+    match with.cache {
+        Some(cache) => cache.ingest_from(body, length, &|reason| {
+            fetchloom_engine::transfer::body_failure(location, reason)
+        }),
+        None => Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "run without --no-cache, because this build streams a remote object through the cache",
+        )),
+    }
+}
+
+fn place_object(with: &Materialization<'_>, ingested: &Ingested, into: &Path) -> Result<(), Error> {
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "run without --no-cache, because this build streams a remote object through the cache",
+        ));
+    };
+    let object = cache.layout().object(ingested.digest);
+    with.platform.clone_or_copy(&object, into).map(|_| ())
+}
+
+fn object_name(location: &str) -> String {
+    let after_scheme = location
+        .split_once("://")
+        .map_or(location, |(_, rest)| rest);
+    let path = after_scheme
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let last = path.rsplit('/').find(|part| !part.is_empty());
+    last.map_or_else(|| "object".to_owned(), str::to_owned)
+}
+
+/// Reports whether a reference names a location this build fetches over the
+/// network.
+#[must_use]
+pub fn is_remote(reference: &str) -> bool {
+    reference.starts_with("http://") || reference.starts_with("https://")
+}
+
+/// Returns the name the object at a remote location is materialized under.
+#[must_use]
+pub fn remote_name(location: &str) -> String {
+    object_name(location)
+}
+
+fn publish_one_object(
+    with: &Materialization<'_>,
+    ingested: &Ingested,
+    name: &str,
+    destination: &Path,
+) -> Result<TreeDigest, Error> {
+    let staging = staging_beside(destination);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    }
+    std::fs::create_dir_all(&staging)
+        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+
+    let entries = match place_object(with, ingested, &staging.join(name)).and_then(|()| {
+        Ok(vec![TreeEntry::File {
+            path: EntryPath::new(name)
+                .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+            size: ingested.size,
+            mode: Mode::ReadWrite,
+            content: ingested.digest,
+        }])
+    }) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
+    }
+    if let Err(error) = with
+        .platform
+        .publish_directory(&staging, destination, with.durability)
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(canonical::tree_digest(&entries))
 }

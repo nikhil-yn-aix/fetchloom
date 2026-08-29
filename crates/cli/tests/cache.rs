@@ -16,6 +16,7 @@ use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_faults as _;
 use fetchloom_platform as _;
+use fetchloom_sources as _;
 use serde as _;
 use toml as _;
 
@@ -352,9 +353,12 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
 
 #[test]
 fn a_cache_that_fills_part_way_through_degrades_and_the_run_completes() {
-    let Some(small) = std::env::var_os("FETCHLOOM_TEST_SMALL_VOLUMES")
-        .and_then(|named| std::env::split_paths(&named).next())
-    else {
+    let named = std::env::var_os("FETCHLOOM_TEST_SMALL_VOLUMES");
+    assert!(
+        !(named.is_none() && std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()),
+        "FETCHLOOM_TEST_SMALL_VOLUMES is unset in a verification run that builds this filesystem"
+    );
+    let Some(small) = named.and_then(|named| std::env::split_paths(&named).next()) else {
         return;
     };
     let scratch = TempDir::new_in(&small).unwrap();

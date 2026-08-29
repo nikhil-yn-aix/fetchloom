@@ -5,7 +5,6 @@
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap as _;
@@ -14,6 +13,7 @@ use fetchloom_cache as _;
 use fetchloom_engine as _;
 use fetchloom_faults as _;
 use fetchloom_platform as _;
+use fetchloom_sources as _;
 use serde as _;
 use serde_json as _;
 use toml as _;
@@ -23,25 +23,9 @@ use fetchloom_cli::settings::{self, Environment};
 use fetchloom_cli::surface::{DisplayMode, GlobalFlags};
 use tempfile::TempDir;
 
-#[derive(Default)]
-struct FakeEnvironment(HashMap<String, String>);
+mod support;
 
-impl FakeEnvironment {
-    fn with(pairs: &[(&str, &str)]) -> Self {
-        Self(
-            pairs
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                .collect(),
-        )
-    }
-}
-
-impl Environment for FakeEnvironment {
-    fn get(&self, name: &str) -> Option<String> {
-        self.0.get(name).cloned()
-    }
-}
+use support::FakeEnvironment;
 
 fn write(directory: &std::path::Path, name: &str, body: &str) -> PathBuf {
     let path = directory.join(name);
