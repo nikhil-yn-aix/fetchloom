@@ -1745,3 +1745,118 @@ result names the count either way.
 Uncertain: nothing.
 
 Sources: contracts.md Errors, Exit codes, and the Cache paragraph on verify.
+
+## Phase 1 gate
+
+Question: Does phase 1 meet its exit criteria, and what remains unproven.
+
+Options: Close it; hold it open until continuous integration can run again.
+
+Chosen: Closed on its exit criterion, with the verification gap named exactly
+rather than described as a whole. The store is built, its invariants are tested,
+and the criterion has been met on five of the six targets. Continuous
+integration then stopped for a reason outside the repository, and the last three
+commits have run nowhere but one Windows machine.
+
+Because: the roadmap's criterion is that the store survives a thousand random
+kills under concurrent load with zero invalid objects and zero orphans after
+recovery. That test runs eight writers at a time, kills each at a named point in
+its work, checks after every batch that every object hashes to the name it is
+stored under, and finishes by rewriting the boot generation and asserting that
+recovery leaves nothing in `partial/` or `staging/`. It passed on
+`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-apple-darwin`
+and `aarch64-apple-darwin` in the run at `ca62927`, and passes locally on
+`x86_64-pc-windows-msvc`.
+
+What the run at `ca62927` proved, which is the last run that executed: nine of
+eleven jobs green, including every Apple and Linux target, the lint, format,
+comment and dependency gates, and the benchmark gate. The two Windows targets
+failed on one test, case folding on a case-sensitive directory, which was a real
+defect: the capability answer was memoized per volume while case sensitivity is
+a property of a directory on NTFS and on ext4, so whichever directory a process
+probed first decided the answer every other directory on that volume received.
+It is fixed in `90a6334` and the test passes on this machine.
+
+What the filesystem runners proved, which is the phase 0 debt this phase was
+asked to pay. Block cloning succeeded for the first time on any machine: on ReFS
+through a Dev Drive on both Windows targets, and on btrfs and reflink XFS on both
+Linux targets. A network-backed volume is exercised against a real loopback NFS
+mount, a volume with no ownership and no sparse support against a FAT image, a
+volume with no room against a sixteen mebibyte image, a read-only cache against
+a read-only mount, and tmpfs through `/dev/shm`. macOS exercises APFS,
+case-sensitive APFS and HFS+ through sparse disk images. Of the fourteen named
+skips phase 0 carried, four remain, and two of those four were never skips: they
+are the child processes the race and the kill loop spawn.
+
+What the benchmarks say. A warm cache is measurably faster than a cold one on
+every platform that has run: on this machine 307 ms against 1995 ms for sixteen
+mebibytes in sixty-four files. The deterministic metric is stronger than the
+timing one and is the same statement as never starting a second transfer: a cold
+run grows the cache by exactly the corpus and a warm run grows it by exactly
+zero.
+
+Costs, and they are the honest gap:
+
+Continuous integration stopped after `9efb4a4` and every job since has failed in
+two seconds without starting, with the message that the account's recent
+payments have failed or its spending limit needs raising. Three commits have
+therefore run on no machine but this one: `90a6334`, which fixes the per-volume
+memo, makes a zero length reservation a success rather than a resource failure,
+and stops a test comparing a timestamp; `9efb4a4`, which deletes a skip; and
+`32dd639`, which lints each platform's own code and removes what that found.
+
+What was done instead of running them. Every target whose toolchain this machine
+has was compile-checked and linted: `x86_64-pc-windows-msvc` builds and runs its
+whole suite, and `x86_64-unknown-linux-musl` and `aarch64-apple-darwin` are
+checked and linted clean with all targets. That is what caught the last set of
+findings, because the lint job had only ever run for the host target, so code
+behind another platform's configuration was compiled by its build job and never
+linted. Linting the Apple target found five denied casts in code phase 0 wrote
+and three constants nothing reads.
+
+What this cannot substitute for, and must be run when continuous integration
+returns:
+
+The thousand kills, the eight-process race, and the whole cache suite on Linux
+and macOS at the current commit rather than at `ca62927`. They passed there and
+nothing since changes the store, but that is an argument rather than a run.
+
+The two Windows targets at the current commit. The case folding defect they
+found is fixed and verified here; no Windows runner has confirmed it.
+
+Every filesystem the runners build, at the current commit. The per-volume memo
+fix changes what a probe answers for a directory, which is precisely what those
+runners exist to check.
+
+The timing baselines, which are per runner and per target and have never been
+recorded on any of the six.
+
+What remains unproven regardless of continuous integration:
+
+Locking across two users still needs a second account, and a volume whose
+locking fails with `ENOLCK` or `EOPNOTSUPP` still needs a filesystem no runner
+builds. Both remain named skips.
+
+A FUSE mount is reported as unknown backing rather than as network, which no
+runner builds.
+
+The on-access scanner threshold is still the provisional ratio of two, and a
+loopback ext4 image measured a ratio near a thousand with no scanner present,
+which means the reported capability is wrong on that volume. The measurement
+cannot distinguish a scanner from a slow filesystem, and deciding what it should
+report instead is a contract question rather than an implementation one.
+
+An object referenced by a lock in the working directory is contracted to survive
+prune. No build writes a lock, so the rule has no subject until phase 4 and its
+test is written there.
+
+Uncertain: whether the case folding fix is complete. It makes folding and
+normalization per directory and leaves the rest of the answer memoized per
+volume, which is right for clone, sparse, hard links and backing. If any other
+row turns out to be per directory on some filesystem, the same defect returns
+for that row.
+
+Sources: the runs at `ca62927` and `9efb4a4`; the local suite at the current
+commit; `cargo clippy --workspace --all-targets` for
+`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-musl` and
+`aarch64-apple-darwin`; `cargo xtask bench --compare` on this machine.
