@@ -246,3 +246,19 @@ fn draining_degradations_empties_the_queue() {
         "degradations were reported twice"
     );
 }
+
+#[test]
+fn reserving_nothing_is_not_a_failure() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("empty");
+    let file = platform.create_file_exclusive(&path).unwrap();
+
+    platform.preallocate(&file, 0).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().len(),
+        0,
+        "reserving nothing changed the length"
+    );
+}

@@ -215,6 +215,9 @@ impl Platform for NativePlatform {
     }
 
     fn preallocate(&self, file: &File, length: u64) -> Result<(), Error> {
+        if length == 0 {
+            return Ok(());
+        }
         imp::preallocate(file, length, &self.degradations)
     }
 

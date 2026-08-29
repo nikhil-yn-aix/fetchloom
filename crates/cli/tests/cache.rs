@@ -54,12 +54,17 @@ fn events(output: &Output) -> String {
     )
 }
 
+fn recorded(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
 #[test]
 fn a_second_identical_run_is_a_cache_hit() {
     let scratch = TempDir::new().unwrap();
     let cache = scratch.path().join("cache");
     let source = source(scratch.path());
 
+    let first_events = scratch.path().join("first.ndjson");
     let first = run(
         &cache,
         &[
@@ -68,16 +73,17 @@ fn a_second_identical_run_is_a_cache_hit() {
             "--output",
             scratch.path().join("first").to_str().unwrap(),
             "--events",
-            "-",
+            first_events.to_str().unwrap(),
         ],
     );
     assert!(first.status.success(), "{}", events(&first));
     assert!(
-        events(&first).contains("cache.miss"),
+        recorded(&first_events).contains("cache.miss"),
         "the first run did not miss: {}",
-        events(&first)
+        recorded(&first_events)
     );
 
+    let second_events = scratch.path().join("second.ndjson");
     let second = run(
         &cache,
         &[
@@ -86,19 +92,19 @@ fn a_second_identical_run_is_a_cache_hit() {
             "--output",
             scratch.path().join("second").to_str().unwrap(),
             "--events",
-            "-",
+            second_events.to_str().unwrap(),
         ],
     );
     assert!(second.status.success(), "{}", events(&second));
     assert!(
-        events(&second).contains("cache.hit"),
+        recorded(&second_events).contains("cache.hit"),
         "the second run did not hit: {}",
-        events(&second)
+        recorded(&second_events)
     );
     assert!(
-        !events(&second).contains("cache.miss"),
+        !recorded(&second_events).contains("cache.miss"),
         "the second run transferred into the cache again: {}",
-        events(&second)
+        recorded(&second_events)
     );
     assert_eq!(
         text(&first).split_whitespace().next(),

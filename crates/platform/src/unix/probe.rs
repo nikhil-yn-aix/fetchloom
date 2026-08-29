@@ -53,14 +53,20 @@ pub(super) fn capabilities(
     degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
-    if let Some(found) = cache()
+    let folding = fold_probe(directory)?;
+    let held = cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&volume.value())
-    {
-        return Ok(found.clone());
+        .cloned();
+    if let Some(found) = held {
+        return Ok(VolumeCapabilities {
+            case_folding: folding.0,
+            normalization: folding.1,
+            ..found
+        });
     }
-    let measured = measure(directory, degradations)?;
+    let measured = measure(directory, folding, degradations)?;
     cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -68,8 +74,11 @@ pub(super) fn capabilities(
     Ok(measured)
 }
 
-fn measure(directory: &Path, degradations: &DegradeQueue) -> Result<VolumeCapabilities, Error> {
-    let (case_folding, normalization) = fold_probe(directory)?;
+fn measure(
+    directory: &Path,
+    folding: (CaseFolding, Normalization),
+    degradations: &DegradeQueue,
+) -> Result<VolumeCapabilities, Error> {
     let symlink = symlink_probe(directory);
     let hard_link = hard_link_probe(directory);
     let clone = clone_probe(directory);
@@ -77,8 +86,8 @@ fn measure(directory: &Path, degradations: &DegradeQueue) -> Result<VolumeCapabi
     let _ = degradations;
 
     Ok(VolumeCapabilities {
-        case_folding,
-        normalization,
+        case_folding: folding.0,
+        normalization: folding.1,
         clone,
         sparse: sparse_probe(directory),
         symlink,

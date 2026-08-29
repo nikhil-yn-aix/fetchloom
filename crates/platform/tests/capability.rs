@@ -355,3 +355,33 @@ fn sparse_support_is_reported_where_it_is_absent() {
 #[test]
 #[ignore = "needs a FUSE mount, which no runner builds yet"]
 fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {}
+
+#[test]
+fn two_directories_on_one_volume_are_reported_separately() {
+    let platform = NativePlatform::new();
+    for directory in support::volume_directories(support::Property::CaseSensitive) {
+        let elsewhere = support::scratch();
+        let first = platform.volume_capabilities(elsewhere.path()).unwrap();
+        let second = platform.volume_capabilities(&directory).unwrap();
+
+        let upper = directory.join("FetchloomOrderCheck");
+        let lower = directory.join("fetchloomordercheck");
+        support::remove_all(&[upper.clone(), lower.clone()]);
+        platform.create_file_exclusive(&upper).unwrap();
+        let both = platform.create_file_exclusive(&lower).is_ok();
+        support::remove_all(&[upper, lower]);
+
+        let expected = if both {
+            CaseFolding::Sensitive
+        } else {
+            CaseFolding::Folding
+        };
+        assert_eq!(
+            second.case_folding,
+            expected,
+            "{} was reported as {:?}, which is the answer for another directory on its volume",
+            directory.display(),
+            first.case_folding
+        );
+    }
+}

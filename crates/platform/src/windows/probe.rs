@@ -58,15 +58,21 @@ pub(crate) fn capabilities(
     degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
-    if let Some(found) = cache()
+    let folding = fold_probe(directory)?;
+    let held = cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&volume.value())
-    {
-        return Ok(found.clone());
+        .cloned();
+    if let Some(found) = held {
+        return Ok(VolumeCapabilities {
+            case_folding: folding.0,
+            normalization: folding.1,
+            ..found
+        });
     }
 
-    let measured = measure(directory, volume, degradations)?;
+    let measured = measure(directory, volume, folding, degradations)?;
     cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -77,6 +83,7 @@ pub(crate) fn capabilities(
 fn measure(
     directory: &Path,
     volume: VolumeId,
+    folding: (CaseFolding, Normalization),
     degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let handle = ffi::open_for_query(directory).map_err(|reason| failure(directory, &reason))?;
@@ -84,14 +91,13 @@ fn measure(
         ffi::volume_information(&handle).map_err(|reason| failure(directory, &reason))?;
     drop(handle);
 
-    let (case_folding, normalization) = fold_probe(directory)?;
     let symlink = symlink_probe(directory);
     let scanner = scanner_probe(directory, degradations)?;
     let _ = volume;
 
     Ok(VolumeCapabilities {
-        case_folding,
-        normalization,
+        case_folding: folding.0,
+        normalization: folding.1,
         clone: information.flags & FILE_SUPPORTS_BLOCK_REFCOUNTING != 0,
         sparse: information.flags & FILE_SUPPORTS_SPARSE_FILES != 0,
         symlink,
