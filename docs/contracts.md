@@ -251,6 +251,12 @@ Orphaned staging and partial entries from a previous boot are removed at startup
 
 Prune marks, waits out a grace period, then sweeps. Objects that are pinned, leased by a running process, or referenced by a lock in the working directory always survive.
 
+The grace period is a race window, not a retention policy. It exists so an object claimed between the mark and the sweep is not removed underneath the process claiming it, and it is therefore a correctness parameter rather than a preference. It is not configurable, because a shorter one is a corruption and a longer one is a wait with no benefit. Retention, meaning a rule about how long an unused object is kept, does not exist.
+
+`cache clear` removes every object. Because refetching can cost hours and, on metered sources, money, it reports what it will remove and confirms before acting. `cache verify` rereads and rehashes every object, reporting each mismatch as `cache.corrupt` and quarantining it.
+
+`cache pin` and `cache unpin` take a content digest. The cache is addressed by digest everywhere else, a digest needs no resolution and no network, and `cache ls` prints the digests to use.
+
 If `format` does not match the running binary, every cache operation fails with instructions to run `cache clear`. There is no migration.
 
 ### Modes
@@ -262,11 +268,10 @@ The cache is an optimization and is never required. The destination is the real 
 | Cached | Default. Objects are retained and reused across projects |
 | `--no-cache` | No object is retained. The partial transfer lives beside the destination and is discarded on success. Verification is unchanged. Resume works only within the run |
 | Project cache | Opt-in through a relative `cache.dir` in project config |
-| Shared cache | One cache directory used by several users on one machine |
 
 A cache that is missing, read-only, or out of space does not stop a run. Fetchloom emits `degrade` naming the reason and continues in `--no-cache` behavior.
 
-Shared cache rules. Objects are readable by every user of the directory and writable only by their creator. Advisory locks must be honored across users, so a shared cache on a filesystem that cannot express cross-user locking is refused with a named error rather than used unsafely. Prune removes only objects the invoking user created, and reports what it skipped and why.
+Sharing is not a mode. A cache directory may be used by several users at once and Fetchloom never assumes otherwise, so there is one behavior rather than two and no way to select the unsafe one by mistake. Objects are readable by every user of the directory and writable only by their creator. Advisory locks must be honored across users, so a cache on a filesystem that cannot express cross-user locking is refused with `cache.locking_unsupported` rather than used. Prune removes only objects the invoking user created, and reports what it skipped and why.
 
 ## Materialization
 
@@ -332,7 +337,8 @@ plan     <ref...>            resolve and report, move no bytes
 apply    <plan>              execute a plan
 verify   <path|ref>          recompute and compare against the receipt
 repair   <ref>               refetch damaged ranges of a cached object
-cache    <subcommand>        status ls verify pin unpin prune import export repair clear
+cache    <subcommand>        status ls verify prune clear repair, pin and unpin taking a digest,
+                             import and export taking a bundle
 watch    <events>            render a run's event stream, live or after the fact
 completions <shell>          write a shell completion script to stdout
 explain  [key]               effective settings and their origin
@@ -360,7 +366,7 @@ Global flags apply to every command.
 | `--display <plain\|live\|none>` | plain | Progress presentation |
 | `--no-animation` | off | Disable redrawing |
 | `--no-hints` | off | Never print hints |
-| `--yes` | off | Assert acceptance of recorded terms |
+| `--yes` | off | Answer every confirmation with yes, including acceptance of recorded terms |
 | `--threads <n>` | detected | Ceiling on threads used for processor work |
 
 Flags for `get` and `apply`.
