@@ -11,6 +11,7 @@ use std::process::{Command, Output, Stdio};
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_cache as _;
 use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_faults as _;
@@ -294,6 +295,7 @@ fn a_run_that_degrades_nothing_reports_no_degradation() {
         temporary.path().join("destination").to_str().unwrap(),
         "--events",
         events.to_str().unwrap(),
+        "--no-cache",
     ]);
     assert_eq!(output.status.code(), Some(0));
 
@@ -383,12 +385,10 @@ fn completions_are_written_for_every_shell() {
 fn the_surface_holds_exactly_the_commands_this_build_performs() {
     let output = run(&["--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
-    for present in ["get", "verify", "completions", "explain"] {
+    for present in ["get", "verify", "completions", "explain", "cache"] {
         assert!(help.contains(present), "{present} is missing from {help}");
     }
-    for absent in [
-        "init", "plan", "apply", "repair", "cache", "watch", "doctor", "why",
-    ] {
+    for absent in ["init", "plan", "apply", "repair", "watch", "doctor", "why"] {
         assert!(
             !help.contains(absent),
             "{absent} is in the surface and performs nothing: {help}"
@@ -398,9 +398,7 @@ fn the_surface_holds_exactly_the_commands_this_build_performs() {
 
 #[test]
 fn a_command_this_build_does_not_perform_is_not_accepted() {
-    for absent in [
-        "init", "plan", "apply", "repair", "cache", "watch", "doctor", "why",
-    ] {
+    for absent in ["init", "plan", "apply", "repair", "watch", "doctor", "why"] {
         let output = run(&[absent]);
         assert_eq!(
             output.status.code(),
@@ -412,13 +410,7 @@ fn a_command_this_build_does_not_perform_is_not_accepted() {
 
 #[test]
 fn a_flag_this_build_does_not_act_on_is_not_accepted() {
-    for absent in [
-        "--verbose",
-        "--color=never",
-        "--no-hints",
-        "--yes",
-        "--cache-dir=.",
-    ] {
+    for absent in ["--verbose", "--color=never", "--no-hints"] {
         let output = run(&["explain", absent]);
         assert_eq!(
             output.status.code(),

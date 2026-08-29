@@ -2,8 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use fetchloom_cache::Cache;
 use fetchloom_engine::canonical;
-use fetchloom_engine::digest::TreeDigest;
+
+use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
@@ -93,6 +95,20 @@ fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
+/// Everything a materialization runs against, so one call does not take a list
+/// of loose arguments.
+#[derive(Clone, Copy)]
+pub struct Materialization<'a> {
+    /// The pool the digests are computed on.
+    pub processor: &'a Processor,
+    /// The platform the filesystem work goes through.
+    pub platform: &'a NativePlatform,
+    /// How far a write is pushed before publication.
+    pub durability: DurabilityTier,
+    /// The cache to read and write, when the run has one.
+    pub cache: Option<&'a Cache<NativePlatform>>,
+}
+
 /// Materializes a local source tree into a destination.
 ///
 /// Takes the processor pool, the source, the destination, and where to emit
@@ -107,14 +123,18 @@ fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
 /// this platform, when the destination already exists, and when staging cannot
 /// be published.
 pub fn materialize_local(
-    processor: &Processor,
-    platform: &NativePlatform,
-    durability: DurabilityTier,
+    with: &Materialization<'_>,
     source: &Path,
     destination: &Path,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
+    let Materialization {
+        processor,
+        platform,
+        durability,
+        cache,
+    } = *with;
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
 
     emit(EventPayload::ResolveStart);
@@ -140,7 +160,7 @@ pub fn materialize_local(
     std::fs::create_dir_all(&staging)
         .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
 
-    let outcome = fill_staging(processor, source, &staging, &walked, &emit);
+    let outcome = fill_staging(processor, platform, cache, source, &staging, &walked, &emit);
     let mut entries = match outcome {
         Ok(entries) => entries,
         Err(error) => {
@@ -184,6 +204,8 @@ pub fn materialize_local(
 
 fn fill_staging(
     processor: &Processor,
+    platform: &NativePlatform,
+    cache: Option<&Cache<NativePlatform>>,
     source: &Path,
     staging: &Path,
     walked: &materialize::Walked,
@@ -211,7 +233,10 @@ fn fill_staging(
             std::fs::create_dir_all(parent)
                 .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
         }
-        let (size, content) = materialize::copy_file(processor, &from, &to)?;
+        let (size, content) = match cache {
+            None => materialize::copy_file(processor, &from, &to)?,
+            Some(held) => through_cache(held, platform, &from, &to, emit)?,
+        };
         copied += size;
         emit(EventPayload::TransferProgress { bytes: copied });
         entries.push(TreeEntry::File {
@@ -227,6 +252,37 @@ fn fill_staging(
         duration_ms: 0,
     });
     Ok(entries)
+}
+
+/// Puts one file through the cache and materializes it from there.
+///
+/// Reads the source once, hashing it as it is written into the cache, then
+/// places the object at its destination by sharing blocks where the volume can.
+/// A source the cache already holds is a hit, and nothing is written into the
+/// cache for it.
+fn through_cache(
+    cache: &Cache<NativePlatform>,
+    platform: &NativePlatform,
+    from: &Path,
+    to: &Path,
+    emit: &dyn Fn(EventPayload),
+) -> Result<(u64, ContentDigest), Error> {
+    let ingested = cache.ingest(from)?;
+    if ingested.was_present {
+        emit(EventPayload::CacheHit {
+            digest: ingested.digest,
+        });
+    } else {
+        emit(EventPayload::CacheMiss {
+            digest: ingested.digest,
+        });
+    }
+
+    let lease = cache.read_lease(ingested.digest)?;
+    let object = cache.layout().object(ingested.digest);
+    platform.clone_or_copy(&object, to)?;
+    drop(lease);
+    Ok((ingested.size, ingested.digest))
 }
 
 fn staging_beside(destination: &Path) -> PathBuf {

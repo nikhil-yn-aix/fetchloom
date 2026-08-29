@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_cache as _;
 use fetchloom_engine as _;
 use fetchloom_faults as _;
 use fetchloom_platform as _;

@@ -1,5 +1,7 @@
 //! Resolving every setting across the five precedence levels.
 
+use std::path::{Path, PathBuf};
+
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
 use crate::surface::{DisplayMode, GlobalFlags};
 
@@ -29,6 +31,53 @@ pub struct Settings {
     pub threads: Sourced<Option<u32>>,
     /// The progress presentation requested.
     pub display: Sourced<DisplayMode>,
+    /// Where the cache is.
+    pub cache_dir: Sourced<PathBuf>,
+}
+
+/// Returns the cache directory this platform puts a cache in by default.
+///
+/// Takes somewhere to read environment variables from. Returns the location
+/// contracts.md names for this platform, and the working directory when the
+/// platform names no home, which is the only place always writable.
+#[must_use]
+pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = environment.get("LOCALAPPDATA") {
+            return PathBuf::from(local).join("Fetchloom").join("Cache");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = environment.get("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Caches")
+                .join("fetchloom");
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(base) = environment.get("XDG_CACHE_HOME") {
+            return PathBuf::from(base).join("fetchloom");
+        }
+        if let Some(home) = environment.get("HOME") {
+            return PathBuf::from(home).join(".cache").join("fetchloom");
+        }
+    }
+    PathBuf::from(".fetchloom-cache")
+}
+
+/// Resolves the cache directory a project file names, against the directory
+/// that file is in.
+///
+/// A project file names a cache beside the project, so its value is relative
+/// and is read against the file rather than against the working directory.
+fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
+    let named = loaded.values.cache.as_ref()?.dir.as_ref()?;
+    let beside = loaded.path.parent().unwrap_or(Path::new("."));
+    Some(beside.join(named))
 }
 
 fn parse_bool(text: &str) -> Option<bool> {
@@ -135,9 +184,26 @@ pub fn resolve_all(
         DisplayMode::Plain,
     );
 
+    let cache_dir = if let Some(named) = flags.cache_dir.clone() {
+        Sourced::new(named, Origin::CommandLine)
+    } else if let Some(named) = environment.get("FETCHLOOM_CACHE_DIR") {
+        Sourced::new(PathBuf::from(named), Origin::Environment)
+    } else if let Some(named) = discovered.project.as_ref().and_then(project_cache_dir) {
+        Sourced::new(named, Origin::ProjectConfig)
+    } else if let Some(named) = discovered
+        .user
+        .as_ref()
+        .and_then(|loaded| loaded.values.cache.as_ref()?.dir.clone())
+    {
+        Sourced::new(named, Origin::UserConfig)
+    } else {
+        Sourced::new(default_cache_dir(environment), Origin::Default)
+    };
+
     Settings {
         offline,
         threads,
         display,
+        cache_dir,
     }
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_cache as _;
 use fetchloom_platform as _;
 use serde as _;
 use serde_json as _;

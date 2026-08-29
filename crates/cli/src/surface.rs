@@ -71,6 +71,12 @@ pub struct GlobalFlags {
     /// Ceiling on threads used for processor work.
     #[arg(long, global = true, value_name = "n")]
     pub threads: Option<u32>,
+    /// Where the cache is.
+    #[arg(long, global = true, value_name = "path")]
+    pub cache_dir: Option<PathBuf>,
+    /// Answer every confirmation with yes.
+    #[arg(long, global = true)]
+    pub yes: bool,
 }
 
 /// How far a write is pushed before publication.
@@ -85,6 +91,18 @@ pub enum DurabilityChoice {
     Fast,
 }
 
+/// What a cache hit is checked against before it is reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum VerifyChoice {
+    /// Reread and rehash the whole object.
+    Always,
+    /// Trust the object when its recorded filesystem fingerprint matches.
+    Fingerprint,
+    /// Trust the object unconditionally, which makes the result unverified.
+    Never,
+}
+
 /// Flags for the commands that materialize bytes.
 #[derive(Args, Clone, Debug, Default)]
 pub struct TransferFlags {
@@ -94,6 +112,39 @@ pub struct TransferFlags {
     /// How far a write is pushed before publication.
     #[arg(long, value_name = "strict|normal|fast")]
     pub durability: Option<DurabilityChoice>,
+    /// Bypass the cache for this operation.
+    #[arg(long)]
+    pub no_cache: bool,
+    /// What a cache hit is checked against before it is reused.
+    #[arg(long, value_name = "always|fingerprint|never")]
+    pub verify: Option<VerifyChoice>,
+}
+
+/// What to do with the cache.
+#[derive(Subcommand, Clone, Debug)]
+pub enum CacheCommand {
+    /// Report what the cache holds.
+    Status,
+    /// List the objects the cache holds.
+    Ls,
+    /// Reread and rehash every object, quarantining each mismatch.
+    Verify,
+    /// Keep an object from ever being pruned.
+    Pin {
+        /// The content digest to pin.
+        #[arg(value_name = "digest")]
+        digest: String,
+    },
+    /// Remove the mark that kept an object from being pruned.
+    Unpin {
+        /// The content digest to unpin.
+        #[arg(value_name = "digest")]
+        digest: String,
+    },
+    /// Mark what nothing refers to, then sweep what has been marked longest.
+    Prune,
+    /// Remove every object.
+    Clear,
 }
 
 /// What Fetchloom was asked to do.
@@ -118,6 +169,12 @@ pub enum Command {
     Completions {
         /// The shell to write a script for.
         shell: Shell,
+    },
+    /// Read and change what the cache holds.
+    Cache {
+        /// What to do with the cache.
+        #[command(subcommand)]
+        command: CacheCommand,
     },
     /// Report effective settings and their origin.
     Explain {

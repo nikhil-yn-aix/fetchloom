@@ -307,13 +307,7 @@ impl<P: Platform> Store for Cache<P> {
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
         seal_object(&object)?;
 
-        let fingerprint = self.platform.fingerprint(&object)?;
-        let record_path = self.fingerprint_record(lease.digest);
-        if let Some(parent) = record_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, parent, &reason))?;
-        }
-        record::write(&record_path, &RecordedFingerprint::from(fingerprint))?;
+        self.record_fingerprint(lease.digest)?;
         let _ = std::fs::remove_file(self.layout.mark_of(lease.digest));
         drop(lease);
         Ok(())

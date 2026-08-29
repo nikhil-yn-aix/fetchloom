@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 clap_complete = { workspace = true }
+fetchloom-cache = { workspace = true }
 fetchloom-engine = { workspace = true }
 fetchloom-platform = { workspace = true }
 serde = { workspace = true }

@@ -264,6 +264,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "clap_complete",
+ "fetchloom-cache",
  "fetchloom-engine",
  "fetchloom-faults",
  "fetchloom-platform",

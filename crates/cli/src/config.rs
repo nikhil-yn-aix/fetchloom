@@ -85,6 +85,17 @@ pub struct ConfigFile {
     pub threads: Option<u32>,
     /// Progress presentation.
     pub display: Option<String>,
+    /// Where the cache is.
+    pub cache: Option<CacheSection>,
+}
+
+/// Everything the cache table of a configuration file may set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct CacheSection {
+    /// Where the cache is. Relative in a project file, where it names a cache
+    /// beside the project rather than the one every project shares.
+    pub dir: Option<PathBuf>,
 }
 
 /// Why a configuration file could not be used.

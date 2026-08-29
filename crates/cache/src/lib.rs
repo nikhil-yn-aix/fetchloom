@@ -12,6 +12,7 @@ use fetchloom_platform as _;
 use tempfile as _;
 
 pub mod format;
+pub mod ingest;
 pub mod layout;
 pub mod prune;
 pub mod record;

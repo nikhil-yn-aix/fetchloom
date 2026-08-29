@@ -1,7 +1,8 @@
 //! The composition root: the only place the seams are wired together.
 
-use fetchloom_cli::{config, explain, run, settings, surface, terminal};
+use fetchloom_cli::{cache, config, explain, report, run, settings, surface, terminal};
 
+use fetchloom_cache as _;
 #[cfg(test)]
 use fetchloom_faults as _;
 use serde as _;
@@ -19,6 +20,7 @@ use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::threads::ThreadBudget;
+use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_platform::NativePlatform;
 
 use fetchloom_cli::observer::{EventStream, Fanout, Renderer};
@@ -121,6 +123,12 @@ fn dispatch(
             references,
             transfer,
         } => run_get(references, transfer, parsed, resolved, observer, sequence),
+        Command::Cache { command } => cache::run(
+            &resolved.cache_dir.value,
+            command,
+            parsed.global.json,
+            parsed.global.yes,
+        ),
     }
 }
 
@@ -238,15 +246,45 @@ fn run_get(
 
     let platform = NativePlatform::new();
 
-    match run::materialize_local(
-        &processor,
-        &platform,
+    let policy = match transfer.verify {
+        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
+        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
+        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
+    };
+    let root = resolved.cache_dir.value.clone();
+    let opened = if transfer.no_cache {
+        cache::Opened::Degraded {
+            reason: "this run asked for no cache".to_owned(),
+        }
+    } else {
+        cache::open(&root, durability, policy)
+    };
+    let held = match opened {
+        cache::Opened::Ready(held) => Some(held),
+        cache::Opened::Refused(refused) => {
+            observer.emit(&Event::new(
+                sequence,
+                EventPayload::Failure {
+                    error: (*refused).clone(),
+                },
+            ));
+            return report(&refused, json);
+        }
+        cache::Opened::Degraded { reason } => {
+            if !transfer.no_cache {
+                cache::report_degrade(observer, sequence, &root, &reason);
+            }
+            None
+        }
+    };
+
+    let with = run::Materialization {
+        processor: &processor,
+        platform: &platform,
         durability,
-        &source,
-        &destination,
-        observer,
-        sequence,
-    ) {
+        cache: held.as_deref(),
+    };
+    match run::materialize_local(&with, &source, &destination, observer, sequence) {
         Ok(result) => {
             if json {
                 match serde_json::to_string(&result) {
@@ -268,17 +306,4 @@ fn run_get(
         }
         Err(error) => report(&error, json),
     }
-}
-
-fn report(error: &fetchloom_engine::error::Error, json: bool) -> ExitCode {
-    if json {
-        match serde_json::to_string(error) {
-            Ok(body) => println!("{body}"),
-            Err(_) => eprintln!("{error}"),
-        }
-    } else {
-        eprintln!("{error}");
-        eprintln!("next: {}", error.next_action());
-    }
-    ExitCode::from(error.layer())
 }

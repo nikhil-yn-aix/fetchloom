@@ -34,6 +34,12 @@ impl Describe for u32 {
     }
 }
 
+impl Describe for std::path::PathBuf {
+    fn describe(&self) -> String {
+        self.display().to_string()
+    }
+}
+
 impl Describe for crate::surface::DisplayMode {
     fn describe(&self) -> String {
         match self {
@@ -70,6 +76,7 @@ pub fn rows(settings: &Settings) -> Vec<Explained> {
         row!("offline", offline),
         row!("threads", threads),
         row!("display", display),
+        row!("cache.dir", cache_dir),
     ]
 }
 
