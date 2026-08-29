@@ -14,6 +14,11 @@
 #[cfg(windows)]
 use windows_sys as _;
 
+#[cfg(unix)]
+use libc as _;
+#[cfg(unix)]
+use rustix as _;
+
 mod support;
 
 use std::process::Command;
