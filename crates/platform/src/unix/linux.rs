@@ -172,3 +172,36 @@ pub(super) fn process_start(pid: u32) -> ProcessState {
         None => ProcessState::Unreadable,
     }
 }
+
+/// Reads the identity of an open file.
+///
+/// Takes a handle rather than a name, so the answer is about the file that was
+/// opened. Fails when the platform refuses the query.
+pub(super) fn identity_of(file: &File) -> Result<Identity, Error> {
+    let found = rustix::fs::statx(
+        file,
+        c"",
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::INO
+            | rustix::fs::StatxFlags::SIZE
+            | rustix::fs::StatxFlags::MTIME
+            | rustix::fs::StatxFlags::CTIME,
+    )
+    .map_err(|reason| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            format!("an open file does not report an identity: {reason}"),
+        )
+    })?;
+
+    let device = (u64::from(found.stx_dev_major) << 32) | u64::from(found.stx_dev_minor);
+    Ok(Identity {
+        volume: device,
+        file: (u128::from(device) << 64) | u128::from(found.stx_ino),
+        size: found.stx_size,
+        modified_nanos: i128::from(found.stx_mtime.tv_sec) * 1_000_000_000
+            + i128::from(found.stx_mtime.tv_nsec),
+        changed_nanos: i128::from(found.stx_ctime.tv_sec) * 1_000_000_000
+            + i128::from(found.stx_ctime.tv_nsec),
+    })
+}

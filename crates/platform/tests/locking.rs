@@ -244,3 +244,138 @@ fn a_network_volume_is_refused_for_a_shared_cache() {}
 #[test]
 #[ignore = "needs a filesystem whose locking fails with ENOLCK or EOPNOTSUPP, reachable only on a Linux runner"]
 fn a_volume_that_cannot_lock_is_refused_with_locking_unsupported() {}
+
+#[test]
+fn two_shared_holders_take_one_lock_at_once() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("digest.lock");
+
+    let first = platform.try_lock_shared(&path).unwrap();
+    let second = platform.try_lock_shared(&path).unwrap();
+
+    assert!(first.is_some(), "the first shared holder was refused");
+    assert!(
+        second.is_some(),
+        "a second shared holder was refused a lock a reader must be able to share"
+    );
+}
+
+#[test]
+fn a_shared_holder_refuses_a_writer() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("digest.lock");
+
+    let reader = platform.try_lock_shared(&path).unwrap();
+    assert!(reader.is_some());
+    assert!(
+        platform.try_lock(&path).unwrap().is_none(),
+        "a writer took a lock a reader was holding"
+    );
+}
+
+#[test]
+fn a_writer_refuses_a_shared_holder() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("digest.lock");
+
+    let writer = platform.try_lock(&path).unwrap();
+    assert!(writer.is_some());
+    assert!(
+        platform.try_lock_shared(&path).unwrap().is_none(),
+        "a reader took a lock a writer was holding"
+    );
+}
+
+#[test]
+fn a_shared_lock_is_released_when_it_is_dropped() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("digest.lock");
+
+    let held = platform.try_lock_shared(&path).unwrap();
+    drop(held);
+
+    assert!(
+        platform.try_lock(&path).unwrap().is_some(),
+        "a shared lock was not released when it was dropped"
+    );
+}
+
+#[test]
+fn this_process_owns_what_it_creates() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("object");
+    support::write_file(&path, b"bytes");
+
+    assert_eq!(
+        platform.owner(&path).unwrap(),
+        platform.current_owner().unwrap(),
+        "a file this process created reports another owner"
+    );
+}
+
+#[test]
+fn an_owner_is_the_same_every_time_it_is_read() {
+    let platform = NativePlatform::new();
+    assert_eq!(
+        platform.current_owner().unwrap(),
+        platform.current_owner().unwrap(),
+        "this process described its owner two ways"
+    );
+}
+
+#[test]
+fn a_volume_without_ownership_does_not_report_this_process_as_the_owner() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::NoOwnership) {
+        let path = scratch.path().join("object");
+        support::write_file(&path, b"bytes");
+        assert_ne!(
+            platform.owner(&path).unwrap(),
+            platform.current_owner().unwrap(),
+            "{} records no owner and reported this process as one",
+            scratch.path().display()
+        );
+    }
+}
+
+#[test]
+fn an_identity_read_from_a_handle_is_the_identity_of_its_path() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("object");
+    let file = platform.create_file_exclusive(&path).unwrap();
+
+    assert_eq!(
+        platform.file_id_of(&file).unwrap(),
+        platform.file_id(&path).unwrap(),
+        "a handle and its own path reported two identities"
+    );
+}
+
+#[test]
+fn an_identity_read_from_a_handle_survives_the_name_being_replaced() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let path = scratch.path().join("object");
+    let file = platform.create_file_exclusive(&path).unwrap();
+    let before = platform.file_id_of(&file).unwrap();
+
+    std::fs::remove_file(&path).unwrap();
+    support::write_file(&path, b"a different file wearing the same name");
+
+    assert_eq!(
+        platform.file_id_of(&file).unwrap(),
+        before,
+        "an open handle changed identity when its name was reused"
+    );
+    assert_ne!(
+        platform.file_id(&path).unwrap(),
+        before,
+        "a replaced name reported the identity of the file it replaced"
+    );
+}

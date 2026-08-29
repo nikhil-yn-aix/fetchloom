@@ -17,7 +17,16 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::core::PWSTR;
+
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT,
+};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY,
+    TOKEN_USER, TokenUser,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateSymbolicLinkW, FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileAllocationInfo, FileBasicInfo, FileEndOfFileInfo,
@@ -36,7 +45,7 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::System::Threading::{
     ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess, GetProcessAffinityMask,
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 /// The drive type the platform reports for a volume reached over a network.
@@ -604,4 +613,106 @@ fn wide_at(buffer: &[u8], base: usize, offset: u16, length: u16) -> Option<Strin
         .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     Some(String::from_utf16_lossy(&wide))
+}
+
+/// Reads the user a file belongs to.
+///
+/// Takes an open handle. Returns the owner security identifier in its string
+/// form. Fails when the platform refuses the query.
+pub(crate) fn file_owner(file: &File) -> io::Result<String> {
+    let mut sid: PSID = std::ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: the handle is owned and open for the call, and both out pointers address locals the call fills in and nothing reads before it returns.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle() as HANDLE,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            std::ptr::from_mut(&mut sid),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::from_mut(&mut descriptor),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    let owner = sid_text(sid);
+    // SAFETY: the descriptor was allocated by the call above and is freed once, and nothing borrows it afterwards.
+    unsafe { LocalFree(descriptor.cast()) };
+    owner
+}
+
+/// Reads the user this process runs as.
+///
+/// Returns the security identifier of the token's user in its string form.
+/// Fails when the platform refuses the query.
+pub(crate) fn process_owner() -> io::Result<String> {
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the pseudo handle for this process is always valid, and the out pointer addresses a local the call fills in.
+    let opened = unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY,
+            std::ptr::from_mut(&mut token),
+        )
+    };
+    if opened == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut needed = 0u32;
+    // SAFETY: the token handle is open for the call, and a null buffer with a zero length is how the call is asked for the size it needs.
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::from_mut(&mut needed),
+        )
+    };
+    let mut buffer = vec![0u8; needed as usize];
+    // SAFETY: the token handle is open for the call, and the buffer is at least the length passed, which the call itself reported.
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            needed,
+            std::ptr::from_mut(&mut needed),
+        )
+    };
+    // SAFETY: the token handle was opened above, is closed once, and nothing uses it afterwards.
+    unsafe { CloseHandle(token) };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // SAFETY: the call reported it wrote a TOKEN_USER into this buffer, and the read is unaligned because the buffer is bytes.
+    let user = unsafe { buffer.as_ptr().cast::<TOKEN_USER>().read_unaligned() };
+    sid_text(user.User.Sid)
+}
+
+/// Renders a security identifier as the text form the platform defines.
+fn sid_text(sid: PSID) -> io::Result<String> {
+    let mut text: PWSTR = std::ptr::null_mut();
+    // SAFETY: the identifier came from a call that reported success, and the out pointer addresses a local the call fills in.
+    let ok = unsafe { ConvertSidToStringSidW(sid, std::ptr::from_mut(&mut text)) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut length = 0usize;
+    // SAFETY: the call above wrote a NUL terminated string, so the walk stops inside the allocation.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the string holds the length just measured and lives until it is freed below.
+    let rendered = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+    // SAFETY: the string was allocated by the call above and is freed once, and nothing borrows it afterwards.
+    unsafe { LocalFree(text.cast()) };
+    Ok(rendered)
 }

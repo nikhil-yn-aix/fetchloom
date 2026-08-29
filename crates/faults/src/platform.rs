@@ -7,7 +7,7 @@ use std::path::Path;
 use fetchloom_engine::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
-use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
+use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 
 use crate::schedule::{Faults, Operation};
@@ -132,5 +132,30 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
     fn lock(&self, path: &Path) -> Result<Self::Lock, Error> {
         self.gate(Operation::Lock)?;
         self.inner.lock(path)
+    }
+
+    fn file_id_of(&self, file: &File) -> Result<FileId, Error> {
+        self.gate(Operation::FileIdOf)?;
+        self.inner.file_id_of(file)
+    }
+
+    fn owner(&self, path: &Path) -> Result<OwnerId, Error> {
+        self.gate(Operation::Owner)?;
+        self.inner.owner(path)
+    }
+
+    fn current_owner(&self) -> Result<OwnerId, Error> {
+        self.gate(Operation::CurrentOwner)?;
+        self.inner.current_owner()
+    }
+
+    fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
+        self.gate(Operation::TryLockShared)?;
+        self.inner.try_lock_shared(path)
+    }
+
+    fn lock_shared(&self, path: &Path) -> Result<Self::Lock, Error> {
+        self.gate(Operation::LockShared)?;
+        self.inner.lock_shared(path)
     }
 }

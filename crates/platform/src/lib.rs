@@ -15,7 +15,7 @@ use std::sync::{Mutex, PoisonError};
 use fetchloom_engine::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
+use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
 
@@ -167,6 +167,18 @@ impl Platform for NativePlatform {
 
     fn file_id(&self, path: &Path) -> Result<FileId, Error> {
         imp::file_id(path)
+    }
+
+    fn file_id_of(&self, file: &File) -> Result<FileId, Error> {
+        imp::file_id_of(file)
+    }
+
+    fn owner(&self, path: &Path) -> Result<OwnerId, Error> {
+        imp::owner(path)
+    }
+
+    fn current_owner(&self) -> Result<OwnerId, Error> {
+        imp::current_owner()
     }
 
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error> {
@@ -350,22 +362,100 @@ impl Platform for NativePlatform {
     }
 
     fn try_lock(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
-        let file = open_lock_file(path)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(PlatformLock { file })),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(reason)) => Err(locking_unsupported(path, &reason)),
-        }
+        acquire(path, Sharing::Exclusive, Waiting::No)
     }
 
     fn lock(&self, path: &Path) -> Result<Self::Lock, Error> {
-        let file = open_lock_file(path)?;
-        file.lock()
-            .map_err(|reason| locking_unsupported(path, &reason))?;
-        Ok(PlatformLock { file })
+        acquire(path, Sharing::Exclusive, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
+    }
+
+    fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
+        acquire(path, Sharing::Shared, Waiting::No)
+    }
+
+    fn lock_shared(&self, path: &Path) -> Result<Self::Lock, Error> {
+        acquire(path, Sharing::Shared, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
     }
 }
 
+/// Whether a lock admits other holders.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sharing {
+    /// One holder at a time.
+    Exclusive,
+    /// Any number of readers, and no writer.
+    Shared,
+}
+
+/// Whether an acquisition waits for a holder to release.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// Return without the lock rather than wait.
+    No,
+    /// Wait for the holder to release it.
+    Yes,
+}
+
+/// How many times an acquisition is retried when the name is replaced under it.
+const LOCK_ATTEMPTS: u32 = 16;
+
+/// Takes an advisory lock over the file a path currently names.
+///
+/// The identity of the locked handle is compared against the identity of the
+/// path afterwards, because a lock file can be removed and recreated between
+/// the open and the lock, and a lock over a name nothing refers to any more
+/// would let a second holder take the same digest.
+fn acquire(path: &Path, sharing: Sharing, waiting: Waiting) -> Result<Option<PlatformLock>, Error> {
+    for _ in 0..LOCK_ATTEMPTS {
+        let file = open_lock_file(path)?;
+        let taken = match (sharing, waiting) {
+            (Sharing::Exclusive, Waiting::No) => immediate(file.try_lock(), path)?,
+            (Sharing::Shared, Waiting::No) => immediate(file.try_lock_shared(), path)?,
+            (Sharing::Exclusive, Waiting::Yes) => {
+                file.lock().map_err(|why| unsupported(path, &why))?;
+                true
+            }
+            (Sharing::Shared, Waiting::Yes) => {
+                file.lock_shared().map_err(|why| unsupported(path, &why))?;
+                true
+            }
+        };
+        if !taken {
+            return Ok(None);
+        }
+
+        let held = PlatformLock { file };
+        if imp::file_id_of(&held.file)? == imp::file_id(path)? {
+            return Ok(Some(held));
+        }
+    }
+    Err(Error::new(
+        ErrorKind::CacheLocked,
+        format!(
+            "try again, because {} was replaced under every attempt to lock it",
+            path.display()
+        ),
+    ))
+}
+
+/// Reports whether an immediate attempt took the lock.
+fn immediate(outcome: Result<(), std::fs::TryLockError>, path: &Path) -> Result<bool, Error> {
+    match outcome {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(reason)) => Err(unsupported(path, &reason)),
+    }
+}
+
+fn waited_without_it(path: &Path) -> Error {
+    Error::new(
+        ErrorKind::CacheLocked,
+        format!(
+            "try again, because the wait for {} ended without the lock",
+            path.display()
+        ),
+    )
+}
 fn open_lock_file(path: &Path) -> Result<File, Error> {
     File::options()
         .read(true)
@@ -376,7 +466,7 @@ fn open_lock_file(path: &Path) -> Result<File, Error> {
         .map_err(|reason| failure(ErrorKind::CacheLocked, path, &reason))
 }
 
-fn locking_unsupported(path: &Path, reason: &std::io::Error) -> Error {
+fn unsupported(path: &Path, reason: &std::io::Error) -> Error {
     Error::new(
         ErrorKind::CacheLockingUnsupported,
         format!(

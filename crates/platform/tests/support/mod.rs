@@ -64,7 +64,8 @@ impl Property {
         let macos = cfg!(target_os = "macos");
         let windows = cfg!(windows);
         match self {
-            Self::Clone | Self::CaseSensitive | Self::Small | Self::Second => true,
+            Self::Clone | Self::Small | Self::Second => true,
+            Self::CaseSensitive => linux || macos,
             Self::CaseInsensitive => macos || windows,
             Self::Normalizing => macos,
             Self::Network | Self::Memory | Self::NoOwnership | Self::NoSparse | Self::ReadOnly => {

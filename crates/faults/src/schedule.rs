@@ -38,6 +38,16 @@ pub enum Operation {
     TryLock,
     /// Taking an advisory lock and waiting for it.
     Lock,
+    /// Taking a lock other readers may hold, without waiting.
+    TryLockShared,
+    /// Taking a lock other readers may hold, and waiting for it.
+    LockShared,
+    /// Reading the identity of an open file.
+    FileIdOf,
+    /// Reading the user a file belongs to.
+    Owner,
+    /// Reading the user this process runs as.
+    CurrentOwner,
 }
 
 #[derive(Debug)]

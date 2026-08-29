@@ -385,3 +385,25 @@ pub(super) fn process_start(pid: u32) -> ProcessState {
             .wrapping_add(found.pbi_start_tvusec),
     )
 }
+
+/// Reads the identity of an open file.
+///
+/// Takes a handle rather than a name, so the answer is about the file that was
+/// opened. Fails when the platform refuses the query.
+pub(super) fn identity_of(file: &File) -> Result<Identity, Error> {
+    let found = rustix::fs::fstat(file).map_err(|reason| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            format!("an open file does not report an identity: {reason}"),
+        )
+    })?;
+    let device = found.st_dev as u64;
+    Ok(Identity {
+        volume: device,
+        file: (u128::from(device) << 64) | u128::from(found.st_ino),
+        size: found.st_size as u64,
+        modified_nanos: i128::from(found.st_mtime) * 1_000_000_000
+            + i128::from(found.st_mtime_nsec),
+        changed_nanos: i128::from(found.st_ctime) * 1_000_000_000 + i128::from(found.st_ctime_nsec),
+    })
+}

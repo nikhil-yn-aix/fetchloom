@@ -25,13 +25,23 @@ $second = New-TestVolume -Path C:\fetchloom-images\second.vhdx -Size 64MB
 $sensitive = 'C:\fetchloom-case-sensitive'
 New-Item -ItemType Directory -Force -Path $sensitive | Out-Null
 fsutil.exe file setCaseSensitiveInfo $sensitive enable
+New-Item -ItemType File -Force -Path (Join-Path $sensitive 'Probe') | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $sensitive 'probe') | Out-Null
+$behaves = (Get-ChildItem -Path $sensitive -Force).Count -eq 2
+Remove-Item -Path $sensitive -Recurse -Force
+Write-Output "case sensitive directory behaves: $behaves"
 
-Add-Content -Path $env:GITHUB_ENV -Encoding utf8 -Value @(
+$lines = @(
     "FETCHLOOM_TEST_CLONE_VOLUMES=$clone",
-    "FETCHLOOM_TEST_CASE_SENSITIVE_VOLUMES=$sensitive",
     "FETCHLOOM_TEST_CASE_INSENSITIVE_VOLUMES=C:\",
     "FETCHLOOM_TEST_SMALL_VOLUMES=$small",
     "FETCHLOOM_TEST_SECOND_VOLUMES=$second"
 )
+if ($behaves) {
+    New-Item -ItemType Directory -Force -Path $sensitive | Out-Null
+    fsutil.exe file setCaseSensitiveInfo $sensitive enable
+    $lines += "FETCHLOOM_TEST_CASE_SENSITIVE_VOLUMES=$sensitive"
+}
+Add-Content -Path $env:GITHUB_ENV -Encoding utf8 -Value $lines
 
 Get-Volume | Format-Table -AutoSize

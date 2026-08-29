@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
 use crate::durability::DurabilityTier;
 use crate::error::Error;
-use crate::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
+use crate::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
 
 /// What a lock holder recorded about itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +61,31 @@ pub trait Platform: Send + Sync {
     ///
     /// Fails when the path cannot be opened or the platform refuses the query.
     fn file_id(&self, path: &Path) -> Result<FileId, Error>;
+
+    /// Returns the identifier of an open file within its volume.
+    ///
+    /// Takes a handle rather than a name, so the answer is about the file that
+    /// was opened and not about whatever the name refers to now.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform refuses the query.
+    fn file_id_of(&self, file: &File) -> Result<FileId, Error>;
+
+    /// Returns the user a file belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path cannot be opened, and when the platform reports no
+    /// owner for it.
+    fn owner(&self, path: &Path) -> Result<OwnerId, Error>;
+
+    /// Returns the user this process runs as.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform refuses the query.
+    fn current_owner(&self) -> Result<OwnerId, Error>;
 
     /// Returns the tuple recording that the file at a path is probably
     /// unchanged.
@@ -191,4 +216,23 @@ pub trait Platform: Send + Sync {
     /// Fails when the volume cannot express advisory locking and when the wait
     /// ends without the lock.
     fn lock(&self, path: &Path) -> Result<Self::Lock, Error>;
+
+    /// Takes an advisory lock that other readers may hold at the same time,
+    /// without waiting.
+    ///
+    /// Returns nothing when a writer holds it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the volume cannot express advisory locking.
+    fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error>;
+
+    /// Takes an advisory lock that other readers may hold at the same time,
+    /// waiting for a writer to release it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the volume cannot express advisory locking and when the wait
+    /// ends without the lock.
+    fn lock_shared(&self, path: &Path) -> Result<Self::Lock, Error>;
 }

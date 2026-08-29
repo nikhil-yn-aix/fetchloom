@@ -40,6 +40,28 @@ impl FileId {
     }
 }
 
+/// The identity of the user a file belongs to.
+///
+/// It is compared for equality and never parsed, displayed as a name, or
+/// resolved to an account.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct OwnerId(String);
+
+impl OwnerId {
+    /// Builds an owner identity from the platform's own value.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the platform's own value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The tuple recording that a file is probably unchanged.
 ///
 /// It is never evidence of content and never appears in a lock.

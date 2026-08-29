@@ -10,7 +10,7 @@ use std::path::Path;
 use fetchloom_engine::capability::{InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
+use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
 
 use crate::{DegradeQueue, ProcessState};
 
@@ -314,4 +314,47 @@ pub(crate) fn process_start(pid: u32) -> ProcessState {
         ffi::ProcessQuery::Gone => ProcessState::Gone,
         ffi::ProcessQuery::Unreadable => ProcessState::Unreadable,
     }
+}
+
+/// Returns the identifier of an open file within its volume.
+///
+/// # Errors
+///
+/// Fails when the platform refuses the query.
+pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
+    let (_, id) = ffi::id_info(file).map_err(|reason| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            format!("an open file does not report an identity: {reason}"),
+        )
+    })?;
+    Ok(FileId::new(id))
+}
+
+/// Returns the user a file belongs to.
+///
+/// # Errors
+///
+/// Fails when the path cannot be opened and when the platform reports no owner.
+pub(crate) fn owner(path: &Path) -> Result<OwnerId, Error> {
+    let file = ffi::open_for_query(path)
+        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+    let found =
+        ffi::file_owner(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+    Ok(OwnerId::new(found))
+}
+
+/// Returns the user this process runs as.
+///
+/// # Errors
+///
+/// Fails when the platform refuses the query.
+pub(crate) fn current_owner() -> Result<OwnerId, Error> {
+    let found = ffi::process_owner().map_err(|reason| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            format!("this process does not report a user: {reason}"),
+        )
+    })?;
+    Ok(OwnerId::new(found))
 }
