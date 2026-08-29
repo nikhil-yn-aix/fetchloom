@@ -225,6 +225,7 @@ Verification during transfer is always on and is not configurable.
   outboard/   chunk trees for objects above the outboard threshold
   partial/    in-progress transfers with recorded source identity
   staging/    extraction trees not yet published
+  quarantine/ objects that failed verification, kept for diagnosis and repair
   meta/       resolution metadata, per-host measurements, witnesses
   locks/      advisory single-writer locks
   pins/       pin records
@@ -253,7 +254,7 @@ Prune marks, waits out a grace period, then sweeps. Objects that are pinned, lea
 
 The grace period is a race window, not a retention policy. It exists so an object claimed between the mark and the sweep is not removed underneath the process claiming it, and it is therefore a correctness parameter rather than a preference. It is not configurable, because a shorter one is a corruption and a longer one is a wait with no benefit. Retention, meaning a rule about how long an unused object is kept, does not exist.
 
-`cache clear` removes every object. Because refetching can cost hours and, on metered sources, money, it reports what it will remove and confirms before acting. `cache verify` rereads and rehashes every object, reporting each mismatch as `cache.corrupt` and quarantining it.
+`cache clear` removes every object. Because refetching can cost hours and, on metered sources, money, it reports what it will remove and confirms before acting. `cache verify` rereads and rehashes every object and reports each mismatch as `cache.corrupt`. A mismatched object is moved to `quarantine/`, because leaving it in `objects/` would break the invariant that everything there has been verified, and deleting it would discard the bytes a later repair needs to find the damaged range. Quarantined objects are never served, are reported by `cache status`, and are removed only by `prune` or `clear`.
 
 `cache pin` and `cache unpin` take a content digest. The cache is addressed by digest everywhere else, a digest needs no resolution and no network, and `cache ls` prints the digests to use.
 
@@ -270,6 +271,8 @@ The cache is an optimization and is never required. The destination is the real 
 | Project cache | Opt-in through a relative `cache.dir` in project config |
 
 A cache that is missing, read-only, or out of space does not stop a run. Fetchloom emits `degrade` naming the reason and continues in `--no-cache` behavior.
+
+A format mismatch stops it. The difference is whether the user can act: no disk and no permission are conditions they often cannot fix now, while a format mismatch always has one command that fixes it. Continuing would silently refetch everything the unusable cache already held, which on a large or metered source costs far more than stopping. Every command that would touch the cache fails with `cache.format_mismatch` and exit 80, naming `cache clear` as the fix.
 
 Sharing is not a mode. A cache directory may be used by several users at once and Fetchloom never assumes otherwise, so there is one behavior rather than two and no way to select the unsafe one by mistake. Objects are readable by every user of the directory and writable only by their creator. Advisory locks must be honored across users, so a cache on a filesystem that cannot express cross-user locking is refused with `cache.locking_unsupported` rather than used. Prune removes only objects the invoking user created, and reports what it skipped and why.
 
