@@ -57,7 +57,11 @@ pub struct Mark {
     pub marked_nanos: i128,
 }
 
-/// Writes a record where a reader can find it whole or not at all.
+/// Writes a record where a reader finds it whole or not at all.
+///
+/// Writes beside the record and renames onto it, because a reader of a record
+/// another process is part way through writing would otherwise see a file that
+/// is empty or half a value.
 ///
 /// # Errors
 ///
@@ -69,7 +73,19 @@ pub fn write<T: Serialize>(path: &Path, record: &T) -> Result<(), Error> {
             format!("a cache record could not be written: {reason}"),
         )
     })?;
-    std::fs::write(path, rendered).map_err(|reason| {
+
+    let mut beside = path.as_os_str().to_owned();
+    beside.push(format!(".{}.writing", std::process::id()));
+    let beside = std::path::PathBuf::from(beside);
+
+    std::fs::write(&beside, rendered).map_err(|reason| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            format!("{}: {reason}", beside.display()),
+        )
+    })?;
+    std::fs::rename(&beside, path).map_err(|reason| {
+        let _ = std::fs::remove_file(&beside);
         Error::new(
             ErrorKind::CacheCorrupt,
             format!("{}: {reason}", path.display()),

@@ -37,7 +37,10 @@ const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 #[cfg(unix)]
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
-/// The name of the file a probe writes to learn whether a volume locks.
+/// The name a probe writes to learn whether a volume locks.
+///
+/// The name carries this process's identity, because a probe that every process
+/// shared would be a file each of them removes under the others.
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
 /// A cache directory this process may read and write.
@@ -347,7 +350,9 @@ fn check_locking<P: Platform>(platform: &P, layout: &Layout) -> Result<(), Error
             ),
         ));
     }
-    let probe = layout.locks().join(LOCK_PROBE);
+    let probe = layout
+        .locks()
+        .join(format!("{LOCK_PROBE}-{}", std::process::id()));
     let held = platform.try_lock(&probe)?;
     drop(held);
     let _ = std::fs::remove_file(&probe);
