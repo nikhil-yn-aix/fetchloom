@@ -491,21 +491,21 @@ Liveness is decided in this order, and never from a file modification time:
 
 The lock, not the token, is the authority. `try_lock` succeeding proves there is no live holder, because both `flock` and `LockFileEx` are released by the kernel when the last descriptor closes or the process dies. The token exists so a waiter can say who holds the lock, and so recovery can reason about a volume where the lock itself is not trustworthy. Lock files are never deleted by a waiter, because deleting a file another process holds open races on every platform; they are zero length, and `cache prune` removes one only while holding its lock.
 
-Cross-user behavior in a shared cache. On Unix `locks/` is mode 0777 with the sticky bit, and the two lock files are created 0666 with the umask cleared for them specifically, so any user of the cache can take the lock while the sticky bit stops one user removing another's file. `<digest>.lock` is opened read-write, because `flock(2)` documents that over NFS "in order to place an exclusive lock, the file must be opened for writing". On Windows `locks/` carries an inheritable ACE granting the configured shared-cache group `FILE_GENERIC_READ` and `FILE_GENERIC_WRITE`, because `LockFileEx` requires the handle to have been created with `GENERIC_READ` or `GENERIC_WRITE`.
+Cross-user behavior, which is the only behavior. On Unix `locks/` is mode 0777 with the sticky bit, and the two lock files are created 0666 with the umask cleared for them specifically, so any user of the cache can take the lock while the sticky bit stops one user removing another's file. `<digest>.lock` is opened read-write, because `flock(2)` documents that over NFS "in order to place an exclusive lock, the file must be opened for writing". On Windows `locks/` inherits its parent's access control entries and Fetchloom sets none of its own, so a lock file is reachable by exactly the users the directory's creator allowed, and the handle is opened with `GENERIC_READ` and `GENERIC_WRITE`, which `LockFileEx` requires.
 
-Filesystems refused for a shared cache:
+Filesystems refused, because a cache on one cannot be shared safely and sharing is not something a user opts into:
 
 Any volume detected as network-backed. `flock(2)` documents that "up to Linux 2.6.11, flock() does not lock files over NFS", and that since 2.6.12 the kernel emulates it with whole-file `fcntl` byte-range locks. Mounting with `-o nolock` or a `local_lock=` option makes those locks node-local and returns no error, so a silent single-writer violation cannot be detected from a return code. contracts.md already requires refusing rather than using unsafely.
 
 Any volume where a probe `try_lock` on a scratch file fails with `ENOLCK`, `EOPNOTSUPP`, `ENOSYS` or `EINVAL`, which is how a FUSE filesystem without lock support answers.
 
-A private cache on a network-backed volume is still allowed, because its only writers are processes on this machine and node-local emulation covers them, but it emits `degrade` naming locking as node-local and the volume as the reason, and cloning is disabled there as contracts.md already requires.
+There is no exception for a cache only one machine writes to, because nothing declares that and the next process to open the directory may be on another host. A cache on a network-backed volume is refused with `cache.locking_unsupported`, and the run continues in no-cache behavior with a `degrade` event naming the volume, which is what contracts.md requires of a cache that cannot be used.
 
 Because: the standard library reached this exact primitive in 1.89 and documents the mapping to `flock` and `LockFileEx` explicitly, which removes an entire platform module and every unsafe block that would have been in it. `fcntl` byte-range locks are the wrong shape twice: they are per-process rather than per-descriptor, so a second open in the same process silently releases them, and they are what NFS emulation is built on rather than an improvement over it. Open-file-description locks fix the first problem but exist only on Linux. A lock directory created with exclusive create needs no filesystem lock support at all, but it has no liveness at all either: a killed process leaves a directory that nothing can prove is dead, which is precisely what contracts.md forbids deciding by modification time.
 
 The pair of pid and process start time is what makes pid reuse detectable, and boot identity is what makes a whole generation of records recognizable at once after a crash, which is what contracts.md startup recovery of orphaned `partial/` and `staging/` entries depends on. Machine identity is not in contracts.md and is added here, because the moment a cache directory is shared or network-mounted, a token whose pid refers to a different machine's process table would otherwise be read as live or stale by accident.
 
-Costs: the MSRV floor moves to 1.89, and any future need for a shared lock plus a readable token in one file is foreclosed by the two-file layout. Lock files accumulate, one per digest ever written, until a prune removes them. A holder that is alive but wedged is indistinguishable from a holder that is working, so the only remedy is the wait timeout, not a liveness check. Refusing a shared cache on every network volume refuses some that would in fact lock correctly, because the mount options that break locking cannot be distinguished from the ones that do not.
+Costs: the MSRV floor moves to 1.89, and any future need for a shared lock plus a readable token in one file is foreclosed by the two-file layout. Lock files accumulate, one per digest ever written, until a prune removes them. A holder that is alive but wedged is indistinguishable from a holder that is working, so the only remedy is the wait timeout, not a liveness check. Refusing every network volume refuses some that would in fact lock correctly, because the mount options that break locking cannot be distinguished from the ones that do not.
 
 Uncertain: the macOS `IOPlatformUUID` and `KERN_BOOTTIME` sources and the Windows `MachineGuid` registry path were not verified against primary documentation in this session. The Windows boot instant has no single obvious source, and the choice between deriving it from uptime and reading a performance counter is unsettled. All four are report-only inputs to the liveness ladder and must be confirmed before implementation. The error kind for refusing a volume that cannot express locking does not exist: `cache.locked` means contended, not incapable.
 
@@ -1245,8 +1245,8 @@ and `staging/` is created together with an owner record naming the machine, the
 boot, the process and its start time, which is the token the locking record
 already defines. Recovery removes an entry whose recorded machine is this
 machine and whose recorded boot is not this boot. An entry from another machine
-is left alone, because a shared cache is not this machine's to recover. An
-entry from this boot is left alone whether or not its writer is still running:
+is left alone, because a directory another machine also writes to is not this
+machine's to recover. An entry from this boot is left alone whether or not its writer is still running:
 a partial from this boot is resume material, and its writer's lock is what
 keeps a second writer off it.
 
@@ -1329,11 +1329,11 @@ Uncertain: nothing.
 Sources: standards.md One thing; contracts.md Cache and Errors
 `cache.format_mismatch`; docs.rs `blake3` `Hasher::new_derive_key`.
 
-## Ownership in a shared cache is the filesystem's answer, not a recorded one
+## Ownership is the filesystem's answer, not a recorded one
 
-Question: how prune in a shared cache tells which objects the invoking user
-created, and which filesystems cannot express the ownership rule contracts.md
-states.
+Question: how prune tells which objects the invoking user created, and which
+filesystems cannot express the ownership rule contracts.md states, given that
+sharing is not a mode and every cache is treated as one several users may reach.
 
 Options: record the creating user in a file beside each object; ask the
 filesystem who owns the object.
@@ -1346,40 +1346,50 @@ Windows it is the owner security identifier read with `GetSecurityInfo` for
 `OWNER_SECURITY_INFORMATION`, and this process's is the user in its own access
 token, compared as bytes.
 
-Permissions written by a shared cache, on Unix: `objects/`, `outboard/`,
-`partial/`, `staging/`, `meta/`, `locks/` and `pins/` are mode 0777 with the
-sticky bit, so every user may add entries and only an entry's owner may remove
-it; objects are published mode 0444, because an object is immutable once it is
-in `objects/` and no user has cause to write one; the two lock files stay mode
-0666 as the locking record already fixed. On Windows the cache root carries an
-inheritable access control entry granting the configured shared-cache group read
-and write, which the locking record already requires for `locks/`, and the
-sticky bit has no equivalent, so removal by another user is prevented by prune's
-ownership check rather than by the filesystem.
+Permissions, on Unix, and they are the same whether or not anyone else ever
+opens the directory: `objects/`, `outboard/`, `partial/`, `staging/`, `meta/`,
+`locks/` and `pins/` are mode 0777 with the sticky bit, so every user who can
+reach the cache may add entries and only an entry's owner may remove it; objects
+are published mode 0444, because an object is immutable once it is in `objects/`
+and no user has cause to write one; the two lock files stay mode 0666 as the
+locking record already fixed. Whether anyone else can reach the cache at all is
+decided by the directory the user put it in, which is the user's decision and
+not Fetchloom's: the default location sits under a home directory that is
+already private.
 
-Filesystems that cannot express it, and are refused for a shared cache: any
-volume with no ownership model at all, which is FAT and exFAT; any volume mounted
-so that every file reports one identity regardless of who wrote it, which is
-what an SMB or CIFS mount with a fixed user option does and what a network mount
-of a Windows share looks like from Unix; and every volume already refused by the
-locking record, because a shared cache without cross-user locking is refused
-before ownership is even asked about. The probe is empirical and matches the
-capability record's shape: create a file in the cache's own staging directory,
-ask who owns it, and refuse the volume when the answer is not this process's own
-identity.
+On Windows Fetchloom sets no access control entry of its own. A directory
+inherits its parent's, so a cache under the per-user default is private and a
+cache an administrator created for several users carries the entry that
+administrator chose. There is no configured group, because there is no mode to
+configure and inheritance already expresses exactly the intent the person who
+made the directory had. The sticky bit has no Windows equivalent, so removal of
+another user's object is prevented by prune's ownership check rather than by the
+filesystem.
 
-Because: a recorded owner is a claim by whoever wrote the record, and in a
-shared cache the other users are exactly the parties the record would be
+Filesystems that cannot express it, and are refused: any volume with no
+ownership model at all, which is FAT and exFAT; any volume mounted so that every
+file reports one identity regardless of who wrote it, which is what an SMB or
+CIFS mount with a fixed user option does and what a network mount of a Windows
+share looks like from Unix; and every volume already refused by the locking
+record, because a cache without cross-user locking is refused with
+`cache.locking_unsupported` before ownership is even asked about. The probe is
+empirical and matches the capability record's shape: create a file in the
+cache's own staging directory, ask who owns it, and refuse the volume when the
+answer is not this process's own identity.
+
+Because: a recorded owner is a claim by whoever wrote the record, and the other
+users of a cache directory are exactly the parties the record would be
 protecting against. The filesystem's answer is the only one that is not
 self-asserted. Comparing opaque identities for equality keeps one rule on three
 platforms and never needs a user name, which would be a lookup that can fail and
 a string that can collide.
 
-Costs: one ownership query per object prune considers, which makes a prune of a
-shared cache slower than a prune of a private one in proportion to the objects
-it examines. On Windows the removal rule is enforced by Fetchloom rather than by
-the filesystem, so a user with permission to delete another user's object could
-do so with any other tool.
+Costs: one ownership query per object prune considers, which is a stat the sweep
+was already making on most of them. World-writable directory modes look alarming
+in isolation and are safe only because the sticky bit is set and the parent
+directory is what decides reachability. On Windows the removal rule is enforced
+by Fetchloom rather than by the filesystem, so a user with permission to delete
+another user's object could do so with any other tool.
 
 Uncertain: the exact Windows call sequence for reading an owner from an open
 handle and for reading the token user was chosen from the documented API surface
@@ -1387,10 +1397,9 @@ and has not been compiled or run in this session. Whether a given SMB mount
 reports a fixed identity is discovered by the probe rather than predicted, which
 is why the probe exists.
 
-Sources: contracts.md Cache Modes, the shared cache rules; the advisory locking
+Sources: contracts.md Cache Modes, sharing is not a mode; the advisory locking
 record on `locks/` permissions; Microsoft Learn `GetSecurityInfo`,
 `GetTokenInformation`; `stat(2)`; `geteuid(2)`.
-
 ## A cache that cannot be used is a degradation, never a failure
 
 Question: what a run does when the cache directory is missing, read-only, or
