@@ -46,10 +46,8 @@ pub enum Operation {
     LockShared,
     /// Reading the identity of an open file.
     FileIdOf,
-    /// Reading the user a file belongs to.
-    Owner,
-    /// Reading the user this process runs as.
-    CurrentOwner,
+    /// Reading whether a file belongs to this user.
+    Owns,
 }
 
 #[derive(Debug)]

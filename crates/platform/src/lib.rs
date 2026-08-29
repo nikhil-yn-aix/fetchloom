@@ -17,7 +17,7 @@ use fetchloom_engine::capability::{
 };
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
+use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
 
@@ -134,6 +134,11 @@ impl NativePlatform {
 }
 
 fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
+    let kind = if reason.kind() == std::io::ErrorKind::StorageFull {
+        ErrorKind::ResourceDisk
+    } else {
+        kind
+    };
     Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
@@ -175,12 +180,8 @@ impl Platform for NativePlatform {
         imp::file_id_of(file)
     }
 
-    fn owner(&self, path: &Path) -> Result<OwnerId, Error> {
-        imp::owner(path)
-    }
-
-    fn current_owner(&self) -> Result<OwnerId, Error> {
-        imp::current_owner()
+    fn owns(&self, path: &Path) -> Result<bool, Error> {
+        imp::owns(path)
     }
 
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error> {

@@ -5,6 +5,8 @@ use std::path::Path;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::OwnerToken;
+
+use crate::failure;
 use serde::{Deserialize, Serialize};
 
 /// The fingerprint of an object as it was when the object was published.
@@ -78,18 +80,11 @@ pub fn write<T: Serialize>(path: &Path, record: &T) -> Result<(), Error> {
     beside.push(format!(".{}.writing", std::process::id()));
     let beside = std::path::PathBuf::from(beside);
 
-    std::fs::write(&beside, rendered).map_err(|reason| {
-        Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", beside.display()),
-        )
-    })?;
+    std::fs::write(&beside, rendered)
+        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &beside, &reason))?;
     std::fs::rename(&beside, path).map_err(|reason| {
         let _ = std::fs::remove_file(&beside);
-        Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", path.display()),
-        )
+        failure(ErrorKind::CacheCorrupt, path, &reason)
     })
 }
 
@@ -105,10 +100,7 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
         Ok(bytes) => bytes,
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(reason) => {
-            return Err(Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            ));
+            return Err(failure(ErrorKind::CacheCorrupt, path, &reason));
         }
     };
     serde_json::from_slice(&bytes).map(Some).map_err(|reason| {

@@ -22,7 +22,7 @@ use std::path::Path;
 use fetchloom_engine::capability::{Backing, InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
+use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
 use crate::{DegradeQueue, ProcessState};
 
@@ -263,30 +263,19 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
     host::identity_of(file).map(|found| FileId::new(found.file))
 }
 
-/// Returns the user a file belongs to.
+/// Reports whether a file belongs to the user this process runs as.
 ///
 /// # Errors
 ///
 /// Fails when the path cannot be read.
-pub(crate) fn owner(path: &Path) -> Result<OwnerId, Error> {
+pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     let found = rustix::fs::stat(path).map_err(|reason| {
         Error::new(
             ErrorKind::CacheCorrupt,
             format!("{}: {reason}", path.display()),
         )
     })?;
-    Ok(OwnerId::new(found.st_uid.to_string()))
-}
-
-/// Returns the user this process runs as.
-///
-/// # Errors
-///
-/// Never fails, because the platform always answers.
-pub(crate) fn current_owner() -> Result<OwnerId, Error> {
-    Ok(OwnerId::new(
-        rustix::process::geteuid().as_raw().to_string(),
-    ))
+    Ok(found.st_uid == rustix::process::geteuid().as_raw())
 }
 
 /// Reports what the volume behind a path sits on.

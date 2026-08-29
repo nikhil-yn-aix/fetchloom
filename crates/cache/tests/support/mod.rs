@@ -239,7 +239,7 @@ pub fn another_owner() -> Option<String> {
     std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok()
 }
 
-/// Gives a file to another user through the platform's own tool.
+/// Gives a file to another user through the platform s own tool.
 pub fn give_away(path: &Path, owner: &str) {
     let status = std::process::Command::new("sudo")
         .args(["-n", "chown", owner])

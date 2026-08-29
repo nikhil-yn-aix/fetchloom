@@ -14,7 +14,7 @@ use fetchloom_engine::verification::VerificationPolicy;
 
 use crate::layout::{digest_of, name_of};
 use crate::record::{self, RecordedFingerprint};
-use crate::{Cache, owner_record_of, seal_object};
+use crate::{Cache, failure, owner_record_of, seal_object};
 
 /// A completed object held open, with the lease that keeps it from being
 /// pruned while it is being read.
@@ -174,21 +174,14 @@ impl<P: Platform> Cache<P> {
 
     fn hash_object(&self, digest: ContentDigest) -> Result<ContentDigest, Error> {
         let path = self.layout.object(digest);
-        let mut file = std::fs::File::open(&path).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        })?;
+        let mut file = std::fs::File::open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
         let mut hasher = blake3::Hasher::new();
         let mut buffer = vec![0u8; 1 << 20];
         loop {
-            let filled = file.read(&mut buffer).map_err(|reason| {
-                Error::new(
-                    ErrorKind::CacheCorrupt,
-                    format!("{}: {reason}", path.display()),
-                )
-            })?;
+            let filled = file
+                .read(&mut buffer)
+                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
             if filled == 0 {
                 break;
             }
@@ -212,12 +205,8 @@ impl<P: Platform> Cache<P> {
     }
     /// Lists the digests a directory of the cache names.
     pub(crate) fn digests_in(directory: &std::path::Path) -> Result<Vec<ContentDigest>, Error> {
-        let entries = std::fs::read_dir(directory).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", directory.display()),
-            )
-        })?;
+        let entries = std::fs::read_dir(directory)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
         let mut found = Vec::new();
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str()
@@ -257,12 +246,8 @@ impl<P: Platform> Store for Cache<P> {
             ));
         }
         self.check(digest)?;
-        let file = std::fs::File::open(&path).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        })?;
+        let file = std::fs::File::open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
         Ok(ObjectReader { file, lease })
     }
 
@@ -285,12 +270,8 @@ impl<P: Platform> Store for Cache<P> {
     fn begin(&self, lease: &Self::Lease, length: u64) -> Result<Self::Writer, Error> {
         let path = self.layout.partial_of(lease.digest);
         if path.exists() {
-            std::fs::remove_file(&path).map_err(|reason| {
-                Error::new(
-                    ErrorKind::CacheCorrupt,
-                    format!("{}: {reason}", path.display()),
-                )
-            })?;
+            std::fs::remove_file(&path)
+                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
         }
         let file = self.platform.create_file_exclusive(&path)?;
         self.platform.preallocate(&file, length)?;
@@ -329,12 +310,8 @@ impl<P: Platform> Store for Cache<P> {
         let fingerprint = self.platform.fingerprint(&object)?;
         let record_path = self.fingerprint_record(lease.digest);
         if let Some(parent) = record_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|reason| {
-                Error::new(
-                    ErrorKind::CacheCorrupt,
-                    format!("{}: {reason}", parent.display()),
-                )
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|reason| failure(ErrorKind::CacheCorrupt, parent, &reason))?;
         }
         record::write(&record_path, &RecordedFingerprint::from(fingerprint))?;
         let _ = std::fs::remove_file(self.layout.mark_of(lease.digest));
@@ -345,23 +322,15 @@ impl<P: Platform> Store for Cache<P> {
     fn open_outboard(&self, digest: ContentDigest) -> Result<Self::Reader, Error> {
         let lease = self.read_lease(digest)?;
         let path = self.layout.outboard_of(digest);
-        let file = std::fs::File::open(&path).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        })?;
+        let file = std::fs::File::open(&path)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
         Ok(ObjectReader { file, lease })
     }
 
     fn write_outboard(&self, digest: ContentDigest, tree: &[u8]) -> Result<(), Error> {
         let path = self.layout.outboard_of(digest);
-        std::fs::write(&path, tree).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        })
+        std::fs::write(&path, tree)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))
     }
 
     fn stage(&self, destination_volume: &std::path::Path) -> Result<PathBuf, Error> {
@@ -392,12 +361,8 @@ impl<P: Platform> Store for Cache<P> {
             ));
         }
         let path = self.layout.pin_of(digest);
-        let written = std::fs::write(&path, []).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        });
+        let written = std::fs::write(&path, [])
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason));
         drop(held);
         written
     }

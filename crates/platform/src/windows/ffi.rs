@@ -24,8 +24,8 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY,
-    TOKEN_USER, TokenUser,
+    GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenOwner, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateSymbolicLinkW, FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
@@ -646,11 +646,14 @@ pub(crate) fn file_owner(file: &File) -> io::Result<String> {
     owner
 }
 
-/// Reads the user this process runs as.
+/// Reads the users a file this process creates can be owned by.
 ///
-/// Returns the security identifier of the token's user in its string form.
+/// Returns the token's user and the token's owner as security identifiers in
+/// their string form. The two differ when the process runs with an elevated
+/// token, where a file it creates is owned by the administrators group rather
+/// than by the user, and both of those are this process.
 /// Fails when the platform refuses the query.
-pub(crate) fn process_owner() -> io::Result<String> {
+pub(crate) fn process_owners() -> io::Result<Vec<String>> {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: the pseudo handle for this process is always valid, and the out pointer addresses a local the call fills in.
     let opened = unsafe {
@@ -664,12 +667,30 @@ pub(crate) fn process_owner() -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
 
+    let user = token_sid(token, TokenUser);
+    let owner = token_sid(token, TokenOwner);
+    // SAFETY: the token handle was opened above, is closed once, and nothing uses it afterwards.
+    unsafe { CloseHandle(token) };
+
+    let mut found = vec![user?];
+    let owner = owner?;
+    if !found.contains(&owner) {
+        found.push(owner);
+    }
+    Ok(found)
+}
+
+/// Reads one security identifier out of an access token.
+///
+/// Both classes this is asked for answer with a record whose first field is the
+/// identifier, so one reader serves both.
+fn token_sid(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String> {
     let mut needed = 0u32;
     // SAFETY: the token handle is open for the call, and a null buffer with a zero length is how the call is asked for the size it needs.
     unsafe {
         GetTokenInformation(
             token,
-            TokenUser,
+            class,
             std::ptr::null_mut(),
             0,
             std::ptr::from_mut(&mut needed),
@@ -680,23 +701,20 @@ pub(crate) fn process_owner() -> io::Result<String> {
     let read = unsafe {
         GetTokenInformation(
             token,
-            TokenUser,
+            class,
             buffer.as_mut_ptr().cast::<c_void>(),
             needed,
             std::ptr::from_mut(&mut needed),
         )
     };
-    // SAFETY: the token handle was opened above, is closed once, and nothing uses it afterwards.
-    unsafe { CloseHandle(token) };
     if read == 0 {
         return Err(io::Error::last_os_error());
     }
 
-    // SAFETY: the call reported it wrote a TOKEN_USER into this buffer, and the read is unaligned because the buffer is bytes.
-    let user = unsafe { buffer.as_ptr().cast::<TOKEN_USER>().read_unaligned() };
-    sid_text(user.User.Sid)
+    // SAFETY: the call reported it wrote a record beginning with a pointer to an identifier, and the read is unaligned because the buffer is bytes.
+    let sid = unsafe { buffer.as_ptr().cast::<PSID>().read_unaligned() };
+    sid_text(sid)
 }
-
 /// Renders a security identifier as the text form the platform defines.
 fn sid_text(sid: PSID) -> io::Result<String> {
     let mut text: PWSTR = std::ptr::null_mut();

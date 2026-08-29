@@ -9,7 +9,7 @@ use fetchloom_engine::capability::{
 };
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
-use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
+use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 
 use crate::schedule::{Faults, Operation};
@@ -146,14 +146,9 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
         self.inner.file_id_of(file)
     }
 
-    fn owner(&self, path: &Path) -> Result<OwnerId, Error> {
-        self.gate(Operation::Owner)?;
-        self.inner.owner(path)
-    }
-
-    fn current_owner(&self) -> Result<OwnerId, Error> {
-        self.gate(Operation::CurrentOwner)?;
-        self.inner.current_owner()
+    fn owns(&self, path: &Path) -> Result<bool, Error> {
+        self.gate(Operation::Owns)?;
+        self.inner.owns(path)
     }
 
     fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {

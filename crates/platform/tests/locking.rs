@@ -311,20 +311,9 @@ fn this_process_owns_what_it_creates() {
     let path = scratch.path().join("object");
     support::write_file(&path, b"bytes");
 
-    assert_eq!(
-        platform.owner(&path).unwrap(),
-        platform.current_owner().unwrap(),
-        "a file this process created reports another owner"
-    );
-}
-
-#[test]
-fn an_owner_is_the_same_every_time_it_is_read() {
-    let platform = NativePlatform::new();
-    assert_eq!(
-        platform.current_owner().unwrap(),
-        platform.current_owner().unwrap(),
-        "this process described its owner two ways"
+    assert!(
+        platform.owns(&path).unwrap(),
+        "a file this process created is not reported as its own"
     );
 }
 
@@ -334,9 +323,8 @@ fn a_volume_without_ownership_does_not_report_this_process_as_the_owner() {
     for scratch in support::scratch_on(support::Property::NoOwnership) {
         let path = scratch.path().join("object");
         support::write_file(&path, b"bytes");
-        assert_ne!(
-            platform.owner(&path).unwrap(),
-            platform.current_owner().unwrap(),
+        assert!(
+            !platform.owns(&path).unwrap(),
             "{} records no owner and reported this process as one",
             scratch.path().display()
         );

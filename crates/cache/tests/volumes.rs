@@ -58,7 +58,10 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
         let mut wrote = 0u32;
         let outcome = loop {
             let digest = hash_bytes(&bytes_of(1 << 20, u8::try_from(wrote % 251).unwrap_or(1)));
-            let lease = held.lease(digest).unwrap();
+            let lease = match held.lease(digest) {
+                Ok(lease) => lease,
+                Err(refused) => break refused,
+            };
             let began = held.begin(&lease, bytes.len() as u64);
             match began {
                 Err(refused) => break refused,
@@ -78,12 +81,10 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
                 scratch.path().display()
             );
         };
-        assert!(
-            matches!(
-                outcome.kind(),
-                ErrorKind::ResourceDisk | ErrorKind::CacheCorrupt | ErrorKind::IntegrityMismatch
-            ),
-            "running out of room reported {}",
+        assert_eq!(
+            outcome.kind(),
+            ErrorKind::ResourceDisk,
+            "running out of room reported {} rather than a disk failure",
             outcome.kind().label()
         );
         assert!(

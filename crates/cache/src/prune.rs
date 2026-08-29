@@ -9,11 +9,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::OwnerId;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::{PruneReport, Store};
 
 use crate::Cache;
+use crate::failure;
 use crate::record::{self, Mark};
 
 /// How long an object stays marked before a sweep may remove it.
@@ -30,7 +30,6 @@ pub const GRACE: Duration = Duration::from_secs(60);
 /// Fails when the cache cannot be read or written.
 pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport, Error> {
     let mut report = PruneReport::default();
-    let ours = cache.platform().current_owner()?;
     let now = nanos_now();
 
     for digest in cache.list()? {
@@ -42,7 +41,7 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
             continue;
         }
 
-        if cache.platform().owner(&object)? != ours {
+        if !cache.platform().owns(&object)? {
             report.skipped_other_owner += 1;
             continue;
         }
@@ -82,7 +81,7 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
         remove(&cache.layout().lock_owner_of(digest))?;
     }
 
-    sweep_quarantine(cache, &ours, &mut report)?;
+    sweep_quarantine(cache, &mut report)?;
     Ok(report)
 }
 
@@ -91,14 +90,10 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
 /// A quarantined object is never served, so nothing can claim one between a
 /// mark and a sweep, which is the only thing the grace period protects. It is
 /// removed under its lock so a repair reading one is never removed underneath.
-fn sweep_quarantine<P: Platform>(
-    cache: &Cache<P>,
-    ours: &OwnerId,
-    report: &mut PruneReport,
-) -> Result<(), Error> {
+fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> Result<(), Error> {
     for digest in cache.quarantined()? {
         let path = cache.layout().quarantined(digest);
-        if cache.platform().owner(&path)? != *ours {
+        if !cache.platform().owns(&path)? {
             report.skipped_other_owner += 1;
             continue;
         }
@@ -124,10 +119,7 @@ fn remove(path: &std::path::Path) -> Result<(), Error> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(reason) => Err(Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", path.display()),
-        )),
+        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, path, &reason)),
     }
 }
 

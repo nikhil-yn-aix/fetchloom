@@ -10,7 +10,7 @@ use std::path::Path;
 use fetchloom_engine::capability::{Backing, InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
+use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
 use crate::{DegradeQueue, ProcessState};
 
@@ -331,34 +331,29 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
     Ok(FileId::new(id))
 }
 
-/// Returns the user a file belongs to.
+/// Reports whether a file belongs to the user this process runs as.
+///
+/// Compares the file's owner against both the token's user and the token's
+/// owner, because a process running with an elevated token creates files owned
+/// by the administrators group rather than by the user, and both are this
+/// process.
 ///
 /// # Errors
 ///
 /// Fails when the path cannot be opened and when the platform reports no owner.
-pub(crate) fn owner(path: &Path) -> Result<OwnerId, Error> {
+pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     let file = ffi::open_for_query(path)
         .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
     let found =
         ffi::file_owner(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
-    Ok(OwnerId::new(found))
-}
-
-/// Returns the user this process runs as.
-///
-/// # Errors
-///
-/// Fails when the platform refuses the query.
-pub(crate) fn current_owner() -> Result<OwnerId, Error> {
-    let found = ffi::process_owner().map_err(|reason| {
+    let ours = ffi::process_owners().map_err(|reason| {
         Error::new(
             ErrorKind::CacheCorrupt,
             format!("this process does not report a user: {reason}"),
         )
     })?;
-    Ok(OwnerId::new(found))
+    Ok(ours.contains(&found))
 }
-
 /// Reports what the volume behind a path sits on.
 ///
 /// A path the platform cannot answer for is reported as a local volume rather

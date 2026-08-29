@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{Backing, CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
 use crate::durability::DurabilityTier;
 use crate::error::Error;
-use crate::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
+use crate::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
 /// What a lock holder recorded about itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,20 +72,17 @@ pub trait Platform: Send + Sync {
     /// Fails when the platform refuses the query.
     fn file_id_of(&self, file: &File) -> Result<FileId, Error>;
 
-    /// Returns the user a file belongs to.
+    /// Reports whether a file belongs to the user this process runs as.
+    ///
+    /// Asks the filesystem rather than reading a recorded claim, because in a
+    /// directory several users write to, a record is written by the parties it
+    /// would be protecting against.
     ///
     /// # Errors
     ///
     /// Fails when the path cannot be opened, and when the platform reports no
     /// owner for it.
-    fn owner(&self, path: &Path) -> Result<OwnerId, Error>;
-
-    /// Returns the user this process runs as.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the platform refuses the query.
-    fn current_owner(&self) -> Result<OwnerId, Error>;
+    fn owns(&self, path: &Path) -> Result<bool, Error>;
 
     /// Returns the tuple recording that the file at a path is probably
     /// unchanged.

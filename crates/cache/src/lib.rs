@@ -136,14 +136,8 @@ impl<P: Platform> Cache<P> {
         }
         sweep_previous_boot(&self.layout.partial(), &self.token)?;
         sweep_previous_boot(&self.layout.staging(), &self.token)?;
-        std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes()).map_err(
-            |reason| {
-                Error::new(
-                    ErrorKind::CacheCorrupt,
-                    format!("{}: {reason}", self.layout.recovered().display()),
-                )
-            },
-        )
+        std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes())
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &self.layout.recovered(), &reason))
     }
 
     /// Removes the whole cache.
@@ -152,12 +146,8 @@ impl<P: Platform> Cache<P> {
     ///
     /// Fails when the directory cannot be removed.
     pub fn clear(&self) -> Result<(), Error> {
-        std::fs::remove_dir_all(self.layout.root()).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", self.layout.root().display()),
-            )
-        })
+        std::fs::remove_dir_all(self.layout.root())
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, self.layout.root(), &reason))
     }
 }
 
@@ -173,9 +163,10 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
     match std::fs::read(layout.recovered()) {
         Ok(bytes) => Ok(bytes == boot.as_str().as_bytes()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(reason) => Err(Error::new(
+        Err(reason) => Err(failure(
             ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", layout.recovered().display()),
+            &layout.recovered(),
+            &reason,
         )),
     }
 }
@@ -183,12 +174,8 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
 /// Removes the entries in a directory that this machine wrote in a previous
 /// boot, along with their owner records.
 fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error> {
-    let entries = std::fs::read_dir(directory).map_err(|reason| {
-        Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", directory.display()),
-        )
-    })?;
+    let entries = std::fs::read_dir(directory)
+        .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().is_some_and(|kind| kind == "owner") {
@@ -207,6 +194,19 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
     Ok(())
 }
 
+/// Turns a filesystem failure into the error kind it deserves.
+///
+/// A volume with no room left is a resource failure and not a corruption, and
+/// the caller decides what to do about the two differently.
+pub(crate) fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
+    let kind = if reason.kind() == std::io::ErrorKind::StorageFull {
+        ErrorKind::ResourceDisk
+    } else {
+        kind
+    };
+    Error::new(kind, format!("{}: {reason}", path.display()))
+}
+
 /// Removes a file or a directory, whichever the path is.
 fn remove(path: &Path) -> Result<(), Error> {
     let outcome = if path.is_dir() {
@@ -217,10 +217,7 @@ fn remove(path: &Path) -> Result<(), Error> {
     match outcome {
         Ok(()) => Ok(()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(reason) => Err(Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", path.display()),
-        )),
+        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, path, &reason)),
     }
 }
 
@@ -232,12 +229,8 @@ fn create_directories(layout: &Layout) -> Result<(), Error> {
     }
     wanted.push(layout.marks());
     for directory in wanted {
-        std::fs::create_dir_all(&directory).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", directory.display()),
-            )
-        })?;
+        std::fs::create_dir_all(&directory)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory.as_path(), &reason))?;
         share_directory(&directory)?;
     }
     Ok(())
@@ -252,12 +245,7 @@ fn share_directory(directory: &Path) -> Result<(), Error> {
         directory,
         std::fs::Permissions::from_mode(SHARED_DIRECTORY_MODE),
     )
-    .map_err(|reason| {
-        Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", directory.display()),
-        )
-    })
+    .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))
 }
 
 /// Leaves a cache directory with the entries it inherited.
@@ -275,14 +263,8 @@ fn share_directory(_directory: &Path) -> Result<(), Error> {
 pub(crate) fn seal_object(path: &Path) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(PUBLISHED_OBJECT_MODE)).map_err(
-        |reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("{}: {reason}", path.display()),
-            )
-        },
-    )
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(PUBLISHED_OBJECT_MODE))
+        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))
 }
 
 /// Leaves a published object with the entries it inherited.
@@ -315,10 +297,7 @@ fn check_format(layout: &Layout) -> Result<(), Error> {
                 )
             })
         }
-        Err(reason) => Err(Error::new(
-            ErrorKind::CacheCorrupt,
-            format!("{}: {reason}", layout.format().display()),
-        )),
+        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, &layout.format(), &reason)),
     }
 }
 
