@@ -1077,3 +1077,38 @@ Because: the earlier record could only say that everything was unverified becaus
 Costs: the list is shorter than it was and still long. Half of a crate that cannot run here is the honest description of building a platform layer on one platform.
 
 Uncertain: the same caveat as the earlier record. This is a floor.
+
+## Phase 0 gate
+
+Question: Does phase 0 meet its exit criteria, and what remains unproven.
+
+Options: Close it; hold it open until every filesystem in the roadmap's Prove
+list has been exercised.
+
+Chosen: Closed, with the filesystem gap carried into phase 1 as a named debt.
+
+Because: the exit criterion is a tree reproducing an identical digest across
+platforms with no network code in the binary. All six targets independently
+produce the committed tree digest for the portable corpus, which is a stronger
+statement than pairwise agreement because the reference is fixed. All eleven
+continuous integration jobs are green, 163 tests pass on every target, and no
+async runtime or transport is linked.
+
+The first three runs found five real defects, every one of them in code that had
+compiled on Windows and never been linted or test-compiled elsewhere: three
+clippy findings in the Unix probe, four test files that did not name libc and
+rustix as used on Unix, and a benchmark gate that failed a runner measuring
+itself for the first time rather than recording a baseline. This is the evidence
+that the platform code needed a machine, not a review.
+
+Costs: fourteen named skips remain, and they are the honest gap. Block cloning
+has never succeeded on any machine, because no runner offers ReFS, btrfs, or
+XFS. A network-backed volume, a case-sensitive APFS volume, and tmpfs are
+likewise unexercised. Phase 1 exercises clone and lock paths continuously, so a
+runner with those filesystems belongs there rather than in a phase that has
+nothing to clone.
+
+Uncertain: the portable corpus is constructed by the same code on every target
+rather than transported between them, so the agreement proves the canonical
+encoding is platform-independent, not that a materialized tree survives a
+physical move. Phase 4 moves a bundle between machines and settles that.
