@@ -1,3 +1,5 @@
+param([string]$EnvFile = (Join-Path $env:TEMP 'fetchloom-volumes.env'))
+
 $ErrorActionPreference = 'Stop'
 
 New-Item -ItemType Directory -Force -Path C:\fetchloom-images | Out-Null
@@ -42,6 +44,6 @@ if ($behaves) {
     fsutil.exe file setCaseSensitiveInfo $sensitive enable
     $lines += "FETCHLOOM_TEST_CASE_SENSITIVE_VOLUMES=$sensitive"
 }
-Add-Content -Path $env:GITHUB_ENV -Encoding utf8 -Value $lines
+Set-Content -Path $EnvFile -Encoding utf8 -Value $lines
 
 Get-Volume | Format-Table -AutoSize

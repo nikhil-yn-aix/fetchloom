@@ -3,6 +3,7 @@
 
 mod bench;
 mod comments;
+mod verify;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -18,8 +19,15 @@ fn main() -> ExitCode {
 
     match task.as_str() {
         "check-comments" => check_comments(&workspace),
-        "bench" => run_bench(&workspace, &rest),
+        "bench" => run_bench(&workspace, &rest, verification_run()),
         "completions" => generate_completions(&workspace, &rest),
+        "verify" => {
+            if verify::run(&workspace, &rest) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -31,7 +39,8 @@ const USAGE: &str = "\
 usage:
   cargo xtask check-comments
   cargo xtask bench [--save-baseline] [--compare] [--iterations <n>]
-  cargo xtask completions <shell> <directory>";
+  cargo xtask completions <shell> <directory>
+  cargo xtask verify [--fast] [--arm] [--install-hook]";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -40,7 +49,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn check_comments(workspace: &Path) -> ExitCode {
+pub(crate) fn check_comments(workspace: &Path) -> ExitCode {
     let mut findings = Vec::new();
     let mut files = Vec::new();
     collect(workspace, &mut files);
@@ -85,7 +94,7 @@ fn collect(directory: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
+pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: bool) -> ExitCode {
     let save = arguments
         .iter()
         .any(|argument| argument == "--save-baseline");
@@ -112,8 +121,13 @@ fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
         Ok(regimes) => regimes,
         Err(code) => return code,
     };
+    let transfer = match measure_transfer(&binary, iterations) {
+        Ok(regimes) => regimes,
+        Err(code) => return code,
+    };
     let mut regimes = vec![regime];
     regimes.extend(cache);
+    regimes.extend(transfer);
     let mut current = bench::Baseline {
         target: target_triple(),
         regimes,
@@ -129,14 +143,14 @@ fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
 
     let path = baseline_path(workspace, &current.target);
     if save {
-        if !continuous_integration() {
+        if !gate_timing {
             current.regimes.iter_mut().for_each(|regime| {
                 regime
                     .metrics
                     .retain(|metric| metric.kind == bench::MetricKind::Deterministic);
             });
             println!(
-                "timing metrics were not recorded, because a timing baseline is only valid from the runner it was measured on"
+                "timing metrics were not recorded, because a timing baseline is only valid from the machine it was measured on, under cargo xtask verify"
             );
         }
         if let Err(error) = bench::save(&current, &path) {
@@ -164,18 +178,13 @@ fn run_bench(workspace: &Path, arguments: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let gate_timing = continuous_integration();
-        if let Err(error) = bench::compare(&baseline, &current, gate_timing) {
+        if let Err(error) = bench::compare(&baseline, &current) {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
-        if gate_timing {
-            println!("no regime regressed by more than five percent");
-        } else {
-            println!(
-                "no deterministic metric regressed by more than five percent; timing metrics gate only on continuous integration"
-            );
-        }
+        println!(
+            "no deterministic metric regressed by more than five percent; a timing metric is recorded and reported and never gates, because no machine here is quiet enough for a wall clock to mean anything"
+        );
     }
     ExitCode::SUCCESS
 }
@@ -244,8 +253,8 @@ fn host_triple() -> String {
         .to_owned()
 }
 
-fn continuous_integration() -> bool {
-    std::env::var_os("CI").is_some()
+fn verification_run() -> bool {
+    std::env::var_os("FETCHLOOM_VERIFY").is_some()
 }
 
 fn measure_cache(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
@@ -265,4 +274,14 @@ fn measure_cache(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResu
         return Err(ExitCode::from(1));
     }
     Ok(measured)
+}
+
+fn measure_transfer(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
+    match bench::run_transfer(binary, iterations.min(3)) {
+        Ok(regimes) => Ok(regimes),
+        Err(error) => {
+            eprintln!("{error}");
+            Err(ExitCode::from(1))
+        }
+    }
 }

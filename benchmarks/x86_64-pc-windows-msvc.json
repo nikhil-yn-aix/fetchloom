@@ -3,11 +3,17 @@
   "regimes": [
     {
       "regime": "no-op",
-      "iterations": 3,
+      "iterations": 5,
       "metrics": [
         {
+          "name": "startup",
+          "value": 9.7181,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
           "name": "binary-size",
-          "value": 1839104.0,
+          "value": 3894784.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -17,6 +23,12 @@
       "regime": "cold-cache",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 1015.6693000000001,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "cache-growth",
           "value": 16777216.0,
@@ -30,8 +42,50 @@
       "iterations": 3,
       "metrics": [
         {
+          "name": "wall",
+          "value": 325.0104,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
           "name": "cache-growth",
           "value": 0.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "cold-transfer",
+      "iterations": 3,
+      "metrics": [
+        {
+          "name": "wall",
+          "value": 53.4903,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
+          "name": "bytes-materialized",
+          "value": 4194304.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "interrupted-transfer",
+      "iterations": 3,
+      "metrics": [
+        {
+          "name": "wall",
+          "value": 231.50109999999998,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
+          "name": "bytes-materialized",
+          "value": 4194304.0,
           "unit": "bytes",
           "kind": "deterministic"
         }

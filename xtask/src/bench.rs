@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use fetchloom_faults::{Reply, Script, TestServer};
 use serde::{Deserialize, Serialize};
 
 /// The fraction a metric may worsen by before the gate fails.
@@ -18,7 +19,7 @@ pub enum MetricKind {
     /// Identical on identical inputs, so it gates on every machine.
     Deterministic,
     /// A property of the machine as much as the code, so it gates only on
-    /// continuous integration against a baseline from that same runner.
+    /// a verification run against a baseline from that same machine.
     Timing,
 }
 
@@ -70,6 +71,8 @@ pub enum BenchError {
     MalformedBaseline(serde_json::Error),
     /// A regime in the baseline was not run, or the other way round.
     RegimeMissing(String),
+    /// A run's `--json` result could not be parsed.
+    MalformedResult(serde_json::Error),
     /// A metric worsened by more than the gate allows.
     Regression {
         /// The regime the metric belongs to.
@@ -92,6 +95,9 @@ impl std::fmt::Display for BenchError {
             Self::Baseline(error) => write!(f, "could not read or write the baseline: {error}"),
             Self::MalformedBaseline(error) => write!(f, "the baseline is malformed: {error}"),
             Self::RegimeMissing(regime) => write!(f, "regime {regime} is not in both runs"),
+            Self::MalformedResult(error) => {
+                write!(f, "the run's result could not be read: {error}")
+            }
             Self::Regression {
                 regime,
                 metric,
@@ -217,18 +223,14 @@ pub fn load(path: &Path) -> Result<Baseline, BenchError> {
 /// Takes the baseline, the current run, and whether timing metrics gate. Returns
 /// nothing when every gated metric is within the gate. Deterministic metrics
 /// gate on every machine. Timing metrics gate only when timing gating is on,
-/// which is only on continuous integration against a baseline recorded on that
-/// same runner. Fails on the first gated metric that worsened by more than the
+/// which is only under `cargo xtask verify` against a baseline recorded on that
+/// same machine. Fails on the first gated metric that worsened by more than the
 /// gate allows, and on any regime present in one run and not the other.
 ///
 /// # Errors
 ///
 /// Returns the regime and metric that regressed, with both numbers.
-pub fn compare(
-    baseline: &Baseline,
-    current: &Baseline,
-    gate_timing: bool,
-) -> Result<(), BenchError> {
+pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError> {
     for regime in &current.regimes {
         let recorded = baseline
             .regimes
@@ -236,7 +238,7 @@ pub fn compare(
             .find(|candidate| candidate.regime == regime.regime)
             .ok_or_else(|| BenchError::RegimeMissing(regime.regime.clone()))?;
         for metric in &regime.metrics {
-            if metric.kind == MetricKind::Timing && !gate_timing {
+            if metric.kind == MetricKind::Timing {
                 continue;
             }
             let found = recorded
@@ -395,15 +397,175 @@ fn write_corpus(into: &Path) -> Result<(), BenchError> {
     fs::create_dir_all(into).map_err(BenchError::Process)?;
     for index in 0..CORPUS_FILES {
         let seed = u8::try_from(index % 251).unwrap_or(1);
-        let bytes: Vec<u8> = (0..CORPUS_FILE_BYTES)
-            .map(|offset| {
-                let offset = u8::try_from(offset % 251).unwrap_or(0);
-                offset.wrapping_mul(seed).wrapping_add(seed)
-            })
-            .collect();
+        let bytes = non_repeating_bytes(seed, CORPUS_FILE_BYTES);
         fs::write(into.join(format!("file-{index}.bin")), bytes).map_err(BenchError::Process)?;
     }
     Ok(())
+}
+
+fn non_repeating_bytes(seed: u8, length: usize) -> Vec<u8> {
+    (0..length)
+        .map(|offset| {
+            let offset = u8::try_from(offset % 251).unwrap_or(0);
+            offset.wrapping_mul(seed).wrapping_add(seed)
+        })
+        .collect()
+}
+
+/// How many bytes the transfer regimes' object holds.
+const TRANSFER_OBJECT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Where the interrupted transfer regime's server closes the connection
+/// partway through the body, as percentages of the object, before serving it
+/// whole.
+///
+/// Fewer than the attempt limit allows, because the client may retry a request
+/// of its own on a connection it had pooled, which consumes a scripted reply
+/// without the transfer having made an attempt.
+const TRANSFER_INTERRUPTIONS: [usize; 2] = [25, 50];
+
+/// Runs the cold transfer and interrupted transfer regimes and returns what
+/// they measured.
+///
+/// A cold run fetches a 4 MiB object from a local test server that serves it
+/// whole. An interrupted run fetches the same object from a server that
+/// closes the connection four times partway through the body, at twenty,
+/// forty, sixty and eighty percent, before serving it whole. Both regimes
+/// materialize the same object, so the deterministic difference between them
+/// is nothing: both must report the same bytes transferred.
+///
+/// # Errors
+///
+/// Fails when the test server cannot be started, when a run does not exit
+/// zero, and when a run's `--json` result cannot be read.
+pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
+    let object = non_repeating_bytes(1, TRANSFER_OBJECT_BYTES);
+    let mut cold_times = Vec::with_capacity(iterations as usize);
+    let mut cold_bytes = 0u64;
+    let mut interrupted_times = Vec::with_capacity(iterations as usize);
+    let mut interrupted_bytes = 0u64;
+
+    for round in 0..iterations {
+        let scratch = scratch_directory(round)?;
+
+        let cold_server =
+            TestServer::start(Script::serving(object.clone())).map_err(BenchError::Process)?;
+        let (wall, bytes) = measure_transfer(
+            binary,
+            &cold_server,
+            &scratch.join("cold"),
+            &scratch.join("cache-cold"),
+        )?;
+        drop(cold_server);
+        cold_times.push(wall);
+        cold_bytes = bytes;
+
+        let replies = TRANSFER_INTERRUPTIONS
+            .into_iter()
+            .map(|percent| Reply::ClosedMidBody {
+                after: object.len() * percent / 100,
+            })
+            .collect();
+        let interrupted_server = TestServer::start(
+            Script::serving(object.clone())
+                .tagged(vec!["\"stable\"".to_owned()])
+                .replying(replies),
+        )
+        .map_err(BenchError::Process)?;
+        let (wall, bytes) = measure_transfer(
+            binary,
+            &interrupted_server,
+            &scratch.join("interrupted"),
+            &scratch.join("cache-interrupted"),
+        )?;
+        drop(interrupted_server);
+        interrupted_times.push(wall);
+        interrupted_bytes = bytes;
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    cold_times.sort_by(f64::total_cmp);
+    interrupted_times.sort_by(f64::total_cmp);
+
+    Ok(vec![
+        RegimeResult {
+            regime: "cold-transfer".to_owned(),
+            iterations,
+            metrics: vec![
+                Metric {
+                    name: "wall".to_owned(),
+                    value: cold_times[cold_times.len() / 2],
+                    unit: "ms".to_owned(),
+                    kind: MetricKind::Timing,
+                },
+                Metric {
+                    name: "bytes-materialized".to_owned(),
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "an object below two to the fifty-third bytes is exact"
+                    )]
+                    value: cold_bytes as f64,
+                    unit: "bytes".to_owned(),
+                    kind: MetricKind::Deterministic,
+                },
+            ],
+        },
+        RegimeResult {
+            regime: "interrupted-transfer".to_owned(),
+            iterations,
+            metrics: vec![
+                Metric {
+                    name: "wall".to_owned(),
+                    value: interrupted_times[interrupted_times.len() / 2],
+                    unit: "ms".to_owned(),
+                    kind: MetricKind::Timing,
+                },
+                Metric {
+                    name: "bytes-materialized".to_owned(),
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "an object below two to the fifty-third bytes is exact"
+                    )]
+                    value: interrupted_bytes as f64,
+                    unit: "bytes".to_owned(),
+                    kind: MetricKind::Deterministic,
+                },
+            ],
+        },
+    ])
+}
+
+/// What a run's `--json` result carries that a benchmark reads.
+#[derive(Deserialize)]
+struct TransferOutcome {
+    bytes: u64,
+}
+
+fn measure_transfer(
+    binary: &Path,
+    server: &TestServer,
+    destination: &Path,
+    cache: &Path,
+) -> Result<(f64, u64), BenchError> {
+    let url = format!("{}/object", server.origin());
+    let started = Instant::now();
+    let output = Command::new(binary)
+        .arg("get")
+        .arg(&url)
+        .arg("--output")
+        .arg(destination)
+        .arg("--json")
+        .env("FETCHLOOM_CACHE_DIR", cache)
+        .output()
+        .map_err(BenchError::Process)?;
+    let elapsed = started.elapsed();
+    if !output.status.success() {
+        return Err(BenchError::NonZeroExit(output.status.code().unwrap_or(-1)));
+    }
+    let outcome: TransferOutcome =
+        serde_json::from_slice(&output.stdout).map_err(BenchError::MalformedResult)?;
+    Ok((elapsed.as_secs_f64() * 1000.0, outcome.bytes))
 }
 
 fn measure_get(

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+env_file=${1:-/tmp/fetchloom-volumes.env}
 root=/Volumes
 images=/var/tmp/fetchloom-images
 mkdir -p "$images"
@@ -25,6 +26,6 @@ attach fetchloom-small 8m APFS
   echo "FETCHLOOM_TEST_NORMALIZING_VOLUMES=$root/fetchloom-hfs"
   echo "FETCHLOOM_TEST_SMALL_VOLUMES=$root/fetchloom-small"
   echo "FETCHLOOM_TEST_SECOND_VOLUMES=$root/fetchloom-apfs"
-} >> "$GITHUB_ENV"
+} > "$env_file"
 
 mount
