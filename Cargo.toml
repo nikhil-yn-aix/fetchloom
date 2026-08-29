@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/platform", "crates/faults", "crates/cli", "xtask"]
+members = ["crates/engine", "crates/platform", "crates/cache", "crates/faults", "crates/cli", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,7 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+fetchloom-cache = { path = "crates/cache" }
 fetchloom-engine = { path = "crates/engine" }
 fetchloom-faults = { path = "crates/faults" }
 fetchloom-platform = { path = "crates/platform" }

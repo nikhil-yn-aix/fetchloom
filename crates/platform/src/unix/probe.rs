@@ -233,7 +233,7 @@ fn max_component_length(directory: &Path) -> u32 {
 }
 
 #[cfg(target_os = "linux")]
-fn backing(directory: &Path) -> Backing {
+pub(crate) fn backing(directory: &Path) -> Backing {
     const NETWORK_KINDS: [i64; 7] = [
         0x6969,
         0x517b,
@@ -263,7 +263,7 @@ fn backing(directory: &Path) -> Backing {
     unsafe_code,
     reason = "the mount flags have no wrapper on this platform, and each block states its invariant"
 )]
-fn backing(directory: &Path) -> Backing {
+pub(crate) fn backing(directory: &Path) -> Backing {
     use std::os::unix::ffi::OsStrExt;
     let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
         return Backing::Unknown;

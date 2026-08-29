@@ -14,6 +14,8 @@ pub enum Operation {
     FileId,
     /// Reading the tuple recording that a file is probably unchanged.
     Fingerprint,
+    /// Reading what a volume sits on.
+    VolumeBacking,
     /// Detecting what a volume can do.
     VolumeCapabilities,
     /// Creating a file that must not already exist.

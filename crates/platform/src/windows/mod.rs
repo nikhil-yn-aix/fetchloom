@@ -7,7 +7,7 @@ use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
-use fetchloom_engine::capability::{InteropAcceleration, VectorLevel, VolumeCapabilities};
+use fetchloom_engine::capability::{Backing, InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
@@ -357,4 +357,16 @@ pub(crate) fn current_owner() -> Result<OwnerId, Error> {
         )
     })?;
     Ok(OwnerId::new(found))
+}
+
+/// Reports what the volume behind a path sits on.
+///
+/// A path the platform cannot answer for is reported as a local volume rather
+/// than refused.
+pub(crate) fn volume_backing(path: &Path) -> Backing {
+    if ffi::is_remote_drive(path) {
+        Backing::Network
+    } else {
+        Backing::Local
+    }
 }

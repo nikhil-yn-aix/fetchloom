@@ -4,7 +4,9 @@ use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
-use fetchloom_engine::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
+use fetchloom_engine::capability::{
+    Backing, CopyMechanism, ProcessorCapabilities, VolumeCapabilities,
+};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
 use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
@@ -59,6 +61,11 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error> {
         self.gate(Operation::Fingerprint)?;
         self.inner.fingerprint(path)
+    }
+
+    fn volume_backing(&self, path: &Path) -> Result<Backing, Error> {
+        self.gate(Operation::VolumeBacking)?;
+        self.inner.volume_backing(path)
     }
 
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {

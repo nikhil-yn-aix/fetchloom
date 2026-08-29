@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
+use crate::capability::{Backing, CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
 use crate::durability::DurabilityTier;
 use crate::error::Error;
 use crate::identity::{BootId, FileId, Fingerprint, MachineId, OwnerId, VolumeId};
@@ -94,6 +94,16 @@ pub trait Platform: Send + Sync {
     ///
     /// Fails when the path cannot be opened or the platform refuses the query.
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error>;
+
+    /// Reports what the volume behind a path sits on.
+    ///
+    /// Answers with one query rather than the whole probe, because a cache
+    /// refuses a network-backed volume before it does any other work.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path cannot be read or the platform refuses the query.
+    fn volume_backing(&self, path: &Path) -> Result<Backing, Error>;
 
     /// Detects what the volume behind a directory can do.
     ///

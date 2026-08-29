@@ -12,7 +12,9 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use fetchloom_engine::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
+use fetchloom_engine::capability::{
+    Backing, CopyMechanism, ProcessorCapabilities, VolumeCapabilities,
+};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{FileId, Fingerprint, OwnerId, VolumeId};
@@ -183,6 +185,10 @@ impl Platform for NativePlatform {
 
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error> {
         imp::fingerprint(path)
+    }
+
+    fn volume_backing(&self, path: &Path) -> Result<Backing, Error> {
+        Ok(imp::volume_backing(path))
     }
 
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {
