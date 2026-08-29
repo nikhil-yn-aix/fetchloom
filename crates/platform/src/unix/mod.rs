@@ -24,7 +24,9 @@ use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
-use crate::{DegradeQueue, ProcessState};
+use fetchloom_engine::degrade::DegradeQueue;
+
+use crate::ProcessState;
 
 fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))

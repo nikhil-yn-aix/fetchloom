@@ -19,7 +19,9 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{BootId, MachineId};
 
 use super::Identity;
-use crate::{DegradeQueue, ProcessState};
+use fetchloom_engine::degrade::DegradeQueue;
+
+use crate::ProcessState;
 
 /// The flag telling a clone not to follow a symbolic link.
 ///

@@ -12,15 +12,17 @@ use fetchloom_engine::capability::{
 };
 use fetchloom_engine::error::{Error, ErrorKind};
 
-use crate::DegradeQueue;
+use fetchloom_engine::degrade::DegradeQueue;
 
-/// The ratio above which an on-access scanner is called present.
+use crate::probe_tag;
+
+/// The ratio above which writing many small files is called expensive.
 ///
-/// This value is provisional. Neither Linux nor macOS can enumerate a scanner,
-/// so presence is decided by measurement alone, and no measurement stands
-/// behind this number yet. The slice that measures a runner with a scanner
-/// enabled and disabled replaces it here, in this one place.
-const PROVISIONAL_SCANNER_RATIO: f64 = 2.0;
+/// This is a cost threshold and never a detection threshold. Neither Linux nor
+/// macOS can enumerate what inspects a write, and a loopback ext4 image has
+/// measured a ratio near a thousand with no scanner loaded, so exceeding this
+/// says the volume is slow at small writes and says nothing about why.
+const SMALL_WRITE_COST_RATIO: f64 = 2.0;
 
 /// How many small files the scanner measurement writes.
 const SCANNER_FILES: usize = 64;
@@ -53,37 +55,44 @@ pub(super) fn capabilities(
     degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
-    let folding = fold_probe(directory)?;
+    let folding = fold_probe(directory, degradations)?;
     let held = cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&volume.value())
         .cloned();
-    if let Some(found) = held {
-        return Ok(VolumeCapabilities {
+    let answer = if let Some(found) = held {
+        VolumeCapabilities {
             case_folding: folding.0,
             normalization: folding.1,
             ..found
-        });
+        }
+    } else {
+        let measured = measure(directory, folding)?;
+        cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(volume.value(), measured.clone());
+        measured
+    };
+    if let Scanner::Unknown { cost_ratio } = answer.scanner {
+        degradations.record(
+            "whether an on-access scanner inspects writes on this volume",
+            format!("a measured cost ratio of {cost_ratio:.2} with the answer left unknown"),
+            "this platform cannot enumerate what inspects a write, and the measurement cannot tell a scanner from a filesystem that is slow at small writes, so the cause is unknown",
+        );
     }
-    let measured = measure(directory, folding, degradations)?;
-    cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(volume.value(), measured.clone());
-    Ok(measured)
+    Ok(answer)
 }
 
 fn measure(
     directory: &Path,
     folding: (CaseFolding, Normalization),
-    degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let symlink = symlink_probe(directory);
     let hard_link = hard_link_probe(directory);
     let clone = clone_probe(directory);
     let scanner = scanner_probe(directory)?;
-    let _ = degradations;
 
     Ok(VolumeCapabilities {
         case_folding: folding.0,
@@ -105,21 +114,38 @@ const MAX_PATH_LENGTH: u32 = 4096;
 #[cfg(target_vendor = "apple")]
 const MAX_PATH_LENGTH: u32 = 1024;
 
-fn fold_probe(directory: &Path) -> Result<(CaseFolding, Normalization), Error> {
-    let upper = directory.join("fetchloom-probe-A");
-    let lower = directory.join("fetchloom-probe-a");
+fn fold_probe(
+    directory: &Path,
+    degradations: &DegradeQueue,
+) -> Result<(CaseFolding, Normalization), Error> {
+    let tag = probe_tag();
+    let upper = directory.join(format!("fetchloom-probe-{tag}-A"));
+    let lower = directory.join(format!("fetchloom-probe-{tag}-a"));
     std::fs::File::create_new(&upper).map_err(|reason| failure(&upper, &reason))?;
     let folds_case = std::fs::File::create_new(&lower).is_err();
     let _ = std::fs::remove_file(&lower);
     let _ = std::fs::remove_file(&upper);
 
-    let composed = String::from_utf8(vec![b'f', b'l', 0xc3, 0xa9])
-        .unwrap_or_else(|_| "flprobe-composed".to_owned());
-    let decomposed = String::from_utf8(vec![b'f', b'l', 0x65, 0xcc, 0x81])
-        .unwrap_or_else(|_| "flprobe-decomposed".to_owned());
+    let stem = format!("fetchloom-probe-{tag}-");
+    let composed = String::from_utf8([stem.as_bytes(), &[0xc3, 0xa9]].concat())
+        .unwrap_or_else(|_| format!("{stem}composed"));
+    let decomposed = String::from_utf8([stem.as_bytes(), &[0x65, 0xcc, 0x81]].concat())
+        .unwrap_or_else(|_| format!("{stem}decomposed"));
     let first = directory.join(&composed);
     let second = directory.join(&decomposed);
-    std::fs::File::create_new(&first).map_err(|reason| failure(&first, &reason))?;
+    let case_folding = if folds_case {
+        CaseFolding::Folding
+    } else {
+        CaseFolding::Sensitive
+    };
+    if let Err(reason) = std::fs::File::create_new(&first) {
+        degradations.record(
+            "how this volume treats two spellings of one name",
+            "nothing, because the answer is unknown",
+            format!("the volume refused the name the probe measures with: {reason}"),
+        );
+        return Ok((case_folding, Normalization::Unknown));
+    }
     let folds_normalization = std::fs::File::create_new(&second).is_err();
 
     let stored_as_written = std::fs::read_dir(directory).is_ok_and(|entries| {
@@ -138,24 +164,21 @@ fn fold_probe(directory: &Path) -> Result<(CaseFolding, Normalization), Error> {
     } else {
         Normalization::Normalizing
     };
-    let case_folding = if folds_case {
-        CaseFolding::Folding
-    } else {
-        CaseFolding::Sensitive
-    };
     Ok((case_folding, normalization))
 }
 
 fn symlink_probe(directory: &Path) -> bool {
-    let link = directory.join("fetchloom-probe-link");
+    let tag = probe_tag();
+    let link = directory.join(format!("fetchloom-probe-{tag}-link"));
     let created = rustix::fs::symlinkat("fetchloom-probe-target", rustix::fs::CWD, &link).is_ok();
     let _ = std::fs::remove_file(&link);
     created
 }
 
 fn hard_link_probe(directory: &Path) -> bool {
-    let original = directory.join("fetchloom-probe-original");
-    let linked = directory.join("fetchloom-probe-linked");
+    let tag = probe_tag();
+    let original = directory.join(format!("fetchloom-probe-{tag}-original"));
+    let linked = directory.join(format!("fetchloom-probe-{tag}-linked"));
     if std::fs::write(&original, b"probe").is_err() {
         return false;
     }
@@ -174,8 +197,9 @@ fn hard_link_probe(directory: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 fn clone_probe(directory: &Path) -> bool {
-    let from = directory.join("fetchloom-probe-clone-source");
-    let to = directory.join("fetchloom-probe-clone-target");
+    let tag = probe_tag();
+    let from = directory.join(format!("fetchloom-probe-{tag}-clone-source"));
+    let to = directory.join(format!("fetchloom-probe-{tag}-clone-target"));
     if std::fs::write(&from, vec![0u8; 4096]).is_err() {
         return false;
     }
@@ -193,7 +217,8 @@ fn clone_probe(directory: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 fn sparse_probe(directory: &Path) -> bool {
-    let path = directory.join("fetchloom-probe-sparse");
+    let tag = probe_tag();
+    let path = directory.join(format!("fetchloom-probe-{tag}-sparse"));
     let Ok(file) = std::fs::File::create(&path) else {
         return false;
     };
@@ -291,9 +316,10 @@ pub(crate) fn backing(directory: &Path) -> Backing {
 }
 
 fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
+    let tag = probe_tag();
     let bytes = vec![0u8; SCANNER_FILE_BYTES];
 
-    let many = directory.join("fetchloom-probe-many");
+    let many = directory.join(format!("fetchloom-probe-{tag}-many"));
     std::fs::create_dir(&many).map_err(|reason| failure(&many, &reason))?;
     let started = std::time::Instant::now();
     for index in 0..SCANNER_FILES {
@@ -303,7 +329,7 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
     let small = started.elapsed();
     let _ = std::fs::remove_dir_all(&many);
 
-    let one = directory.join("fetchloom-probe-one");
+    let one = directory.join(format!("fetchloom-probe-{tag}-one"));
     let whole = vec![0u8; SCANNER_FILE_BYTES * SCANNER_FILES];
     let started = std::time::Instant::now();
     std::fs::write(&one, &whole).map_err(|reason| failure(&one, &reason))?;
@@ -316,12 +342,8 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
         1.0
     };
 
-    if ratio > PROVISIONAL_SCANNER_RATIO {
-        Ok(Scanner::Present {
-            name: None,
-            cost_ratio: ratio,
-        })
-    } else {
-        Ok(Scanner::Absent)
+    if ratio > SMALL_WRITE_COST_RATIO {
+        return Ok(Scanner::Unknown { cost_ratio: ratio });
     }
+    Ok(Scanner::Absent)
 }

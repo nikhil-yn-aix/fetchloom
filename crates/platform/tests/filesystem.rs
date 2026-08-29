@@ -220,7 +220,16 @@ fn a_degradation_names_what_was_requested_what_was_used_and_why() {
         )
         .unwrap();
 
-    for entry in platform.take_degradations() {
+    let reported = platform.take_degradations();
+    let capabilities = platform.volume_capabilities(scratch.path()).unwrap();
+    let expected = usize::from(!capabilities.clone) + usize::from(!capabilities.sparse);
+    assert!(
+        reported.len() >= expected,
+        "this volume cannot clone or reserve, and {expected} degradations were expected rather than {}",
+        reported.len()
+    );
+
+    for entry in reported {
         assert!(
             !entry.requested.is_empty(),
             "a degradation named no request"

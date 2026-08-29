@@ -10,11 +10,11 @@
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 use fetchloom_engine::capability::{
     Backing, CopyMechanism, ProcessorCapabilities, VolumeCapabilities,
 };
+use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
@@ -46,57 +46,19 @@ use crate::unix as imp;
 #[cfg(windows)]
 use crate::windows as imp;
 
-/// One fallback the platform performed instead of what was requested.
+/// A name fragment no other probe uses at the same moment.
 ///
-/// The Platform seam has no observer, so a fallback is recorded here and the
-/// composition root turns each entry into the one `degrade` event.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Degradation {
-    /// What was requested.
-    pub requested: String,
-    /// What was used instead.
-    pub used: String,
-    /// Why the substitution happened.
-    pub reason: String,
-}
-
-/// Where a platform records the fallbacks it performed.
-#[derive(Debug, Default)]
-pub struct DegradeQueue {
-    entries: Mutex<Vec<Degradation>>,
-}
-
-impl DegradeQueue {
-    /// Starts a queue that has recorded nothing.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            entries: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Records one fallback.
-    pub fn record(
-        &self,
-        requested: impl Into<String>,
-        used: impl Into<String>,
-        reason: impl Into<String>,
-    ) {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(Degradation {
-                requested: requested.into(),
-                used: used.into(),
-                reason: reason.into(),
-            });
-    }
-
-    /// Removes and returns everything recorded so far.
-    #[must_use]
-    pub fn take(&self) -> Vec<Degradation> {
-        std::mem::take(&mut self.entries.lock().unwrap_or_else(PoisonError::into_inner))
-    }
+/// Returns this process's identifier and a count that never repeats within it,
+/// so two probes of one directory, in this process or in another, never contend
+/// for a name and never read each other's file as the filesystem's answer.
+pub(crate) fn probe_tag() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// A held advisory lock. Releasing it is dropping it.

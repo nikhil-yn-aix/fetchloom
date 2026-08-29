@@ -8,7 +8,9 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{BootId, MachineId};
 
 use super::Identity;
-use crate::{DegradeQueue, ProcessState};
+use fetchloom_engine::degrade::DegradeQueue;
+
+use crate::ProcessState;
 
 /// Where the system records this machine's own identity.
 const MACHINE_FILE: &str = "/etc/machine-id";

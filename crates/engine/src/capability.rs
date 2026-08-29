@@ -22,6 +22,8 @@ pub enum Normalization {
     InsensitivePreserving,
     /// Two spellings are one name, and the bytes stored are a normalized form.
     Normalizing,
+    /// The volume refused the name the probe measures with, so nothing is known.
+    Unknown,
 }
 
 /// What a volume's storage sits behind.
@@ -37,15 +39,25 @@ pub enum Backing {
 }
 
 /// Whether an on-access scanner inspects writes, and what it costs.
+///
+/// Presence and absence are only ever reported where the platform can
+/// enumerate what inspects a write. Where it cannot, the measured cost is
+/// reported with the answer left unknown, because the measurement cannot tell a
+/// scanner from a filesystem that is slow at small writes.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scanner {
-    /// No scanner was measured on this volume.
+    /// Nothing is inspecting writes on this volume.
     Absent,
-    /// A scanner was measured on this volume.
+    /// A named product is inspecting writes on this volume.
     Present {
-        /// The product's name, when the platform names it.
-        name: Option<String>,
+        /// The product's name.
+        name: String,
+        /// How many times longer many small writes took than one large write.
+        cost_ratio: f64,
+    },
+    /// The platform cannot say what inspects writes, so only the cost is known.
+    Unknown {
         /// How many times longer many small writes took than one large write.
         cost_ratio: f64,
     },

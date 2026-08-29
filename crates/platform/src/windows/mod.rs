@@ -12,7 +12,9 @@ use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
-use crate::{DegradeQueue, ProcessState};
+use fetchloom_engine::degrade::DegradeQueue;
+
+use crate::ProcessState;
 
 /// The interval the Windows epoch counts in, relative to the Unix epoch.
 const WINDOWS_TO_UNIX_INTERVALS: i64 = 116_444_736_000_000_000;

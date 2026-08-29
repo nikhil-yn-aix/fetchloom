@@ -18,13 +18,9 @@ use windows_sys::Win32::System::SystemServices::{
 };
 
 use super::{MAX_PATH_LENGTH, ffi};
-use crate::DegradeQueue;
+use fetchloom_engine::degrade::DegradeQueue;
 
-/// The name the case probe creates first.
-const UPPER_NAME: &str = "fetchloom-probe-A";
-
-/// The name the case probe attempts second.
-const LOWER_NAME: &str = "fetchloom-probe-a";
+use crate::probe_tag;
 
 /// How many small files the scanner measurement writes.
 const SCANNER_FILES: usize = 64;
@@ -58,33 +54,40 @@ pub(crate) fn capabilities(
     degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
-    let folding = fold_probe(directory)?;
+    let folding = fold_probe(directory, degradations)?;
     let held = cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&volume.value())
         .cloned();
-    if let Some(found) = held {
-        return Ok(VolumeCapabilities {
+    let answer = if let Some(found) = held {
+        VolumeCapabilities {
             case_folding: folding.0,
             normalization: folding.1,
             ..found
-        });
+        }
+    } else {
+        let measured = measure(directory, volume, folding)?;
+        cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(volume.value(), measured.clone());
+        measured
+    };
+    if let Scanner::Unknown { cost_ratio } = answer.scanner {
+        degradations.record(
+            "whether an on-access scanner inspects writes on this volume",
+            format!("a measured cost ratio of {cost_ratio:.2} with the answer left unknown"),
+            "the filter manager refused to say which filters are registered, which it does for a process that is not elevated, so the cause is unknown",
+        );
     }
-
-    let measured = measure(directory, volume, folding, degradations)?;
-    cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(volume.value(), measured.clone());
-    Ok(measured)
+    Ok(answer)
 }
 
 fn measure(
     directory: &Path,
     volume: VolumeId,
     folding: (CaseFolding, Normalization),
-    degradations: &DegradeQueue,
 ) -> Result<VolumeCapabilities, Error> {
     let handle = ffi::open_for_query(directory).map_err(|reason| failure(directory, &reason))?;
     let information =
@@ -92,7 +95,7 @@ fn measure(
     drop(handle);
 
     let symlink = symlink_probe(directory);
-    let scanner = scanner_probe(directory, degradations)?;
+    let scanner = scanner_probe(directory)?;
     let _ = volume;
 
     Ok(VolumeCapabilities {
@@ -113,21 +116,38 @@ fn measure(
     })
 }
 
-fn fold_probe(directory: &Path) -> Result<(CaseFolding, Normalization), Error> {
-    let upper = directory.join(UPPER_NAME);
-    let lower = directory.join(LOWER_NAME);
+fn fold_probe(
+    directory: &Path,
+    degradations: &DegradeQueue,
+) -> Result<(CaseFolding, Normalization), Error> {
+    let tag = probe_tag();
+    let upper = directory.join(format!("fetchloom-probe-{tag}-A"));
+    let lower = directory.join(format!("fetchloom-probe-{tag}-a"));
     std::fs::File::create_new(&upper).map_err(|reason| failure(&upper, &reason))?;
     let folds_case = std::fs::File::create_new(&lower).is_err();
     let _ = std::fs::remove_file(&lower);
     let _ = std::fs::remove_file(&upper);
 
-    let composed = String::from_utf8(vec![b'f', b'l', 0xc3, 0xa9])
-        .unwrap_or_else(|_| "flprobe-composed".to_owned());
-    let decomposed = String::from_utf8(vec![b'f', b'l', 0x65, 0xcc, 0x81])
-        .unwrap_or_else(|_| "flprobe-decomposed".to_owned());
+    let stem = format!("fetchloom-probe-{tag}-");
+    let composed = String::from_utf8([stem.as_bytes(), &[0xc3, 0xa9]].concat())
+        .unwrap_or_else(|_| format!("{stem}composed"));
+    let decomposed = String::from_utf8([stem.as_bytes(), &[0x65, 0xcc, 0x81]].concat())
+        .unwrap_or_else(|_| format!("{stem}decomposed"));
     let first = directory.join(&composed);
     let second = directory.join(&decomposed);
-    std::fs::File::create_new(&first).map_err(|reason| failure(&first, &reason))?;
+    let case_folding = if folds_case {
+        CaseFolding::Folding
+    } else {
+        CaseFolding::Sensitive
+    };
+    if let Err(reason) = std::fs::File::create_new(&first) {
+        degradations.record(
+            "how this volume treats two spellings of one name",
+            "nothing, because the answer is unknown",
+            format!("the volume refused the name the probe measures with: {reason}"),
+        );
+        return Ok((case_folding, Normalization::Unknown));
+    }
     let folds_normalization = std::fs::File::create_new(&second).is_err();
 
     let stored_as_written = std::fs::read_dir(directory).is_ok_and(|entries| {
@@ -146,25 +166,22 @@ fn fold_probe(directory: &Path) -> Result<(CaseFolding, Normalization), Error> {
     } else {
         Normalization::Normalizing
     };
-    let case_folding = if folds_case {
-        CaseFolding::Folding
-    } else {
-        CaseFolding::Sensitive
-    };
     Ok((case_folding, normalization))
 }
 
 fn symlink_probe(directory: &Path) -> bool {
-    let link = directory.join("fetchloom-probe-link");
+    let tag = probe_tag();
+    let link = directory.join(format!("fetchloom-probe-{tag}-link"));
     let created = ffi::create_symlink("fetchloom-probe-target", &link, false).is_ok();
     let _ = std::fs::remove_file(&link);
     created
 }
 
-fn scanner_probe(directory: &Path, degradations: &DegradeQueue) -> Result<Scanner, Error> {
+fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
+    let tag = probe_tag();
     let bytes = vec![0u8; SCANNER_FILE_BYTES];
 
-    let many = directory.join("fetchloom-probe-many");
+    let many = directory.join(format!("fetchloom-probe-{tag}-many"));
     std::fs::create_dir(&many).map_err(|reason| failure(&many, &reason))?;
     let started = std::time::Instant::now();
     for index in 0..SCANNER_FILES {
@@ -174,7 +191,7 @@ fn scanner_probe(directory: &Path, degradations: &DegradeQueue) -> Result<Scanne
     let small = started.elapsed();
     let _ = std::fs::remove_dir_all(&many);
 
-    let one = directory.join("fetchloom-probe-one");
+    let one = directory.join(format!("fetchloom-probe-{tag}-one"));
     let whole = vec![0u8; SCANNER_FILE_BYTES * SCANNER_FILES];
     let started = std::time::Instant::now();
     std::fs::write(&one, &whole).map_err(|reason| failure(&one, &reason))?;
@@ -187,30 +204,20 @@ fn scanner_probe(directory: &Path, degradations: &DegradeQueue) -> Result<Scanne
         1.0
     };
 
-    if let Some(name) = minifilter_name() {
-        return Ok(Scanner::Present {
-            name: Some(name),
-            cost_ratio: ratio,
-        });
-    }
-    degradations.record(
-        "the name of any on-access scanner inspecting writes",
-        "no scanner was named",
-        "no minifilter sits in the range the platform allocates to scanners",
-    );
-    Ok(Scanner::Absent)
-}
-
-/// Names the on-access scanner inspecting writes, when one is loaded.
-///
-/// Returns the product's name when a minifilter sits in the range the platform
-/// allocates to anti-virus filters or to activity monitors, and nothing when
-/// none does.
-fn minifilter_name() -> Option<String> {
-    ffi::loaded_minifilters()
+    let Some(loaded) = ffi::loaded_minifilters() else {
+        return Ok(Scanner::Unknown { cost_ratio: ratio });
+    };
+    let named = loaded
         .into_iter()
         .find(|filter| is_scanner_altitude(filter.altitude))
-        .map(|filter| filter.name)
+        .map(|filter| filter.name);
+    match named {
+        Some(name) => Ok(Scanner::Present {
+            name,
+            cost_ratio: ratio,
+        }),
+        None => Ok(Scanner::Absent),
+    }
 }
 
 /// Reports whether an altitude is one the platform allocates to a scanner.

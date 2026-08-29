@@ -502,22 +502,27 @@ pub(crate) struct LoadedFilter {
 
 /// Lists the filter drivers inspecting file operations on this machine.
 ///
-/// Returns each one's name and altitude. Returns nothing when the filter
-/// manager cannot be asked, which is the same answer as no filters loaded and
-/// is reported rather than treated as proof none exist.
-pub(crate) fn loaded_minifilters() -> Vec<LoadedFilter> {
+/// Returns each loaded filter's name and altitude, and an empty list when the
+/// filter manager reports that none are registered. Returns nothing at all when
+/// the filter manager cannot be asked, which is not the same answer as none
+/// being loaded and is never treated as proof that none are.
+pub(crate) fn loaded_minifilters() -> Option<Vec<LoadedFilter>> {
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS};
     use windows_sys::Win32::Storage::InstallableFileSystems::{
         FILTER_AGGREGATE_STANDARD_INFORMATION, FilterAggregateStandardInformation, FilterFindClose,
         FilterFindFirst, FilterFindNext,
     };
 
+    const NO_MORE_ITEMS: i32 = win32_result(ERROR_NO_MORE_ITEMS);
+    const INSUFFICIENT_BUFFER: i32 = win32_result(ERROR_INSUFFICIENT_BUFFER);
+
     let mut buffer = vec![0u8; 8192];
     let mut returned = 0u32;
     let mut find = std::ptr::null_mut();
-    let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+    let mut size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
 
     // SAFETY: the buffer is at least the size passed, and the find handle is written to a live local that is closed below.
-    let status = unsafe {
+    let mut status = unsafe {
         FilterFindFirst(
             FilterAggregateStandardInformation,
             buffer.as_mut_ptr().cast::<c_void>(),
@@ -526,8 +531,25 @@ pub(crate) fn loaded_minifilters() -> Vec<LoadedFilter> {
             &raw mut find,
         )
     };
+    if status == INSUFFICIENT_BUFFER {
+        buffer = vec![0u8; returned as usize];
+        size = returned;
+        // SAFETY: the buffer is at least the size passed, and the find handle is written to a live local that is closed below.
+        status = unsafe {
+            FilterFindFirst(
+                FilterAggregateStandardInformation,
+                buffer.as_mut_ptr().cast::<c_void>(),
+                size,
+                &raw mut returned,
+                &raw mut find,
+            )
+        };
+    }
+    if status == NO_MORE_ITEMS {
+        return Some(Vec::new());
+    }
     if status != 0 {
-        return Vec::new();
+        return None;
     }
 
     let mut found = Vec::new();
@@ -552,7 +574,12 @@ pub(crate) fn loaded_minifilters() -> Vec<LoadedFilter> {
         FilterFindClose(find);
     }
     let _ = size_of::<FILTER_AGGREGATE_STANDARD_INFORMATION>();
-    found
+    Some(found)
+}
+
+/// Builds the result value the filter manager returns for a Win32 error.
+const fn win32_result(code: u32) -> i32 {
+    i32::from_ne_bytes((0x8007_0000 | (code & 0xffff)).to_ne_bytes())
 }
 
 fn collect_filters(buffer: &[u8], found: &mut Vec<LoadedFilter>) {

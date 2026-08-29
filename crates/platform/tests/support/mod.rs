@@ -40,6 +40,8 @@ pub enum Property {
     ReadOnly,
     /// The volume is not the one the temporary directory is on.
     Second,
+    /// The volume is served by a filesystem in user space.
+    Fuse,
 }
 
 impl Property {
@@ -56,6 +58,7 @@ impl Property {
             Self::Small => "FETCHLOOM_TEST_SMALL_VOLUMES",
             Self::ReadOnly => "FETCHLOOM_TEST_READ_ONLY_VOLUMES",
             Self::Second => "FETCHLOOM_TEST_SECOND_VOLUMES",
+            Self::Fuse => "FETCHLOOM_TEST_FUSE_VOLUMES",
         }
     }
 
@@ -68,27 +71,28 @@ impl Property {
             Self::CaseSensitive => linux || macos,
             Self::CaseInsensitive => macos || windows,
             Self::Normalizing => macos,
-            Self::Network | Self::Memory | Self::NoOwnership | Self::NoSparse | Self::ReadOnly => {
+            Self::Memory | Self::NoOwnership | Self::NoSparse | Self::ReadOnly | Self::Fuse => {
                 linux
             }
+            Self::Network => false,
         }
     }
 }
 
 /// Every volume the environment offers with the given property.
 ///
-/// Returns the paths named by the property's variable, which the continuous
-/// integration workflow sets after it builds the filesystems. An empty answer
-/// on a runner that promised the property fails rather than skipping, so a
-/// filesystem that did not get built is a failure and not a silent pass.
+/// Returns the paths named by the property's variable, which the volume script
+/// writes after it builds the filesystems. An empty answer in a verification run
+/// that promised the property fails rather than skipping, so a filesystem that
+/// did not get built is a failure and not a silent pass.
 pub fn volumes(property: Property) -> Vec<PathBuf> {
     let named = std::env::var_os(property.variable()).unwrap_or_default();
     let found: Vec<PathBuf> = std::env::split_paths(&named)
         .filter(|path| !path.as_os_str().is_empty())
         .collect();
     assert!(
-        !(found.is_empty() && in_continuous_integration() && property.promised_here()),
-        "{} is unset on a runner that builds this filesystem",
+        !(found.is_empty() && volumes_were_built() && property.promised_here()),
+        "{} is unset in a verification run that builds this filesystem",
         property.variable()
     );
     found
@@ -107,9 +111,22 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
         .collect()
 }
 
-/// Reports whether this is a continuous integration run.
-pub fn in_continuous_integration() -> bool {
-    std::env::var_os("CI").is_some()
+/// The user a test hands work to, when the environment names one.
+///
+/// A verification run that built the volumes promised this user on Linux, so an
+/// absent name there is a provisioning failure rather than a reason to skip.
+pub fn another_user() -> Option<String> {
+    let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
+    assert!(
+        !(named.is_none() && volumes_were_built() && cfg!(target_os = "linux")),
+        "FETCHLOOM_TEST_OTHER_OWNER is unset in a verification run that creates the user"
+    );
+    named
+}
+
+/// Reports whether the verification matrix built the volumes for this run.
+pub fn volumes_were_built() -> bool {
+    std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()
 }
 
 /// A directory this process owns, on the volume the temporary directory is on.

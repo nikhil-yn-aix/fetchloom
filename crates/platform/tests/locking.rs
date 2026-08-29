@@ -234,11 +234,63 @@ fn hold_lock_until_removed() {
 }
 
 #[test]
-#[ignore = "needs a second user account and a shared cache directory, which this machine does not have"]
-fn a_lock_is_honored_across_users() {}
+#[cfg(unix)]
+fn a_lock_is_honored_across_users() {
+    let Some(user) = support::another_user() else {
+        return;
+    };
+    let shared = support::scratch();
+    shared_by_everyone(shared.path());
+    let path = shared.path().join("digest.lock");
+    let ready = shared.path().join("ready");
+
+    let mut child = Command::new("setpriv")
+        .args(["--reuid", &user, "--regid", &user, "--clear-groups", "--"])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hold_lock_until_removed",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(LOCK_PATH, &path)
+        .env(READY_PATH, &ready)
+        .spawn()
+        .unwrap();
+
+    while !ready.exists() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the child exited before it took the lock as {user}"
+        );
+        std::hint::spin_loop();
+    }
+
+    let platform = NativePlatform::new();
+    let taken = platform.try_lock(&path).unwrap();
+    assert!(
+        taken.is_none(),
+        "a lock held by {user} was taken by this user"
+    );
+
+    std::fs::remove_file(&ready).unwrap();
+    child.wait().unwrap();
+
+    let after = platform.try_lock(&path).unwrap();
+    assert!(
+        after.is_some(),
+        "the lock was not released when the holder exited"
+    );
+}
+
+#[cfg(unix)]
+fn shared_by_everyone(directory: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o777)).unwrap();
+}
 
 #[test]
-#[ignore = "needs a filesystem whose locking fails with ENOLCK or EOPNOTSUPP, reachable only on a Linux runner"]
+#[ignore = "no filesystem reachable inside the verification container refuses a lock: a bindfs mount in user space, tmpfs through /dev/shm and a procfs file each granted both an fcntl write lock and a flock, and the one filesystem known to answer ENOLCK is an NFS mount without a lock daemon, which needs a server the container lane does not run"]
 fn a_volume_that_cannot_lock_is_refused_with_locking_unsupported() {}
 
 #[test]

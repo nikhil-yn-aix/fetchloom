@@ -46,12 +46,102 @@ fn a_probe_reports_every_capability_the_contract_names() {
     );
     match found.scanner {
         Scanner::Absent => {}
-        Scanner::Present { cost_ratio, .. } => {
+        Scanner::Present { cost_ratio, .. } | Scanner::Unknown { cost_ratio } => {
             assert!(
                 cost_ratio.is_finite() && cost_ratio > 0.0,
                 "a measured cost is a real number"
             );
         }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_platform_that_cannot_enumerate_never_claims_a_scanner_is_present() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let found = platform.volume_capabilities(scratch.path()).unwrap();
+
+    assert!(
+        !matches!(found.scanner, Scanner::Present { .. }),
+        "a ratio cannot tell a scanner from a slow filesystem, so presence may not be claimed"
+    );
+}
+
+#[test]
+fn only_an_unknown_scanner_answer_emits_a_degrade_and_it_names_the_ratio() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new();
+    let found = platform.volume_capabilities(scratch.path()).unwrap();
+    let degradations = platform.take_degradations();
+    let named = degradations
+        .iter()
+        .find(|degradation| degradation.requested == SCANNER_REQUEST);
+
+    match found.scanner {
+        Scanner::Unknown { cost_ratio } => {
+            assert!(
+                named.is_some(),
+                "an unknown scanner answer degrades: {degradations:?}"
+            );
+            let named = named.unwrap();
+            assert!(
+                named.used.contains(&format!("{cost_ratio:.2}")),
+                "the degrade names the measured ratio: {named:?}"
+            );
+            assert!(
+                named.reason.contains("unknown"),
+                "the degrade says the cause is unknown: {named:?}"
+            );
+        }
+        Scanner::Present { .. } | Scanner::Absent => {
+            assert!(
+                named.is_none(),
+                "an enumerated answer is not a degradation: {named:?}"
+            );
+        }
+    }
+}
+
+/// What a scanner degrade names as the thing that was wanted.
+const SCANNER_REQUEST: &str = "whether an on-access scanner inspects writes on this volume";
+
+/// What a normalization degrade names as the thing that was wanted.
+const NORMALIZATION_REQUEST: &str = "how this volume treats two spellings of one name";
+
+#[test]
+fn a_volume_that_refuses_the_probe_name_reports_normalization_as_unknown() {
+    let scratch = support::scratch();
+    let mut directories = vec![scratch.path().to_path_buf()];
+    let held = support::scratch_on(support::Property::NoSparse);
+    directories.extend(held.iter().map(|scratch| scratch.path().to_path_buf()));
+
+    for directory in directories {
+        let platform = NativePlatform::new();
+        let found = platform.volume_capabilities(&directory).unwrap();
+        let degradations = platform.take_degradations();
+        let named = degradations
+            .iter()
+            .any(|degradation| degradation.requested == NORMALIZATION_REQUEST);
+
+        let composed = String::from_utf8(vec![b'f', b'l', 0xc3, 0xa9]).unwrap();
+        let path = directory.join(&composed);
+        let refused = std::fs::File::create_new(&path).is_err();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            found.normalization == Normalization::Unknown,
+            refused,
+            "{} reported {:?} and creating the probe name was refused: {refused}",
+            directory.display(),
+            found.normalization
+        );
+        assert_eq!(
+            named,
+            refused,
+            "{} degraded {named} and creating the probe name was refused: {refused}",
+            directory.display()
+        );
     }
 }
 
@@ -184,9 +274,9 @@ fn a_capability_answer_is_the_same_every_time_it_is_asked() {
     assert_eq!(first.max_path_length, second.max_path_length);
     assert_eq!(first.backing, second.backing);
     assert_eq!(
-        matches!(first.scanner, Scanner::Present { .. }),
-        matches!(second.scanner, Scanner::Present { .. }),
-        "a volume was said to have a scanner once and not the next time"
+        std::mem::discriminant(&first.scanner),
+        std::mem::discriminant(&second.scanner),
+        "a volume was given one scanner answer once and another the next time"
     );
 }
 
@@ -352,8 +442,18 @@ fn sparse_support_is_reported_where_it_is_absent() {
 }
 
 #[test]
-#[ignore = "needs a FUSE mount, which no runner builds yet"]
-fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {}
+fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {
+    let platform = NativePlatform::new();
+    for scratch in support::scratch_on(support::Property::Fuse) {
+        let reported = platform.volume_capabilities(scratch.path()).unwrap();
+        assert_eq!(
+            reported.backing,
+            Backing::Unknown,
+            "{} is a filesystem in user space, which may be either, and was not reported as unknown",
+            scratch.path().display()
+        );
+    }
+}
 
 #[test]
 fn two_directories_on_one_volume_are_reported_separately() {
