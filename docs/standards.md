@@ -1,6 +1,6 @@
 # Standards
 
-How Fetchloom is written. These rules are enforced in review and, where possible, in CI.
+How Fetchloom is written. These rules are enforced in review and, where possible, by `cargo xtask verify`.
 
 ## One thing
 
@@ -46,7 +46,7 @@ Contract tests drive the public surface and assert exact outputs: exit codes, JS
 
 Adversarial tests are first-class, not an afterthought: truncated responses, flipped bytes, changed validators mid-resume, rate-limit storms, stalled connections, DNS failure, full disks, killed processes, concurrent processes on the same digest, and the hostile archive corpus.
 
-Cross-platform conformance tests build a tree on one platform, transport it, materialize it on the others, and assert identical tree digests or the exact declared failure. All six directions run in CI.
+Cross-platform conformance tests build a tree on one platform, transport it, materialize it on the others, and assert identical tree digests or the exact declared failure. All six directions run where a machine for each platform exists.
 
 Fault injection is a library in the repository, not a mock in a test file. It is part of the product.
 
@@ -142,7 +142,7 @@ Metrics are of two kinds and are gated differently.
 
 Deterministic metrics, such as binary size and bytes read or written, are identical on identical inputs. They gate everywhere, including a developer machine, and a regression above five percent fails.
 
-Timing metrics are a property of the machine as much as the code. They gate only on continuous integration, against a baseline recorded on that same runner for that same target. A timing baseline is never recorded on a machine running other work, and a timing gate never fails a local run.
+Timing metrics are a property of the machine as much as the code. They gate only under `cargo xtask verify`, against a baseline recorded by that command on that same machine for that same target, and at a wider band than a deterministic metric, because a wall clock on a desktop is not reproducible to five percent. A timing baseline is never recorded on a machine running other work, and a timing gate never fails an ordinary local run.
 
 A timing measurement that moves while the deterministic metrics are unchanged is evidence about the machine, not about the change. It is investigated, never silenced by re-recording the baseline.
 

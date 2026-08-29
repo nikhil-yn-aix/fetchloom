@@ -55,6 +55,10 @@ The outboard tree groups chunks and stores a length followed by parent nodes in 
 
 Resolution order is deterministic: explicit scheme, then local path if it exists, then configured source priority. A bare name that matches nothing fails; it is never guessed.
 
+A reference naming one object materializes a destination directory holding that one entry, under the object's own name. Its dataset name is that name and its tree is the one-entry tree. A reference naming a container materializes every entry the container holds. The two forms differ only in what is walked, never in what a destination is.
+
+A reference naming nothing fails with `reference.unresolved` saying nothing is there. A reference naming something that cannot be read fails with `reference.unresolved` saying to make it readable. The two are never reported as each other.
+
 ## Selection
 
 Selection is part of identity. Changing it changes the lock entry, not the dataset name.
@@ -204,6 +208,16 @@ The rung used is always reported.
 | 5 | No validator | Restart from zero and report why |
 
 Resume never appends to a partial file whose recorded source identity differs from the current response.
+
+A partial file carries a record beside it holding the redacted location, the host, the length the source stated, what the source said identifies the bytes, the entity tag and last modified value as received, whether the source accepted ranges, how many bytes are known to have arrived, and the rung the transfer was on. The record is written when the partial is opened and removed with it.
+
+A partial is preallocated to its full length, so its size on disk says nothing about how much of it arrived. The recorded byte count is the only offset a resume may append at, and anything past it is discarded before appending. A count that is behind what actually arrived costs a refetch; one that is ahead would be a corruption, so it is only ever written after the bytes are.
+
+`If-Range` is sent only on rung three and carries only a strong entity tag. Rung four sends the range with no precondition and verifies in full at completion.
+
+A range request answered `200` rather than `206` means the server ignored the range. The partial is discarded, the transfer restarts, and the rung it fell to is reported.
+
+A `416` is answered once: the length is reread from the response and the request is remade against it. A second `416` is terminal.
 
 ## Verification policy
 
@@ -635,6 +649,11 @@ Defaults. All configurable. None may be raised past a hard ceiling that would al
 | Outboard chunk group | 1 MiB |
 | Path length | the target platform's own maximum, queried per volume |
 | Listing entries | 500,000 |
+| Listing size | 16 MiB |
+| Connections to one host | 4 |
+| Connect timeout | 10 s |
+| Response header timeout | 30 s |
+| Idle timeout inside a body | 30 s |
 | Probed candidates | 4 |
 | Credential offer threshold | 2 minutes of projected transfer time, or a source supporting resume where the alternative does not |
 
@@ -644,9 +663,32 @@ Detected per destination and per cache volume, reported in plans and results: ca
 
 An on-access scanner is reported, never worked around. `doctor` states the measured cost and the exclusion the user may choose to configure.
 
+The scanner answer has three values, and which of them a platform may give depends on whether it can enumerate what inspects a write.
+
+| Answer | Carries | Given when |
+|---|---|---|
+| present | The product's name and the measured cost ratio | The platform enumerated what inspects writes and one of them is a scanner |
+| absent | Nothing | The platform enumerated and none is a scanner, or the platform cannot enumerate and small writes cost no more than the ratio |
+| unknown | The measured cost ratio | The platform cannot enumerate and small writes cost more than the ratio |
+
+The cost ratio is how many times longer writing many small files took than writing the same bytes to one file. It is a cost, never a detection: a volume that is simply slow at small writes measures the same ratio as one behind a scanner. Present is therefore never reported from the ratio alone.
+
+An unknown answer emits `degrade` naming the measured ratio, the answer left unknown, and that the cause cannot be determined on this platform.
+
 Processor capabilities are detected and reported the same way: the thread budget actually available after affinity, container, and job limits, the vector instruction level chosen for the content digest, and whether hardware acceleration is present and usable for the interop digest. A target where that acceleration exists but cannot be detected at runtime emits `degrade` rather than claiming it. A thread ceiling requested above the detected budget is clamped rather than honored, and the clamp is reported.
 
-Normalization behavior is measured on the target volume, never inferred from the platform.
+Normalization behavior is measured on the target volume, never inferred from the platform. It has four values.
+
+| Answer | Meaning |
+|---|---|
+| sensitive | Two spellings of one name are two names |
+| insensitive preserving | Two spellings are one name, and the bytes written are the bytes stored |
+| normalizing | Two spellings are one name, and the bytes stored are a normalized form |
+| unknown | The volume refused the name the measurement uses, so nothing was learned |
+
+An unknown answer emits `degrade` naming that the volume refused the probe name and why the volume gave for refusing it.
+
+A capability probe never uses a fixed name. Two probes of one directory, in one process or in two, must not contend for a name, because an already-exists result is how a probe reads the filesystem's answer and another probe's file would be read as that answer.
 
 A capability the platform reports is queried. One it does not report is probed inside Fetchloom's own staging directory, never by writing into the user's destination.
 
