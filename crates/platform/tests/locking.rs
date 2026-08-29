@@ -238,10 +238,6 @@ fn hold_lock_until_removed() {
 fn a_lock_is_honored_across_users() {}
 
 #[test]
-#[ignore = "needs a mounted NFS or SMB share, which this machine does not have"]
-fn a_network_volume_is_refused_for_a_shared_cache() {}
-
-#[test]
 #[ignore = "needs a filesystem whose locking fails with ENOLCK or EOPNOTSUPP, reachable only on a Linux runner"]
 fn a_volume_that_cannot_lock_is_refused_with_locking_unsupported() {}
 
