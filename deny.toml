@@ -1,0 +1,100 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+]
+confidence-threshold = 0.93
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+allow = [
+  { crate = "anstream", reason = "console virtual terminal enabling and stripping, pulled by clap color" },
+  { crate = "anstyle", reason = "the style types anstream writes" },
+  { crate = "anstyle-parse", reason = "the escape sequence parsing anstream needs" },
+  { crate = "anstyle-query", reason = "the terminal capability queries anstream needs" },
+  { crate = "anstyle-wincon", reason = "the Windows console backend anstream needs" },
+  { crate = "arrayvec", reason = "the fixed-capacity buffers blake3 hashes subtrees in" },
+  { crate = "bitflags", reason = "the flag types rustix takes for open, rename, and fallocate" },
+  { crate = "blake3", reason = "the content, tree, and manifest digest, chosen in the toolchain record" },
+  { crate = "block-buffer", reason = "the block accumulation sha2 hashes through" },
+  { crate = "cc", reason = "the C build step libmimalloc-sys needs on the two musl targets" },
+  { crate = "cfg-if", reason = "target selection for blake3, sha2, and rustix" },
+  { crate = "clap", reason = "the one argument parser, chosen in the toolchain record" },
+  { crate = "clap_builder", reason = "the parser clap derive builds on" },
+  { crate = "clap_complete", reason = "static shell completion generation, chosen in the toolchain record" },
+  { crate = "clap_derive", reason = "the derive half of clap" },
+  { crate = "clap_lex", reason = "the argument lexing clap_builder needs" },
+  { crate = "colorchoice", reason = "the color policy anstream honors" },
+  { crate = "constant_time_eq", reason = "the timing-independent digest comparison blake3 uses" },
+  { crate = "const-oid", reason = "the algorithm identifiers digest carries" },
+  { crate = "cpufeatures", reason = "the runtime backend selection sha2 needs for the portable baseline" },
+  { crate = "crossbeam-deque", reason = "the work-stealing queue rayon-core schedules on" },
+  { crate = "crossbeam-epoch", reason = "the reclamation crossbeam-deque needs" },
+  { crate = "crossbeam-utils", reason = "the primitives crossbeam-deque and rayon-core share" },
+  { crate = "crypto-common", reason = "the traits sha2 implements" },
+  { crate = "digest", reason = "the streaming hash trait sha2 implements" },
+  { crate = "either", reason = "the two-branch iterator rayon returns" },
+  { crate = "errno", reason = "the error number reader rustix returns failures through" },
+  { crate = "fastrand", reason = "the unique name generation tempfile needs" },
+  { crate = "fetchloom-cli", reason = "the workspace binary" },
+  { crate = "fetchloom-engine", reason = "the workspace engine" },
+  { crate = "fetchloom-faults", reason = "the workspace fault injection library" },
+  { crate = "fetchloom-platform", reason = "the workspace Platform seam implementation" },
+  { crate = "find-msvc-tools", reason = "toolchain discovery for cc" },
+  { crate = "getrandom", reason = "the entropy tempfile names directories from" },
+  { crate = "heck", reason = "the case conversion clap_derive uses for value names" },
+  { crate = "hybrid-array", reason = "the output sizing digest is generic over" },
+  { crate = "is_terminal_polyfill", reason = "terminal detection for anstream" },
+  { crate = "itoa", reason = "integer formatting for serde_json" },
+  { crate = "libc", reason = "the six Apple calls rustix does not wrap, named in the rustix gaps record" },
+  { crate = "libmimalloc-sys", reason = "the bindings mimalloc is built from" },
+  { crate = "linux-raw-sys", reason = "the syscall definitions rustix is built on" },
+  { crate = "memchr", reason = "substring search for serde_json" },
+  { crate = "mimalloc", reason = "the allocator on the two musl targets, chosen in the toolchain record" },
+  { crate = "once_cell", reason = "the one-time detection cpufeatures caches" },
+  { crate = "once_cell_polyfill", reason = "the one-time initialization anstyle-query needs" },
+  { crate = "proc-macro2", reason = "token handling for serde_derive" },
+  { crate = "quote", reason = "token generation for serde_derive" },
+  { crate = "rayon", reason = "the one explicit processor pool, chosen in the thread pool record" },
+  { crate = "rayon-core", reason = "the scheduler rayon is built on" },
+  { crate = "r-efi", reason = "the firmware entropy getrandom uses on the uefi target" },
+  { crate = "rustix", reason = "the Unix syscall surface, chosen in the toolchain record" },
+  { crate = "serde", reason = "the one serialization framework, chosen in the toolchain record" },
+  { crate = "serde_core", reason = "the traits serde is built on" },
+  { crate = "serde_derive", reason = "the derive half of serde" },
+  { crate = "serde_json", reason = "the canonical JSON form and the event stream" },
+  { crate = "serde_spanned", reason = "the source spans toml reports unknown keys with" },
+  { crate = "sha2", reason = "the interop digest, chosen in the toolchain record" },
+  { crate = "shlex", reason = "command line splitting for cc" },
+  { crate = "strsim", reason = "the suggestion distance clap uses for a mistyped flag" },
+  { crate = "syn", reason = "syntax parsing for serde_derive" },
+  { crate = "tempfile", reason = "per-test directories with reliable cleanup on all three platforms" },
+  { crate = "toml", reason = "the one configuration parser, required by contracts.md Configuration files" },
+  { crate = "toml_datetime", reason = "the datetime type toml parses into" },
+  { crate = "toml_parser", reason = "the parser toml is built on" },
+  { crate = "typenum", reason = "the compile-time sizes digest is generic over" },
+  { crate = "unicode-ident", reason = "identifier classification for proc-macro2" },
+  { crate = "utf8parse", reason = "the escape sequence decoding anstyle-parse needs" },
+  { crate = "windows-link", reason = "the import libraries windows-sys links through" },
+  { crate = "windows-sys", reason = "the Windows syscall surface, chosen in the toolchain record" },
+  { crate = "winnow", reason = "the parser combinators toml_parser is built on" },
+  { crate = "xtask", reason = "the workspace check and measurement driver" },
+  { crate = "zmij", reason = "float formatting for serde_json" },
+]

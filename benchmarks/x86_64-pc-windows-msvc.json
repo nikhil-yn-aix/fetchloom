@@ -1,0 +1,17 @@
+{
+  "target": "x86_64-pc-windows-msvc",
+  "regimes": [
+    {
+      "regime": "no-op",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "binary-size",
+          "value": 1571328.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        }
+      ]
+    }
+  ]
+}

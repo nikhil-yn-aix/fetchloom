@@ -1,0 +1,194 @@
+//! The Platform seam: filesystem, publication, cloning, locking, detection.
+
+use std::fs::File;
+use std::num::NonZeroUsize;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
+use crate::durability::DurabilityTier;
+use crate::error::Error;
+use crate::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
+
+/// What a lock holder recorded about itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerToken {
+    /// The machine the holder runs on.
+    pub machine: MachineId,
+    /// The boot of that machine the holder started in.
+    pub boot: BootId,
+    /// The holder's process identifier.
+    pub pid: u32,
+    /// When the holder's process started, in the platform's own units.
+    pub start: u64,
+}
+
+/// What is known about whether a lock holder is still running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Liveness {
+    /// The holder is running.
+    Live,
+    /// The holder is a process that no longer exists.
+    Stale,
+    /// The holder is on another machine, so it cannot be inspected and is
+    /// never treated as stale.
+    OtherMachine,
+    /// A field could not be read, so the holder is treated as running.
+    Undecidable {
+        /// The field that could not be read.
+        missing: String,
+    },
+}
+
+/// Filesystem behavior that differs by platform and by volume.
+pub trait Platform: Send + Sync {
+    /// What a held advisory lock is represented by. Releasing it is dropping
+    /// it.
+    type Lock: Send;
+
+    /// Returns the identifier of the volume a path is on.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path cannot be opened or the platform refuses the query.
+    fn volume_id(&self, path: &Path) -> Result<VolumeId, Error>;
+
+    /// Returns the identifier of the file at a path within its volume.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path cannot be opened or the platform refuses the query.
+    fn file_id(&self, path: &Path) -> Result<FileId, Error>;
+
+    /// Returns the tuple recording that the file at a path is probably
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path cannot be opened or the platform refuses the query.
+    fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error>;
+
+    /// Detects what the volume behind a directory can do.
+    ///
+    /// Takes a directory Fetchloom owns, because probing creates and removes
+    /// files inside it. Returns everything detected about that volume.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the directory cannot be written to.
+    fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error>;
+
+    /// Detects what the processor can do and how many threads may be used.
+    ///
+    /// Takes the user's thread ceiling, when one was given. Returns the budget
+    /// after affinity, container, and job limits, clamped to the detected count.
+    fn processor_capabilities(&self, requested: Option<NonZeroUsize>) -> ProcessorCapabilities;
+
+    /// Creates a file, failing when the name already exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the name exists, which is how a folding collision is found,
+    /// and when the directory cannot be written to.
+    fn create_file_exclusive(&self, path: &Path) -> Result<File, Error>;
+
+    /// Creates a directory, failing when the name already exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the name exists and when the parent cannot be written to.
+    fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error>;
+
+    /// Reserves the full length of a file before anything is written to it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the volume has no room. A volume that cannot reserve blocks
+    /// sets the length instead and emits a degrade event.
+    fn preallocate(&self, file: &File, length: u64) -> Result<(), Error>;
+
+    /// Pushes a file's bytes as far as a durability tier requires.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform reports the flush did not complete.
+    fn flush(&self, file: &File, tier: DurabilityTier) -> Result<(), Error>;
+
+    /// Publishes one file by renaming it onto its final name.
+    ///
+    /// Takes a source and a target on the same volume. Fails rather than
+    /// copying when they are on different volumes.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the two paths are on different volumes and when the rename
+    /// or the directory flush does not complete.
+    fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error>;
+
+    /// Publishes a staging tree onto a destination.
+    ///
+    /// An existing destination is renamed aside first, so the destination is
+    /// briefly absent and never partial.
+    ///
+    /// # Errors
+    ///
+    /// Fails when staging and the destination are on different volumes and
+    /// when either rename does not complete.
+    fn publish_directory(
+        &self,
+        staging: &Path,
+        destination: &Path,
+        tier: DurabilityTier,
+    ) -> Result<(), Error>;
+
+    /// Places a file's bytes at another path, sharing blocks when the volume
+    /// can and writing them again when it cannot.
+    ///
+    /// Returns which of the two mechanisms was used.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the target exists or cannot be written.
+    fn clone_or_copy(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error>;
+
+    /// Creates a symbolic link with the given target bytes.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the name exists, when the volume has no symbolic links, and
+    /// when this process is not permitted to create one.
+    fn create_symlink(&self, target: &[u8], link: &Path) -> Result<(), Error>;
+
+    /// Returns what this process would record about itself as a lock holder.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform cannot report machine identity, boot identity,
+    /// or this process's start time.
+    fn owner_token(&self) -> Result<OwnerToken, Error>;
+
+    /// Decides whether a recorded lock holder is still running.
+    ///
+    /// Takes a token read from a lock's owner record. Returns what is known,
+    /// never deciding from a file modification time.
+    fn liveness(&self, token: &OwnerToken) -> Liveness;
+
+    /// Takes an advisory lock without waiting.
+    ///
+    /// Returns nothing when another holder has it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the volume cannot express advisory locking.
+    fn try_lock(&self, path: &Path) -> Result<Option<Self::Lock>, Error>;
+
+    /// Takes an advisory lock, waiting for another holder to release it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the volume cannot express advisory locking and when the wait
+    /// ends without the lock.
+    fn lock(&self, path: &Path) -> Result<Self::Lock, Error>;
+}

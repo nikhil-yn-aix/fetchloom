@@ -1,0 +1,136 @@
+//! A platform that fails the operations a schedule names.
+
+use std::fs::File;
+use std::num::NonZeroUsize;
+use std::path::Path;
+
+use fetchloom_engine::capability::{CopyMechanism, ProcessorCapabilities, VolumeCapabilities};
+use fetchloom_engine::durability::DurabilityTier;
+use fetchloom_engine::error::Error;
+use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
+use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
+
+use crate::schedule::{Faults, Operation};
+
+/// A platform that consults a schedule before it calls the one underneath.
+#[derive(Debug)]
+pub struct FaultyPlatform<P> {
+    inner: P,
+    faults: Faults,
+}
+
+impl<P: Platform> FaultyPlatform<P> {
+    /// Wraps a platform in a schedule that starts empty.
+    #[must_use]
+    pub fn new(inner: P) -> Self {
+        Self {
+            inner,
+            faults: Faults::new(),
+        }
+    }
+
+    /// Returns the schedule, so faults can be added to it.
+    #[must_use]
+    pub fn faults(&self) -> &Faults {
+        &self.faults
+    }
+
+    fn gate(&self, operation: Operation) -> Result<(), Error> {
+        match self.faults.check(operation) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<P: Platform> Platform for FaultyPlatform<P> {
+    type Lock = P::Lock;
+
+    fn volume_id(&self, path: &Path) -> Result<VolumeId, Error> {
+        self.gate(Operation::VolumeId)?;
+        self.inner.volume_id(path)
+    }
+
+    fn file_id(&self, path: &Path) -> Result<FileId, Error> {
+        self.gate(Operation::FileId)?;
+        self.inner.file_id(path)
+    }
+
+    fn fingerprint(&self, path: &Path) -> Result<Fingerprint, Error> {
+        self.gate(Operation::Fingerprint)?;
+        self.inner.fingerprint(path)
+    }
+
+    fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {
+        self.gate(Operation::VolumeCapabilities)?;
+        self.inner.volume_capabilities(probe_directory)
+    }
+
+    fn processor_capabilities(&self, requested: Option<NonZeroUsize>) -> ProcessorCapabilities {
+        self.inner.processor_capabilities(requested)
+    }
+
+    fn create_file_exclusive(&self, path: &Path) -> Result<File, Error> {
+        self.gate(Operation::CreateFileExclusive)?;
+        self.inner.create_file_exclusive(path)
+    }
+
+    fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error> {
+        self.gate(Operation::CreateDirectoryExclusive)?;
+        self.inner.create_directory_exclusive(path)
+    }
+
+    fn preallocate(&self, file: &File, length: u64) -> Result<(), Error> {
+        self.gate(Operation::Preallocate)?;
+        self.inner.preallocate(file, length)
+    }
+
+    fn flush(&self, file: &File, tier: DurabilityTier) -> Result<(), Error> {
+        self.gate(Operation::Flush)?;
+        self.inner.flush(file, tier)
+    }
+
+    fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
+        self.gate(Operation::PublishFile)?;
+        self.inner.publish_file(from, to, tier)
+    }
+
+    fn publish_directory(
+        &self,
+        staging: &Path,
+        destination: &Path,
+        tier: DurabilityTier,
+    ) -> Result<(), Error> {
+        self.gate(Operation::PublishDirectory)?;
+        self.inner.publish_directory(staging, destination, tier)
+    }
+
+    fn clone_or_copy(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
+        self.gate(Operation::CloneOrCopy)?;
+        self.inner.clone_or_copy(from, to)
+    }
+
+    fn create_symlink(&self, target: &[u8], link: &Path) -> Result<(), Error> {
+        self.gate(Operation::CreateSymlink)?;
+        self.inner.create_symlink(target, link)
+    }
+
+    fn owner_token(&self) -> Result<OwnerToken, Error> {
+        self.gate(Operation::OwnerToken)?;
+        self.inner.owner_token()
+    }
+
+    fn liveness(&self, token: &OwnerToken) -> Liveness {
+        self.inner.liveness(token)
+    }
+
+    fn try_lock(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
+        self.gate(Operation::TryLock)?;
+        self.inner.try_lock(path)
+    }
+
+    fn lock(&self, path: &Path) -> Result<Self::Lock, Error> {
+        self.gate(Operation::Lock)?;
+        self.inner.lock(path)
+    }
+}
