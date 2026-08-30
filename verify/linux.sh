@@ -15,4 +15,5 @@ for target in "$@"; do
   cargo clippy --workspace --all-targets --target "$target"
   cargo build --workspace --target "$target"
   cargo test --workspace --target "$target"
+  cargo run -p xtask -- network "/target/$target/debug/fetchloom"
 done

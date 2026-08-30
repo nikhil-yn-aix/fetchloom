@@ -45,6 +45,9 @@ struct Step {
     name: String,
     /// Whether the command succeeded.
     passed: bool,
+    /// Whether the step declined to run at all, which is neither a pass nor a
+    /// failure and is never counted as either.
+    skipped: bool,
     /// How long the command took.
     took: Duration,
 }
@@ -103,13 +106,49 @@ impl Report {
         self.steps.push(Step {
             name: name.to_owned(),
             passed,
+            skipped: false,
             took,
         });
         passed
     }
 
+    /// Records a step whose work already ran, with the time it actually took.
+    ///
+    /// `step_here` times the closure it is given, which is nothing when the
+    /// work happened before the call and would report a lane that ran for
+    /// twenty seconds as taking none.
+    fn already_ran(&mut self, name: &str, passed: bool, took: Duration) {
+        println!("--- {name}");
+        println!(
+            "{} {name} in {:.1} s",
+            if passed { "pass" } else { "FAIL" },
+            took.as_secs_f64()
+        );
+        self.steps.push(Step {
+            name: name.to_owned(),
+            passed,
+            skipped: false,
+            took,
+        });
+    }
+
+    /// Records a step that declined to run, with the reason it declined.
+    ///
+    /// A skipped step is reported as skipped and counted as neither a pass nor
+    /// a failure, because a lane that passes when it ran nothing is worse than
+    /// no lane at all.
+    fn skipped(&mut self, name: &str, took: Duration, reason: &str) {
+        println!("skip {name} in {:.1} s: {reason}", took.as_secs_f64());
+        self.steps.push(Step {
+            name: name.to_owned(),
+            passed: false,
+            skipped: true,
+            took,
+        });
+    }
+
     fn failed(&self) -> bool {
-        self.steps.iter().any(|step| !step.passed)
+        self.steps.iter().any(|step| !step.passed && !step.skipped)
     }
 }
 
@@ -183,6 +222,24 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         crate::check_comments(workspace) == std::process::ExitCode::SUCCESS
     });
     if !fast {
+        let started = Instant::now();
+        match crate::network::run(workspace, None) {
+            crate::network::Outcome::Skipped(reason) => {
+                report.skipped("network", started.elapsed(), &reason);
+                report.degrade(
+                    "real archives fetched from real servers",
+                    "nothing",
+                    &format!("no host could be reached: {reason}"),
+                );
+            }
+            crate::network::Outcome::Passed => {
+                report.already_ran("network", true, started.elapsed());
+            }
+            crate::network::Outcome::Failed(reason) => {
+                println!("{reason}");
+                report.already_ran("network", false, started.elapsed());
+            }
+        }
         report.step_here("benchmark", || {
             crate::run_bench(workspace, &["--compare".to_owned()], true)
                 == std::process::ExitCode::SUCCESS
@@ -309,12 +366,14 @@ fn summary(report: &Report) {
     println!();
     println!("--- verify");
     for step in &report.steps {
-        println!(
-            "{} {} {:.1} s",
-            if step.passed { "pass" } else { "FAIL" },
-            step.name,
-            step.took.as_secs_f64()
-        );
+        let verdict = if step.skipped {
+            "skip"
+        } else if step.passed {
+            "pass"
+        } else {
+            "FAIL"
+        };
+        println!("{verdict} {} {:.1} s", step.name, step.took.as_secs_f64());
     }
     for degrade in &report.degrades {
         println!(
@@ -323,11 +382,16 @@ fn summary(report: &Report) {
         );
     }
     println!("macOS is compiled and never executed");
-    let failed = report.steps.iter().filter(|step| !step.passed).count();
+    let skipped = report.steps.iter().filter(|step| step.skipped).count();
+    let failed = report
+        .steps
+        .iter()
+        .filter(|step| !step.passed && !step.skipped)
+        .count();
     println!(
-        "{} of {} steps passed, {} degradations",
-        report.steps.len() - failed,
-        report.steps.len(),
+        "{} of {} steps passed, {skipped} skipped, {} degradations",
+        report.steps.len() - failed - skipped,
+        report.steps.len() - skipped,
         report.degrades.len()
     );
 }

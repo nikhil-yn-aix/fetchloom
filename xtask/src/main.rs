@@ -3,6 +3,7 @@
 
 mod bench;
 mod comments;
+mod network;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ fn main() -> ExitCode {
         "check-comments" => check_comments(&workspace),
         "bench" => run_bench(&workspace, &rest, verification_run()),
         "completions" => generate_completions(&workspace, &rest),
+        "network" => run_network(&workspace, &rest),
         "verify" => {
             if verify::run(&workspace, &rest) {
                 ExitCode::SUCCESS
@@ -40,6 +42,7 @@ usage:
   cargo xtask check-comments
   cargo xtask bench [--save-baseline] [--compare] [--iterations <n>]
   cargo xtask completions <shell> <directory>
+  cargo xtask network [path to a built fetchloom]
   cargo xtask verify [--fast] [--arm] [--install-hook]";
 
 fn workspace_root() -> PathBuf {
@@ -301,6 +304,30 @@ fn measure_shapes(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeRes
         Err(error) => {
             eprintln!("{error}");
             Err(ExitCode::from(1))
+        }
+    }
+}
+
+/// Runs the network lane on its own.
+///
+/// Takes the workspace root and, optionally, the binary to run, which the
+/// Linux lane gives because its build lands under a target triple. Returns
+/// success when the lane passed and when it skipped, because a host that
+/// cannot be reached is not a failure of this workspace.
+pub(crate) fn run_network(workspace: &Path, arguments: &[String]) -> ExitCode {
+    let binary = arguments.first().map(PathBuf::from);
+    match network::run(workspace, binary.as_deref()) {
+        network::Outcome::Passed => {
+            println!("network: every recorded subject matched");
+            ExitCode::SUCCESS
+        }
+        network::Outcome::Skipped(reason) => {
+            println!("network: skipped, {reason}");
+            ExitCode::SUCCESS
+        }
+        network::Outcome::Failed(reason) => {
+            println!("network: {reason}");
+            ExitCode::from(1)
         }
     }
 }
