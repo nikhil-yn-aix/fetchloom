@@ -123,7 +123,9 @@ fn is_empty(dir: &Path) -> bool {
 
 #[test]
 fn every_benign_entry_extracts_cleanly_into_a_real_staging_directory() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let corpus = Corpus::build();
     for entry in corpus.benign() {
         let staging = tempfile::tempdir().unwrap();
@@ -192,7 +194,9 @@ fn check_volume_dependent(
 
 #[test]
 fn every_hostile_entry_the_reader_defers_is_finally_decided() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let corpus = Corpus::build();
     let mut checked = 0;
     for entry in corpus.hostile() {
@@ -303,7 +307,9 @@ fn every_deferred_entry_is_covered_by_this_suite() {
         "tar_windows_reserved_colon",
         "tar_path_too_long",
     ];
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let corpus = Corpus::build();
     for name in DECIDED_BY_EXTRACTION {
         let entry = corpus
@@ -349,7 +355,9 @@ fn every_deferred_entry_is_covered_by_this_suite() {
 
 #[test]
 fn a_symlink_member_is_created_only_after_every_regular_member_exists() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut writer = TarWriter::new();
     let mut symlink = TarHeader::ustar(b"conflict", TYPEFLAG_SYMLINK);
     symlink.set_linkname(b"elsewhere.txt");
@@ -385,7 +393,9 @@ fn a_symlink_member_is_created_only_after_every_regular_member_exists() {
 
 #[test]
 fn a_hard_link_to_a_member_the_archive_does_not_hold_is_a_link_escape() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut writer = TarWriter::new();
     let mut hardlink = TarHeader::ustar(b"copy.txt", TYPEFLAG_HARDLINK);
     hardlink.set_linkname(b"missing.txt");
@@ -415,7 +425,9 @@ fn a_hard_link_to_a_member_the_archive_does_not_hold_is_a_link_escape() {
 
 #[test]
 fn a_hard_link_member_materializes_the_bytes_of_its_target() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut writer = TarWriter::new();
     let mut original = TarHeader::ustar(b"original.txt", TYPEFLAG_REGULAR);
     original.set_size(5);
@@ -448,7 +460,9 @@ fn a_hard_link_member_materializes_the_bytes_of_its_target() {
 
 #[test]
 fn many_members_extract_correctly_through_one_reused_buffer() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut writer = TarWriter::new();
     let count = 500;
     for index in 0..count {
@@ -486,7 +500,9 @@ fn many_members_extract_correctly_through_one_reused_buffer() {
 
 #[test]
 fn entry_count_is_enforced_against_what_extraction_actually_writes() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let corpus = Corpus::build();
     let entry = corpus
         .entries()
@@ -507,7 +523,9 @@ fn entry_count_is_enforced_against_what_extraction_actually_writes() {
 
 #[test]
 fn expanded_bytes_are_enforced_against_what_extraction_actually_writes() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let corpus = Corpus::build();
     let entry = corpus
         .entries()
@@ -553,7 +571,9 @@ fn expansion_ratio_is_decided_by_the_reader_before_extraction_runs() {
 #[cfg(windows)]
 #[test]
 fn a_colon_in_a_member_name_is_refused_rather_than_hidden_in_an_alternate_data_stream() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut writer = TarWriter::new();
     let mut header = TarHeader::ustar(b"weird:name.txt", TYPEFLAG_REGULAR);
     header.set_size(1);
@@ -609,7 +629,9 @@ fn three_entry_tar(prefix: &str, pax: bool) -> Vec<u8> {
 
 fn tree_of(bytes: Vec<u8>) -> fetchloom_engine::digest::TreeDigest {
     let staging = tempfile::tempdir().unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let mut reader = ArchiveReader::new(
         Cursor::new(bytes),
         ArchiveFormat::Tar,

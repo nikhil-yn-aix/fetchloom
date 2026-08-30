@@ -12,14 +12,19 @@ use fetchloom_platform as _;
 use tempfile as _;
 
 pub mod bundle;
+pub mod diagnosis;
 pub mod format;
 pub mod ingest;
 pub mod layout;
 pub mod prune;
+pub mod rebuild;
 pub mod receipts;
 pub mod record;
+pub mod repair;
+pub mod resolution;
 pub mod store;
 pub mod verify;
+pub mod witness;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -84,8 +89,8 @@ impl<P: Platform> Cache<P> {
         processor: Arc<Processor>,
     ) -> Result<Self, Error> {
         let layout = Layout::new(root.as_ref());
-        create_directories(&layout)?;
-        check_format(&layout)?;
+        create_directories(&layout, &work)?;
+        check_format(&layout, &work)?;
         check_one_volume(&platform, &layout)?;
         check_locking(&platform, &layout)?;
 
@@ -160,8 +165,11 @@ impl<P: Platform> Cache<P> {
         }
         sweep_previous_boot(&self.layout.partial(), &self.token)?;
         sweep_previous_boot(&self.layout.staging(), &self.token)?;
-        std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes())
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &self.layout.recovered(), &reason))
+        std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes()).map_err(
+            |reason| failure(ErrorKind::CacheCorrupt, &self.layout.recovered(), &reason),
+        )?;
+        self.work.touched_file();
+        Ok(())
     }
 
     /// Removes the whole cache.
@@ -255,16 +263,22 @@ fn remove(path: &Path) -> Result<(), Error> {
 }
 
 /// Creates the cache root and every directory it holds.
-fn create_directories(layout: &Layout) -> Result<(), Error> {
+fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
     let mut wanted = vec![layout.root().to_path_buf()];
     for name in DIRECTORIES {
         wanted.push(layout.root().join(name));
     }
     wanted.push(layout.marks());
     wanted.push(layout.records());
+    wanted.push(layout.witnesses());
+    wanted.push(layout.resolutions());
     for directory in wanted {
+        let absent = !directory.is_dir();
         std::fs::create_dir_all(&directory)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory.as_path(), &reason))?;
+        if absent {
+            work.touched_file();
+        }
         share_directory(&directory)?;
     }
     Ok(())
@@ -312,7 +326,7 @@ pub(crate) fn seal_object(_path: &Path) -> Result<(), Error> {
 }
 
 /// Writes the format fingerprint, or checks the one already there.
-fn check_format(layout: &Layout) -> Result<(), Error> {
+fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
     let ours = format::render(format::fingerprint());
     match std::fs::read_to_string(layout.format()) {
         Ok(found) if found == ours => Ok(()),
@@ -329,7 +343,9 @@ fn check_format(layout: &Layout) -> Result<(), Error> {
                     ErrorKind::CacheCorrupt,
                     format!("{}: {why}", layout.format().display()),
                 )
-            })
+            })?;
+            work.touched_file();
+            Ok(())
         }
         Err(reason) => Err(failure(ErrorKind::CacheCorrupt, &layout.format(), &reason)),
     }

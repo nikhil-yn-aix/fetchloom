@@ -5,6 +5,10 @@
 //! second read of a file already read, a second write of bytes already
 //! written, and a request that need not have been issued all move one of
 //! these and move no wall clock the harness is allowed to trust.
+//!
+//! File operations are counted because the cost of holding many small objects
+//! is dominated by how many files each one takes rather than by how many bytes,
+//! and a count is the only form of that fact a gate can hold.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,6 +25,9 @@ pub struct Work {
     /// How many requests the run issued to a source, retries and probes
     /// included.
     pub requests: u64,
+    /// How many files and directories the run created, renames it performed,
+    /// and flushes it issued.
+    pub file_operations: u64,
 }
 
 /// Where every part of a run counts the work it did.
@@ -33,6 +40,7 @@ pub struct WorkCounter {
     bytes_read: AtomicU64,
     bytes_written: AtomicU64,
     requests: AtomicU64,
+    file_operations: AtomicU64,
 }
 
 impl WorkCounter {
@@ -57,6 +65,11 @@ impl WorkCounter {
         self.requests.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Counts one file created, renamed, or flushed.
+    pub fn touched_file(&self) {
+        self.file_operations.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Returns what has been counted so far, leaving the counter running.
     #[must_use]
     pub fn taken(&self) -> Work {
@@ -64,6 +77,7 @@ impl WorkCounter {
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
             requests: self.requests.load(Ordering::Relaxed),
+            file_operations: self.file_operations.load(Ordering::Relaxed),
         }
     }
 }

@@ -345,12 +345,34 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
     assert_eq!(verified.status.code(), Some(80));
     let body: serde_json::Value = serde_json::from_str(text(&verified).trim()).unwrap();
     assert_eq!(body["quarantined"].as_array().map(Vec::len), Some(1));
+    let quarantined: Vec<String> = std::fs::read_dir(cache.join("quarantine"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    let name = object.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        quarantined.contains(&name),
+        "the object was not quarantined: {quarantined:?}"
+    );
+    assert!(
+        quarantined.contains(&format!("{name}.diagnosis")),
+        "no diagnosis travelled beside the quarantined object: {quarantined:?}"
+    );
+
+    let diagnosis: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(cache.join("quarantine").join(format!("{name}.diagnosis"))).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        std::fs::read_dir(cache.join("quarantine"))
-            .unwrap()
-            .flatten()
-            .count(),
-        1
+        diagnosis["localized"], "no_tree_stored",
+        "an object below the outboard threshold has no tree, and the diagnosis has to say so          rather than leaving an empty damaged list to be read as no damage"
+    );
+    assert!(
+        diagnosis["next_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("repair")),
+        "the diagnosis does not name the command that fetches the bytes again"
     );
 }
 

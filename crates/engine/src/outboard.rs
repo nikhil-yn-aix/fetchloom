@@ -1,15 +1,13 @@
 //! The outboard chunk tree, its construction, and its range verification walk.
 
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 
 use blake3::hazmat::{self, ChainingValue, HasherExt, Mode};
 
 use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
-use crate::hashing::{self, Digests};
 use crate::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
-use crate::pool::Processor;
 
 const NODE_LEN: usize = 64;
 const HEADER_LEN: usize = 8;
@@ -39,84 +37,48 @@ impl Outboard {
     }
 }
 
-/// The digests and, when the object is large enough, the outboard tree
-/// produced by one streaming pass over its bytes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BuildOutput {
-    /// The content and interop digest of the object.
-    pub digests: Digests,
-    /// The outboard tree, present only when the object exceeds the outboard
-    /// threshold.
-    pub outboard: Option<Outboard>,
-}
-
-/// Reads `reader` once and returns its digests and, when it is large enough,
-/// its outboard tree.
+/// Returns the content digest of an object and, when it is large enough, its
+/// outboard tree, from the chaining value of each of its leaf groups.
 ///
-/// Streams through a single buffer sized to one outboard chunk group,
-/// allocated once and reused for both the digest pass and the leaf hashing
-/// the outboard needs, so the object is never read twice.
-///
-/// # Errors
-///
-/// Fails when `reader` fails.
-pub fn build_stream(processor: &Processor, mut reader: impl Read) -> io::Result<BuildOutput> {
-    let mut buffer = vec![0u8; usize_from_u64(GROUP_LEN)];
-    let mut pair = hashing::Pair::new();
-    let mut leaves: Vec<ChainingValue> = Vec::new();
-    let mut group_index: u64 = 0;
-    let mut object_len: u64 = 0;
-
-    loop {
-        let filled = hashing::fill(&mut reader, &mut buffer)?;
-        if filled == 0 {
-            break;
-        }
-        let chunk = &buffer[..filled];
-        pair.update(processor, chunk);
-        leaves.push(leaf_chaining_value(group_index, chunk));
-        object_len += u64::try_from(filled).unwrap_or(u64::MAX);
-        group_index += 1;
-    }
-
-    let digests = pair.finish();
-    let outboard = build_outboard(object_len, &leaves);
-    Ok(BuildOutput { digests, outboard })
-}
-
-/// Builds the outboard tree for an object of the given length from its
-/// per-group leaf chaining values, when the object is large enough to need
-/// one.
-///
-/// Takes the total object length and one chaining value per leaf group, in
-/// order. Returns `None` at or below the outboard threshold, because the
-/// content digest already authenticates an object that small whole.
+/// Takes the total object length and one chaining value per group implied by
+/// that length, in order. Returns the digest the whole object hashes to and the
+/// tree, which is absent at or below the outboard threshold because the digest
+/// already authenticates an object that small whole.
 ///
 /// # Panics
 ///
-/// Panics when `leaves` does not have exactly one entry per group implied by
-/// `object_len`, which is a bug in the caller rather than an input to
-/// validate.
+/// Panics when `leaves` does not hold exactly one entry per group, or when the
+/// object holds one group or none, both of which are bugs in the caller rather
+/// than inputs to validate. An object of one group has no parent node to build
+/// a digest out of and is hashed directly.
 #[must_use]
-pub fn build_outboard(object_len: u64, leaves: &[ChainingValue]) -> Option<Outboard> {
-    if object_len <= OUTBOARD_THRESHOLD {
-        return None;
-    }
+pub fn tree_of(object_len: u64, leaves: &[ChainingValue]) -> (ContentDigest, Option<Outboard>) {
     let whole = Subtree::whole(object_len);
+    assert!(
+        whole.group_count > 1,
+        "an object of one group or none is hashed directly rather than merged"
+    );
     assert_eq!(
         leaves.len() as u64,
         whole.group_count,
         "one leaf chaining value per group"
     );
-    assert!(
-        whole.group_count >= 65,
-        "a stored outboard always has at least sixty-five leaves"
-    );
+
     let mut bytes =
         Vec::with_capacity(HEADER_LEN + NODE_LEN * usize_from_u64(whole.parent_count()));
     bytes.extend_from_slice(&object_len.to_le_bytes());
-    write_subtree(&whole, leaves, &mut bytes);
-    Some(Outboard { bytes })
+    let (left, right) = whole.split();
+    let node_at = bytes.len();
+    bytes.extend_from_slice(&[0u8; NODE_LEN]);
+    let left_cv = write_subtree(&left, leaves, &mut bytes);
+    let right_cv = write_subtree(&right, leaves, &mut bytes);
+    bytes[node_at..node_at + 32].copy_from_slice(&left_cv);
+    bytes[node_at + 32..node_at + NODE_LEN].copy_from_slice(&right_cv);
+
+    let root = hazmat::merge_subtrees_root(&left_cv, &right_cv, Mode::Hash);
+    let digest = ContentDigest::from_bytes(*root.as_bytes());
+    let outboard = (object_len > OUTBOARD_THRESHOLD).then_some(Outboard { bytes });
+    (digest, outboard)
 }
 
 fn write_subtree(subtree: &Subtree, leaves: &[ChainingValue], out: &mut Vec<u8>) -> ChainingValue {
@@ -237,12 +199,44 @@ enum Expectation {
     Cv(ChainingValue),
 }
 
+/// Fills the raw bytes of one leaf group into a buffer the walk owns and
+/// reuses.
+///
+/// Takes the zero-based group index and the buffer to fill, which the callee
+/// clears. A group past the end of what is readable is filled with what is
+/// there, because a truncated object is damage in the groups past the
+/// truncation rather than an object that cannot be read.
+type GroupBytes<'a> = &'a mut dyn FnMut(u64, &mut Vec<u8>) -> Result<(), Error>;
+
+/// Why a walk stopped before it finished.
+enum Stopped {
+    /// The tree or the object could not be read.
+    Unreadable(Error),
+    /// A node of the tree does not check out against the digest, so the tree
+    /// says nothing about the object and the range it covers is all that is
+    /// known.
+    TreeCorrupt(Range<u64>),
+}
+
+impl From<Error> for Stopped {
+    fn from(error: Error) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+fn tree_corrupt(range: &Range<u64>) -> Error {
+    corrupt(format!(
+        "discard the tree and rebuild it, because the node covering bytes {}..{} does not check out against the digest, so it says nothing about the object",
+        range.start, range.end
+    ))
+}
+
 /// Verifies that the bytes in `range` match the outboard tree, walking only
 /// the nodes needed to authenticate that range.
 ///
 /// Takes an outboard opened for reading and seeking, the object's recorded
 /// length, its content digest, the half-open byte range to verify, and a
-/// callback returning the raw bytes of a leaf group by its zero-based index.
+/// callback filling the raw bytes of a leaf group by its zero-based index.
 /// Returns nothing on success.
 ///
 /// # Errors
@@ -257,15 +251,103 @@ pub fn verify_range(
     object_len: u64,
     content: ContentDigest,
     range: Range<u64>,
-    group_bytes: &mut impl FnMut(u64) -> Vec<u8>,
+    group_bytes: GroupBytes<'_>,
 ) -> Result<(), Error> {
+    let mut damaged = Vec::new();
+    let mut buffer = Vec::with_capacity(usize_from_u64(GROUP_LEN));
+    match walk(
+        outboard,
+        object_len,
+        content,
+        &range,
+        group_bytes,
+        &mut buffer,
+        &mut damaged,
+    ) {
+        Ok(()) => {}
+        Err(Stopped::Unreadable(error)) => return Err(error),
+        Err(Stopped::TreeCorrupt(at)) => return Err(range_mismatch(at)),
+    }
+    match damaged.first() {
+        None => Ok(()),
+        Some(group) => Err(range_mismatch(group_range(*group, object_len))),
+    }
+}
+
+/// Returns every byte range of an object whose bytes do not match the tree,
+/// ascending, with adjacent ranges merged so one request serves them.
+///
+/// Takes an outboard opened for reading and seeking, the object's recorded
+/// length, its content digest, and a callback filling the raw bytes of a leaf
+/// group by its zero-based index. Returns an empty list when nothing is
+/// damaged.
+///
+/// # Errors
+///
+/// Returns `cache.corrupt` when the tree cannot be read, when its recorded
+/// length disagrees with `object_len`, and when any node in it does not check
+/// out against the digest. In each of those the tree says nothing about the
+/// object and the caller discards it rather than believing it. Returns
+/// whatever the callback fails with, because a group that could not be read is
+/// never reported as undamaged.
+pub fn find_damage(
+    outboard: &mut (impl Read + Seek),
+    object_len: u64,
+    content: ContentDigest,
+    group_bytes: GroupBytes<'_>,
+) -> Result<Vec<Range<u64>>, Error> {
+    let mut damaged = Vec::new();
+    let mut buffer = Vec::with_capacity(usize_from_u64(GROUP_LEN));
+    match walk(
+        outboard,
+        object_len,
+        content,
+        &(0..object_len),
+        group_bytes,
+        &mut buffer,
+        &mut damaged,
+    ) {
+        Ok(()) => Ok(merge(&damaged, object_len)),
+        Err(Stopped::Unreadable(error)) => Err(error),
+        Err(Stopped::TreeCorrupt(at)) => Err(tree_corrupt(&at)),
+    }
+}
+
+/// Turns ascending group indices into ascending byte ranges, joining ones that
+/// touch.
+fn merge(groups: &[u64], object_len: u64) -> Vec<Range<u64>> {
+    let mut spans: Vec<Range<u64>> = Vec::new();
+    for group in groups {
+        let range = group_range(*group, object_len);
+        match spans.last_mut() {
+            Some(last) if last.end == range.start => last.end = range.end,
+            _ => spans.push(range),
+        }
+    }
+    spans
+}
+
+fn group_range(group: u64, object_len: u64) -> Range<u64> {
+    let start = group * GROUP_LEN;
+    start..(start + GROUP_LEN).min(object_len)
+}
+
+fn walk(
+    outboard: &mut (impl Read + Seek),
+    object_len: u64,
+    content: ContentDigest,
+    range: &Range<u64>,
+    group_bytes: GroupBytes<'_>,
+    buffer: &mut Vec<u8>,
+    damaged: &mut Vec<u64>,
+) -> Result<(), Stopped> {
     let mut header = [0u8; HEADER_LEN];
     read_exact_at(outboard, 0, &mut header)?;
     let recorded_len = u64::from_le_bytes(header);
     if recorded_len != object_len {
-        return Err(corrupt(format!(
+        return Err(Stopped::Unreadable(corrupt(format!(
             "outboard records length {recorded_len} but the object is {object_len} bytes; discard it and rebuild by a full rehash"
-        )));
+        ))));
     }
 
     let whole = Subtree::whole(object_len);
@@ -278,9 +360,25 @@ pub fn verify_range(
         HEADER_LEN as u64,
         &whole,
         Expectation::Root(content),
-        &range,
-        group_bytes,
+        &mut Descent {
+            range,
+            group_bytes,
+            buffer,
+            damaged,
+        },
     )
+}
+
+/// Everything the descent carries down the tree that is not the node itself.
+struct Descent<'a> {
+    /// The byte range the walk is filtered to.
+    range: &'a Range<u64>,
+    /// Where the bytes of one leaf group come from.
+    group_bytes: GroupBytes<'a>,
+    /// The buffer those bytes are read into, allocated once.
+    buffer: &'a mut Vec<u8>,
+    /// The leaf groups found not to match, ascending.
+    damaged: &'a mut Vec<u64>,
 }
 
 fn verify_subtree(
@@ -288,27 +386,15 @@ fn verify_subtree(
     node_offset: u64,
     subtree: &Subtree,
     expectation: Expectation,
-    range: &Range<u64>,
-    group_bytes: &mut impl FnMut(u64) -> Vec<u8>,
-) -> Result<(), Error> {
+    descent: &mut Descent<'_>,
+) -> Result<(), Stopped> {
     let subtree_range = subtree.byte_range();
-    if !overlaps(&subtree_range, range) {
+    if !overlaps(&subtree_range, descent.range) {
         return Ok(());
     }
 
     if subtree.group_count == 1 {
-        let bytes = group_bytes(subtree.start_group);
-        let actual = leaf_chaining_value(subtree.start_group, &bytes);
-        let expected = match expectation {
-            Expectation::Cv(cv) => cv,
-            Expectation::Root(_) => {
-                unreachable!("a root expectation only reaches a subtree with more than one group")
-            }
-        };
-        if actual != expected {
-            return Err(range_mismatch(subtree_range));
-        }
-        return Ok(());
+        return check_leaf(subtree.start_group, expectation, descent);
     }
 
     let (left_cv, right_cv) = read_node(outboard, node_offset)?;
@@ -322,7 +408,7 @@ fn verify_subtree(
         }
     };
     if !matches {
-        return Err(range_mismatch(subtree_range));
+        return Err(Stopped::TreeCorrupt(subtree_range));
     }
 
     let (left, right) = subtree.split();
@@ -333,17 +419,39 @@ fn verify_subtree(
         left_offset,
         &left,
         Expectation::Cv(left_cv),
-        range,
-        group_bytes,
+        descent,
     )?;
     verify_subtree(
         outboard,
         right_offset,
         &right,
         Expectation::Cv(right_cv),
-        range,
-        group_bytes,
+        descent,
     )
+}
+
+/// Checks one leaf group against the chaining value its parent stores for it.
+///
+/// A group that yielded no bytes is damaged rather than hashed, because a leaf
+/// of a tree with more than one group always covers at least one byte and an
+/// empty one is what a truncated object gives back.
+fn check_leaf(
+    group: u64,
+    expectation: Expectation,
+    descent: &mut Descent<'_>,
+) -> Result<(), Stopped> {
+    (descent.group_bytes)(group, descent.buffer)?;
+    let Expectation::Cv(expected) = expectation else {
+        unreachable!("a root expectation only reaches a subtree with more than one group")
+    };
+    if descent.buffer.is_empty() {
+        descent.damaged.push(group);
+        return Ok(());
+    }
+    if leaf_chaining_value(group, descent.buffer) != expected {
+        descent.damaged.push(group);
+    }
+    Ok(())
 }
 
 fn usize_from_u64(value: u64) -> usize {

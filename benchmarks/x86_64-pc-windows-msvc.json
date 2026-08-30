@@ -6,8 +6,14 @@
       "iterations": 9,
       "metrics": [
         {
+          "name": "startup",
+          "value": 10.7616,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
           "name": "binary-size",
-          "value": 5302272.0,
+          "value": 5515776.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -17,6 +23,12 @@
       "regime": "cold-cache",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 1628.6505,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "cache-growth",
           "value": 16777216.0,
@@ -40,6 +52,12 @@
           "value": 0.0,
           "unit": "requests",
           "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 338.0,
+          "unit": "operations",
+          "kind": "deterministic"
         }
       ]
     },
@@ -47,6 +65,12 @@
       "regime": "warm-cache",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 232.2331,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "cache-growth",
           "value": 0.0,
@@ -70,6 +94,12 @@
           "value": 0.0,
           "unit": "requests",
           "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 2.0,
+          "unit": "operations",
+          "kind": "deterministic"
         }
       ]
     },
@@ -77,6 +107,12 @@
       "regime": "cold-transfer",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 171.6202,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
@@ -100,6 +136,12 @@
           "value": 2.0,
           "unit": "requests",
           "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 33.0,
+          "unit": "operations",
+          "kind": "deterministic"
         }
       ]
     },
@@ -107,6 +149,12 @@
       "regime": "interrupted-transfer",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 609.3942,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
@@ -130,6 +178,12 @@
           "value": 6.0,
           "unit": "requests",
           "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 53.0,
+          "unit": "operations",
+          "kind": "deterministic"
         }
       ]
     },
@@ -137,6 +191,12 @@
       "regime": "many-small-files",
       "iterations": 3,
       "metrics": [
+        {
+          "name": "wall",
+          "value": 2936.0602999999996,
+          "unit": "ms",
+          "kind": "timing"
+        },
         {
           "name": "bytes-read",
           "value": 1048576.0,
@@ -154,6 +214,12 @@
           "value": 0.0,
           "unit": "requests",
           "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 1273.0,
+          "unit": "operations",
+          "kind": "deterministic"
         }
       ]
     },
@@ -162,6 +228,12 @@
       "iterations": 3,
       "metrics": [
         {
+          "name": "wall",
+          "value": 666.2837000000001,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
           "name": "bytes-read",
           "value": 268435456.0,
           "unit": "bytes",
@@ -169,7 +241,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 536870912.0,
+          "value": 536887240.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -177,6 +249,12 @@
           "name": "requests",
           "value": 0.0,
           "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 26.0,
+          "unit": "operations",
           "kind": "deterministic"
         }
       ]

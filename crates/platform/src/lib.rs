@@ -74,20 +74,31 @@ impl Drop for PlatformLock {
 }
 
 /// The Platform seam as this machine implements it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NativePlatform {
     degradations: DegradeQueue,
     refused_cloning: std::sync::Mutex<std::collections::BTreeSet<std::ffi::OsString>>,
+    work: std::sync::Arc<fetchloom_engine::work::WorkCounter>,
 }
 
 impl NativePlatform {
     /// Builds the platform for this machine.
+    ///
+    /// Takes where the run counts the file operations it performs, so every
+    /// create, rename and flush is counted here rather than at each call site.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(work: std::sync::Arc<fetchloom_engine::work::WorkCounter>) -> Self {
         Self {
             degradations: DegradeQueue::new(),
             refused_cloning: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            work,
         }
+    }
+
+    /// Returns where this platform counts the file operations it performs.
+    #[must_use]
+    pub fn work(&self) -> &std::sync::Arc<fetchloom_engine::work::WorkCounter> {
+        &self.work
     }
 
     /// Returns the volume a path is on, as far as its own text says.
@@ -120,10 +131,28 @@ impl NativePlatform {
     }
 
     /// Copies the bytes of one file into a path that does not exist.
-    fn copy_bytes(from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
+    fn copy_bytes(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
         std::fs::copy(from, to)
             .map_err(|error| failure(ErrorKind::DestinationUnrepresentable, to, &error))?;
+        self.work.touched_file();
         Ok(CopyMechanism::Copy)
+    }
+
+    /// Renames a path onto another, counting the operation.
+    fn rename(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
+        imp::rename(from, to, tier)?;
+        self.work.touched_file();
+        Ok(())
+    }
+
+    /// Flushes a directory as far as a durability tier requires, counting the
+    /// operation when the tier issues one.
+    fn flush_directory(&self, directory: &Path, tier: DurabilityTier) -> Result<(), Error> {
+        imp::flush_directory(directory, tier)?;
+        if tier == DurabilityTier::Strict {
+            self.work.touched_file();
+        }
+        Ok(())
     }
 
     /// Removes and returns every fallback performed since the last call.
@@ -207,13 +236,17 @@ impl Platform for NativePlatform {
     }
 
     fn create_file_exclusive(&self, path: &Path) -> Result<File, Error> {
-        File::create_new(path)
-            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))
+        let made = File::create_new(path)
+            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))?;
+        self.work.touched_file();
+        Ok(made)
     }
 
     fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error> {
         std::fs::create_dir(path)
-            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))
+            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))?;
+        self.work.touched_file();
+        Ok(())
     }
 
     fn preallocate(&self, file: &File, length: u64) -> Result<(), Error> {
@@ -224,7 +257,9 @@ impl Platform for NativePlatform {
     }
 
     fn flush(&self, file: &File, tier: DurabilityTier) -> Result<(), Error> {
-        imp::flush(file, tier, &self.degradations)
+        imp::flush(file, tier, &self.degradations)?;
+        self.work.touched_file();
+        Ok(())
     }
 
     fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
@@ -233,8 +268,8 @@ impl Platform for NativePlatform {
         if source_volume != target_volume {
             return Err(cross_volume(from, to));
         }
-        imp::rename(from, to, tier)?;
-        imp::flush_directory(&containing_directory(to), tier)
+        self.rename(from, to, tier)?;
+        self.flush_directory(&containing_directory(to), tier)
     }
 
     fn publish_directory(
@@ -250,8 +285,8 @@ impl Platform for NativePlatform {
         }
 
         if !destination.exists() {
-            imp::rename(staging, destination, tier)?;
-            return imp::flush_directory(&containing_directory(destination), tier);
+            self.rename(staging, destination, tier)?;
+            return self.flush_directory(&containing_directory(destination), tier);
         }
 
         let aside = destination.with_file_name(format!(
@@ -262,17 +297,17 @@ impl Platform for NativePlatform {
             ),
             random_suffix()
         ));
-        imp::rename(destination, &aside, tier)?;
-        match imp::rename(staging, destination, tier) {
+        self.rename(destination, &aside, tier)?;
+        match self.rename(staging, destination, tier) {
             Ok(()) => {}
             Err(error) => {
-                let _ = imp::rename(&aside, destination, tier);
+                let _ = self.rename(&aside, destination, tier);
                 return Err(error);
             }
         }
         std::fs::remove_dir_all(&aside)
             .map_err(|reason| failure(ErrorKind::DestinationForeign, &aside, &reason))?;
-        imp::flush_directory(&containing_directory(destination), tier)
+        self.flush_directory(&containing_directory(destination), tier)
     }
 
     fn clone_or_copy(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
@@ -283,10 +318,13 @@ impl Platform for NativePlatform {
             ));
         }
         if self.volume_refused_cloning(from) {
-            return Self::copy_bytes(from, to);
+            return self.copy_bytes(from, to);
         }
         match imp::clone_file(from, to) {
-            Ok(()) => Ok(CopyMechanism::Clone),
+            Ok(()) => {
+                self.work.touched_file();
+                Ok(CopyMechanism::Clone)
+            }
             Err(reason) => {
                 self.remember_refusal(from);
                 self.degradations.record(
@@ -295,13 +333,15 @@ impl Platform for NativePlatform {
                     reason.next_action().to_owned(),
                 );
                 let _ = std::fs::remove_file(to);
-                Self::copy_bytes(from, to)
+                self.copy_bytes(from, to)
             }
         }
     }
 
     fn create_symlink(&self, target: &[u8], link: &Path) -> Result<(), Error> {
-        imp::create_symlink(target, link)
+        imp::create_symlink(target, link)?;
+        self.work.touched_file();
+        Ok(())
     }
 
     fn owner_token(&self) -> Result<OwnerToken, Error> {
@@ -376,18 +416,22 @@ impl Platform for NativePlatform {
     }
 
     fn try_lock(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
+        self.work.touched_file();
         acquire(path, Sharing::Exclusive, Waiting::No)
     }
 
     fn lock(&self, path: &Path) -> Result<Self::Lock, Error> {
+        self.work.touched_file();
         acquire(path, Sharing::Exclusive, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
     }
 
     fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
+        self.work.touched_file();
         acquire(path, Sharing::Shared, Waiting::No)
     }
 
     fn lock_shared(&self, path: &Path) -> Result<Self::Lock, Error> {
+        self.work.touched_file();
         acquire(path, Sharing::Shared, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
     }
 }

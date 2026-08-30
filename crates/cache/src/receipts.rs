@@ -32,10 +32,13 @@ impl<P: Platform> Cache<P> {
         let beside = std::path::PathBuf::from(beside);
         std::fs::write(&beside, rendered.as_bytes())
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, &beside, &reason))?;
+        self.work().touched_file();
         std::fs::rename(&beside, &path).map_err(|reason| {
             let _ = std::fs::remove_file(&beside);
             failure(ErrorKind::CacheCorrupt, &path, &reason)
-        })
+        })?;
+        self.work().touched_file();
+        Ok(())
     }
 
     /// Returns the receipt that describes a destination.

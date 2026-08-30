@@ -141,6 +141,10 @@ fn dispatch(
         Command::Apply { plan, transfer } => {
             run_apply(plan, transfer, parsed, resolved, observer, sequence)
         }
+        Command::Repair {
+            reference,
+            transfer,
+        } => run_repair(reference, transfer, parsed, resolved, observer, sequence),
         Command::Cache { command } => run_cache(
             parsed,
             resolved,
@@ -148,6 +152,88 @@ fn dispatch(
             parsed.global.json,
             parsed.global.yes,
         ),
+    }
+}
+
+/// Refetches the damaged ranges of a cached object.
+///
+/// The digest comes from the lock when one pins it and from what the cache last
+/// resolved the reference to otherwise, because a repair puts right an object
+/// this cache already holds.
+fn run_repair(
+    reference: &str,
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let json = parsed.global.json;
+    if let Err(error) = run::allowed_offline(reference, resolved.offline.value) {
+        return report(&error, json);
+    }
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    let work = Arc::new(WorkCounter::new());
+    let held = match cache::require(&root, Arc::clone(&work), Arc::new(processor)) {
+        Ok(held) => held,
+        Err(refused) => return report(&refused, json),
+    };
+
+    let lock_path = match lock_path_of(transfer) {
+        Ok(path) => path,
+        Err(error) => return report(&error, json),
+    };
+    let pinned = match locked::pinned(&lock_path, &run::remote_name(reference), false) {
+        Ok(found) => found.and_then(|dataset| {
+            dataset
+                .artifacts
+                .values()
+                .next()
+                .map(|artifact| artifact.digest)
+        }),
+        Err(error) => return report(&error, json),
+    };
+    let digest = match fetchloom_cli::repair::digest_for(&held, reference, pinned) {
+        Ok(digest) => digest,
+        Err(error) => return report(&error, json),
+    };
+
+    let outcome = fetchloom_cli::repair::Repair {
+        cache: &held,
+        location: reference,
+        work: &work,
+        observer,
+        sequence,
+    }
+    .run(digest);
+    if let Err(error) = outcome.as_ref() {
+        observer.emit(&Event::new(
+            sequence,
+            EventPayload::Failure {
+                error: error.clone(),
+            },
+        ));
+    }
+    fetchloom_cli::repair::report(&outcome, json)
+}
+
+/// Returns the check a run applies to a cache hit and to a destination entry.
+///
+/// One policy governs both sides rather than two, because the question is the
+/// same on each: whether a recorded fingerprint may stand in for reading the
+/// bytes.
+fn verification_of(transfer: &surface::TransferFlags) -> VerificationPolicy {
+    match transfer.verify {
+        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
+        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
+        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
     }
 }
 
@@ -331,12 +417,12 @@ fn run_get(
         return ExitCode::Resource;
     };
     let processor = Arc::new(processor);
-    let platform = NativePlatform::new();
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
         Err(error) => return report(&error, json),
     };
     let work = Arc::new(WorkCounter::new());
+    let platform = NativePlatform::new(Arc::clone(&work));
     let held = match open_cache(
         transfer, &root, durability, &work, &processor, observer, sequence,
     ) {
@@ -363,6 +449,7 @@ fn run_get(
         cache: held.as_deref(),
         work: &work,
         extract: !transfer.no_extract,
+        verify: verification_of(transfer),
     };
     let produced = resolve_and_publish(
         &with,
@@ -390,6 +477,7 @@ fn run_get(
             pinned: pinned.as_ref(),
             locked: transfer.locked,
             cache: held.as_deref(),
+            verify: verification_of(transfer),
             json,
         },
         observer,
@@ -480,6 +568,8 @@ struct Recording<'a> {
     locked: bool,
     /// The cache the receipt is kept in, when the run has one.
     cache: Option<&'a fetchloom_cache::Cache<NativePlatform>>,
+    /// What a cache hit and a destination entry are checked against.
+    verify: VerificationPolicy,
     /// Whether the result is machine readable.
     json: bool,
 }
@@ -517,6 +607,7 @@ fn record(
             into.cache,
             into.manifest,
             &produced.resolved,
+            into.verify,
             into.json,
         ),
         Err(error) => report(error, into.json),
@@ -644,12 +735,12 @@ fn run_apply(
         return ExitCode::Resource;
     };
     let processor = Arc::new(processor);
-    let platform = NativePlatform::new();
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
         Err(error) => return report(&error, json),
     };
     let work = Arc::new(WorkCounter::new());
+    let platform = NativePlatform::new(Arc::clone(&work));
     let held = match open_cache(
         transfer, &root, durability, &work, &processor, observer, sequence,
     ) {
@@ -665,6 +756,7 @@ fn run_apply(
         cache: held.as_deref(),
         work: &work,
         extract: !transfer.no_extract,
+        verify: verification_of(transfer),
     };
     let selection = fetchloom_engine::selection::Selection {
         include: artifact.select.clone(),
@@ -711,7 +803,14 @@ fn run_apply(
     };
     let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
     let resolved = run::resolved_object(&result, &selection);
-    finish_get(&result, held.as_deref(), &manifest, &resolved, json)
+    finish_get(
+        &result,
+        held.as_deref(),
+        &manifest,
+        &resolved,
+        verification_of(transfer),
+        json,
+    )
 }
 
 /// Returns the lock file this run reads and writes.
@@ -862,10 +961,11 @@ fn finish_get(
     cache: Option<&fetchloom_cache::Cache<NativePlatform>>,
     manifest: &fetchloom_engine::manifest::Manifest,
     artifacts: &[run::ResolvedArtifact],
+    verify: VerificationPolicy,
     json: bool,
 ) -> ExitCode {
     if let Some(cache) = cache
-        && let Err(error) = run::write_receipt(cache, manifest, artifacts, result)
+        && let Err(error) = run::write_receipt(cache, manifest, artifacts, result, verify)
     {
         return report(&error, json);
     }
@@ -935,11 +1035,7 @@ fn open_cache(
     sequence: &Sequence,
 ) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
 {
-    let policy = match transfer.verify {
-        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
-        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
-        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
-    };
+    let policy = verification_of(transfer);
     let opened = if transfer.no_cache {
         cache::Opened::Degraded {
             reason: "this run asked for no cache".to_owned(),

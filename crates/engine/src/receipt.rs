@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::digest::{ContentDigest, ManifestDigest, RECEIPT_KEY_CONTEXT, TreeDigest};
 use crate::error::Error;
+use crate::identity::Fingerprint;
 use crate::license::Acceptance;
 use crate::redact::SafeUrl;
 use crate::timestamp::Timestamp;
@@ -48,6 +49,14 @@ pub struct Receipt {
     /// because a tree digest records those two and no others.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executable: Vec<String>,
+    /// The fingerprint each file entry carried when the run published it.
+    ///
+    /// Local, like everything else here, and the same cache of the phrase
+    /// probably unchanged that `--verify fingerprint` applies to a cache hit.
+    /// Never evidence of content, never compared against another machine's, and
+    /// never anything but a reason to skip reading bytes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fingerprints: BTreeMap<String, RecordedFingerprint>,
     /// Where the tree was materialized.
     pub destination: PathBuf,
     /// Whether the user asserted acceptance of the recorded terms.
@@ -60,6 +69,48 @@ pub struct Receipt {
     pub fetchloom: String,
     /// When the run finished.
     pub completed_at: Timestamp,
+}
+
+/// The fingerprint tuple of one destination file, as a receipt records it.
+///
+/// Every field but the length is written as text. A volume identifier, a file
+/// identifier and an instant are opaque values this record only ever compares
+/// for equality, two of them are a hundred and twenty-eight bits wide, and the
+/// canonical form carries a number as a run of digits that fits sixty-four. A
+/// value that is not a quantity is not written as one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedFingerprint {
+    /// The volume the file was on.
+    pub volume: String,
+    /// The file within that volume.
+    pub file: String,
+    /// The length of the file in bytes.
+    pub size: u64,
+    /// The modification time in nanoseconds since the epoch.
+    pub modified_nanos: String,
+    /// The change time in nanoseconds since the epoch.
+    pub changed_nanos: String,
+}
+
+impl RecordedFingerprint {
+    /// Records what a file carried when it was published.
+    #[must_use]
+    pub fn new(found: Fingerprint) -> Self {
+        Self {
+            volume: found.volume.value().to_string(),
+            file: found.file.value().to_string(),
+            size: found.size,
+            modified_nanos: found.modified_nanos.to_string(),
+            changed_nanos: found.changed_nanos.to_string(),
+        }
+    }
+
+    /// Reports whether a fingerprint read now is the one that was recorded.
+    #[must_use]
+    pub fn matches(&self, now: Fingerprint) -> bool {
+        *self == Self::new(now)
+    }
 }
 
 impl Receipt {

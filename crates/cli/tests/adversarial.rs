@@ -80,7 +80,9 @@ impl Harness {
         let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
         let cache = Cache::open(
             root.path().join("cache"),
-            NativePlatform::new(),
+            NativePlatform::new(std::sync::Arc::new(
+                fetchloom_engine::work::WorkCounter::new(),
+            )),
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
             std::sync::Arc::clone(&work),
@@ -130,13 +132,25 @@ fn at(server: &TestServer) -> Vec<String> {
     vec![format!("{}/object", server.origin())]
 }
 
+/// Limits that give up on a body that stops arriving without giving up on a
+/// machine that is busy.
+///
+/// The idle timeout is what makes a stall end quickly, and it is the only one
+/// that has to be short. A short response timeout would instead race the
+/// machine's own scheduler for the headers, which is not a contract and is not
+/// what any of these tests mean to assert.
 fn impatient() -> Limits {
     Limits {
         connect_timeout: Duration::from_millis(500),
-        response_timeout: Duration::from_millis(500),
         idle_timeout: Duration::from_millis(500),
         ..Limits::default()
     }
+}
+
+/// A run with nothing recorded for the reference, which is what a cold cache
+/// holds and what every transfer test here starts from.
+fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
+    None
 }
 
 #[test]
@@ -155,7 +169,7 @@ fn a_truncated_response_exits_thirty_and_leaves_bytes_to_resume_from() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::IntegrityTruncated);
@@ -190,7 +204,7 @@ fn a_flipped_byte_exits_thirty_and_publishes_nothing() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::IntegrityMismatch);
@@ -217,7 +231,7 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(ExitCode::from(failure.layer()), ExitCode::Network);
@@ -239,7 +253,7 @@ fn a_name_that_does_not_resolve_exits_twenty() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(b"anything")), &locations)
+        .run(Some(digest_of(b"anything")), &nothing_prior, &locations)
         .unwrap_err();
 
     assert_eq!(failure.layer(), Layer::Transfer);
@@ -283,7 +297,7 @@ fn a_rate_limit_storm_stops_at_the_attempt_limit_and_waits_within_the_ceiling() 
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(b"anything")), &at(&server))
+        .run(Some(digest_of(b"anything")), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
@@ -318,7 +332,7 @@ fn a_wait_the_source_asks_for_beyond_the_ceiling_is_not_waited_out() {
 }
 
 #[test]
-fn an_outboard_tree_puts_a_resumed_transfer_on_the_first_rung() {
+fn a_stored_tree_that_does_not_check_out_earns_a_resume_nothing() {
     let bytes = object(64 * 1024);
     let digest = digest_of(&bytes);
     let server = TestServer::start(
@@ -333,10 +347,16 @@ fn an_outboard_tree_puts_a_resumed_transfer_on_the_first_rung() {
         .write_outboard(digest, b"a stored tree")
         .unwrap();
 
-    let done = harness.transfer().run(Some(digest), &at(&server)).unwrap();
+    let done = harness
+        .transfer()
+        .run(Some(digest), &nothing_prior, &at(&server))
+        .unwrap();
 
-    assert_eq!(done.rung, ResumeRung::Outboard);
-    assert_eq!(done.rung.number(), 1);
+    assert_eq!(
+        done.rung,
+        ResumeRung::StrongValidator,
+        "a tree that says nothing about the object put a resume on the rung that trusts it,          where the only evidence here is the entity tag the source restated"
+    );
     assert!(harness.cache.contains(digest).unwrap());
 }
 
@@ -362,7 +382,7 @@ fn a_weak_validator_resumes_on_the_fourth_rung() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.rung, ResumeRung::WeakValidator);

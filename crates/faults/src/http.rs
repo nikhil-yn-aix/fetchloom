@@ -98,6 +98,12 @@ pub struct Script {
     pub then: Reply,
     /// Whether the server advertises range support.
     pub accepts_ranges: bool,
+    /// The last modified value every response carries, when the server states
+    /// one.
+    pub last_modified: Option<String>,
+    /// Whether the server answers a conditional request whose validator still
+    /// matches with a three hundred and four.
+    pub honors_conditionals: bool,
 }
 
 impl Script {
@@ -110,7 +116,26 @@ impl Script {
             replies: Vec::new(),
             then: Reply::Whole,
             accepts_ranges: true,
+            last_modified: None,
+            honors_conditionals: true,
         }
+    }
+
+    /// Returns the script with a last modified value on every response.
+    #[must_use]
+    pub fn modified_at(mut self, value: impl Into<String>) -> Self {
+        self.last_modified = Some(value.into());
+        self
+    }
+
+    /// Returns the script with conditional requests answered or ignored.
+    ///
+    /// A source that ignores one answers with the whole object, which is what a
+    /// run has to keep working against.
+    #[must_use]
+    pub fn conditional(mut self, honors: bool) -> Self {
+        self.honors_conditionals = honors;
+        self
     }
 
     /// Returns the script with these replies used, in order, before `then`.
@@ -325,6 +350,9 @@ fn answer(
     ending: &AtomicBool,
 ) -> bool {
     let asked = request.header("range").and_then(parse_range);
+    if script.honors_conditionals && still_current(script, request, etag) {
+        return not_modified(writer, script, etag);
+    }
     if request.method == "HEAD" {
         return metadata_only(writer, script, reply, etag, asked);
     }
@@ -393,13 +421,13 @@ fn wrong_range(
     writer: &mut impl Write,
     script: &Script,
     etag: Option<&str>,
-    asked: Option<u64>,
+    asked: Option<Span>,
     shift: u64,
 ) -> bool {
     let Some(asked) = asked else {
         return whole(writer, script, etag, &script.object.clone());
     };
-    let start = asked.saturating_add(shift);
+    let start = asked.0.saturating_add(shift);
     let sent = script.object.get(usize(start)..).unwrap_or_default();
     partial(writer, script, etag, sent, start) && flush(writer)
 }
@@ -408,7 +436,7 @@ fn flipped(
     writer: &mut impl Write,
     script: &Script,
     etag: Option<&str>,
-    asked: Option<u64>,
+    asked: Option<Span>,
     offset: usize,
 ) -> bool {
     let mut object = script.object.clone();
@@ -426,7 +454,7 @@ fn body(
     writer: &mut impl Write,
     script: &Script,
     etag: Option<&str>,
-    asked: Option<u64>,
+    asked: Option<Span>,
     stop_after: Option<usize>,
     claimed: Option<u64>,
 ) -> bool {
@@ -457,7 +485,13 @@ fn partial(
     body: &[u8],
     start: u64,
 ) -> bool {
-    let mut headers = head(script, etag, body.len() as u64, Some(start), body.len());
+    let mut headers = head(
+        script,
+        etag,
+        body.len() as u64,
+        Some((start, None)),
+        body.len(),
+    );
     headers.retain(|(name, _)| name != "Content-Range");
     headers.push((
         "Content-Range".to_owned(),
@@ -470,14 +504,22 @@ fn partial(
     write_head(writer, 206, &headers) && writer.write_all(body).is_ok()
 }
 
-fn served(script: &Script, asked: Option<u64>) -> &[u8] {
-    match asked {
-        Some(start) => script.object.get(usize(start)..).unwrap_or_default(),
-        None => script.object.as_slice(),
-    }
+/// The span a request asked for: the first byte, and the last when it named
+/// one.
+type Span = (u64, Option<u64>);
+
+fn served(script: &Script, asked: Option<Span>) -> &[u8] {
+    let Some((start, end)) = asked else {
+        return script.object.as_slice();
+    };
+    let from = usize(start);
+    let to = end.map_or(script.object.len(), |last| {
+        usize(last.saturating_add(1)).min(script.object.len())
+    });
+    script.object.get(from..to.max(from)).unwrap_or_default()
 }
 
-fn status_for(asked: Option<u64>) -> u16 {
+fn status_for(asked: Option<Span>) -> u16 {
     if asked.is_some() { 206 } else { 200 }
 }
 
@@ -485,7 +527,7 @@ fn head(
     script: &Script,
     etag: Option<&str>,
     length: u64,
-    asked: Option<u64>,
+    asked: Option<Span>,
     served_length: usize,
 ) -> Vec<(String, String)> {
     let mut headers = vec![("Content-Length".to_owned(), length.to_string())];
@@ -495,7 +537,10 @@ fn head(
     if let Some(etag) = etag {
         headers.push(("ETag".to_owned(), etag.to_owned()));
     }
-    if let Some(start) = asked {
+    if let Some(value) = script.last_modified.as_deref() {
+        headers.push(("Last-Modified".to_owned(), value.to_owned()));
+    }
+    if let Some((start, _)) = asked {
         headers.push((
             "Content-Range".to_owned(),
             format!(
@@ -524,14 +569,44 @@ fn flush(writer: &mut impl Write) -> bool {
     writer.flush().is_ok()
 }
 
-fn parse_range(value: &str) -> Option<u64> {
-    value
-        .trim()
-        .strip_prefix("bytes=")?
-        .split('-')
-        .next()?
-        .parse()
-        .ok()
+/// Reads the span a request asked for.
+///
+/// Returns the first byte and, when the request named one, the last. A request
+/// naming no last byte is asking for everything from the first.
+fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let span = value.trim().strip_prefix("bytes=")?;
+    let (start, end) = span.split_once('-')?;
+    let start = start.trim().parse().ok()?;
+    let end = end.trim();
+    let end = if end.is_empty() {
+        None
+    } else {
+        Some(end.parse().ok()?)
+    };
+    Some((start, end))
+}
+
+/// Reports whether a conditional request's validator still matches.
+fn still_current(script: &Script, request: &Received, etag: Option<&str>) -> bool {
+    if let Some(asked) = request.header("if-none-match") {
+        return etag.is_some_and(|held| asked.split(',').any(|one| one.trim() == held));
+    }
+    if let Some(asked) = request.header("if-modified-since") {
+        return script.last_modified.as_deref() == Some(asked);
+    }
+    false
+}
+
+/// Answers a conditional request whose validator still matches.
+fn not_modified(writer: &mut impl Write, script: &Script, etag: Option<&str>) -> bool {
+    let mut headers = vec![("Content-Length".to_owned(), "0".to_owned())];
+    if let Some(etag) = etag {
+        headers.push(("ETag".to_owned(), etag.to_owned()));
+    }
+    if let Some(value) = script.last_modified.as_deref() {
+        headers.push(("Last-Modified".to_owned(), value.to_owned()));
+    }
+    write_head(writer, 304, &headers) && flush(writer)
 }
 
 fn usize(value: u64) -> usize {
@@ -545,6 +620,7 @@ fn reason(code: u16) -> &'static str {
         207 => "Multi-Status",
         301 => "Moved Permanently",
         302 => "Found",
+        304 => "Not Modified",
         307 => "Temporary Redirect",
         308 => "Permanent Redirect",
         403 => "Forbidden",
@@ -633,7 +709,7 @@ fn metadata_only(
     script: &Script,
     reply: &Reply,
     etag: Option<&str>,
-    asked: Option<u64>,
+    asked: Option<Span>,
 ) -> bool {
     match reply {
         Reply::Status { code, retry_after } => status(writer, *code, retry_after.as_deref()),

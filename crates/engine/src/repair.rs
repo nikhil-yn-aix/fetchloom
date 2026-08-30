@@ -1,0 +1,111 @@
+//! Deciding what a repair fetches, once the damage is known.
+//!
+//! A ranged repair trades bytes for requests: each span costs a request and a
+//! round trip and saves the bytes it does not carry. Past either bound the
+//! trade stops paying, and the object is fetched whole and said so.
+
+use std::ops::Range;
+
+use crate::limits::Limits;
+use crate::seam::source::ByteRange;
+
+/// Why a repair fetches the whole object rather than the damaged spans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WholeReason {
+    /// More damaged spans than one repair may ask a source for.
+    TooManySpans {
+        /// How many spans the damage came to.
+        spans: u64,
+        /// How many the limit allows.
+        allowed: u64,
+    },
+    /// More damaged bytes than the whole-refetch share of the object.
+    PastTheShare {
+        /// How many bytes are damaged.
+        damaged: u64,
+        /// How many the share allows.
+        allowed: u64,
+    },
+    /// The source cannot serve part of an object.
+    NoRanges,
+}
+
+/// What one repair will fetch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RepairPlan {
+    /// Nothing is damaged, so nothing is fetched.
+    Nothing,
+    /// Exactly these spans are fetched, in ascending order.
+    Spans(Vec<ByteRange>),
+    /// The object is fetched whole, for this reason.
+    Whole(WholeReason),
+}
+
+/// Decides what a repair fetches.
+///
+/// Takes the damaged byte spans, ascending and already merged, the object's
+/// length, whether the source can serve part of an object, and the bounds this
+/// run obeys. Returns what to fetch.
+#[must_use]
+pub fn plan_repair(
+    damaged: &[Range<u64>],
+    object_len: u64,
+    supports_ranges: bool,
+    limits: &Limits,
+) -> RepairPlan {
+    if damaged.is_empty() {
+        return RepairPlan::Nothing;
+    }
+    if !supports_ranges {
+        return RepairPlan::Whole(WholeReason::NoRanges);
+    }
+
+    let spans = damaged.len() as u64;
+    if spans > limits.repair_spans {
+        return RepairPlan::Whole(WholeReason::TooManySpans {
+            spans,
+            allowed: limits.repair_spans,
+        });
+    }
+
+    let bytes: u64 = damaged.iter().map(|span| span.end - span.start).sum();
+    let allowed = object_len / 100 * limits.repair_whole_percent;
+    if bytes > allowed {
+        return RepairPlan::Whole(WholeReason::PastTheShare {
+            damaged: bytes,
+            allowed,
+        });
+    }
+
+    RepairPlan::Spans(
+        damaged
+            .iter()
+            .map(|span| ByteRange {
+                start: span.start,
+                end: span.end,
+            })
+            .collect(),
+    )
+}
+
+impl WholeReason {
+    /// Returns what the run asked for, what it used instead, and why, for the
+    /// `degrade` event a bounded repair emits.
+    #[must_use]
+    pub fn degradation(self, object_len: u64) -> (String, String, String) {
+        let requested = "a repair fetching only the damaged ranges".to_owned();
+        let used = format!("a fetch of all {object_len} bytes");
+        let reason = match self {
+            Self::TooManySpans { spans, allowed } => format!(
+                "the damage came to {spans} separate ranges and a repair asks a source for at most {allowed}, past which the requests cost more than the bytes they save"
+            ),
+            Self::PastTheShare { damaged, allowed } => format!(
+                "{damaged} bytes are damaged and a ranged repair is only cheaper up to {allowed}, which is the share of the object past which one request for all of it costs less"
+            ),
+            Self::NoRanges => {
+                "the source does not serve part of an object, so the only request it answers is one for the whole of it".to_owned()
+            }
+        };
+        (requested, used, reason)
+    }
+}

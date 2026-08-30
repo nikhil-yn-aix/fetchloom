@@ -1,8 +1,7 @@
 //! Rereading every object and quarantining the ones that no longer hash to the
 //! name they are stored under.
 
-use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::Error;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
@@ -23,7 +22,9 @@ pub struct VerifyReport {
 /// Rereads and rehashes every object, quarantining each mismatch.
 ///
 /// An object a writer holds is left alone and counted, because reading it while
-/// it is being written would report a mismatch that is not one.
+/// it is being written would report a mismatch that is not one. Every mismatch
+/// is localized against its tree before it is moved, and the diagnosis is
+/// written beside it.
 ///
 /// # Errors
 ///
@@ -44,36 +45,9 @@ pub fn run<P: Platform>(cache: &Cache<P>) -> Result<VerifyReport, Error> {
             continue;
         }
         drop(held);
-        quarantine(cache, digest)?;
+        let recorded = cache.recorded_source_of(digest);
+        cache.quarantine(digest, recorded.0, recorded.1)?;
         report.quarantined.push(digest.to_string());
     }
     Ok(report)
-}
-
-/// Moves an object out of `objects/` and into `quarantine/`.
-///
-/// # Errors
-///
-/// Fails when the object cannot be moved, and when the two directories are on
-/// different volumes.
-pub fn quarantine<P: Platform>(cache: &Cache<P>, digest: ContentDigest) -> Result<(), Error> {
-    let held = cache.platform().lock(&cache.layout().lock_of(digest))?;
-    let from = cache.layout().object(digest);
-    let to = cache.layout().quarantined(digest);
-    let moved = cache
-        .platform()
-        .publish_file(&from, &to, cache.tier())
-        .map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!(
-                    "remove {} by hand, because it failed verification and could not be quarantined: {}",
-                    from.display(),
-                    reason.next_action()
-                ),
-            )
-        });
-    let _ = std::fs::remove_file(cache.object_record(digest));
-    drop(held);
-    moved
 }

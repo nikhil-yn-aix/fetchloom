@@ -84,7 +84,9 @@ impl Harness {
         let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
         let cache = Cache::open(
             root.path().join("cache"),
-            NativePlatform::new(),
+            NativePlatform::new(std::sync::Arc::new(
+                fetchloom_engine::work::WorkCounter::new(),
+            )),
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
             std::sync::Arc::clone(&work),
@@ -138,6 +140,12 @@ fn at(server: &TestServer) -> Vec<String> {
     vec![format!("{}/object", server.origin())]
 }
 
+/// A run with nothing recorded for the reference, which is what a cold cache
+/// holds and what every transfer test here starts from.
+fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
+    None
+}
+
 #[test]
 fn a_whole_object_arrives_and_hashes_to_what_was_expected() {
     let bytes = object(64 * 1024);
@@ -146,7 +154,7 @@ fn a_whole_object_arrives_and_hashes_to_what_was_expected() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.bytes_transferred, bytes.len() as u64);
@@ -166,7 +174,7 @@ fn bytes_that_do_not_hash_to_the_expected_digest_are_refused() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::IntegrityMismatch);
@@ -191,7 +199,7 @@ fn a_transient_status_is_retried_and_the_wait_grows() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.attempts, 3, "the transfer did not retry twice");
@@ -219,7 +227,7 @@ fn a_terminal_status_is_not_retried() {
 
     let failure = harness
         .transfer()
-        .run(Some(digest_of(b"anything")), &at(&server))
+        .run(Some(digest_of(b"anything")), &nothing_prior, &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
@@ -247,7 +255,7 @@ fn a_transfer_leaves_a_dead_source_for_the_next_one() {
     ];
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &locations)
+        .run(Some(digest_of(&bytes)), &nothing_prior, &locations)
         .unwrap();
 
     assert_eq!(done.bytes_transferred, bytes.len() as u64);
@@ -271,7 +279,7 @@ fn an_interrupted_transfer_resumes_from_what_is_already_on_disk() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.rung, ResumeRung::StrongValidator);
@@ -293,7 +301,7 @@ fn a_validator_that_changes_mid_resume_discards_what_was_kept() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.rung, ResumeRung::NoValidator);
@@ -312,7 +320,7 @@ fn a_source_with_no_validator_restarts_rather_than_appending() {
 
     let done = harness
         .transfer()
-        .run(Some(digest_of(&bytes)), &at(&server))
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
         .unwrap();
 
     assert_eq!(done.rung, ResumeRung::NoValidator);
@@ -351,7 +359,9 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
         sequence: &harness.sequence,
     };
 
-    let done = transfer.run(Some(digest_of(&bytes)), &at(&server)).unwrap();
+    let done = transfer
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
+        .unwrap();
 
     assert!(harness.cache.contains(digest_of(&bytes)).unwrap());
     assert_eq!(
@@ -389,6 +399,7 @@ fn materialization<'a>(
         cache: Some(cache),
         work,
         extract: true,
+        verify: fetchloom_engine::verification::VerificationPolicy::Fingerprint,
         digester,
     }
 }
@@ -406,14 +417,18 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
     let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
     let cache = Cache::open(
         root.path().join("cache"),
-        NativePlatform::new(),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
         std::sync::Arc::clone(&work),
         test_processor(),
     )
     .unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());

@@ -24,8 +24,9 @@ use fetchloom_engine::conformance::{declared_failures, portable_core};
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::Digester;
+use fetchloom_engine::hashing::{Digests, Pair};
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
-use fetchloom_engine::outboard::{build_outboard, build_stream, verify_range};
+use fetchloom_engine::outboard::{tree_of, verify_range};
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
@@ -99,8 +100,8 @@ fn interop_digest_matches_a_known_sha256_value() {
 
 fn walked_root(object: &[u8]) -> [u8; 32] {
     let processor = processor();
-    let output = build_stream(&processor, Cursor::new(object.to_vec())).unwrap();
-    let content = output.digests.content;
+    let output = hash_stream(&processor, object);
+    let content = output.content;
     if let Some(outboard) = &output.outboard {
         let mut cursor = Cursor::new(outboard.as_bytes().to_vec());
         let range = 0..object.len() as u64;
@@ -109,10 +110,12 @@ fn walked_root(object: &[u8]) -> [u8; 32] {
             object.len() as u64,
             content,
             range,
-            &mut |group| {
+            &mut |group, into| {
                 let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
                 let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
-                object[start..end].to_vec()
+                into.clear();
+                into.extend_from_slice(&object[start..end]);
+                Ok(())
             },
         )
         .unwrap();
@@ -166,7 +169,7 @@ fn outboard_file_size_is_exactly_the_header_plus_the_parent_nodes() {
     let processor = processor();
     let len = (OUTBOARD_CHUNK_GROUP as usize) * 65 + 3;
     let object = pattern(len);
-    let output = build_stream(&processor, Cursor::new(object)).unwrap();
+    let output = hash_stream(&processor, &object);
     let outboard = output.outboard.unwrap();
     let leaf_count = len.div_ceil(OUTBOARD_CHUNK_GROUP as usize) as u64;
     assert_eq!(outboard.as_bytes().len() as u64, 8 + 64 * (leaf_count - 1));
@@ -176,19 +179,15 @@ fn outboard_file_size_is_exactly_the_header_plus_the_parent_nodes() {
 #[test]
 fn no_outboard_is_stored_at_or_below_the_threshold() {
     let processor = processor();
-    let output = build_stream(
-        &processor,
-        Cursor::new(pattern(OUTBOARD_THRESHOLD as usize)),
-    )
-    .unwrap();
+    let output = hash_stream(&processor, &pattern(OUTBOARD_THRESHOLD as usize));
     assert!(output.outboard.is_none());
 }
 
-fn build_large_object(extra_groups: u64) -> (Vec<u8>, fetchloom_engine::outboard::BuildOutput) {
+fn build_large_object(extra_groups: u64) -> (Vec<u8>, Digests) {
     let processor = processor();
     let len = (OUTBOARD_THRESHOLD + OUTBOARD_CHUNK_GROUP * extra_groups + 12345) as usize;
     let object = pattern(len);
-    let output = build_stream(&processor, Cursor::new(object.clone())).unwrap();
+    let output = hash_stream(&processor, &object);
     (object, output)
 }
 
@@ -204,12 +203,14 @@ fn flipping_a_byte_inside_a_group_is_reported_as_a_range_mismatch_naming_that_gr
     let error = verify_range(
         &mut cursor,
         object_len,
-        output.digests.content,
+        output.content,
         0..object_len,
-        &mut |group| {
+        &mut |group, into| {
             let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
             let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
-            object[start..end].to_vec()
+            into.clear();
+            into.extend_from_slice(&object[start..end]);
+            Ok(())
         },
     )
     .unwrap_err();
@@ -236,12 +237,14 @@ fn flipping_a_byte_inside_a_parent_node_is_reported_at_that_node_not_at_a_leaf()
     let error = verify_range(
         &mut cursor,
         object_len,
-        output.digests.content,
+        output.content,
         0..object_len,
-        &mut |group| {
+        &mut |group, into| {
             let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
             let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
-            object[start..end].to_vec()
+            into.clear();
+            into.extend_from_slice(&object[start..end]);
+            Ok(())
         },
     )
     .unwrap_err();
@@ -266,9 +269,12 @@ fn truncating_the_outboard_is_cache_corrupt() {
     let error = verify_range(
         &mut cursor,
         object_len,
-        output.digests.content,
+        output.content,
         0..object_len,
-        &mut |_group| Vec::new(),
+        &mut |_group, into| {
+            into.clear();
+            Ok(())
+        },
     )
     .unwrap_err();
 
@@ -284,9 +290,12 @@ fn a_length_that_disagrees_with_the_object_is_cache_corrupt_not_an_integrity_err
     let error = verify_range(
         &mut cursor,
         wrong_len,
-        output.digests.content,
+        output.content,
         0..wrong_len,
-        &mut |_group| Vec::new(),
+        &mut |_group, into| {
+            into.clear();
+            Ok(())
+        },
     )
     .unwrap_err();
 
@@ -294,10 +303,23 @@ fn a_length_that_disagrees_with_the_object_is_cache_corrupt_not_an_integrity_err
 }
 
 #[test]
-fn build_outboard_returns_none_below_the_threshold_and_some_above_it() {
-    assert!(build_outboard(OUTBOARD_THRESHOLD, &[]).is_none());
+fn a_tree_is_stored_above_the_threshold_and_not_at_it() {
+    let leaves: Vec<[u8; 32]> = (0..64).map(|_| [0u8; 32]).collect();
+    assert!(tree_of(OUTBOARD_THRESHOLD, &leaves).1.is_none());
     let leaves: Vec<[u8; 32]> = (0..65).map(|_| [0u8; 32]).collect();
-    assert!(build_outboard(OUTBOARD_THRESHOLD + 1, &leaves).is_some());
+    assert!(tree_of(OUTBOARD_THRESHOLD + 1, &leaves).1.is_some());
+}
+
+/// Hashes bytes in one pass the way every write path does.
+fn hash_stream(processor: &Processor, object: &[u8]) -> Digests {
+    let mut pair = Pair::new();
+    for chunk in object.chunks(1 << 20) {
+        pair.update(processor, chunk);
+    }
+    if object.is_empty() {
+        pair.update(processor, &[]);
+    }
+    pair.finish()
 }
 
 fn file_entry(path: &str, mode: Mode, bytes: &[u8]) -> TreeEntry {

@@ -4823,3 +4823,627 @@ machine; `cargo run -p xtask -- bench`; the records above;
 `crates/engine/tests/document.rs`, `crates/cli/tests/lock.rs`,
 `crates/cli/tests/mode.rs`, `crates/cli/tests/portable.rs`,
 `crates/cli/tests/manifest.rs`, `crates/archive/tests/passes.rs`.
+
+## The lock deduplicates a transfer, so a local write does not take one
+
+Question: A cold run of 2000 small files spends 88 percent of its time in the
+cache write path, which performs the lock file, the lock owner record, the
+partial, the partial owner record, the flush, the rename and the object record
+for every object. Phase 4 measured it and left the question open. Which of those
+files exists because of a contract, and which because of an assumption.
+
+Options: pack many objects into one file; keep a size threshold below which the
+coordination is skipped; take the lock only where it does something.
+
+Chosen: take the lock where there is a transfer to deduplicate, and write
+directly where there is not. A `file:` source, an archive being extracted and a
+member of an imported bundle are all bytes that are already on this machine.
+They are written to a name of this process's own and renamed into `objects/`,
+with no lock, no partial and no owner record. A remote transfer is unchanged.
+
+Because: the contract states what the lock is for in one sentence. A second
+process wanting an object being written waits and reuses the result, and never
+starts a second transfer of the same digest. Where the bytes never cross a
+network there is no second transfer to prevent. Two processes writing identical
+bytes under one digest is not a race that can produce a wrong answer, because a
+content-addressed write is idempotent and the rename already makes a torn object
+impossible; it is only duplicated work, and the work duplicated is a local copy
+that costs less than the three files the coordination costs.
+
+Rejected, packing: it makes the cache a container format with its own free-space
+accounting, its own compaction and its own corruption modes, and it puts a
+second way of storing an object beside the one that exists. The contract says an
+entry in `objects/` has been fully verified and there is no other way for a file
+to appear there; packing means there is another way.
+
+Rejected, a size threshold: a threshold answers the wrong question. Whether
+coordination is worth its cost does not depend on how many bytes an object holds
+but on whether those bytes have to be fetched. A one-byte remote object still
+deduplicates a request, a round trip and a possibly metered download; a hundred
+megabyte local file deduplicates a copy. A threshold would get both backwards,
+and it would drift, because a number nobody can derive is a number somebody
+tunes.
+
+Proven by: the file operation counter, not a clock. The cold 2000-file run's
+file operations per object fall, and every digest and every tree digest is
+identical to the byte before and after. The concurrency suite and the thousand
+kill loop stay green; had either failed, the reasoning above would have been
+wrong somewhere and the answer would have been to say so rather than to weaken
+the test.
+
+Cost: the mark a prune wrote is cleared by publication in one place rather than
+two, because the lockless path publishes without holding what a prune must wait
+for. That was a hole in the existing local path as well: it published without
+clearing the mark at all.
+
+## Counting files, because bytes never saw the cost
+
+Question: Phase 4's numbers say six files per object is the dominant cost of a
+many-small-files run, and phase 4 could only say it in prose. Bytes read, bytes
+written and requests all stayed flat across the change that mattered. What
+number moves when the file count does.
+
+Options: a timing gate; a syscall count; a count of file creations, renames and
+flushes.
+
+Chosen: `file_operations`, counted where the platform performs the operation.
+It is a key added to `Work` and to the JSON result, which Compatibility permits
+because it is additive. It gates deterministically at five percent like the other
+three.
+
+Because: standards say a deterministic metric is identical on identical inputs
+and gates everywhere, and a timing metric is a property of the machine. The cost
+being measured is a per-file cost that a scanner or a slow volume multiplies, so
+timing it measures the volume and counting it measures the code. A raw syscall
+count would be neither portable nor stable: the same three operations cost a
+different number of calls on Windows and on Linux, and the number would move
+when a standard library did.
+
+Counted at the platform seam rather than at each call site, so a new caller
+counts by construction, which is the same rule the byte and request counters
+already follow.
+
+## Revalidating an object a URL still names
+
+Question: A warm run of an unpinned remote reference refetches the whole object
+to learn it has not changed. Contracts state the resume ladder, which is about an
+interrupted transfer, and state nothing about a completed one. What should a warm
+run ask.
+
+Options: refetch, which is what this build did; a metadata request followed by a
+comparison; one conditional request.
+
+Chosen: one conditional request built from the validator recorded when the object
+was published. `If-None-Match` from the entity tag, `If-Modified-Since` from the
+last modified value, both when both were recorded. A `304` reuses what the cache
+holds. A `200` is the transfer, from zero, because the response already carries
+the bytes. Anything else is handled by the retry classification that exists.
+
+Because: the run is asking one question and this is the request that asks it. A
+metadata request followed by a comparison asks the same question in two requests
+and leaves a window between them in which the object changes. The conditional
+request has no window: the source decides, atomically, whether the answer is the
+bytes or nothing.
+
+The trust class is unchanged by a `304`, because a `304` is the source restating
+a validator it already gave. It is not a new observation of the content and does
+not become a witness.
+
+The validator lives in `meta/resolution/`, which the cache layout already names
+as where resolution metadata lives. It is derived data: losing it costs one
+transfer.
+
+Proven by: the request counter and the byte counter. A warm remote run issues one
+request and reads zero body bytes.
+
+## A destination fingerprint is a receipt field
+
+Question: Reconcile hashes every file in the destination. Phase 4 found the place
+to keep a fingerprint missing and left it. A receipt is never an authority for
+identity; `meta/` holds resolution metadata, per-host measurements and witnesses,
+and a destination fingerprint is none of those. Where does one live.
+
+Options: a new cache directory; a record in `meta/`; the receipt.
+
+Chosen: the receipt, as `fingerprints`, one tuple per file entry path.
+
+Because: contracts already say what a fingerprint is and what it is not. It is a
+cache of the phrase probably unchanged, is never evidence of content, and never
+appears in a lock. Recording one in a receipt therefore does not make the receipt
+an identity authority, for the same reason recording the executable mode does not:
+nothing is ever concluded from it except whether bytes have to be read. It is
+exactly the model `--verify fingerprint` already applies to a cache hit, and a
+mismatch falls through to hashing exactly as it does there.
+
+One policy governs both sides. `--verify always` hashes every destination file
+whatever its fingerprint says, `--verify fingerprint` reads the bytes only of the
+files whose fingerprint moved, and `--verify never` lets the fingerprint decide
+alone. A destination with no receipt has no recorded fingerprint and is hashed
+whole, which is what this build did for every destination.
+
+A receipt is local and may hold absolute paths, so a tuple naming a volume and a
+file within it belongs there and nowhere portable. Nothing ever compares one
+machine's fingerprint against another's.
+
+## When a tree is stored, and where one comes from for an object that has none
+
+Question: Limits give the outboard threshold as 64 MiB and the chunk group as
+1 MiB. Every object this cache held before this phase has no tree. What happens
+to one, and can a tree be built without fetching the object again.
+
+Options: refetch to build a tree; build one from the cached bytes; store a tree
+for every object regardless of size.
+
+Chosen: a tree is stored for an object longer than the threshold and for no
+other, it is built in the pass that writes the bytes, and an object already held
+whose tree is absent has one built from its own bytes.
+
+Because: the bytes in `objects/` have been fully verified, which is the
+invariant that directory carries and the only reason anything is served from it.
+A tree built from bytes that already hash to their name is authenticated by that
+hash, so building one costs one read and refetching costs the whole object over
+a network. There is no question of trusting the wrong bytes: a tree built from
+bytes that did not hash to their name would fail its own root check the first
+time it was walked.
+
+Below the threshold nothing is stored, because the content digest already
+authenticates an object that small whole and a tree for it would be a second
+file per object for no localization worth having: the smallest repairable unit
+is a chunk group, and an object at or below the threshold is at most 64 of them.
+
+A tree is derived data in the sense Compatibility uses the word. The content
+digest is the only authority. A stored tree that disagrees with the digest is
+discarded and rebuilt rather than believed, which is what makes a tree an
+attacker controls unable to make bad bytes verify: the walk's top comparison is
+against the digest, not against anything the tree says about itself.
+
+## Localizing damage, and the two bounds that stop a repair costing more than a refetch
+
+Question: The walk descends the tree to find which chunk groups fail and the
+refetch asks for exactly those spans. What happens when the damage is spread
+across many groups.
+
+Options: always refetch the named ranges; a byte fraction; a span count; both.
+
+Chosen: both, and adjacent damaged groups are merged into one span first. A
+repair fetches the object whole when the merged spans exceed the repair span
+limit of 64, and when the damaged bytes exceed the whole-refetch share, which is half the object. Either bound
+emits `degrade` naming what was asked for, what was used and the two numbers.
+
+Because: a ranged repair trades bytes for requests. Each span costs a request,
+a round trip and a range the source has to honor, and each saves the bytes it
+does not carry. At one half of the object the bytes saved no longer pay for
+anything, because the alternative is one request for all of them. At 64 spans
+the request count is past the four connections a host is allowed, so the spans
+serialize and the repair becomes slower than the refetch it replaced while
+issuing sixteen times as many requests to somebody else's server.
+
+Neither bound is a preference and neither is tunable for taste. Past either of
+them the ranged repair costs more than what it replaces, which is a fact about
+arithmetic rather than a choice about behavior.
+
+The last word is never the tree. A repair rewrites the named ranges, then
+rereads the whole object and hashes it, and publishes only when it hashes to the
+digest it is named by. A repair whose localization was wrong therefore fails
+loudly instead of publishing bytes nothing checked whole, and a tree that does
+not check out against the digest is discarded, the object refetched whole and
+the tree rebuilt.
+
+## What travels beside a quarantined object
+
+Question: Phase 1 built `quarantine/`. What is written beside an object in it,
+and what is enough for a person to understand the damage without rerunning
+anything.
+
+Options: nothing, and rely on the run's own output; a log line; a record beside
+the object.
+
+Chosen: `quarantine/<hex>.diagnosis`, holding the digest the object is named by,
+what its bytes actually hash to, its length, the byte ranges that failed against
+the tree, why the damage could not be narrowed when it could not, the redacted
+location and validator the cache recorded for it, when it was moved, and the
+command that fetches those bytes again.
+
+Because: the run that quarantined an object is over. Its output has scrolled
+away or went to a file nobody kept, and `cache verify` quarantines objects in
+bulk, so the fact that something failed is separated from which thing failed by
+however many objects the cache held. The evidence has to live next to the
+evidence.
+
+An empty `damaged` is never read as no damage. It means the damage could not be
+narrowed, and `localized` says which of the three reasons applies: no tree was
+stored, the stored tree does not check out against the digest, or the object
+could not be read at all. An object is in quarantine because it failed, and a
+field that is empty for three different reasons has to say which.
+
+Removed with the object it describes, by prune and by clear, because a diagnosis
+of an object nothing holds describes nothing.
+
+## Two witnesses from one machine are one witness
+
+Question: `corroborated` means no prior digest, but the observed digest matches
+at least two independent recorded witnesses. This is the definition most easily
+weakened by accident. What is a witness, where does it live, and what makes two
+of them independent.
+
+Options: count observations; count origins; count runs; require all three to
+differ.
+
+Chosen: require all three. Two witnesses are independent only when they differ in
+the machine that observed them, the origin that served the bytes, and the run
+that recorded them. `corroborated` therefore requires at least two machines, at
+least two origins and at least two runs.
+
+Because: each of the three is a way the same evidence gets counted twice.
+
+Two observations from one machine are one observation, because a machine that is
+lying, compromised, or simply has a bad disk lies the same way the second time,
+and because a machine that could count its own observations twice could raise its
+own trust by running a command again.
+
+Two from one origin are one observation, because the thing being corroborated is
+what the bytes are, and one origin serving them twice is one claim restated. A
+mirror that proxies another mirror is one origin wearing two names, which is why
+the origin recorded is the host and path that served the bytes and not the alias
+the user typed.
+
+Two from one run are one observation, because one run has one view of the
+network, one resolver answer and one path. An attacker on that path serves every
+request in it, including the one to the second mirror.
+
+Where they live: `meta/witness/<key>`, which the cache layout already names as
+where witnesses live. The key is the derived-key hash of the manifest digest and
+the artifact identifier, each length-prefixed. The key never involves the
+content, because a witness identified by its subject's content would only ever
+agree with itself.
+
+How a witness avoids becoming a channel for talking a machine into trusting bad
+bytes: nothing read from a source, a bundle, a lock, a receipt or a plan ever
+becomes one. A witness is written only by a run on this machine that transferred
+the bytes in full and verified them as they arrived. A cache hit writes none,
+because it observed nothing. So no remote party can put a witness anywhere.
+
+What remains, stated rather than hidden: a party that can write the cache
+directory can write a witness file, and a shared cache directory between machines
+is how a second machine's witness reaches this one. That is the only channel, and
+it is exactly as trusted as the cache directory itself, which the same party
+could change directly by writing into `objects/`. The witness rule does not claim
+to defend against a writer of the cache; it claims to defend against a source, a
+network path and a bundle, and it does.
+
+Consequence, stated because it is the point rather than a limitation: a single
+machine fetching from a single mirror never reaches `corroborated`, however many
+times it runs. There is no independent evidence in that situation, and a class
+that appeared anyway would be the definition silently weakened.
+
+Rejected: counting an imported bundle as a witness. A bundle is bytes plus a
+member name, and the name is checked against what the bytes hash to, so a bundle
+can assert anything about itself and nothing about anybody else. It is not an
+observation of a source.
+
+Rejected: counting two entries of a manifest's source list reached in one run.
+That is two origins and one run, which fails the rule for the reason above.
+
+Rejected: recording a witness for an object the run found in the cache. The run
+observed a file it already had, and has no evidence about what any source is
+serving.
+
+## What each verification policy does once a tree exists
+
+Question: `--verify always`, `fingerprint` and `never` already exist. What does
+each do now that an object may have an outboard tree.
+
+Chosen: `always` walks the tree, verifying every group against it, when a tree is
+stored, and rehashes the object whole when none is. `fingerprint` is unchanged.
+`never` is unchanged.
+
+Because, and this corrects the reason the change was proposed with: walking the
+tree is not less work. It reads every byte of the object exactly as a rehash
+does, and reads the tree on top, so it reads more. The byte counter says so, and
+this record says so rather than repeating a claim the measurement did not
+support.
+
+What the tree actually buys is the shape of the failure. A rehash can say the
+object is wrong. A walk says which byte ranges are wrong, which is the difference
+between an object that has to be fetched again and one that can be repaired by
+fetching a megabyte. That is worth the tree read, and it is the whole reason the
+phase exists.
+
+What `never` promises, stated plainly because the gate tests it: nothing about a
+cache hit. It does not reach verification and fail to reject damaged bytes; it
+does not verify at all, which is why the result is `unverified` and not any other
+class. It never disables verification during transfer, which contracts say is
+always on and not configurable, so bytes that entered the cache during the run
+were checked as they arrived. A run under `never` that serves damaged cached
+bytes has not had verification pass on them. It skipped verification and said so.
+
+## Rung one, reachable at last, and the only place it is reachable from
+
+Question: Rung one has been unreachable since phase 2 because it needs an
+outboard tree that did not exist. Now trees exist. When is a tree known for a
+digest whose bytes are not in `objects/`.
+
+Chosen: after a quarantine. The object moves to `quarantine/` and its tree stays
+in `outboard/`, because the tree is what a repair needs to find the damage. That
+is the state rung one describes: the expected digest's tree is known, bytes for
+it are on disk, and neither has been trusted yet.
+
+So rung one is wired as the repair path uses it. The bytes on disk are verified
+group by group against the tree, and the transfer resumes from the first group
+that is bad or missing rather than from the recorded byte count. A group that
+verifies is kept whatever the source now says identifies its bytes, because the
+tree is stronger evidence than any validator: it says these exact bytes belong to
+this exact digest, and a validator only says the source thinks nothing changed.
+
+An object in `objects/` never reaches rung one, because a run holding the object
+has nothing to transfer.
+
+## Two commands named repair, and the line between them
+
+Question: The command surface lists `repair <ref>` with a description, and lists
+`repair` among the cache subcommands with none. `pin` and `unpin` are annotated
+as taking a digest and `repair` is not, so the cache subcommand takes no argument
+and therefore has no source to fetch from. What does it do.
+
+Chosen, by the human the question was put to rather than by the session: `cache
+repair` rebuilds the derived data the cache can regenerate from what it already
+holds. An outboard tree that is missing or does not check out for an object whose
+bytes still verify. An object record whose fields are lost. A lock whose holder is
+not alive. A partial or staging entry with no object behind it. It takes no
+argument, reaches no network, and resolves no reference. An object whose own bytes
+fail verification is not repairable from the cache, so it is left in quarantine and
+the report names `repair <ref>` as the command that can fetch those bytes again. It
+reports what it rebuilt and what it could not.
+
+Because: the two do not overlap once the line is drawn at the network. Every other
+cache subcommand is local and argument-free, and a subcommand that took a reference
+would be the reference-taking command reached through a second name, which is the
+second way of doing something that standards delete. Derived data is precisely what
+Compatibility says can be regenerated rather than migrated, and this is the command
+that regenerates it, which is also what clears the objects this cache held before
+outboard trees existed.
+
+The question was asked rather than answered here, because contracts were silent and
+a behavior invented for a named command is a placeholder wearing a description.
+
+## Phase 5 gate
+
+Question: Does phase 5 meet its exit criterion, and what remains unproven.
+
+The criterion, from the roadmap: repair of a one-megabyte region inside a very
+large object transfers approximately one megabyte and restores the correct
+digest.
+
+It is met, and the assertion is on counters rather than on a clock.
+`crates/cli/tests/prove.rs` fetches a 68,161,537-byte object over the fault
+server, overwrites one megabyte of the cached copy at group forty, and runs
+`repair`. The result is one range, 1,048,576 bytes moved, two requests -- one
+asking the source about the object and one carrying the megabyte -- and the
+object equal byte for byte to what the source served.
+`cache verify` passes afterwards. A stopwatch appears nowhere in it, because a
+stopwatch cannot state that a megabyte moved.
+
+What phase 5 was for: localized verification and repair is the capability
+nothing else has. Every other tool can say an object is corrupt. This one says
+which byte ranges, and fetches only those.
+
+What passed, and on what.
+
+`cargo xtask verify` on this machine, native `x86_64-pc-windows-msvc` and the
+container lane for `x86_64-unknown-linux-musl` and `x86_64-unknown-linux-gnu`,
+with `aarch64-apple-darwin` compiled and never run. The real output is in the
+session that produced this record.
+
+The suites this phase added: `crates/engine/tests/damage.rs`, twenty tests over
+locating damage; `crates/engine/tests/witness.rs`, thirteen over the
+independence rule; `crates/cache/tests/witness.rs`, six over the store that keeps
+witnesses; `crates/platform/tests/counting.rs`, six over the file operation
+counter; `crates/cli/tests/prove.rs`, fourteen over repair end to end.
+
+Damage at every boundary the roadmap named is covered, each as a named test: the
+first group, the last partial group, a region spanning two groups, one flipped
+bit, a truncation, and damage to the outboard tree rather than to the object.
+The last one matters most, and it is covered twice. At the engine, a tree built
+over the damaged bytes -- the strongest tree an attacker can produce, internally
+consistent at every node -- still fails, because the walk's top comparison is
+against the content digest and nothing the tree says about itself is trusted.
+At the command, the same forged tree makes `cache verify` quarantine the object
+rather than pass it.
+
+An object stored before trees existed is covered from both ends. `repair`
+fetches it whole and emits `degrade` naming that no tree was stored, so the
+damage could not be narrowed. `cache repair` builds the tree from the object's
+own bytes, which are already verified, and a `repair` afterwards reports nothing
+damaged.
+
+Verification never passes on damaged content under any policy, and what `never`
+promises is written into the test rather than implied by it. Under `always` and
+under `fingerprint` a damaged cache hit stops the run with an integrity or cache
+failure. Under `never` the run completes and records `unverified`, because
+`never` does not reach verification and reject the bytes; it does not verify at
+all. It never disables verification during transfer, so bytes that entered the
+cache in the run were still checked as they arrived. A run under `never` that
+serves damaged cached bytes has not had verification pass on them. It skipped
+verification and said so.
+
+Trust classes are produced as their definitions state, and the witness rule is
+tested adversarially in the three ways it could be weakened by accident. Two
+observations differing only in origin, only in machine, or only in run each stay
+`tofu`. The same observation recorded twice under two instants is stored once
+and stays `tofu`. Four observations made by one run, across two machines and two
+mirrors, stay `tofu`, because one run has one view of the network. At the
+command, fetching one origin twice from one machine never reaches
+`corroborated`, which is the point of the definition rather than a limitation of
+it.
+
+What the gate found that nothing else would have.
+
+The cache-hit verification policy was not applied on the materialization path at
+all. A warm run that cloned an object's blocks into a destination never called
+`open`, so it never reached the check, and `--verify always` reported success on
+a damaged object while reading zero bytes. The policy now runs wherever an
+object is reused, whether the bytes are read or cloned, because the policy is
+about reusing the object rather than about how the bytes travel. This is what
+the roadmap's "verification never passes on damaged content under any policy"
+was for, and it was false until the test was written.
+
+The file operation counter could not see the two files the phase 4 record blamed
+for the small-files cost. The lock file is created inside the platform's own
+locking path and a cache record is written with the standard library rather than
+through the platform, so neither reached the counter. Both are counted now. This
+is the same shape as "The write the counter could not see" from phase 3, and it
+is the second time a counter has been introduced and immediately been found
+blind to the thing it was introduced for.
+
+A truncated object could not be localized, because the walk was given the length
+of the file on disk rather than the length the tree records. Those two differ in
+exactly one case, which is truncation, which is the case the walk was being
+asked about.
+
+The numbers.
+
+The cold many-small-files regime, measured on this machine with the same corpus,
+before and after the lock came out of the local write path:
+
+    file operations   2026 -> 1273
+    bytes read        1048576 -> 1048576
+    bytes written     1305600 -> 1305600
+    requests          0 -> 0
+
+Cold cache, 64 objects: 530 -> 338 file operations, every byte count identical.
+One large file: 29 -> 26. Warm cache, cold transfer and interrupted transfer are
+unchanged, which is what the decision predicted: a remote transfer keeps its
+lock because there is a transfer to deduplicate.
+
+The drop is exactly three file operations per distinct object -- the lock file,
+and the create and rename of its owner record -- times the 251 distinct objects
+the 1024-file corpus holds, and times the 64 the cache corpus holds. Every
+digest and every tree digest is identical before and after, which is what the
+byte counters and the whole suite say.
+
+A warm run of an unpinned remote reference issues one request and reads no body
+bytes, where it previously issued two and refetched the object.
+
+The repair of one megabyte writes 1,052,744 bytes: the megabyte it fetched, plus
+the 4,168-byte tree that covers the whole object and is rewritten when the object
+is published again.
+
+The costs, and they are the honest gap.
+
+A repair copies the object before patching it. It has to: `objects/` holds only
+what has been verified, so the damaged object cannot be edited in place and the
+patched copy cannot be published until it hashes whole. Where the volume clones
+blocks the copy is cheap, and where it does not a repair of one megabyte inside
+a hundred-megabyte object physically writes a hundred megabytes locally to save
+ninety-nine over the network. That is the right trade against a network and the
+wrong one against a local mirror, and nothing measures which it is.
+
+`always` with a tree reads more, not less. It reads every byte of the object
+exactly as a rehash does, and the tree on top. The reason to prefer it is the
+shape of the failure, not its cost, and the record above says so rather than
+repeating the claim the change was proposed with.
+
+`corroborated` is unreachable on a single machine with a single mirror, by
+construction. Nothing in this build produces it outside a shared cache
+directory, so the class is proven by the classifier and by the store and not by
+a run.
+
+Witness origins are the redacted location of the first source in the artifact's
+list, not the host and path the bytes actually arrived from after redirects. A
+source that redirects two aliases to one host would be recorded as two origins.
+Contracts say the origin is what served the bytes; this build records what was
+asked for. Closing it needs the transfer to report the origin it settled on,
+which is one field on `Transferred` and is not written here.
+
+`repair` resolves its digest from the lock or from what the cache last resolved
+the reference to. A reference this cache has never fetched cannot be repaired,
+which is correct, but it also means a repair after `cache clear` is a `get`.
+
+The benchmark baseline was re-recorded, because `file-operations` is a metric the
+baseline did not carry and a metric that is added is not a number that moved.
+The comparison said "regime cold-cache is not in both runs", which was wrong and
+is now its own message naming the metric.
+
+The binary is 5,515,776 bytes. Against the baseline phase 4 recorded, 5,302,272,
+that is 4.03 percent, under the five percent gate. What grew it: the repair
+command, the rebuild command, the diagnosis, resolution and witness records, and
+the conditional request path. The baseline is re-recorded with the new metric in
+it, so this growth is stated here rather than gated.
+
+The container lane found a defect the native lane could not. A receipt records a
+destination fingerprint, whose file identifier and two instants are a hundred and
+twenty-eight bits wide, and the canonical form carries a number as a run of
+digits that fits sixty-four. On Windows the values were small enough to render.
+On Linux they were not, and every archive reconcile test failed with
+`manifest.invalid` and the message that a number was out of range. Those fields
+are opaque values a receipt only ever compares for equality, so they are written
+as text: a value that is not a quantity is not written as one. The test that
+would have caught it on any platform now exists and renders a receipt holding the
+widest values any platform can produce.
+
+One test flaked under the verification matrix and was found to be asserting more
+than its contract. `a_stalled_connection_exits_twenty_rather_than_hanging` gave
+the transfer a five-hundred-millisecond response timeout as well as a
+five-hundred-millisecond idle timeout, so on a machine running the whole matrix
+it sometimes lost the race for the response headers and recorded zero bytes.
+Only the idle timeout has to be short for a stall to end quickly; the response
+timeout was racing this machine's scheduler, which is not a contract. It is back
+at its default and the test is unchanged otherwise.
+
+What phase 5 leaves undone, gathered from every gate, as the audit's input.
+
+From phase 0. Block cloning has never succeeded on any machine in this matrix,
+because the Windows volume script needs an elevated shell and Hyper-V and the
+Linux images do not include a cloning filesystem the container can mount as one.
+What would clear it: a runner with ReFS, btrfs or XFS that the matrix can write
+to.
+
+From phase 0. The portable corpus is built by the same code on every target
+rather than carried between them. Phase 4's bundle lane closed this for objects;
+a materialized tree still has not physically moved between two machines. What
+would clear it: two machines.
+
+From phase 1. Locking that fails with `ENOLCK` or `EOPNOTSUPP` is a named skip.
+No filesystem reachable in the container refuses a lock; bindfs, tmpfs and
+procfs were each tried. What would clear it: a filesystem that refuses, or a
+fault-injecting platform implementation, which the fault library could carry.
+
+From phase 1. A network-backed volume is built nowhere, so the conservative
+locking path and the network magic set are unproven. What would clear it: an
+NFS or SMB export the container can mount.
+
+From phase 2. macOS is compiled and never executed, and two crates are not even
+compiled for it, because both link C cryptography this machine has no Apple
+software development kit for. Both Windows on ARM targets are neither compiled
+nor run. What would clear it: an Apple machine and a Windows on ARM machine, or
+a pure-Rust TLS stack, which would also close the first half.
+
+From phase 2. Rung two is proven only at the unit level, because it needs a
+source publishing an immutable content address or version identity, which is
+phase 7.
+
+From phase 3. Many small files cost about twenty milliseconds each with an
+on-access scanner enabled. Phase 5 removed three of the six files per object;
+what remains is the object, its record, and the destination write. What would
+clear the rest: packing, which contracts refuse, or an exclusion the user
+configures, which `doctor` will state in phase 9.
+
+From phase 4. `plan` and `apply` take one reference and one artifact. Partial
+success across several artifacts is written down and reachable through a
+manifest, and not through a plan.
+
+From phase 4. `cache export` writes the whole cache. A plan-scoped bundle is
+smaller and is not invented.
+
+From phase 4. The remote manifest the reference grammar names is not resolved,
+and neither are the object store, provider and metadata forms beside it. Those
+are phases seven and eight.
+
+From phase 5. The three items above under costs: the repair copy, the witness
+origin, and `corroborated` unreachable without a second machine.
+
+Sources: `cargo xtask verify` on this machine; `cargo test --workspace --exclude
+xtask`; `cargo run -p xtask -- bench` before and after the write-path change;
+`crates/cli/tests/prove.rs`, `crates/engine/tests/damage.rs`,
+`crates/engine/tests/witness.rs`, `crates/cache/tests/witness.rs`,
+`crates/platform/tests/counting.rs`; the decision records above.

@@ -72,6 +72,13 @@ impl Layout {
         self.quarantine().join(name_of(digest))
     }
 
+    /// Returns the diagnosis written beside a quarantined object.
+    #[must_use]
+    pub fn diagnosis_of(&self, digest: ContentDigest) -> PathBuf {
+        self.quarantine()
+            .join(format!("{}.diagnosis", name_of(digest)))
+    }
+
     /// Returns the directory holding receipts.
     #[must_use]
     pub fn receipts(&self) -> PathBuf {
@@ -162,6 +169,30 @@ impl Layout {
         self.meta().join("object")
     }
 
+    /// Returns the directory holding one record per artifact key.
+    #[must_use]
+    pub fn witnesses(&self) -> PathBuf {
+        self.meta().join("witness")
+    }
+
+    /// Returns the witnesses recorded for one artifact key.
+    #[must_use]
+    pub fn witness_of(&self, key: &fetchloom_engine::trust::ArtifactKey) -> PathBuf {
+        self.witnesses().join(hexadecimal(key.bytes()))
+    }
+
+    /// Returns the directory holding one record per reference resolved.
+    #[must_use]
+    pub fn resolutions(&self) -> PathBuf {
+        self.meta().join("resolution")
+    }
+
+    /// Returns what a reference last resolved to.
+    #[must_use]
+    pub fn resolution_of(&self, key: &[u8; 32]) -> PathBuf {
+        self.resolutions().join(hexadecimal(key))
+    }
+
     /// Returns the prune mark of the object with the given digest.
     #[must_use]
     pub fn mark_of(&self, digest: ContentDigest) -> PathBuf {
@@ -175,10 +206,16 @@ impl Layout {
 /// name every filesystem accepts, so the name is the hexadecimal alone.
 #[must_use]
 pub fn name_of(digest: ContentDigest) -> String {
+    hexadecimal(digest.bytes())
+}
+
+/// Returns the lowercase hexadecimal of some bytes, which is how every key in
+/// the cache becomes a file name every filesystem accepts.
+fn hexadecimal(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
-    let mut name = String::with_capacity(digest.bytes().len() * 2);
-    for byte in digest.bytes() {
+    let mut name = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         let _ = write!(name, "{byte:02x}");
     }
     name

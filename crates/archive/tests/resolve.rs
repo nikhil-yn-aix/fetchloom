@@ -69,7 +69,9 @@ fn path_of(entry: &TreeEntry) -> &str {
 #[test]
 fn resolving_answers_what_extracting_answers() {
     let staging = tempfile::tempdir().unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let selection = Selection::default();
 
     let written = extract(
@@ -119,7 +121,9 @@ fn resolving_honors_the_selection_extraction_honors() {
         ..Selection::default()
     };
     let staging = tempfile::tempdir().unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
 
     let written = extract(
         &mut reader(subject()),

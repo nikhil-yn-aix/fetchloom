@@ -54,7 +54,11 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
 
         let marked: Option<Mark> = record::read(&cache.layout().mark_of(digest))?;
         let Some(mark) = marked else {
-            record::write(&cache.layout().mark_of(digest), &Mark { marked_nanos: now })?;
+            record::write(
+                &cache.layout().mark_of(digest),
+                &Mark { marked_nanos: now },
+                cache.work(),
+            )?;
             report.kept += 1;
             drop(held);
             continue;

@@ -58,6 +58,8 @@ pub struct SourceMetadata {
     pub interop: Option<InteropDigest>,
     /// What identifies the bytes the source is serving.
     pub identity: SourceIdentity,
+    /// The last modified value the source gave, when it gave one.
+    pub last_modified: Option<String>,
     /// Whether the source can serve part of the object.
     pub supports_ranges: bool,
     /// How long the metadata request took.
@@ -75,6 +77,45 @@ pub struct ListingEntry {
     pub path: String,
     /// The length in bytes, when the listing states it.
     pub size: Option<u64>,
+}
+
+/// What a run recorded that a conditional request can be built from.
+///
+/// A run with neither value cannot ask whether what it holds is still current
+/// and has to fetch to find out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Validator {
+    /// The entity tag the source gave when the bytes were fetched.
+    pub etag: Option<String>,
+    /// The last modified value it gave.
+    pub last_modified: Option<String>,
+}
+
+impl Validator {
+    /// Reports whether there is anything here to ask with.
+    #[must_use]
+    pub fn can_be_asked_with(&self) -> bool {
+        self.etag.is_some() || self.last_modified.is_some()
+    }
+}
+
+/// What one conditional request learned.
+pub enum Revalidated<B> {
+    /// The source restated the validator it already gave, so what the caller
+    /// holds is what the reference names. Nothing about the bytes is new, so
+    /// nothing about their trust changes.
+    Unchanged,
+    /// The bytes are different, and the response carries them, so the answer is
+    /// also the transfer.
+    Changed(Box<Served<B>>),
+}
+
+/// What a source answered with when the bytes it serves had changed.
+pub struct Served<B> {
+    /// What the response said about the object.
+    pub metadata: SourceMetadata,
+    /// The bytes, from the first one.
+    pub body: B,
 }
 
 /// Somewhere bytes can be fetched from.
@@ -109,6 +150,26 @@ pub trait Source {
         range: Option<ByteRange>,
         credential: Option<&Credential>,
     ) -> Result<Self::Body, Error>;
+
+    /// Asks whether an object a run already holds is still what a reference
+    /// names, in one request.
+    ///
+    /// Takes the location, what the run recorded about the bytes it holds, and
+    /// the credential. Returns that nothing changed, or the new metadata and
+    /// the bytes, because a source answering that the object changed has
+    /// already begun sending it and a second request would leave a window in
+    /// which it changes again.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the source is unreachable or refuses the request, exactly as
+    /// a fetch does.
+    fn revalidate(
+        &self,
+        location: &str,
+        validator: &Validator,
+        credential: Option<&Credential>,
+    ) -> Result<Revalidated<Self::Body>, Error>;
 
     /// Lists the entries at or below a prefix, without crawling.
     ///

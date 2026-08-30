@@ -34,7 +34,11 @@ const LOCK_PATH: &str = "FETCHLOOM_TEST_LOCK_PATH";
 const READY_PATH: &str = "FETCHLOOM_TEST_READY_PATH";
 
 fn ours() -> OwnerToken {
-    NativePlatform::new().owner_token().unwrap()
+    NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ))
+    .owner_token()
+    .unwrap()
 }
 
 #[test]
@@ -56,13 +60,17 @@ fn the_owner_token_is_the_same_every_time_it_is_read() {
 
 #[test]
 fn a_holder_that_is_this_process_is_live() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     assert_eq!(platform.liveness(&ours()), Liveness::Live);
 }
 
 #[test]
 fn a_holder_on_another_machine_is_never_stale() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let token = OwnerToken {
         machine: MachineId::new("a-machine-that-is-not-this-one"),
         ..ours()
@@ -76,7 +84,9 @@ fn a_holder_on_another_machine_is_never_stale() {
 
 #[test]
 fn a_holder_from_another_machine_is_other_machine_even_when_its_process_is_gone() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let token = OwnerToken {
         machine: MachineId::new("a-machine-that-is-not-this-one"),
         boot: BootId::new("a-boot-that-is-not-this-one"),
@@ -92,7 +102,9 @@ fn a_holder_from_another_machine_is_other_machine_even_when_its_process_is_gone(
 
 #[test]
 fn a_holder_from_a_previous_boot_is_stale() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let token = OwnerToken {
         boot: BootId::new("a-boot-that-is-not-this-one"),
         ..ours()
@@ -102,7 +114,9 @@ fn a_holder_from_a_previous_boot_is_stale() {
 
 #[test]
 fn a_holder_whose_process_does_not_exist_is_stale() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let token = OwnerToken {
         pid: 999_999_999,
         ..ours()
@@ -112,7 +126,9 @@ fn a_holder_whose_process_does_not_exist_is_stale() {
 
 #[test]
 fn a_holder_whose_process_identifier_was_recycled_is_stale() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let token = OwnerToken {
         start: ours().start.wrapping_add(1_000_000),
         ..ours()
@@ -126,7 +142,9 @@ fn a_holder_whose_process_identifier_was_recycled_is_stale() {
 
 #[test]
 fn a_holder_with_an_unreadable_field_is_never_stolen_from() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for token in [
         OwnerToken {
             machine: MachineId::new(""),
@@ -149,7 +167,9 @@ fn a_holder_with_an_unreadable_field_is_never_stolen_from() {
 #[test]
 fn a_lock_is_taken_once_and_refused_to_a_second_holder() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let held = platform.try_lock(&path).unwrap();
@@ -165,7 +185,9 @@ fn a_lock_is_taken_once_and_refused_to_a_second_holder() {
 #[test]
 fn a_lock_is_released_when_it_is_dropped() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let held = platform.try_lock(&path).unwrap().unwrap();
@@ -201,7 +223,9 @@ fn a_lock_held_by_another_process_is_observed_as_held() {
         std::hint::spin_loop();
     }
 
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let taken = platform.try_lock(&path).unwrap();
     assert!(
         taken.is_none(),
@@ -224,7 +248,9 @@ fn hold_lock_until_removed() {
     let (Ok(path), Ok(ready)) = (std::env::var(LOCK_PATH), std::env::var(READY_PATH)) else {
         return;
     };
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let held = platform.try_lock(std::path::Path::new(&path)).unwrap();
     assert!(held.is_some(), "the child could not take the lock");
     std::fs::write(&ready, b"held").unwrap();
@@ -266,7 +292,9 @@ fn a_lock_is_honored_across_users() {
         std::hint::spin_loop();
     }
 
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let taken = platform.try_lock(&path).unwrap();
     assert!(
         taken.is_none(),
@@ -296,7 +324,9 @@ fn a_volume_that_cannot_lock_is_refused_with_locking_unsupported() {}
 #[test]
 fn two_shared_holders_take_one_lock_at_once() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let first = platform.try_lock_shared(&path).unwrap();
@@ -312,7 +342,9 @@ fn two_shared_holders_take_one_lock_at_once() {
 #[test]
 fn a_shared_holder_refuses_a_writer() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let reader = platform.try_lock_shared(&path).unwrap();
@@ -326,7 +358,9 @@ fn a_shared_holder_refuses_a_writer() {
 #[test]
 fn a_writer_refuses_a_shared_holder() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let writer = platform.try_lock(&path).unwrap();
@@ -340,7 +374,9 @@ fn a_writer_refuses_a_shared_holder() {
 #[test]
 fn a_shared_lock_is_released_when_it_is_dropped() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("digest.lock");
 
     let held = platform.try_lock_shared(&path).unwrap();
@@ -355,7 +391,9 @@ fn a_shared_lock_is_released_when_it_is_dropped() {
 #[test]
 fn this_process_owns_what_it_creates() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("object");
     support::write_file(&path, b"bytes");
 
@@ -367,7 +405,9 @@ fn this_process_owns_what_it_creates() {
 
 #[test]
 fn a_volume_without_ownership_does_not_report_this_process_as_the_owner() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::NoOwnership) {
         let path = scratch.path().join("object");
         support::write_file(&path, b"bytes");
@@ -382,7 +422,9 @@ fn a_volume_without_ownership_does_not_report_this_process_as_the_owner() {
 #[test]
 fn an_identity_read_from_a_handle_is_the_identity_of_its_path() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("object");
     let file = platform.create_file_exclusive(&path).unwrap();
 
@@ -396,7 +438,9 @@ fn an_identity_read_from_a_handle_is_the_identity_of_its_path() {
 #[test]
 fn an_identity_read_from_a_handle_survives_the_name_being_replaced() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("object");
     let file = platform.create_file_exclusive(&path).unwrap();
     let before = platform.file_id_of(&file).unwrap();

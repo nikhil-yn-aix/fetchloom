@@ -258,3 +258,48 @@ fn a_document_past_a_bound_is_refused_rather_than_read() {
     };
     assert!(parse(YAML.as_bytes(), Syntax::Yaml, &shallow).is_err());
 }
+
+/// A fingerprint tuple holds a volume identifier, a file identifier and two
+/// instants, and two of those are a hundred and twenty-eight bits wide. The
+/// canonical form carries a number as a run of digits that fits sixty-four, so
+/// a receipt that wrote them as numbers could be written on a platform whose
+/// values happen to be small and not on one whose values are not. It is written
+/// on every platform or on none.
+#[test]
+fn a_receipt_renders_with_the_widest_fingerprint_any_platform_can_produce() {
+    let mut fingerprints = std::collections::BTreeMap::new();
+    fingerprints.insert(
+        "data/one.bin".to_owned(),
+        fetchloom_engine::receipt::RecordedFingerprint {
+            volume: u64::MAX.to_string(),
+            file: u128::MAX.to_string(),
+            size: u64::MAX,
+            modified_nanos: i128::MIN.to_string(),
+            changed_nanos: i128::MAX.to_string(),
+        },
+    );
+    let receipt = fetchloom_engine::receipt::Receipt {
+        dataset: "silesia".to_owned(),
+        manifest: fetchloom_engine::digest::ManifestDigest::from_bytes(
+            *blake3::hash(b"a manifest").as_bytes(),
+        ),
+        artifacts: std::collections::BTreeMap::new(),
+        tree: None,
+        executable: Vec::new(),
+        fingerprints,
+        destination: std::path::PathBuf::from("/data/silesia"),
+        accepted_terms: None,
+        fetchloom: "0.1.0-dev".to_owned(),
+        completed_at: fetchloom_engine::timestamp::Timestamp::from_epoch_seconds(1_700_000_000),
+    };
+
+    let rendered = receipt
+        .render()
+        .expect("a receipt has to render on every platform");
+    let read = fetchloom_engine::receipt::Receipt::parse(
+        rendered.as_bytes(),
+        &fetchloom_engine::limits::Limits::default(),
+    )
+    .expect("a receipt has to read back");
+    assert_eq!(read, receipt);
+}

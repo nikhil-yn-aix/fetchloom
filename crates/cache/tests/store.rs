@@ -371,7 +371,7 @@ fn prune_removes_a_quarantined_object() {
 }
 
 #[test]
-fn a_published_object_costs_four_files_and_no_more() {
+fn an_object_ingested_locally_costs_two_files_and_no_more() {
     let (scratch, cache) = cache();
     let source = scratch.path().join("one.bin");
     std::fs::write(&source, b"hello\n").unwrap();
@@ -396,7 +396,7 @@ fn a_published_object_costs_four_files_and_no_more() {
         .collect();
     assert_eq!(
         per_object.len(),
-        4,
-        "an object costs a different number of files than the four it is allowed: {per_object:?}"
+        2,
+        "bytes already on this machine are written with no lock and no partial, so an object          costs its own file and its record and nothing else: {per_object:?}"
     );
 }

@@ -41,7 +41,9 @@ pub fn open_cache_with(
 ) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         under.join("cache"),
-        NativePlatform::new(),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
         DurabilityTier::Fast,
         policy,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
@@ -100,7 +102,9 @@ pub fn make_writable(path: &Path) {
 pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         root,
-        NativePlatform::new(),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),

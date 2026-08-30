@@ -22,7 +22,9 @@ use fetchloom_platform::NativePlatform;
 #[test]
 fn two_files_have_different_identities() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let one = scratch.path().join("one");
     let two = scratch.path().join("two");
     support::write_file(&one, b"one");
@@ -37,7 +39,9 @@ fn two_files_have_different_identities() {
 #[test]
 fn one_file_has_the_same_identity_through_two_paths() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let nested = scratch.path().join("nested");
     std::fs::create_dir_all(&nested).unwrap();
     let direct = nested.join("file");
@@ -53,7 +57,9 @@ fn one_file_has_the_same_identity_through_two_paths() {
 #[test]
 fn a_file_identity_survives_being_reopened() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("file");
     support::write_file(&path, b"content");
 
@@ -65,7 +71,9 @@ fn a_file_identity_survives_being_reopened() {
 #[test]
 fn a_fingerprint_changes_when_the_content_changes() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("file");
     support::write_file(&path, b"before");
     let before = platform.fingerprint(&path).unwrap();
@@ -82,7 +90,9 @@ fn a_fingerprint_changes_when_the_content_changes() {
 #[test]
 fn a_fingerprint_carries_the_volume_and_the_file_it_describes() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("file");
     support::write_file(&path, b"content");
 
@@ -95,7 +105,9 @@ fn a_fingerprint_carries_the_volume_and_the_file_it_describes() {
 #[test]
 fn creating_a_file_that_exists_fails_rather_than_truncating_it() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("file");
     support::write_file(&path, b"existing content");
 
@@ -113,7 +125,9 @@ fn creating_a_file_that_exists_fails_rather_than_truncating_it() {
 #[test]
 fn creating_a_directory_that_exists_fails() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("directory");
     platform.create_directory_exclusive(&path).unwrap();
     assert!(
@@ -125,7 +139,9 @@ fn creating_a_directory_that_exists_fails() {
 #[test]
 fn placing_bytes_produces_an_identical_file_whichever_mechanism_is_used() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let from = scratch.path().join("source");
     let to = scratch.path().join("target");
     let bytes: Vec<u8> = (0..64_u32).flat_map(u32::to_le_bytes).collect();
@@ -147,7 +163,9 @@ fn placing_bytes_produces_an_identical_file_whichever_mechanism_is_used() {
 #[test]
 fn a_volume_that_cannot_clone_falls_back_to_copy_and_reports_the_fallback() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let capabilities = platform.volume_capabilities(scratch.path()).unwrap();
     if capabilities.clone {
         eprintln!("skipped: this volume supports cloning, so the copy fallback is not exercised");
@@ -172,7 +190,9 @@ fn a_volume_that_cannot_clone_falls_back_to_copy_and_reports_the_fallback() {
 #[test]
 fn placing_bytes_onto_a_name_that_exists_fails() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let from = scratch.path().join("source");
     let to = scratch.path().join("target");
     support::write_file(&from, b"source");
@@ -192,7 +212,9 @@ fn a_symlink_carries_the_target_bytes_it_was_given() {
         eprintln!("skipped: this platform does not permit creating a symbolic link here");
         return;
     }
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let link = scratch.path().join("link");
     platform.create_symlink(b"some/target/path", &link).unwrap();
 
@@ -206,7 +228,9 @@ fn a_symlink_carries_the_target_bytes_it_was_given() {
 #[test]
 fn a_degradation_names_what_was_requested_what_was_used_and_why() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let from = scratch.path().join("source");
     let to = scratch.path().join("target");
     support::write_file(&from, b"bytes");
@@ -242,7 +266,9 @@ fn a_degradation_names_what_was_requested_what_was_used_and_why() {
 #[test]
 fn draining_degradations_empties_the_queue() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let from = scratch.path().join("source");
     support::write_file(&from, b"bytes");
     platform
@@ -259,7 +285,9 @@ fn draining_degradations_empties_the_queue() {
 #[test]
 fn reserving_nothing_is_not_a_failure() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("empty");
     let file = platform.create_file_exclusive(&path).unwrap();
 

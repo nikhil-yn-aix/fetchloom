@@ -17,7 +17,9 @@ use crate::partial_key::PartialKey;
 use crate::redact::SafeUrl;
 use crate::resume::ResumeRung;
 use crate::seam::observer::Observer;
-use crate::seam::source::{ByteRange, Source, SourceIdentity, SourceMetadata};
+use crate::seam::source::{
+    ByteRange, Revalidated, Source, SourceIdentity, SourceMetadata, Validator,
+};
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
 
@@ -39,6 +41,10 @@ pub struct Transferred {
     pub rung: ResumeRung,
     /// How many attempts were made.
     pub attempts: u32,
+    /// What the source said identifies these bytes, so a later run can ask
+    /// whether they are still what the reference names. Empty when the run
+    /// learned nothing, which is what an object the cache already held teaches.
+    pub validator: Validator,
 }
 
 /// The two impure things a retry needs: a random fraction and a wait.
@@ -74,21 +80,38 @@ pub fn honors(limits: &Limits, retry_after: Duration) -> bool {
     retry_after <= limits.retry_ceiling
 }
 
+/// What a run already holds for a reference no digest pins.
+///
+/// A warm run of one asks whether the object it holds is still what the
+/// reference names, in one conditional request, rather than fetching the object
+/// again to find out.
+pub struct Prior {
+    /// What the reference resolved to last time.
+    pub digest: ContentDigest,
+    /// What the source said identified those bytes.
+    pub validator: Validator,
+}
+
 /// Decides where a transfer starts, given what is on disk and what the source
 /// says now.
 ///
 /// Takes what the partial recorded, what the source reports now, how many bytes
-/// are on disk, and whether an outboard tree is known. Returns the rung and how
-/// many of those bytes may be kept.
+/// are on disk, and how many of those an outboard tree has already been shown
+/// to cover. Returns the rung and how many of those bytes may be kept.
+///
+/// A verified prefix is kept whatever the source now says identifies its bytes,
+/// because the tree is stronger evidence than any validator: it says these
+/// exact bytes belong to this exact digest, where a validator only says the
+/// source believes nothing changed.
 #[must_use]
 pub fn rung_for(
     recorded: Option<&SourceRecord>,
     now: &SourceMetadata,
     on_disk: u64,
-    outboard_known: bool,
+    verified: u64,
 ) -> (ResumeRung, u64) {
-    if outboard_known {
-        return (ResumeRung::Outboard, on_disk);
+    if verified > 0 {
+        return (ResumeRung::Outboard, verified);
     }
     if on_disk == 0 {
         return (rung_of(&now.identity), 0);
@@ -149,11 +172,12 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     pub fn run(
         &self,
         expected: Option<ContentDigest>,
+        prior: &dyn Fn(&str) -> Option<Prior>,
         locations: &[String],
     ) -> Result<Transferred, Error> {
         let mut last = None;
         for (index, location) in locations.iter().enumerate() {
-            match self.attempt_until_spent(expected, location) {
+            match self.attempt_until_spent(expected, prior, location) {
                 Ok(done) => return Ok(done),
                 Err(error) => {
                     if let Some(next) = locations.get(index + 1) {
@@ -178,6 +202,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     fn attempt_until_spent(
         &self,
         expected: Option<ContentDigest>,
+        prior: &dyn Fn(&str) -> Option<Prior>,
         location: &str,
     ) -> Result<Transferred, Error> {
         let retry = Retry {
@@ -188,7 +213,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         };
         let mut buffer = vec![0u8; BUFFER];
         retry.until_spent(|attempt| {
-            self.attempt_once(expected, location, &mut buffer)
+            self.attempt_once(expected, prior, location, &mut buffer)
                 .map(|mut done| {
                     done.attempts = attempt;
                     done
@@ -199,34 +224,39 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     fn attempt_once(
         &self,
         expected: Option<ContentDigest>,
+        prior: &dyn Fn(&str) -> Option<Prior>,
         location: &str,
         buffer: &mut [u8],
     ) -> Result<Transferred, Error> {
         if let Some(digest) = expected
             && self.store.contains(digest)?
         {
-            return Ok(Transferred {
-                digest,
-                interop: None,
-                bytes_transferred: 0,
-                bytes_kept: 0,
-                rung: ResumeRung::Outboard,
-                attempts: 0,
-            });
+            return Ok(held(digest));
         }
 
-        let metadata = self.source.probe(location, None)?;
+        let arrived = match self.ask_whether_it_changed(expected, prior, location)? {
+            Asked::Unchanged(digest) => return Ok(held(digest)),
+            Asked::Changed(metadata, body) => Some((metadata, body)),
+            Asked::Silence => None,
+        };
+
+        let metadata = match arrived.as_ref() {
+            Some((metadata, _)) => metadata.clone(),
+            None => self.source.probe(location, None)?,
+        };
         let key = match expected {
             Some(digest) => PartialKey::of_content(digest),
             None => PartialKey::of_source(&metadata),
         };
         let recorded = self.store.recorded_source(key)?;
         let on_disk = recorded.as_ref().map_or(0, |record| record.written);
-        let outboard_known = match expected {
-            Some(digest) => self.store.has_outboard(digest)?,
-            None => false,
+        let verified = match expected {
+            Some(digest) if arrived.is_none() => {
+                self.store.verified_prefix(key, digest, on_disk)?
+            }
+            _ => 0,
         };
-        let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, outboard_known);
+        let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified);
 
         if on_disk > keep {
             self.degradations.record(
@@ -249,11 +279,15 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             });
         }
 
-        let range = (keep > 0).then(|| ByteRange {
-            start: keep,
-            end: metadata.size.unwrap_or(u64::MAX),
-        });
-        let body = self.source.fetch(location, range, None)?;
+        let body = if let Some((_, body)) = arrived {
+            Either::Revalidated(body)
+        } else {
+            let range = (keep > 0).then(|| ByteRange {
+                start: keep,
+                end: metadata.size.unwrap_or(u64::MAX),
+            });
+            Either::Fetched(self.source.fetch(location, range, None)?)
+        };
         self.store
             .record_source(key, &record_of(&metadata, rung, keep))?;
 
@@ -300,11 +334,94 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             bytes_kept: keep,
             rung,
             attempts: 0,
+            validator: validator_for(&metadata),
         })
+    }
+
+    /// Asks a source in one request whether an object this run already holds is
+    /// still what the reference names.
+    ///
+    /// Asks nothing when the run's digest is pinned, because a cache holding
+    /// those bytes is already the answer, and nothing when there is no recorded
+    /// validator to ask with.
+    fn ask_whether_it_changed(
+        &self,
+        expected: Option<ContentDigest>,
+        prior: &dyn Fn(&str) -> Option<Prior>,
+        location: &str,
+    ) -> Result<Asked<S::Body>, Error> {
+        if expected.is_some() {
+            return Ok(Asked::Silence);
+        }
+        let Some(prior) = prior(location) else {
+            return Ok(Asked::Silence);
+        };
+        if !prior.validator.can_be_asked_with() || !self.store.contains(prior.digest)? {
+            return Ok(Asked::Silence);
+        }
+        match self.source.revalidate(location, &prior.validator, None)? {
+            Revalidated::Unchanged => Ok(Asked::Unchanged(prior.digest)),
+            Revalidated::Changed(served) => {
+                self.degradations.record(
+                    "the object the cache already holds",
+                    "a transfer of the whole object",
+                    "the source answered that the bytes it serves are no longer the ones the recorded validator named",
+                );
+                Ok(Asked::Changed(served.metadata, served.body))
+            }
+        }
     }
 
     fn emit(&self, payload: EventPayload) {
         self.observer.emit(&Event::new(self.sequence, payload));
+    }
+}
+
+/// What one conditional question produced.
+enum Asked<B> {
+    /// No question was asked, so the transfer proceeds as it always did.
+    Silence,
+    /// The source restated the validator, so the cache already holds the
+    /// answer.
+    Unchanged(ContentDigest),
+    /// The bytes changed, and the response carries them.
+    Changed(SourceMetadata, B),
+}
+
+/// The bytes of a transfer, whichever request produced them.
+enum Either<B> {
+    /// A fetch, which may have carried a range.
+    Fetched(B),
+    /// The body a conditional request answered with, always from zero.
+    Revalidated(B),
+}
+
+impl<B: Read> Read for Either<B> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Fetched(body) | Self::Revalidated(body) => body.read(buffer),
+        }
+    }
+}
+
+/// What a run reports for an object the cache already holds.
+fn held(digest: ContentDigest) -> Transferred {
+    Transferred {
+        digest,
+        interop: None,
+        bytes_transferred: 0,
+        bytes_kept: 0,
+        rung: ResumeRung::Outboard,
+        attempts: 0,
+        validator: Validator::default(),
+    }
+}
+
+/// Returns what a response said identifies the bytes it served.
+fn validator_for(metadata: &SourceMetadata) -> Validator {
+    Validator {
+        etag: validator_of(&metadata.identity),
+        last_modified: metadata.last_modified.clone(),
     }
 }
 
@@ -315,7 +432,7 @@ fn record_of(metadata: &SourceMetadata, rung: ResumeRung, written: u64) -> Sourc
         size: metadata.size,
         etag: validator_of(&metadata.identity),
         identity: metadata.identity.clone(),
-        last_modified: None,
+        last_modified: metadata.last_modified.clone(),
         accepts_ranges: metadata.supports_ranges,
         written,
         rung,

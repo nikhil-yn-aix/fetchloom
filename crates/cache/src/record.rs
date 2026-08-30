@@ -74,12 +74,18 @@ pub struct Mark {
 ///
 /// Writes beside the record and renames onto it, because a reader of a record
 /// another process is part way through writing would otherwise see a file that
-/// is empty or half a value.
+/// is empty or half a value. Takes where the run counts file operations,
+/// because a record is a create and a rename and a counter that could not see
+/// them could not see what an object costs.
 ///
 /// # Errors
 ///
 /// Fails when the record cannot be written.
-pub fn write<T: Serialize>(path: &Path, record: &T) -> Result<(), Error> {
+pub fn write<T: Serialize>(
+    path: &Path,
+    record: &T,
+    work: &fetchloom_engine::work::WorkCounter,
+) -> Result<(), Error> {
     let rendered = serde_json::to_vec(record).map_err(|reason| {
         Error::new(
             ErrorKind::CacheCorrupt,
@@ -93,10 +99,13 @@ pub fn write<T: Serialize>(path: &Path, record: &T) -> Result<(), Error> {
 
     std::fs::write(&beside, rendered)
         .map_err(|reason| failure(ErrorKind::CacheCorrupt, &beside, &reason))?;
+    work.touched_file();
     std::fs::rename(&beside, path).map_err(|reason| {
         let _ = std::fs::remove_file(&beside);
         failure(ErrorKind::CacheCorrupt, path, &reason)
-    })
+    })?;
+    work.touched_file();
+    Ok(())
 }
 
 /// Reads a record.

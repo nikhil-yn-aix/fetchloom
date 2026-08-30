@@ -197,6 +197,8 @@ pub enum CacheCommand {
         #[arg(value_name = "bundle")]
         bundle: PathBuf,
     },
+    /// Rebuild the derived data the cache can regenerate from what it holds.
+    Repair,
     /// Mark what nothing refers to, then sweep what has been marked longest.
     Prune,
     /// Remove every object.
@@ -229,6 +231,15 @@ pub enum Command {
         /// The plan to execute.
         #[arg(value_name = "plan")]
         plan: PathBuf,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Refetch the damaged ranges of a cached object.
+    Repair {
+        /// What to repair.
+        #[arg(value_name = "ref")]
+        reference: String,
         /// The flags that control materialization.
         #[command(flatten)]
         transfer: Box<TransferFlags>,

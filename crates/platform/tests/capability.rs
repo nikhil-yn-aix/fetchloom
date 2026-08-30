@@ -32,7 +32,9 @@ use fetchloom_platform::NativePlatform;
 #[test]
 fn a_probe_reports_every_capability_the_contract_names() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let found = platform.volume_capabilities(scratch.path()).unwrap();
 
     assert!(
@@ -59,7 +61,9 @@ fn a_probe_reports_every_capability_the_contract_names() {
 #[cfg(unix)]
 fn a_platform_that_cannot_enumerate_never_claims_a_scanner_is_present() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let found = platform.volume_capabilities(scratch.path()).unwrap();
 
     assert!(
@@ -71,7 +75,9 @@ fn a_platform_that_cannot_enumerate_never_claims_a_scanner_is_present() {
 #[test]
 fn only_an_unknown_scanner_answer_emits_a_degrade_and_it_names_the_ratio() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let found = platform.volume_capabilities(scratch.path()).unwrap();
     let degradations = platform.take_degradations();
     let named = degradations
@@ -117,7 +123,9 @@ fn a_volume_that_refuses_the_probe_name_reports_normalization_as_unknown() {
     directories.extend(held.iter().map(|scratch| scratch.path().to_path_buf()));
 
     for directory in directories {
-        let platform = NativePlatform::new();
+        let platform = NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        ));
         let found = platform.volume_capabilities(&directory).unwrap();
         let degradations = platform.take_degradations();
         let named = degradations
@@ -148,7 +156,9 @@ fn a_volume_that_refuses_the_probe_name_reports_normalization_as_unknown() {
 #[test]
 fn a_probe_leaves_nothing_behind() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     platform.volume_capabilities(scratch.path()).unwrap();
     assert!(
         support::is_empty(scratch.path()),
@@ -160,7 +170,9 @@ fn a_probe_leaves_nothing_behind() {
 #[test]
 fn case_folding_is_reported_as_the_filesystem_behaves() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let reported = platform.volume_capabilities(scratch.path()).unwrap();
 
     let upper = scratch.path().join("FetchloomCaseCheck");
@@ -182,7 +194,9 @@ fn case_folding_is_reported_as_the_filesystem_behaves() {
 #[test]
 fn normalization_is_reported_as_the_filesystem_behaves() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let reported = platform.volume_capabilities(scratch.path()).unwrap();
 
     let composed = String::from_utf8(vec![b'e', 0xc3, 0xa9]).unwrap();
@@ -210,7 +224,9 @@ fn normalization_is_reported_as_the_filesystem_behaves() {
 #[test]
 fn symlink_support_is_reported_as_the_platform_behaves() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let reported = platform.volume_capabilities(scratch.path()).unwrap();
     assert_eq!(
         reported.symlink,
@@ -222,7 +238,9 @@ fn symlink_support_is_reported_as_the_platform_behaves() {
 #[test]
 fn clone_support_is_reported_as_the_volume_behaves() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let reported = platform.volume_capabilities(scratch.path()).unwrap();
 
     let from = scratch.path().join("source");
@@ -248,7 +266,9 @@ fn clone_support_is_reported_as_the_volume_behaves() {
 #[test]
 fn a_local_volume_is_not_reported_as_network_backed() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let reported = platform.volume_capabilities(scratch.path()).unwrap();
     assert_ne!(
         reported.backing,
@@ -260,7 +280,9 @@ fn a_local_volume_is_not_reported_as_network_backed() {
 #[test]
 fn a_capability_answer_is_the_same_every_time_it_is_asked() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let first = platform.volume_capabilities(scratch.path()).unwrap();
     let second = platform.volume_capabilities(scratch.path()).unwrap();
 
@@ -282,7 +304,9 @@ fn a_capability_answer_is_the_same_every_time_it_is_asked() {
 
 #[test]
 fn the_thread_budget_is_the_detected_count_when_nothing_is_requested() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let found = platform.processor_capabilities(None);
     assert_eq!(found.budget.origin(), BudgetOrigin::Detected);
     assert_eq!(found.budget.threads(), found.budget.detected());
@@ -290,7 +314,9 @@ fn the_thread_budget_is_the_detected_count_when_nothing_is_requested() {
 
 #[test]
 fn a_thread_ceiling_below_the_detected_count_is_honored() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let detected = platform.processor_capabilities(None).budget.detected();
     if detected.get() < 2 {
         return;
@@ -302,7 +328,9 @@ fn a_thread_ceiling_below_the_detected_count_is_honored() {
 
 #[test]
 fn a_thread_ceiling_above_the_detected_count_is_clamped_and_reported() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let detected = platform.processor_capabilities(None).budget.detected();
     let asking = NonZeroUsize::new(detected.get() * 4 + 1).unwrap();
     let found = platform.processor_capabilities(Some(asking));
@@ -316,7 +344,9 @@ fn a_thread_ceiling_above_the_detected_count_is_clamped_and_reported() {
 
 #[test]
 fn cloning_shares_blocks_on_a_volume_that_supports_it() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::Clone) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert!(
@@ -347,7 +377,9 @@ fn cloning_shares_blocks_on_a_volume_that_supports_it() {
 
 #[test]
 fn case_folding_is_reported_on_a_case_sensitive_volume() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for directory in support::volume_directories(support::Property::CaseSensitive) {
         let reported = platform.volume_capabilities(&directory).unwrap();
         let upper = directory.join("FetchloomCaseCheck");
@@ -369,7 +401,9 @@ fn case_folding_is_reported_on_a_case_sensitive_volume() {
 
 #[test]
 fn case_folding_is_reported_on_a_case_insensitive_volume() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for directory in support::volume_directories(support::Property::CaseInsensitive) {
         let scratch = tempfile::TempDir::new_in(&directory).unwrap();
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
@@ -388,7 +422,9 @@ fn case_folding_is_reported_on_a_case_insensitive_volume() {
 }
 #[test]
 fn normalization_is_reported_on_a_volume_that_normalizes() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::Normalizing) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
@@ -402,7 +438,9 @@ fn normalization_is_reported_on_a_volume_that_normalizes() {
 
 #[test]
 fn a_network_volume_is_reported_as_network_backed() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::Network) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
@@ -416,7 +454,9 @@ fn a_network_volume_is_reported_as_network_backed() {
 
 #[test]
 fn a_memory_volume_is_reported_as_local() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::Memory) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
@@ -430,7 +470,9 @@ fn a_memory_volume_is_reported_as_local() {
 
 #[test]
 fn sparse_support_is_reported_where_it_is_absent() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::NoSparse) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert!(
@@ -443,7 +485,9 @@ fn sparse_support_is_reported_where_it_is_absent() {
 
 #[test]
 fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for scratch in support::scratch_on(support::Property::Fuse) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
@@ -457,7 +501,9 @@ fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {
 
 #[test]
 fn two_directories_on_one_volume_are_reported_separately() {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     for directory in support::volume_directories(support::Property::CaseSensitive) {
         let elsewhere = support::scratch();
         let first = platform.volume_capabilities(elsewhere.path()).unwrap();

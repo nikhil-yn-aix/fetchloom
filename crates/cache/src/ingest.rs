@@ -3,15 +3,20 @@
 //! A transfer named by a manifest knows its digest before it starts and takes a
 //! lease on it. A local source does not, so the bytes are written once, hashed
 //! as they arrive, and given their name at the end.
+//!
+//! No lock is taken here. The lock exists to deduplicate a transfer, and bytes
+//! that are already on this machine have no transfer to deduplicate: a
+//! content-addressed write is idempotent, and the rename already makes a torn
+//! object impossible, so coordinating two processes writing identical bytes
+//! costs more than the local copy it would save.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::hashing;
-use fetchloom_engine::partial_key::PartialKey;
-use fetchloom_engine::seam::platform::{OwnerToken, Platform};
+use fetchloom_engine::hashing::{self, Digests};
+use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
@@ -32,8 +37,6 @@ pub struct Ingested {
     pub size: u64,
     /// Whether the cache already held them.
     pub was_present: bool,
-    /// The writer this ingest waited for, when another process held the digest.
-    pub waited_for: Option<OwnerToken>,
 }
 
 impl<P: Platform> Cache<P> {
@@ -56,7 +59,6 @@ impl<P: Platform> Cache<P> {
                 interop: digests.interop,
                 size: length,
                 was_present: true,
-                waited_for: None,
             });
         }
         let reading = std::fs::File::open(source)
@@ -74,7 +76,7 @@ impl<P: Platform> Cache<P> {
     /// does not hold is read twice, once to learn its name and once to store
     /// it; the alternative was writing every byte of every file the cache
     /// already held, on every run.
-    fn digest_of(&self, source: &Path) -> Result<(hashing::Digests, u64), Error> {
+    fn digest_of(&self, source: &Path) -> Result<(Digests, u64), Error> {
         let mut reading = std::fs::File::open(source)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
         let mut pair = hashing::Pair::new();
@@ -96,12 +98,12 @@ impl<P: Platform> Cache<P> {
 
     /// Puts a file whose digest is already known into the cache.
     ///
-    /// Takes the digest the file's bytes hash to, its length, and where it
-    /// sits. Returns what the cache did with it. The bytes are cloned
-    /// where the volume can share blocks and copied where it cannot, so a
-    /// caller that had to write the file anyway pays no second read of the
-    /// source to fill the cache, and pays nothing at all when the cache
-    /// already holds the object.
+    /// Takes what the caller's own pass over the bytes produced, its length,
+    /// and where it sits. Returns what the cache did with it. The bytes are
+    /// cloned where the volume can share blocks and copied where it cannot, so
+    /// a caller that had to write the file anyway pays no second read of the
+    /// source to fill the cache, and pays nothing at all when the cache already
+    /// holds the object.
     ///
     /// The caller states the digest, so the caller is what makes it true. This
     /// is for a file this process just wrote and hashed in the same pass, not
@@ -111,34 +113,20 @@ impl<P: Platform> Cache<P> {
     ///
     /// Fails when the file cannot be read, when the cache cannot be written,
     /// and when the volume has no room.
-    pub fn adopt(
-        &self,
-        digests: hashing::Digests,
-        length: u64,
-        source: &Path,
-    ) -> Result<Ingested, Error> {
+    pub fn adopt(&self, digests: &Digests, length: u64, source: &Path) -> Result<Ingested, Error> {
         let digest = digests.content;
-        let present = |waited_for| Ingested {
+        let present = Ingested {
             digest,
             interop: digests.interop,
             size: length,
             was_present: true,
-            waited_for,
         };
         if self.contains(digest)? {
-            return Ok(present(None));
+            return Ok(present);
         }
         let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
         self.platform().clone_or_copy(source, &scratch)?;
-
-        let lease = self.lease(PartialKey::of_content(digest))?;
-        let waited_for = lease.waited_for().cloned();
-        if self.contains(digest)? {
-            drop(lease);
-            let _ = std::fs::remove_file(&scratch);
-            return Ok(present(waited_for));
-        }
         self.work().wrote_bytes(length);
         let written = std::fs::OpenOptions::new()
             .write(true)
@@ -146,18 +134,17 @@ impl<P: Platform> Cache<P> {
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, &scratch, &reason))?;
         self.platform().flush(&written, self.tier())?;
         drop(written);
-        self.publish_scratch(&scratch, digest, digests.interop)?;
-        drop(lease);
+        self.publish_scratch(&scratch, digests)?;
         Ok(Ingested {
             digest,
             interop: digests.interop,
             size: length,
             was_present: false,
-            waited_for,
         })
     }
 
-    fn scratch_path(&self) -> std::path::PathBuf {
+    /// Returns a name inside the cache that only this process writes.
+    pub(crate) fn scratch_path(&self) -> std::path::PathBuf {
         self.layout().partial().join(format!(
             "{}-{}.ingest",
             self.token().pid,
@@ -165,17 +152,12 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
-    fn publish_scratch(
-        &self,
-        scratch: &Path,
-        digest: ContentDigest,
-        interop: InteropDigest,
-    ) -> Result<(), Error> {
-        let object = self.layout().object(digest);
+    fn publish_scratch(&self, scratch: &Path, digests: &Digests) -> Result<(), Error> {
+        let object = self.layout().object(digests.content);
         self.platform()
             .publish_file(scratch, &object, self.tier())?;
         seal_object(&object)?;
-        self.record_object(digest, interop)
+        self.finish_publication(digests)
     }
 
     /// Returns the interop digest recorded for an object.
@@ -235,51 +217,48 @@ impl<P: Platform> Cache<P> {
         let digests = pair.finish();
         let digest = digests.content;
 
-        let lease = self.lease(PartialKey::of_content(digest))?;
-        let waited_for = lease.waited_for().cloned();
         if self.contains(digest)? {
-            drop(lease);
+            drop(writing);
             let _ = std::fs::remove_file(&scratch);
             return Ok(Ingested {
                 digest,
                 interop: digests.interop,
                 size: written,
                 was_present: true,
-                waited_for,
             });
         }
 
         self.platform().flush(&writing, self.tier())?;
         drop(writing);
-
-        self.publish_scratch(&scratch, digest, digests.interop)?;
-        drop(lease);
+        self.publish_scratch(&scratch, &digests)?;
 
         Ok(Ingested {
             digest,
             interop: digests.interop,
             size: written,
             was_present: false,
-            waited_for,
         })
     }
 
-    /// Records everything the cache knows about a published object.
+    /// Records everything the cache knows about a published object that is not
+    /// in its bytes.
     ///
     /// One record rather than one per fact: holding an object costs what it
     /// takes in files rather than in bytes, and a second record is a second
     /// create, a second write, and a second name in a directory that already
-    /// holds one per object.
+    /// holds one per object. The tree is the exception, because it is read
+    /// without the object and by a run that has not decided to open the object
+    /// yet.
+    ///
+    /// Clears the prune mark, because an object that has just been published is
+    /// referenced by the run that published it.
     ///
     /// # Errors
     ///
-    /// Fails when the object cannot be fingerprinted or the record cannot be
-    /// written.
-    pub(crate) fn record_object(
-        &self,
-        digest: ContentDigest,
-        interop: InteropDigest,
-    ) -> Result<(), Error> {
+    /// Fails when the object cannot be fingerprinted, when the record cannot be
+    /// written, and when the tree cannot be written.
+    pub(crate) fn finish_publication(&self, digests: &Digests) -> Result<(), Error> {
+        let digest = digests.content;
         let object = self.layout().object(digest);
         let fingerprint = self.platform().fingerprint(&object)?;
         let path = self.object_record(digest);
@@ -287,6 +266,15 @@ impl<P: Platform> Cache<P> {
             std::fs::create_dir_all(parent)
                 .map_err(|reason| failure(ErrorKind::CacheCorrupt, parent, &reason))?;
         }
-        record::write(&path, &ObjectRecord::new(fingerprint, interop))
+        record::write(
+            &path,
+            &ObjectRecord::new(fingerprint, digests.interop),
+            self.work(),
+        )?;
+        if let Some(tree) = digests.outboard.as_ref() {
+            self.write_outboard(digest, tree.as_bytes())?;
+        }
+        let _ = std::fs::remove_file(self.layout().mark_of(digest));
+        Ok(())
     }
 }

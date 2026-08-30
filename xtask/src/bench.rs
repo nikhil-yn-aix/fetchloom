@@ -72,6 +72,14 @@ pub enum BenchError {
     MalformedBaseline(serde_json::Error),
     /// A regime in the baseline was not run, or the other way round.
     RegimeMissing(String),
+    /// A run carries a deterministic metric the baseline does not, which is a
+    /// metric that was added rather than a number that moved.
+    MetricAdded {
+        /// The regime the metric belongs to.
+        regime: String,
+        /// The metric the baseline does not carry.
+        metric: String,
+    },
     /// A run's `--json` result could not be parsed.
     MalformedResult(serde_json::Error),
     /// A metric worsened by more than the gate allows.
@@ -96,6 +104,10 @@ impl std::fmt::Display for BenchError {
             Self::Baseline(error) => write!(f, "could not read or write the baseline: {error}"),
             Self::MalformedBaseline(error) => write!(f, "the baseline is malformed: {error}"),
             Self::RegimeMissing(regime) => write!(f, "regime {regime} is not in both runs"),
+            Self::MetricAdded { regime, metric } => write!(
+                f,
+                "{regime} carries {metric}, which the baseline does not, so record a baseline before gating on it"
+            ),
             Self::MalformedResult(error) => {
                 write!(f, "the run's result could not be read: {error}")
             }
@@ -246,10 +258,11 @@ pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError
                 .metrics
                 .iter()
                 .find(|candidate| candidate.name == metric.name);
-            let previous = match found {
-                Some(previous) => previous,
-                None if metric.kind == MetricKind::Timing => continue,
-                None => return Err(BenchError::RegimeMissing(regime.regime.clone())),
+            let Some(previous) = found else {
+                return Err(BenchError::MetricAdded {
+                    regime: regime.regime.clone(),
+                    metric: metric.name.clone(),
+                });
             };
             if metric.value > previous.value * (1.0 + REGRESSION_GATE) {
                 return Err(BenchError::Regression {
@@ -295,7 +308,9 @@ pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::er
             format!("{}: {reason}", directory.display()),
         ))
     })?;
-    let platform = fetchloom_platform::NativePlatform::new();
+    let platform = fetchloom_platform::NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let capabilities = platform.volume_capabilities(directory).map_err(Box::new)?;
     Ok(match capabilities.scanner {
         Scanner::Present { name, cost_ratio } => format!(
@@ -699,10 +714,12 @@ struct RunOutcome {
     work: Work,
 }
 
-/// Turns the three work counters into the metrics that gate on them.
+/// Turns the four work counters into the metrics that gate on them.
 ///
 /// Takes what a run reported. Returns one deterministic metric per counter,
-/// because each is identical on identical inputs and none is a duration.
+/// because each is identical on identical inputs and none is a duration. File
+/// operations is what turns the per-object file count from prose into a number
+/// that cannot regress silently.
 fn work_metrics(work: &Work) -> Vec<Metric> {
     #[expect(
         clippy::cast_precision_loss,
@@ -726,6 +743,12 @@ fn work_metrics(work: &Work) -> Vec<Metric> {
             name: "requests".to_owned(),
             value: count(work.requests),
             unit: "requests".to_owned(),
+            kind: MetricKind::Deterministic,
+        },
+        Metric {
+            name: "file-operations".to_owned(),
+            value: count(work.file_operations),
+            unit: "operations".to_owned(),
             kind: MetricKind::Deterministic,
         },
     ]

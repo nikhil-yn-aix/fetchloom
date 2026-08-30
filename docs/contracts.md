@@ -36,7 +36,9 @@ Digests are written as `blake3:<hex>` or `sha256:<hex>`. Both are computed on ev
 
 Three digests are domain-separated by derived key so a value from one can never be mistaken for another: object content, tree digest, and manifest digest.
 
-The outboard tree groups chunks and stores a length followed by parent nodes in pre-order. Group size and threshold are in Limits. An object at or below one group never stores an outboard, because its content digest already authenticates it whole.
+The outboard tree groups chunks and stores a length followed by parent nodes in pre-order. Group size and threshold are in Limits. An object at or below the threshold never stores an outboard, because its content digest already authenticates it whole.
+
+A tree is built in the pass that writes the bytes, so it never costs a second read. An object the cache already holds whose tree is absent has one built from its own bytes, because those bytes are already verified and reading them costs less than fetching them again. A tree is derived data: the content digest is the only authority, and a tree that disagrees with it is discarded and rebuilt rather than believed.
 
 ## Canonical form
 
@@ -194,6 +196,14 @@ completed_at: 2026-08-29T04:11:02Z
 ascending. Every other file entry carries the read and write mode, because a tree
 digest records those two and no others.
 
+`fingerprints` maps each file entry path to the fingerprint tuple the file carried
+when the run published it. It is local, like everything else in a receipt, and it
+is the same cache of the phrase probably unchanged that `--verify fingerprint`
+applies to a cache hit. It is never evidence of content, never appears in a lock,
+and is never compared against another machine's. Recording one does not make the
+receipt an identity authority, because nothing is ever concluded from it except
+whether bytes have to be read.
+
 `fetchloom` is provenance. It says which build produced a result and nothing ever
 branches on it.
 
@@ -275,6 +285,18 @@ Mechanical definitions. No other meaning is implied.
 Accepting `tofu` is allowed by default for a first fetch and never for a locked run. Accepting `unverified` requires an explicit flag on every invocation.
 
 Publisher identity, manifest authenticity, and content integrity are recorded as three separate facts.
+
+### Witnesses
+
+A witness is one recorded observation that an artifact hashed to a digest. It holds the digest observed, the machine that observed it, the origin that served the bytes, the run that recorded it, and when. It is stored in `meta/witness/` under the artifact key, which is the derived-key hash of the manifest digest and the artifact identifier, each length-prefixed. The key never involves the content, because a witness that identified its subject by the content would only ever agree with itself.
+
+A witness is written only by a run that transferred the bytes in full and verified them as they arrived. A cache hit writes none, because it observed nothing. Nothing read from a source, a bundle, a lock, a receipt, or a plan ever becomes a witness, so no remote party can manufacture one.
+
+Two witnesses are independent only when they differ in all three of the machine that observed them, the origin that served the bytes, and the run that recorded them. Two observations from one machine are one observation. So are two from one origin, and two from one run.
+
+`corroborated` therefore requires the observed digest to be carried by at least two witnesses independent of each other under that rule, which means at least two machines, at least two origins, and at least two runs. A cache directory shared between machines is how a second machine's witness reaches this one; it is the only such channel, and it is exactly as trusted as the cache directory itself, which any writer could change directly.
+
+A run that finds fewer than two independent witnesses is `tofu` and records its own observation. Trust is never raised by counting a witness twice under a different name.
 
 ## Locked runs
 
@@ -359,13 +381,31 @@ A `416` is answered once: the length is reread from the response and the request
 
 | Setting | Behavior on cache hit |
 |---|---|
-| `--verify always` | Full reread and rehash |
+| `--verify always` | Reread every byte and check it. An object with an outboard tree is walked group by group against that tree, which reads the tree as well as the object and names the damaged ranges instead of only naming the object. One without a tree is rehashed whole. |
 | `--verify fingerprint` | Trust the object if the recorded filesystem fingerprint matches. Default. |
 | `--verify never` | Trust the object unconditionally. Result trust class becomes `unverified`. |
+
+`always` reads the same object bytes either way. What the tree buys is not fewer bytes, it is a failure that names byte ranges, which is the difference between an object that must be fetched again and one that can be repaired.
+
+`never` promises nothing about a cache hit and is not a claim that the bytes are wrong or right. It does not reach verification and fail to reject; it does not verify at all, which is why the result is `unverified` rather than any other class. It never disables verification during transfer, so bytes that entered the cache in this run were still checked as they arrived.
 
 Fingerprint is the tuple of volume identifier, file identifier, size, modification time, and change time. A fingerprint is a cache of the phrase probably unchanged. It is never evidence of content and never appears in a lock.
 
 Verification during transfer is always on and is not configurable.
+
+### Revalidating a completed remote object
+
+A reference no digest pins names bytes that may change, so a warm run has to ask whether what it holds is still what the reference names. It asks with one conditional request built from the validator recorded when the object was published: `If-None-Match` from the entity tag, `If-Modified-Since` from the last modified value, and both when both were recorded.
+
+| Answer | Behavior |
+|---|---|
+| `304` | Reuse what the cache holds. One request, no body bytes read. |
+| `200` | The bytes changed. The response is the transfer, from zero. |
+| anything else | The retry classification that already governs a request |
+
+A `304` leaves the trust class unchanged, because it is the source restating the validator it already gave and states nothing new about the bytes.
+
+A run with no recorded validator for the reference cannot ask, and transfers. A run whose digest is pinned by a lock asks nothing at all, because the cache holding those bytes is already the answer.
 
 ## Cache
 
@@ -376,9 +416,13 @@ Verification during transfer is always on and is not configurable.
   partial/    in-progress transfers with recorded source identity
   staging/    extraction trees not yet published
   quarantine/ objects that failed verification, kept for diagnosis and repair
+              <hex>.diagnosis is what was found, beside the object it describes
   meta/       resolution metadata, per-host measurements, witnesses
               object/<hex> is one record per object, holding its interop
               digest and the fingerprint it was published with
+              resolution/<hex> is one record per reference, holding the
+              digest it last resolved to and the validator the source gave
+              witness/<hex> is the witnesses recorded for one artifact key
   locks/      advisory single-writer locks
   pins/       pin records
   format      cache format fingerprint
@@ -400,6 +444,8 @@ A volume that cannot express advisory locking cannot host a shared cache. It is 
 
 A second process wanting an object being written waits and reuses the result. It never starts a second transfer of the same digest.
 
+The lock exists to deduplicate transfer, so it is taken when there is a transfer to deduplicate and not otherwise. Bytes that are already local -- a `file:` source, an archive being extracted, a member of an imported bundle -- are written to a name of this process's own and renamed into `objects/`, with no lock, no partial, and no owner record. A content-addressed write is idempotent and a rename already makes a torn object impossible, so coordinating two processes writing identical bytes costs more than the work it would save. This is a rule about whether bytes have to cross a network, never a rule about how many of them there are, and it never becomes a size threshold.
+
 A partial is named by the key the run knows. A run that states a content digest names the partial by that digest, and the object it publishes must hash to it. A run that states no digest names the partial by the digest of the source identity, which is the redacted location, the host, and the identity the source published, each length-prefixed, and it publishes the object under the digest the bytes hash to. The lease, the partial, its source record and its owner record all carry one key, so there is one claim per key and never two.
 
 Orphaned staging and partial entries from a previous boot are removed at startup.
@@ -408,9 +454,50 @@ Prune marks, waits out a grace period, then sweeps. Objects that are pinned, lea
 
 The grace period is a race window, not a retention policy. It exists so an object claimed between the mark and the sweep is not removed underneath the process claiming it, and it is therefore a correctness parameter rather than a preference. It is not configurable, because a shorter one is a corruption and a longer one is a wait with no benefit. Retention, meaning a rule about how long an unused object is kept, does not exist.
 
-`cache clear` removes every object. Because refetching can cost hours and, on metered sources, money, it reports what it will remove and confirms before acting. `cache verify` rereads and rehashes every object and reports each mismatch as `cache.corrupt`. A mismatched object is moved to `quarantine/`, because leaving it in `objects/` would break the invariant that everything there has been verified, and deleting it would discard the bytes a later repair needs to find the damaged range. Quarantined objects are never served, are reported by `cache status`, and are removed only by `prune` or `clear`.
+`cache clear` removes every object. Because refetching can cost hours and, on metered sources, money, it reports what it will remove and confirms before acting. `cache verify` rereads and rehashes every object and reports each mismatch as `cache.corrupt`. A mismatched object is moved to `quarantine/`, because leaving it in `objects/` would break the invariant that everything there has been verified, and deleting it would discard the bytes a later repair needs to find the damaged range. Quarantined objects are never served, are reported by `cache status`, and are removed only by `prune` or `clear`. Every quarantine writes a diagnosis beside the object, and every removal of a quarantined object removes it too.
 
 `cache pin` and `cache unpin` take a content digest. The cache is addressed by digest everywhere else, a digest needs no resolution and no network, and `cache ls` prints the digests to use.
+
+`cache repair` rebuilds the derived data the cache can regenerate from what it already holds: an outboard tree that is missing or does not check out for an object whose bytes still verify, an object record whose fields are lost, a lock whose holder is not alive, and a partial or staging entry with no object behind it. It takes no argument, reaches no network, and resolves no reference. An object whose own bytes fail verification is not repairable from the cache, so it is left in quarantine and the report names `repair <ref>` as the command that can fetch those bytes again. It reports what it rebuilt and what it could not.
+
+### Quarantine diagnostics
+
+A quarantined object is kept because its bytes are the evidence of what went wrong and the input a localized repair needs. Beside it, `quarantine/<hex>.diagnosis` records what was found, so a person understands the damage without running anything again.
+
+| Field | What it holds |
+|---|---|
+| `digest` | The digest the object is named by, which is what it should have hashed to |
+| `found` | What the bytes actually hash to, or absent when they could not be read |
+| `size` | The length of the object on disk |
+| `damaged` | The byte ranges that failed against the outboard tree, ascending |
+| `localized` | Why the damage could not be narrowed, when `damaged` is empty |
+| `source` | The redacted location the bytes came from, when the cache recorded one |
+| `validator` | What the source said identified those bytes, when it said anything |
+| `quarantined_at` | When the object was moved |
+| `next_action` | The command that fetches the damaged bytes again |
+
+`damaged` is empty and `localized` states why when no outboard tree was stored, when the stored tree does not check out against the digest, or when the object could not be read at all. An empty `damaged` is never read as no damage: the object is in quarantine because it failed.
+
+### Repair
+
+`repair <ref>` restores a cached object the cache holds damaged bytes for. It resolves the reference to a digest exactly as `get` does, finds which byte ranges of the object it holds do not match the outboard tree, and fetches those ranges and no others.
+
+Localization is a claim about which bytes are wrong, and a tree is derived data that could itself be wrong, so it is never the last word. A repair rewrites the named ranges, then rereads the whole object and hashes it. The object enters `objects/` only when it hashes to the digest it is named by, which is the same invariant every other publication holds. A repair whose localization was wrong therefore fails loudly rather than publishing bytes that were never checked whole.
+
+| Condition | Behavior |
+|---|---|
+| No outboard tree is stored | Build one from the object's own bytes and localize against it |
+| The stored tree does not check out against the digest | Discard it, refetch the object whole, rebuild the tree, and emit `degrade` |
+| Adjacent damaged groups | Merged into one span, so one request serves them |
+| More merged spans than the repair span limit | Fetch the object whole and emit `degrade` naming both counts |
+| Damaged bytes above the whole-refetch share of the object | Fetch the object whole and emit `degrade` naming both sizes |
+| The source cannot serve a range | Fetch the object whole and emit `degrade` |
+| The object hashes correctly after the ranges are written | Publish it and remove its diagnosis |
+| It does not | Leave it quarantined, rewrite its diagnosis, and fail with `integrity.mismatch` |
+
+Bounding exists because a repair that issues one request per damaged group stops being cheaper than one request for the object. The two bounds are in Limits and neither is a preference: past either of them the ranged repair costs more than what it replaces.
+
+A run that finds nothing damaged reports `unchanged` and issues no request.
 
 If `format` does not match the running binary, every cache operation fails with instructions to run `cache clear`. There is no migration.
 
@@ -521,6 +608,14 @@ Running a request against an existing destination produces one outcome per entry
 | `restored` | Entry missing | Materialize from cache |
 | `modified` | Entry differs from the resolved entry | Stop. Name every modified path. Require `--force` to overwrite or `--adopt` to accept as the new state |
 | `foreign` | Entry present, not in the resolved tree | Stop and name it. Require `--force` to remove it or `--adopt` to accept it. Never deleted implicitly |
+
+Which of the two answers `unchanged` is decided by comes from `--verify`, so one
+policy governs a destination entry and a cache hit rather than two. Under
+`fingerprint` a file whose recorded fingerprint still matches is `unchanged` with
+its bytes unread, and one whose fingerprint has moved is hashed, exactly as a
+cache hit falls through to hashing. Under `always` every file is hashed whatever
+its fingerprint says. Under `never` the fingerprint alone decides. A destination
+with no receipt has no recorded fingerprint, so every file is hashed.
 
 Every entry unchanged writes nothing: no staging directory, no rename, status `unchanged`, exit 0.
 
@@ -736,7 +831,9 @@ The result's `status` is one of exactly four values, and no other value is ever 
 
 `restored` and `adopted` are run-level statuses. They share their names with the per-entry reconcile outcomes because they name the same fact at a different scale, and a run whose entries are all `restored` reports `restored`.
 
-The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, and `requests`. Bytes read counts every byte the run read from a file, bytes written counts every byte it wrote to one, and requests counts every request it issued to a source, retries and probes included. All three are identical on identical inputs, so they are what a benchmark gates on. None of them is a duration.
+The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests`, and `file_operations`. Bytes read counts every byte the run read from a file, bytes written counts every byte it wrote to one, requests counts every request it issued to a source, retries and probes included, and file operations counts every file or directory the run created, every rename it performed, and every flush it issued. All four are identical on identical inputs, so they are what a benchmark gates on. None of them is a duration.
+
+File operations is counted because the cost of holding many small objects is dominated by how many files each one takes rather than by how many bytes, and a count is the only form of that fact a gate can hold. It is counted where the platform performs the operation, so a new caller counts by construction.
 
 ### Presentation
 
@@ -858,6 +955,8 @@ Defaults. All configurable. None may be raised past a hard ceiling that would al
 | Retry ceiling | 60 s |
 | Outboard threshold | 64 MiB |
 | Outboard chunk group | 1 MiB |
+| Repair spans | 64 |
+| Repair whole-refetch share | 50 percent |
 | Path length | the target platform's own maximum, queried per volume |
 | Listing entries | 500,000 |
 | Listing size | 16 MiB |

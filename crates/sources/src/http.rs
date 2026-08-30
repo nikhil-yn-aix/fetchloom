@@ -17,7 +17,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, ListingEntry, Source, SourceIdentity, SourceMetadata,
+    ByteRange, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata, Validator,
 };
 
 use fetchloom_engine::limits::Limits;
@@ -88,6 +88,17 @@ impl HttpSource {
         range: Option<ByteRange>,
         credential: Option<&Credential>,
     ) -> Result<ureq::http::Response<ureq::Body>, Error> {
+        self.send_conditional(method, location, range, credential, &Validator::default())
+    }
+
+    fn send_conditional(
+        &self,
+        method: Method,
+        location: &str,
+        range: Option<ByteRange>,
+        credential: Option<&Credential>,
+        asking: &Validator,
+    ) -> Result<ureq::http::Response<ureq::Body>, Error> {
         let start = Origin::of(location)?;
         let mut current = location.to_owned();
         let mut carried = credential;
@@ -118,6 +129,12 @@ impl HttpSource {
                     "Range",
                     &format!("bytes={}-{}", range.start, range.end.saturating_sub(1)),
                 );
+            }
+            if let Some(tag) = asking.etag.as_deref() {
+                request = request.header("If-None-Match", tag);
+            }
+            if let Some(since) = asking.last_modified.as_deref() {
+                request = request.header("If-Modified-Since", since);
             }
             self.work.issued_request();
             let answer = request
@@ -203,6 +220,7 @@ impl Source for HttpSource {
             content: None,
             interop: None,
             identity: identity_of(header(&answer, "etag").as_deref()),
+            last_modified: header(&answer, "last-modified"),
             supports_ranges: header(&answer, "accept-ranges")
                 .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
             time_to_first_byte,
@@ -210,6 +228,49 @@ impl Source for HttpSource {
                 .as_deref()
                 .and_then(parse_retry_after),
         })
+    }
+
+    fn revalidate(
+        &self,
+        location: &str,
+        validator: &Validator,
+        credential: Option<&Credential>,
+    ) -> Result<Revalidated<Self::Body>, Error> {
+        let started = Instant::now();
+        let answer = self.send_conditional(Method::Get, location, None, credential, validator)?;
+        let time_to_first_byte = started.elapsed();
+        let status = answer.status().as_u16();
+        if status == 304 {
+            return Ok(Revalidated::Unchanged);
+        }
+        if !(200..300).contains(&status) {
+            return Err(status_failure(
+                location,
+                status,
+                header(&answer, "retry-after"),
+            ));
+        }
+        let metadata = SourceMetadata {
+            location: SafeUrl::new(location),
+            host: Host::new(Origin::of(location)?.host()),
+            size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
+            content: None,
+            interop: None,
+            identity: identity_of(header(&answer, "etag").as_deref()),
+            last_modified: header(&answer, "last-modified"),
+            supports_ranges: header(&answer, "accept-ranges")
+                .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+            time_to_first_byte,
+            retry_after: header(&answer, "retry-after")
+                .as_deref()
+                .and_then(parse_retry_after),
+        };
+        Ok(Revalidated::Changed(Box::new(Served {
+            metadata,
+            body: HttpBody {
+                reader: Box::new(answer.into_body().into_reader()),
+            },
+        })))
     }
 
     fn fetch(

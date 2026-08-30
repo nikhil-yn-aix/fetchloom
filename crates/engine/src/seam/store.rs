@@ -1,6 +1,6 @@
 //! The Store seam: content-addressed objects, partials, staging, and leases.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -48,7 +48,10 @@ pub struct CacheStatus {
 /// Content-addressed storage that one run reads from and writes to.
 pub trait Store {
     /// A completed object opened for reading.
-    type Reader: Read;
+    ///
+    /// Seekable, because a tree is walked by descending to the nodes one range
+    /// needs rather than by reading every node before it.
+    type Reader: Read + Seek;
     /// An in-progress object opened for writing.
     type Writer: Write;
     /// A held single-writer claim on one key. Releasing it is dropping it.
@@ -162,6 +165,27 @@ pub trait Store {
     /// Fails when the object is below the outboard threshold, when no outboard
     /// is stored, and when the cache cannot be read.
     fn open_outboard(&self, digest: ContentDigest) -> Result<Self::Reader, Error>;
+
+    /// Returns how many bytes at the start of a partial transfer match the
+    /// object's outboard tree.
+    ///
+    /// Takes the key the partial is named by, the digest the run expects, and
+    /// how many bytes are recorded as having arrived. Returns the offset of the
+    /// first leaf group that is bad or missing, which is where a resume on the
+    /// first rung appends. Only whole groups can be checked, so the answer is
+    /// never past the last group boundary at or below what is on disk.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the tree cannot be read and when it does not check out
+    /// against the digest, in which case the caller falls to a lower rung
+    /// rather than trusting a tree that says nothing.
+    fn verified_prefix(
+        &self,
+        key: PartialKey,
+        digest: ContentDigest,
+        on_disk: u64,
+    ) -> Result<u64, Error>;
 
     /// Stores the outboard tree for an object.
     ///

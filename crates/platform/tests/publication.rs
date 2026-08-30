@@ -43,7 +43,9 @@ const WHOLE_OBJECT: &[u8] = b"the whole object";
 fn a_file_is_published_by_rename_under_every_tier() {
     for tier in TIERS {
         let scratch = support::scratch();
-        let platform = NativePlatform::new();
+        let platform = NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        ));
         let partial = scratch.path().join("partial");
         let object = scratch.path().join("object");
         support::write_file(&partial, b"published bytes");
@@ -60,7 +62,9 @@ fn a_file_is_published_by_rename_under_every_tier() {
 fn publishing_replaces_an_existing_object_under_every_tier() {
     for tier in TIERS {
         let scratch = support::scratch();
-        let platform = NativePlatform::new();
+        let platform = NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        ));
         let partial = scratch.path().join("partial");
         let object = scratch.path().join("object");
         support::write_file(&object, b"old");
@@ -75,7 +79,9 @@ fn publishing_replaces_an_existing_object_under_every_tier() {
 fn a_flush_completes_under_every_tier_and_the_bytes_survive_reopen() {
     for tier in TIERS {
         let scratch = support::scratch();
-        let platform = NativePlatform::new();
+        let platform = NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        ));
         let path = scratch.path().join("flushed");
         let file = platform.create_file_exclusive(&path).unwrap();
         {
@@ -92,7 +98,9 @@ fn a_flush_completes_under_every_tier_and_the_bytes_survive_reopen() {
 #[test]
 fn preallocation_reserves_the_whole_length_before_anything_is_written() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let path = scratch.path().join("reserved");
     let file = platform.create_file_exclusive(&path).unwrap();
 
@@ -115,7 +123,9 @@ fn a_cross_volume_publish_is_refused_and_never_becomes_a_copy() {
         return;
     };
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
 
     let partial = scratch.path().join("partial");
     let object = other.path().join("object");
@@ -143,7 +153,9 @@ fn two_volumes_report_different_identifiers() {
         return;
     };
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
 
     let one = platform.volume_id(scratch.path()).unwrap();
     let two = platform.volume_id(other.path()).unwrap();
@@ -156,7 +168,9 @@ fn two_volumes_report_different_identifiers() {
 #[test]
 fn a_directory_is_published_onto_a_destination_that_does_not_exist() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let staging = scratch.path().join("staging");
     let destination = scratch.path().join("destination");
     std::fs::create_dir_all(staging.join("nested")).unwrap();
@@ -173,7 +187,9 @@ fn a_directory_is_published_onto_a_destination_that_does_not_exist() {
 #[test]
 fn publishing_a_directory_over_an_existing_one_leaves_no_sibling_behind() {
     let scratch = support::scratch();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let staging = scratch.path().join("staging");
     let destination = scratch.path().join("destination");
     std::fs::create_dir_all(&staging).unwrap();
@@ -247,7 +263,9 @@ fn publish_then_abort() {
     };
     let stage = std::env::var(KILL_STAGE).unwrap_or_default();
     let root = Path::new(&directory);
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let partial = root.join("partial-object");
     let objects = root.join("objects");
 

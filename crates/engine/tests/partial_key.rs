@@ -29,6 +29,7 @@ fn metadata(identity: SourceIdentity) -> SourceMetadata {
         content: None,
         interop: None,
         identity,
+        last_modified: None,
         supports_ranges: true,
         time_to_first_byte: Duration::from_millis(1),
         retry_after: None,

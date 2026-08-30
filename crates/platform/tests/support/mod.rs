@@ -149,7 +149,9 @@ pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
         .join("platform-tests");
     std::fs::create_dir_all(&here).ok()?;
 
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let temporary = std::env::temp_dir();
     let one = platform.volume_id(&temporary).ok()?;
     let two = platform.volume_id(&here).ok()?;
@@ -164,7 +166,9 @@ pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
 /// Answers by attempting one and removing it, so the answer is the filesystem's
 /// rather than a guess about privilege.
 pub fn symlink_works(directory: &Path) -> bool {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let link = directory.join("fetchloom-symlink-check");
     let created = platform.create_symlink(b"target", &link).is_ok();
     let _ = std::fs::remove_file(&link);

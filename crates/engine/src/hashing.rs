@@ -11,7 +11,10 @@ use std::io::{self, Read};
 
 use sha2::{Digest as _, Sha256};
 
+use blake3::hazmat::{ChainingValue, HasherExt as _};
+
 use crate::digest::{ContentDigest, InteropDigest};
+use crate::outboard::{self, GROUP_LEN, Outboard};
 use crate::pool::Processor;
 
 /// The number of bytes at which pairing the two digests across the processor
@@ -23,22 +26,94 @@ use crate::pool::Processor;
 /// level, and at this size and above the pool is ahead by a tenth or more.
 pub const POOL_THRESHOLD: usize = 1 << 20;
 
-/// The content and interop digest of the same object bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Everything one streaming pass over an object's bytes produces.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Digests {
     /// The BLAKE3 root of the object bytes.
     pub content: ContentDigest,
     /// The SHA-256 of the same bytes.
     pub interop: InteropDigest,
+    /// The chunk tree, present only above the outboard threshold.
+    pub outboard: Option<Outboard>,
+    /// How many bytes the pass covered.
+    pub length: u64,
 }
 
-/// The two digests of one object, updated together.
+/// The BLAKE3 side of one pass: the chaining value of each leaf group, and the
+/// group still filling.
+///
+/// A group's chaining value is the only hash taken of its bytes. The root is
+/// merged from those values rather than taken again, so an object is hashed
+/// once whether or not it ends up large enough to store a tree.
+#[derive(Clone, Debug)]
+struct Groups {
+    /// The hasher covering the group currently filling.
+    current: blake3::Hasher,
+    /// How many bytes of that group have arrived.
+    filled: u64,
+    /// The chaining value of every group already finished, in order.
+    finished: Vec<ChainingValue>,
+    /// How many bytes have arrived in total.
+    length: u64,
+}
+
+impl Default for Groups {
+    fn default() -> Self {
+        Self {
+            current: blake3::Hasher::new(),
+            filled: 0,
+            finished: Vec::new(),
+            length: 0,
+        }
+    }
+}
+
+impl Groups {
+    /// Takes bytes, closing a group only once the next group has a byte in it.
+    ///
+    /// A group is left open at a boundary because an object that ends exactly
+    /// there is one group whose root is taken directly, and one that continues
+    /// needs that group's value as a leaf. Which of the two it is is not known
+    /// until the next byte arrives or does not.
+    fn update(&mut self, mut chunk: &[u8]) {
+        while !chunk.is_empty() {
+            if self.filled == GROUP_LEN {
+                self.finished.push(self.current.finalize_non_root());
+                self.current = blake3::Hasher::new();
+                self.current.set_input_offset(self.length);
+                self.filled = 0;
+            }
+            let room = usize_of(GROUP_LEN - self.filled);
+            let take = room.min(chunk.len());
+            self.current.update(&chunk[..take]);
+            self.filled += take as u64;
+            self.length += take as u64;
+            chunk = &chunk[take..];
+        }
+    }
+
+    /// Returns the content digest and, above the threshold, the tree.
+    fn finish(mut self) -> (ContentDigest, Option<Outboard>) {
+        if self.finished.is_empty() {
+            let root = ContentDigest::from_bytes(*self.current.finalize().as_bytes());
+            return (root, None);
+        }
+        self.finished.push(self.current.finalize_non_root());
+        outboard::tree_of(self.length, &self.finished)
+    }
+}
+
+fn usize_of(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
+}
+
+/// The two digests of one object and its tree, updated together.
 ///
 /// This is the only place the pairing is written down, so there is one answer
 /// to what the two digests cover and one rule for where they run.
 #[derive(Clone, Debug, Default)]
 pub struct Pair {
-    content: blake3::Hasher,
+    content: Groups,
     interop: Sha256,
 }
 
@@ -74,14 +149,17 @@ impl Pair {
         });
     }
 
-    /// Returns the two digests.
+    /// Returns the two digests, the tree, and the length covered.
     #[must_use]
     pub fn finish(self) -> Digests {
-        let content = ContentDigest::from_bytes(*self.content.finalize().as_bytes());
         let interop_bytes: [u8; 32] = self.interop.finalize().into();
+        let length = self.content.length;
+        let (content, outboard) = self.content.finish();
         Digests {
             content,
             interop: InteropDigest::from_bytes(interop_bytes),
+            outboard,
+            length,
         }
     }
 }

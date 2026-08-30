@@ -53,6 +53,11 @@ pub struct Limits {
     pub response_timeout: Duration,
     /// Longest a body may go without producing a byte.
     pub idle_timeout: Duration,
+    /// Most separate ranges one repair may ask a source for.
+    pub repair_spans: u64,
+    /// The share of an object, as a percentage, above which a repair fetches
+    /// the whole of it rather than the damaged ranges.
+    pub repair_whole_percent: u64,
 }
 
 impl Default for Limits {
@@ -76,6 +81,8 @@ impl Default for Limits {
             connect_timeout: Duration::from_secs(10),
             response_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(30),
+            repair_spans: 64,
+            repair_whole_percent: 50,
         }
     }
 }

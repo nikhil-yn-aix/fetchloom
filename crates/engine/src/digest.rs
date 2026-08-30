@@ -20,6 +20,14 @@ pub const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
 /// The derived key context separating partial key names from every other domain.
 pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
 
+/// The derived key context separating the name a witness record is filed under
+/// from every other domain.
+pub const WITNESS_KEY_CONTEXT: &str = "fetchloom witness key";
+
+/// The derived key context separating the name a resolution record is filed
+/// under from every other domain.
+pub const RESOLUTION_KEY_CONTEXT: &str = "fetchloom resolution key";
+
 /// The hash algorithm a digest was produced by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Algorithm {

@@ -25,6 +25,7 @@ pub mod receipt;
 pub mod reconcile;
 pub mod redact;
 pub mod reference;
+pub mod repair;
 pub mod resume;
 pub mod seam;
 pub mod selection;

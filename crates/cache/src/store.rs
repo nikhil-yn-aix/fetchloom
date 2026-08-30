@@ -1,7 +1,7 @@
 //! Objects, partials, leases, pins, and the publication that puts an object in
 //! `objects/`.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +43,12 @@ impl<L> ObjectReader<L> {
 impl<L> Read for ObjectReader<L> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.file.read(buffer)
+    }
+}
+
+impl<L> Seek for ObjectReader<L> {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(to)
     }
 }
 
@@ -129,6 +135,21 @@ impl<P: Platform> Cache<P> {
         self.layout.object(digest).is_file()
     }
 
+    /// Checks an object already in the cache against the verification policy
+    /// this cache was opened with.
+    ///
+    /// Every path that reuses an object goes through this, whether it opens the
+    /// object to read it or clones its blocks into a destination without
+    /// reading a byte, because the policy is about reusing the object rather
+    /// than about how the bytes travel.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the check the policy names does not pass.
+    pub fn check_hit(&self, digest: ContentDigest) -> Result<(), Error> {
+        self.check(digest)
+    }
+
     /// Checks an object against the verification policy this cache was opened
     /// with.
     fn check(&self, digest: ContentDigest) -> Result<(), Error> {
@@ -164,7 +185,36 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
+    /// Rereads every byte of an object and checks it.
+    ///
+    /// An object with a stored tree is walked group by group against that tree,
+    /// which reads the tree as well as the object and fails naming the byte
+    /// ranges that are wrong rather than only naming the object. That is not
+    /// less work than a rehash; it is a failure that can be repaired instead of
+    /// refetched, which is what the tree is for. An object with no tree is
+    /// rehashed whole.
     fn check_bytes(&self, digest: ContentDigest) -> Result<(), Error> {
+        if self.has_outboard(digest)? {
+            let found = self.localize(digest)?;
+            if found.not_localized.is_none() && found.damaged.is_empty() {
+                return Ok(());
+            }
+            if let Some(first) = found.damaged.first() {
+                return Err(Error::new(
+                    ErrorKind::IntegrityRangeMismatch,
+                    format!(
+                        "run repair on {digest}, because {} of its bytes do not match its tree, the first of them from {} to {}",
+                        found
+                            .damaged
+                            .iter()
+                            .map(|span| span.end - span.start)
+                            .sum::<u64>(),
+                        first.start,
+                        first.end
+                    ),
+                ));
+            }
+        }
         let found = self.hash_object(digest)?;
         if found == digest {
             return Ok(());
@@ -187,27 +237,8 @@ impl<P: Platform> Cache<P> {
         Ok(self.hash_object(digest)? == digest)
     }
 
-    fn hash_object(&self, digest: ContentDigest) -> Result<ContentDigest, Error> {
-        let path = self.layout.object(digest);
-        let mut file = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
-        let mut hasher = blake3::Hasher::new();
-        let mut buffer = vec![0u8; 1 << 20];
-        loop {
-            let filled = file
-                .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
-            if filled == 0 {
-                break;
-            }
-            hasher.update(&buffer[..filled]);
-            self.work().read_bytes(filled as u64);
-        }
-        Ok(ContentDigest::from_bytes(*hasher.finalize().as_bytes()))
-    }
-
     /// Returns where the fingerprint of an object is recorded.
-    pub(crate) fn object_record(&self, digest: ContentDigest) -> PathBuf {
+    pub fn object_record(&self, digest: ContentDigest) -> PathBuf {
         self.layout.records().join(name_of(digest))
     }
 
@@ -275,7 +306,11 @@ impl<P: Platform> Store for Cache<P> {
             let holder = record::read_owner(&self.layout.lock_owner_of(key.name()))?;
             (self.platform.lock(&path)?, holder)
         };
-        record::write(&self.layout.lock_owner_of(key.name()), &self.token)?;
+        record::write(
+            &self.layout.lock_owner_of(key.name()),
+            &self.token,
+            &self.work,
+        )?;
         Ok(WriteLease {
             key,
             waited_for,
@@ -291,7 +326,7 @@ impl<P: Platform> Store for Cache<P> {
         }
         let file = self.platform.create_file_exclusive(&path)?;
         self.platform.preallocate(&file, length)?;
-        record::write(&owner_record_of(&path), &self.token)?;
+        record::write(&owner_record_of(&path), &self.token, &self.work)?;
         Ok(PartialWriter {
             file,
             path,
@@ -338,7 +373,7 @@ impl<P: Platform> Store for Cache<P> {
             .append(true)
             .open(&path)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
-        record::write(&owner_record_of(&path), &self.token)?;
+        record::write(&owner_record_of(&path), &self.token, &self.work)?;
         Ok(PartialWriter {
             file,
             path,
@@ -353,6 +388,7 @@ impl<P: Platform> Store for Cache<P> {
         record::write(
             &source_record_of(&self.layout.partial_of(key.name())),
             record,
+            &self.work,
         )
     }
 
@@ -400,8 +436,7 @@ impl<P: Platform> Store for Cache<P> {
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
         seal_object(&object)?;
 
-        self.record_object(found, digests.interop)?;
-        let _ = std::fs::remove_file(self.layout.mark_of(found));
+        self.finish_publication(&digests)?;
         drop(lease);
         Ok(digests)
     }
@@ -418,10 +453,27 @@ impl<P: Platform> Store for Cache<P> {
         Ok(ObjectReader { file, lease })
     }
 
+    fn verified_prefix(
+        &self,
+        key: PartialKey,
+        digest: ContentDigest,
+        on_disk: u64,
+    ) -> Result<u64, Error> {
+        crate::repair::verified_prefix(self, key, digest, on_disk)
+    }
+
     fn write_outboard(&self, digest: ContentDigest, tree: &[u8]) -> Result<(), Error> {
         let path = self.layout.outboard_of(digest);
-        std::fs::write(&path, tree)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))
+        let beside = self.scratch_path().with_extension("outboard");
+        let _ = std::fs::remove_file(&beside);
+        let mut writing = self.platform.create_file_exclusive(&beside)?;
+        writing
+            .write_all(tree)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, beside.as_path(), &reason))?;
+        self.work.wrote_bytes(tree.len() as u64);
+        self.platform.flush(&writing, self.tier)?;
+        drop(writing);
+        self.platform.publish_file(&beside, &path, self.tier)
     }
 
     fn stage(&self, destination_volume: &std::path::Path) -> Result<PathBuf, Error> {
@@ -439,7 +491,7 @@ impl<P: Platform> Store for Cache<P> {
         let name = format!("{}-{}", self.token.pid, self.token.start);
         let path = self.layout.staging().join(name);
         self.platform.create_directory_exclusive(&path)?;
-        record::write(&owner_record_of(&path), &self.token)?;
+        record::write(&owner_record_of(&path), &self.token, &self.work)?;
         Ok(path)
     }
 
@@ -454,6 +506,9 @@ impl<P: Platform> Store for Cache<P> {
         let path = self.layout.pin_of(digest);
         let written = std::fs::write(&path, [])
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason));
+        if written.is_ok() {
+            self.work.touched_file();
+        }
         drop(held);
         written
     }

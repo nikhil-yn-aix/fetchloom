@@ -113,26 +113,21 @@ impl<P: Platform> Cache<P> {
     /// `integrity.mismatch` for bytes that do not hash to their name, and with
     /// whatever the tar reader found for a bundle that is not one.
     pub fn import(&self, from: &Path, format: BundleReader) -> Result<BundleReport, Error> {
-        let mut staged: Vec<(
-            ContentDigest,
-            fetchloom_engine::digest::InteropDigest,
-            PathBuf,
-            u64,
-        )> = Vec::new();
+        let mut staged: Vec<Staged> = Vec::new();
         let outcome = self.stage_bundle(from, format, &mut staged);
         if outcome.is_err() {
-            for (_, _, scratch, _) in &staged {
-                let _ = std::fs::remove_file(scratch);
+            for held in &staged {
+                let _ = std::fs::remove_file(&held.scratch);
             }
         }
         let mut report = outcome?;
-        for (digest, interop, scratch, _) in staged {
-            if self.contains(digest)? {
-                let _ = std::fs::remove_file(&scratch);
+        for held in staged {
+            if self.contains(held.digests.content)? {
+                let _ = std::fs::remove_file(&held.scratch);
                 report.already_held += 1;
                 continue;
             }
-            self.publish_imported(&scratch, digest, interop)?;
+            self.publish_imported(&held.scratch, &held.digests)?;
         }
         Ok(report)
     }
@@ -141,12 +136,7 @@ impl<P: Platform> Cache<P> {
         &self,
         from: &Path,
         mut format: BundleReader,
-        staged: &mut Vec<(
-            ContentDigest,
-            fetchloom_engine::digest::InteropDigest,
-            PathBuf,
-            u64,
-        )>,
+        staged: &mut Vec<Staged>,
     ) -> Result<BundleReport, Error> {
         let mut report = BundleReport {
             objects: 0,
@@ -161,8 +151,9 @@ impl<P: Platform> Cache<P> {
                 .partial()
                 .join(format!("{}-{index}.import", self.token().pid));
             index += 1;
-            let (digest, interop) = self.stage_member(&mut format, &member, &scratch)?;
-            staged.push((digest, interop, scratch, member.size));
+            let digests = self.stage_member(&mut format, &member, &scratch)?;
+            let digest = digests.content;
+            staged.push(Staged { digests, scratch });
             if digest != claimed {
                 return Err(Error::new(
                     ErrorKind::IntegrityMismatch,
@@ -184,7 +175,7 @@ impl<P: Platform> Cache<P> {
         format: &mut BundleReader,
         member: &BundleMember,
         scratch: &Path,
-    ) -> Result<(ContentDigest, fetchloom_engine::digest::InteropDigest), Error> {
+    ) -> Result<hashing::Digests, Error> {
         let _ = std::fs::remove_file(scratch);
         let mut writing = self.platform().create_file_exclusive(scratch)?;
         let mut pair = hashing::Pair::new();
@@ -213,22 +204,24 @@ impl<P: Platform> Cache<P> {
         format.finish_body(member.size)?;
         self.platform().flush(&writing, self.tier())?;
         drop(writing);
-        let digests = pair.finish();
-        Ok((digests.content, digests.interop))
+        Ok(pair.finish())
     }
 
-    fn publish_imported(
-        &self,
-        scratch: &Path,
-        digest: ContentDigest,
-        interop: fetchloom_engine::digest::InteropDigest,
-    ) -> Result<(), Error> {
-        let object = self.layout().object(digest);
+    fn publish_imported(&self, scratch: &Path, digests: &hashing::Digests) -> Result<(), Error> {
+        let object = self.layout().object(digests.content);
         self.platform()
             .publish_file(scratch, &object, self.tier())?;
         crate::seal_object(&object)?;
-        self.record_object(digest, interop)
+        self.finish_publication(digests)
     }
+}
+
+/// One member of a bundle, written and hashed but not yet published.
+struct Staged {
+    /// What the member's own bytes produced.
+    digests: hashing::Digests,
+    /// Where those bytes are waiting.
+    scratch: PathBuf,
 }
 
 /// One member a bundle holds.

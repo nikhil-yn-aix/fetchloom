@@ -18,7 +18,7 @@ use fetchloom_engine::hashing;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
 use fetchloom_engine::pool::Processor;
-use fetchloom_engine::receipt::Receipt;
+use fetchloom_engine::receipt::{Receipt, RecordedFingerprint};
 use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
@@ -27,6 +27,7 @@ use fetchloom_engine::selection::Selection;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
+use fetchloom_engine::trust::{ArtifactKey, RunId, TrustClass, Witness, classify};
 use fetchloom_engine::work::{Work, WorkCounter};
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources::HttpSource;
@@ -49,6 +50,10 @@ pub struct RecordedArtifact {
     pub size: u64,
     /// Where the bytes came from, redacted as it was recorded.
     pub source: SafeUrl,
+    /// The digest supplied before the run, when one was.
+    pub prior: Option<ContentDigest>,
+    /// The origin that served the bytes, present only when this run moved them.
+    pub observed: Option<String>,
 }
 
 /// What a completed run reports.
@@ -210,6 +215,9 @@ pub struct Materialization<'a> {
     pub extract: bool,
     /// The one buffer every stream this run hashes is read through.
     pub digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
+    /// What a destination entry and a cache hit are both checked against before
+    /// they are reused, because one policy governs both sides rather than two.
+    pub verify: fetchloom_engine::verification::VerificationPolicy,
 }
 
 /// Materializes a local source tree into a destination.
@@ -268,6 +276,7 @@ pub fn materialize_local(
             adopt,
             Some(ingested.interop),
             &SafeUrl::new(&source.to_string_lossy()),
+            &Provenance::default(),
             &emit,
         );
     }
@@ -437,7 +446,7 @@ fn settle(
     } = *settlement;
     let artifact = settlement.artifact.clone();
 
-    let found = destination_entries(with.digester, destination, with.processor, with.work)?;
+    let found = destination_entries(with, destination, resolved)?;
     let destination_tree = with_resolved_modes(resolved, found);
     let outcomes = reconcile(resolved, &destination_tree);
     for found in &outcomes {
@@ -775,10 +784,7 @@ fn through_cache(
 ) -> Result<(u64, hashing::Digests), Error> {
     let (size, digests) = materialize::copy_file(digester, processor, work, from, to)?;
     let digest = digests.content;
-    let adopted = cache.adopt(digests, size, to)?;
-    if adopted.waited_for.is_some() {
-        emit(EventPayload::CacheWait { digest });
-    }
+    let adopted = cache.adopt(&digests, size, to)?;
     if adopted.was_present {
         emit(EventPayload::CacheHit { digest });
     } else {
@@ -830,7 +836,15 @@ pub fn verify_tree(
     })?;
     let work = WorkCounter::new();
     let digester = std::cell::RefCell::new(hashing::Digester::new());
-    let entries = destination_entries(&digester, path, &processor, &work)?;
+    let walked = materialize::walk(path)?;
+    let mut entries = walked.entries.clone();
+    entries.extend(hash_files(
+        &digester,
+        &walked.root,
+        &walked.files,
+        &processor,
+        &work,
+    )?);
     let Some(receipt) = receipt else {
         report_unread_modes(
             entries
@@ -964,21 +978,85 @@ impl<R: Read> Read for CountedRead<'_, R> {
 ///
 /// Fails when the destination cannot be read or a file cannot be hashed.
 fn destination_entries(
-    digester: &std::cell::RefCell<hashing::Digester>,
+    with: &Materialization<'_>,
     destination: &Path,
-    processor: &Processor,
-    work: &WorkCounter,
+    resolved: &[TreeEntry],
 ) -> Result<Vec<TreeEntry>, Error> {
     let walked = materialize::walk(destination)?;
     let mut entries = walked.entries.clone();
+    let recorded = recorded_fingerprints(with, destination);
+    let mut to_hash = Vec::with_capacity(walked.files.len());
+    for file in &walked.files {
+        match unchanged_by_fingerprint(with, &walked.root, file, &recorded, resolved) {
+            Some(entry) => entries.push(entry),
+            None => to_hash.push(file.clone()),
+        }
+    }
     entries.extend(hash_files(
-        digester,
+        with.digester,
         &walked.root,
-        &walked.files,
-        processor,
-        work,
+        &to_hash,
+        with.processor,
+        with.work,
     )?);
     Ok(entries)
+}
+
+/// Returns the fingerprints the run that wrote this destination recorded.
+///
+/// A destination with no receipt has none, so every file is hashed, which is
+/// what every destination did before a receipt could hold one.
+fn recorded_fingerprints(
+    with: &Materialization<'_>,
+    destination: &Path,
+) -> std::collections::BTreeMap<String, RecordedFingerprint> {
+    with.cache
+        .and_then(|cache| cache.read_receipt(destination).ok().flatten())
+        .map(|receipt| receipt.fingerprints)
+        .unwrap_or_default()
+}
+
+/// Returns the entry a file can be reported as without reading its bytes.
+///
+/// Answers only when the policy allows a fingerprint to decide, when one was
+/// recorded for the path, when it still matches, and when the resolved tree
+/// names that path, because the entry reported is the resolved one and there is
+/// no resolved entry to report otherwise. Every other case reads the bytes.
+fn unchanged_by_fingerprint(
+    with: &Materialization<'_>,
+    root: &Path,
+    file: &materialize::SourceFile,
+    recorded: &std::collections::BTreeMap<String, RecordedFingerprint>,
+    resolved: &[TreeEntry],
+) -> Option<TreeEntry> {
+    use fetchloom_engine::verification::VerificationPolicy;
+
+    if with.verify == VerificationPolicy::Always {
+        return None;
+    }
+    let held = recorded.get(file.entry.as_str())?;
+    let now = with.platform.fingerprint(&root.join(&file.relative)).ok()?;
+    if !held.matches(now) {
+        return None;
+    }
+    let entry = resolved
+        .iter()
+        .find(|entry| entry.path() == &file.entry)?
+        .clone();
+    match entry {
+        TreeEntry::File {
+            path,
+            size,
+            content,
+            ..
+        } => Some(TreeEntry::File {
+            path,
+            mode: file.mode,
+            size,
+            content,
+        }),
+        _ => None,
+    }
 }
 
 enum SelectionCandidate {
@@ -1188,7 +1266,8 @@ pub fn materialize_remote(
         observer,
         sequence,
     };
-    let transferred = transfer.run(pinned, &[location.to_owned()])?;
+    let transferred = transfer.run(pinned, &prior_from(cache), &[location.to_owned()])?;
+    remember(cache, location, &transferred)?;
     for entry in source.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,
@@ -1226,6 +1305,10 @@ pub fn materialize_remote(
         adopt,
         interop,
         &SafeUrl::new(location),
+        &Provenance {
+            prior: pinned,
+            observed: observation(&transferred, std::slice::from_ref(&location.to_owned())),
+        },
         &emit,
     )
 }
@@ -1259,14 +1342,23 @@ fn materialize_object(
     adopt: bool,
     interop: Option<fetchloom_engine::digest::InteropDigest>,
     source: &SafeUrl,
+    provenance: &Provenance,
     emit: &dyn Fn(EventPayload),
 ) -> Result<RunResult, Error> {
+    if provenance.observed.is_none()
+        && let Some(cache) = with.cache
+        && cache.locate(digest).is_some()
+    {
+        cache.check_hit(digest)?;
+    }
     let recorded = RecordedArtifact {
         id: dataset.to_owned(),
         digest,
         interop,
         size,
         source: source.clone(),
+        prior: provenance.prior,
+        observed: provenance.observed.clone(),
     };
     let published = |emit: &dyn Fn(EventPayload)| -> Result<RunResult, Error> {
         let entries =
@@ -1740,29 +1832,87 @@ pub fn write_receipt(
     manifest: &fetchloom_engine::manifest::Manifest,
     artifacts: &[ResolvedArtifact],
     result: &RunResult,
+    verify: fetchloom_engine::verification::VerificationPolicy,
 ) -> Result<(), Error> {
+    let manifest_digest = manifest.digest()?;
+    let run = run_identity(cache);
     let mut recorded = std::collections::BTreeMap::new();
     for artifact in artifacts {
+        let key = ArtifactKey::of(manifest_digest, &artifact.id);
+        if let Some(origin) = artifact.observed.as_deref() {
+            cache.record_witness(
+                &key,
+                Witness {
+                    digest: artifact.digest,
+                    machine: cache.token().machine.clone(),
+                    origin: origin.to_owned(),
+                    run: run.clone(),
+                    observed_at: fetchloom_engine::timestamp::Timestamp::now(),
+                },
+            )?;
+        }
+        let witnesses = cache.witnesses(&key)?;
         recorded.insert(
             artifact.id.clone(),
             fetchloom_engine::receipt::ReceiptArtifact {
                 digest: artifact.digest,
                 source_used: artifact.source.clone(),
-                trust: fetchloom_engine::trust::TrustClass::Tofu,
+                trust: if verify == fetchloom_engine::verification::VerificationPolicy::Never {
+                    TrustClass::Unverified
+                } else {
+                    classify(artifact.prior, artifact.digest, &witnesses)
+                },
             },
         );
     }
     cache.write_receipt(&Receipt {
         dataset: result.dataset.clone(),
-        manifest: manifest.digest()?,
+        manifest: manifest_digest,
         artifacts: recorded,
         tree: Some(result.tree),
         executable: result.executable.clone(),
+        fingerprints: fingerprints_of(cache, &result.destination),
         destination: result.destination.clone(),
         accepted_terms: None,
         fetchloom: env!("CARGO_PKG_VERSION").to_owned(),
         completed_at: fetchloom_engine::timestamp::Timestamp::now(),
     })
+}
+
+/// Returns what names this run, so two witnesses it records are one
+/// observation.
+fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
+    let token = cache.token();
+    RunId::new(format!(
+        "{}:{}:{}",
+        token.boot.as_str(),
+        token.pid,
+        token.start
+    ))
+}
+
+/// Returns the fingerprint every file of a destination carries right now.
+///
+/// A file the platform will not fingerprint is left out rather than recorded
+/// wrong, which costs the next run a read of that file and nothing else.
+fn fingerprints_of(
+    cache: &Cache<NativePlatform>,
+    destination: &Path,
+) -> std::collections::BTreeMap<String, RecordedFingerprint> {
+    let mut found = std::collections::BTreeMap::new();
+    let Ok(walked) = materialize::walk(destination) else {
+        return found;
+    };
+    for file in &walked.files {
+        let full = walked.root.join(&file.relative);
+        if let Ok(fingerprint) = cache.platform().fingerprint(&full) {
+            found.insert(
+                file.entry.as_str().to_owned(),
+                RecordedFingerprint::new(fingerprint),
+            );
+        }
+    }
+    found
 }
 
 /// Returns the name a reference's dataset is recorded under.
@@ -1829,8 +1979,19 @@ pub fn materialize_cached(
         adopt,
         interop,
         source,
+        &Provenance::default(),
         &emit,
     )
+}
+
+/// What is known about where an artifact's bytes came from and what was known
+/// about them before the run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Provenance {
+    /// The digest supplied before the run, when one was.
+    pub prior: Option<ContentDigest>,
+    /// The origin that served the bytes, present only when this run moved them.
+    pub observed: Option<String>,
 }
 
 /// One artifact a manifest named, as this run resolved it.
@@ -1852,6 +2013,16 @@ pub struct ResolvedArtifact {
     pub selection: Selection,
     /// The format the manifest declared, when it declared one.
     pub declared: Option<ArchiveFormat>,
+    /// The digest that was supplied before the run, when one was, which is what
+    /// makes a match `verified` rather than anything weaker.
+    pub prior: Option<ContentDigest>,
+    /// The origin that served the bytes, present only when this run transferred
+    /// them in full and verified them as they arrived.
+    ///
+    /// A cache hit and a local file both leave it absent, because neither is an
+    /// observation of what a source is serving and neither may become a
+    /// witness.
+    pub observed: Option<String>,
 }
 
 /// What a run against a manifest produced.
@@ -1984,17 +2155,18 @@ fn resolve_artifact(
     let declared = artifact.archive.as_ref().map(|spec| spec.format);
 
     if is_remote(first) {
-        let (digest, interop, size) =
-            transfer_object(with, &artifact.sources, expected, observer, sequence)?;
+        let moved = transfer_object(with, &artifact.sources, expected, observer, sequence)?;
         return Ok(ResolvedArtifact {
             id: artifact.id.clone(),
-            digest,
-            interop,
-            size,
+            digest: moved.digest,
+            interop: moved.interop,
+            size: moved.size,
             source: SafeUrl::new(first),
             name,
             selection,
             declared,
+            prior: expected,
+            observed: moved.observed,
         });
     }
 
@@ -2049,6 +2221,8 @@ fn resolve_artifact(
         name,
         selection,
         declared,
+        prior: expected,
+        observed: None,
     })
 }
 
@@ -2062,6 +2236,59 @@ fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
     }
 }
 
+/// Returns what the cache already holds for a reference, so a warm run of one
+/// no digest pins asks one conditional question instead of fetching the object
+/// again to learn the answer.
+fn prior_from(
+    cache: &Cache<NativePlatform>,
+) -> impl Fn(&str) -> Option<fetchloom_engine::transfer::Prior> + '_ {
+    move |location: &str| {
+        let found = cache.resolution(location).ok().flatten()?;
+        Some(fetchloom_engine::transfer::Prior {
+            digest: found.digest,
+            validator: fetchloom_engine::seam::source::Validator {
+                etag: found.etag,
+                last_modified: found.last_modified,
+            },
+        })
+    }
+}
+
+/// Records what a reference resolved to and the validator that came with it.
+///
+/// A transfer that learned no validator leaves whatever was recorded alone,
+/// because a run that was answered from the cache observed nothing about what
+/// the source is serving now.
+fn remember(
+    cache: &Cache<NativePlatform>,
+    location: &str,
+    transferred: &fetchloom_engine::transfer::Transferred,
+) -> Result<(), Error> {
+    if !transferred.validator.can_be_asked_with() {
+        return Ok(());
+    }
+    cache.record_resolution(
+        location,
+        &fetchloom_cache::resolution::Resolution {
+            digest: transferred.digest,
+            etag: transferred.validator.etag.clone(),
+            last_modified: transferred.validator.last_modified.clone(),
+        },
+    )
+}
+
+/// What one transfer of an artifact produced.
+pub struct Moved {
+    /// The digest the bytes hash to.
+    pub digest: ContentDigest,
+    /// The interop digest of the same bytes.
+    pub interop: fetchloom_engine::digest::InteropDigest,
+    /// The length of the object in bytes.
+    pub size: u64,
+    /// The origin that served the bytes, present only when this run moved them.
+    pub observed: Option<String>,
+}
+
 /// Moves one artifact's bytes from the first source that can serve them.
 fn transfer_object(
     with: &Materialization<'_>,
@@ -2069,7 +2296,7 @@ fn transfer_object(
     expected: Option<ContentDigest>,
     observer: &dyn Observer,
     sequence: &Sequence,
-) -> Result<(ContentDigest, fetchloom_engine::digest::InteropDigest, u64), Error> {
+) -> Result<Moved, Error> {
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
@@ -2089,7 +2316,10 @@ fn transfer_object(
         observer,
         sequence,
     };
-    let transferred = transfer.run(expected, locations)?;
+    let transferred = transfer.run(expected, &prior_from(cache), locations)?;
+    for location in locations {
+        remember(cache, location, &transferred)?;
+    }
     for entry in source
         .take_degradations()
         .into_iter()
@@ -2121,7 +2351,31 @@ fn transfer_object(
             .map(|found| found.len())
             .unwrap_or_default()
     };
-    Ok((transferred.digest, interop, size))
+    Ok(Moved {
+        digest: transferred.digest,
+        interop,
+        size,
+        observed: observation(&transferred, locations),
+    })
+}
+
+/// Returns the origin that served an artifact's bytes, when this run moved
+/// them.
+///
+/// A run that moved nothing observed nothing about what a source is serving: it
+/// read a file it already had. Only a run that carried every byte and hashed
+/// them as they arrived has evidence, so only one of those may become a
+/// witness.
+fn observation(
+    transferred: &fetchloom_engine::transfer::Transferred,
+    locations: &[String],
+) -> Option<String> {
+    if transferred.bytes_transferred == 0 {
+        return None;
+    }
+    locations
+        .first()
+        .map(|location| SafeUrl::new(location).to_string())
 }
 
 /// Publishes every resolved artifact into one destination.
@@ -2308,5 +2562,7 @@ pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<Resolve
         name: artifact.id.clone(),
         selection: selection.clone(),
         declared: None,
+        prior: artifact.prior,
+        observed: artifact.observed.clone(),
     }]
 }

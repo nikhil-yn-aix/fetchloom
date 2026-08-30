@@ -35,7 +35,9 @@ fn binary() -> &'static str {
 /// Windows grants the privilege only under developer mode or elevation, so a
 /// run without it proves nothing about materialization and says so.
 fn links_are_permitted(directory: &Path) -> bool {
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     let probe = directory.join("fetchloom-link-probe");
     let created = platform.create_symlink(b"target", &probe).is_ok();
     let _ = std::fs::remove_file(&probe);
@@ -65,7 +67,9 @@ fn a_symlink_in_the_source_is_created_in_the_destination() {
     let source = temporary.path().join("source");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("real.txt"), b"contents").unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     platform
         .create_symlink(b"real.txt", &source.join("link.txt"))
         .unwrap();
@@ -104,7 +108,9 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
     let source = temporary.path().join("source");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("real.txt"), b"contents").unwrap();
-    let platform = NativePlatform::new();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
     platform
         .create_symlink(b"real.txt", &source.join("link.txt"))
         .unwrap();

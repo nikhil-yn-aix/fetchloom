@@ -50,7 +50,8 @@ pub fn open(
     work: Arc<WorkCounter>,
     processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Opened {
-    match Cache::open(root, NativePlatform::new(), tier, policy, work, processor) {
+    let platform = NativePlatform::new(Arc::clone(&work));
+    match Cache::open(root, platform, tier, policy, work, processor) {
         Ok(held) => Opened::Ready(Box::new(held)),
         Err(refused)
             if refused.kind() == ErrorKind::CacheFormatMismatch
@@ -74,9 +75,10 @@ pub fn require(
     work: Arc<WorkCounter>,
     processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Result<Cache<NativePlatform>, Error> {
+    let platform = NativePlatform::new(Arc::clone(&work));
     Cache::open(
         root,
-        NativePlatform::new(),
+        platform,
         DurabilityTier::Normal,
         VerificationPolicy::Fingerprint,
         work,
@@ -126,6 +128,7 @@ pub fn run(
                 .and_then(|reader| held.import(bundle, reader));
             report_bundle(&read, json)
         }
+        CacheCommand::Repair => report_rebuild(&held, json),
         CacheCommand::Prune => report_prune(&held, json),
         CacheCommand::Clear => clear(&held, json, yes),
     }
@@ -224,6 +227,31 @@ fn change_pin(held: &Cache<NativePlatform>, digest: &str, pin: bool, json: bool)
                 println!("{parsed} is {}", if pin { "pinned" } else { "not pinned" });
             }
             ExitCode::Success
+        }
+        Err(refused) => crate::report(&refused, json),
+    }
+}
+
+fn report_rebuild(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+    match fetchloom_cache::rebuild::run(held) {
+        Ok(found) => {
+            if json {
+                print_json(&found);
+            } else {
+                println!("trees       {:>12}", found.trees_rebuilt);
+                println!("records     {:>12}", found.records_rebuilt);
+                println!("locks       {:>12}", found.locks_released);
+                println!("orphans     {:>12}", found.orphans_removed);
+                println!("held        {:>12}", found.held);
+                for digest in &found.needing_a_source {
+                    println!("{digest} needs a source: run repair {digest}");
+                }
+            }
+            if found.needing_a_source.is_empty() {
+                ExitCode::Success
+            } else {
+                ExitCode::Cache
+            }
         }
         Err(refused) => crate::report(&refused, json),
     }

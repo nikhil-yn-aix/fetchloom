@@ -28,6 +28,7 @@ fn metadata(identity: SourceIdentity, supports_ranges: bool) -> SourceMetadata {
         content: None,
         interop: None,
         identity,
+        last_modified: None,
         supports_ranges,
         time_to_first_byte: Duration::from_millis(1),
         retry_after: None,
@@ -49,12 +50,12 @@ fn recorded(identity: SourceIdentity) -> SourceRecord {
 }
 
 #[test]
-fn an_outboard_tree_puts_a_transfer_on_the_first_rung() {
+fn bytes_verified_against_the_tree_put_a_transfer_on_the_first_rung() {
     let (rung, keep) = rung_for(
         Some(&recorded(SourceIdentity::None)),
         &metadata(SourceIdentity::None, true),
         1024,
-        true,
+        1024,
     );
     assert_eq!(rung, ResumeRung::Outboard);
     assert_eq!(keep, 1024);
@@ -67,7 +68,7 @@ fn an_unchanged_immutable_identity_puts_a_transfer_on_the_second_rung() {
         Some(&recorded(identity.clone())),
         &metadata(identity, true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::ImmutableIdentity);
     assert_eq!(keep, 1024);
@@ -80,7 +81,7 @@ fn an_unchanged_strong_validator_puts_a_transfer_on_the_third_rung() {
         Some(&recorded(identity.clone())),
         &metadata(identity, true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::StrongValidator);
     assert_eq!(keep, 1024);
@@ -93,7 +94,7 @@ fn an_unchanged_weak_validator_puts_a_transfer_on_the_fourth_rung() {
         Some(&recorded(identity.clone())),
         &metadata(identity, true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::WeakValidator);
     assert_eq!(keep, 1024);
@@ -107,7 +108,7 @@ fn a_changed_validator_restarts_from_zero_on_the_fifth_rung() {
         ))),
         &metadata(SourceIdentity::StrongValidator("\"two\"".to_owned()), true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0, "bytes were kept across a changed validator");
@@ -119,7 +120,7 @@ fn a_source_with_no_identity_never_resumes_even_when_it_matches() {
         Some(&recorded(SourceIdentity::None)),
         &metadata(SourceIdentity::None, true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
@@ -132,7 +133,7 @@ fn a_source_that_cannot_serve_a_range_restarts_however_good_its_validator_is() {
         Some(&recorded(identity.clone())),
         &metadata(identity, false),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
@@ -144,7 +145,7 @@ fn a_partial_with_no_record_beside_it_restarts() {
         None,
         &metadata(SourceIdentity::StrongValidator("\"one\"".to_owned()), true),
         1024,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
@@ -156,7 +157,7 @@ fn nothing_on_disk_reports_the_rung_the_source_would_earn() {
         None,
         &metadata(SourceIdentity::StrongValidator("\"one\"".to_owned()), true),
         0,
-        false,
+        0,
     );
     assert_eq!(rung, ResumeRung::StrongValidator);
     assert_eq!(keep, 0);

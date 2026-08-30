@@ -523,10 +523,11 @@ fn the_surface_holds_exactly_the_commands_this_build_performs() {
         "completions",
         "explain",
         "cache",
+        "repair",
     ] {
         assert!(help.contains(present), "{present} is missing from {help}");
     }
-    for absent in ["init", "repair", "watch", "doctor", "why"] {
+    for absent in ["init", "watch", "doctor", "why"] {
         assert!(
             !help.contains(absent),
             "{absent} is in the surface and performs nothing: {help}"
@@ -536,7 +537,7 @@ fn the_surface_holds_exactly_the_commands_this_build_performs() {
 
 #[test]
 fn a_command_this_build_does_not_perform_is_not_accepted() {
-    for absent in ["init", "repair", "watch", "doctor", "why"] {
+    for absent in ["init", "watch", "doctor", "why"] {
         let output = run(&[absent]);
         assert_eq!(
             output.status.code(),
