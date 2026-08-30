@@ -406,6 +406,7 @@ fn corpus_declares_every_required_case() {
         "zip_symlink_escape_unix_mode",
         "zip_unsupported_method",
         "zip_backslash_path",
+        "zip_backslash_separated_normalizes",
         "tar_benign_two_files_and_dir",
         "zip_benign_two_files_and_dir",
         "tar_benign_zero_byte_file",

@@ -2,6 +2,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::seam::archive::{ArchiveMember, MemberKind};
@@ -57,6 +58,93 @@ fn unsafe_path_member(member: &str, detail: &str) -> Error {
         ErrorKind::ArchiveUnsafePath,
         format!("member \"{member}\" {detail}"),
     )
+}
+
+/// Decides whether every backslash in this zip's member paths can safely be
+/// read as a path separator.
+///
+/// Takes the raw name of every central directory record. Returns true only
+/// when no name holds a forward slash anywhere and at least one name holds a
+/// backslash, which is the one condition under which a backslash cannot be a
+/// legal Unix filename character coexisting with the archive's own
+/// separator: Windows PowerShell's `Compress-Archive`, before .NET 4.6.1
+/// fixed it, wrote exactly such archives.
+fn is_backslash_separated(names: &[Vec<u8>]) -> bool {
+    let holds_forward_slash = names.iter().any(|name| name.contains(&b'/'));
+    let holds_backslash = names.iter().any(|name| name.contains(&b'\\'));
+    !holds_forward_slash && holds_backslash
+}
+
+/// Translates every backslash in a raw member name to a forward slash.
+fn with_backslashes_as_separators(raw: &[u8]) -> Vec<u8> {
+    raw.iter()
+        .map(|&byte| if byte == b'\\' { b'/' } else { byte })
+        .collect()
+}
+
+/// Decides whether a zip's paths need normalizing and, when they do, records
+/// the one degradation this decision produces.
+///
+/// Takes every central directory member name and the archive's name for the
+/// degradation message. Returns whether every backslash in this archive
+/// should be read as a forward slash.
+fn decide_and_record_separator(
+    central_names: &[Vec<u8>],
+    archive_name: &str,
+    degradations: &DegradeQueue,
+) -> bool {
+    let backslash_separated = is_backslash_separated(central_names);
+    if backslash_separated {
+        degradations.record(
+            format!("archive \"{archive_name}\" with member paths separated by \"/\""),
+            format!(
+                "archive \"{archive_name}\" with every \"\\\" in its member paths read as \"/\""
+            ),
+            "no member path in this archive holds a forward slash and at least one holds a backslash, which only a writer using the backslash as its path separator produces",
+        );
+    }
+    backslash_separated
+}
+
+/// Validates every central directory member name and reports the first
+/// collision, normalizing first when the archive was decided to be
+/// backslash-separated.
+fn validate_central_directory_paths(
+    central_names: &[Vec<u8>],
+    backslash_separated: bool,
+    nesting_limit: u32,
+) -> Result<(), Error> {
+    let mut claimed = std::collections::BTreeSet::new();
+    for name in central_names {
+        let path = zip_member_path(name, backslash_separated, nesting_limit)?;
+        claim_member_path(&mut claimed, &path)?;
+    }
+    Ok(())
+}
+
+/// Validates one raw member name, normalizing a backslash-separated zip's
+/// paths first.
+///
+/// Takes the raw name exactly as the archive wrote it, whether this archive
+/// was decided to be backslash-separated, and the nesting depth limit.
+/// Returns the validated path. This is the only place a raw zip member name
+/// reaches `validate_member_path`, so a backslash-separated archive can never
+/// have its `..` components checked against the original, unnormalized
+/// bytes: normalization always runs first.
+///
+/// # Errors
+///
+/// Returns whatever `validate_member_path` fails with.
+fn zip_member_path(
+    raw: &[u8],
+    backslash_separated: bool,
+    nesting_limit: u32,
+) -> Result<String, Error> {
+    if backslash_separated {
+        validate_member_path(&with_backslashes_as_separators(raw), nesting_limit)
+    } else {
+        validate_member_path(raw, nesting_limit)
+    }
 }
 
 #[expect(
@@ -261,8 +349,16 @@ fn open_body(
 /// Lists every member of a zip container.
 ///
 /// Takes the shared source, the archive's name for error messages, its
-/// on-disk size, and the configured limits. Returns the members alongside
-/// where each one's compressed data begins, in the same order.
+/// on-disk size, the configured limits, and where to record a degradation
+/// when this archive's member paths had to be normalized. Returns the
+/// members alongside where each one's compressed data begins, in the same
+/// order.
+///
+/// When every member path in the whole archive holds no forward slash and at
+/// least one holds a backslash, every backslash is translated to a forward
+/// slash before any path is validated, and one degradation is recorded
+/// naming this archive. An archive mixing both separators anywhere is left
+/// exactly as written, so its backslash is refused as unsafe.
 ///
 /// # Errors
 ///
@@ -275,17 +371,17 @@ pub fn list_members<R: Read + Seek + 'static>(
     archive_name: &str,
     on_disk_bytes: u64,
     limits: Limits,
+    degradations: &DegradeQueue,
 ) -> Result<(Vec<ArchiveMember>, Vec<ZipOffset>), Error> {
     let mut archive = zip::ZipArchive::new(source.clone()).map_err(|error| {
         unsupported_archive(archive_name, &format!("is truncated or malformed: {error}"))
     })?;
     let mut guard = BombGuard::new(archive_name, on_disk_bytes, limits);
+    let central_names = central_directory_names(source.clone(), archive_name)?;
+    let backslash_separated =
+        decide_and_record_separator(&central_names, archive_name, degradations);
+    validate_central_directory_paths(&central_names, backslash_separated, limits.nesting_depth)?;
     let mut claimed = std::collections::BTreeSet::new();
-    for name in central_directory_names(source.clone(), archive_name)? {
-        let path = validate_member_path(&name, limits.nesting_depth)?;
-        claim_member_path(&mut claimed, &path)?;
-    }
-    claimed.clear();
     let mut members = Vec::new();
     let mut offsets = Vec::new();
 
@@ -315,7 +411,7 @@ pub fn list_members<R: Read + Seek + 'static>(
                 file.header_start(),
             )
         };
-        let path = validate_member_path(&name_bytes, limits.nesting_depth)?;
+        let path = zip_member_path(&name_bytes, backslash_separated, limits.nesting_depth)?;
         claim_member_path(&mut claimed, &path)?;
         let local = read_local_header(source.clone(), header_start, archive_name)?;
         let central_method = method_number(method);

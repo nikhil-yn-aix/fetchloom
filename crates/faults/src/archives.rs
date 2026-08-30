@@ -1350,6 +1350,35 @@ fn corpus_entries() -> Vec<CorpusEntry> {
         Container::Zip,
         {
             let mut writer = ZipWriter::new();
+            let first_data = b"x";
+            let first_offset = writer.offset();
+            let first_local = ZipLocalHeader::store(b"a/b.txt", first_data);
+            let first_central = ZipCentralHeader::from_local(&first_local, first_offset);
+            writer.push(ZipMember {
+                local: first_local,
+                central: first_central,
+                data: first_data.to_vec(),
+            });
+            let second_data = b"y";
+            let second_offset = writer.offset();
+            let second_local = ZipLocalHeader::store(b"dir\\evil.txt", second_data);
+            let second_central = ZipCentralHeader::from_local(&second_local, second_offset);
+            writer.push(ZipMember {
+                local: second_local,
+                central: second_central,
+                data: second_data.to_vec(),
+            });
+            writer.finish()
+        },
+        "a member path using a backslash alongside another member that already uses a forward slash, so the backslash cannot be read as a separator",
+        rejected("archive.unsafe_path", "dir\\evil.txt"),
+    ));
+
+    entries.push(entry(
+        "zip_backslash_separated_normalizes",
+        Container::Zip,
+        {
+            let mut writer = ZipWriter::new();
             let data = b"x";
             let offset = writer.offset();
             let local = ZipLocalHeader::store(b"dir\\evil.txt", data);
@@ -1361,8 +1390,8 @@ fn corpus_entries() -> Vec<CorpusEntry> {
             });
             writer.finish()
         },
-        "a member path using a backslash, which Windows cannot store in a name",
-        rejected("archive.unsafe_path", "dir\\evil.txt"),
+        "a zip whose only member holds a backslash and no member anywhere holds a forward slash, which is the Windows PowerShell Compress-Archive shape and is read as backslash-separated",
+        Expectation::Benign,
     ));
 
     entries.push(entry(
