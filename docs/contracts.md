@@ -70,9 +70,15 @@ Selection is part of identity. Changing it changes the lock entry, not the datas
 | `--layout keep` | Preserve archive paths. Default. |
 | `--layout flatten:<n>` | Drop the first n path components. Collision is an error. |
 
-Globs match on the canonical `/`-separated member path. `**` crosses directories, `*` does not. Matching is on raw bytes, case-sensitive, with no normalization.
+Globs match on the canonical `/`-separated member path. Matching is on raw bytes, case-sensitive, with no normalization.
 
-An empty selection is an error, not a no-op.
+A pattern is four rules and nothing else. `*` matches any run of bytes within one path component, including none. `**` as a whole component matches any number of components, including none. `?` matches exactly one byte within one component. Every other byte is literal, including the bracket, the brace, and the backslash.
+
+A pattern matches member paths, not subtrees. `--select data` selects a member named `data`; `--select data/**` selects what is under it. Every ancestor directory of a selected member is included whether or not a pattern matched it.
+
+An empty selection is an error, not a no-op. It fails with `reference.unresolved` naming how many members were considered and which patterns matched none of them.
+
+Under `--layout flatten:<n>`, a member left with no path after dropping `n` components fails with `destination.unrepresentable` naming the member and the count.
 
 ## Manifest
 
@@ -262,6 +268,8 @@ A volume that cannot express advisory locking cannot host a shared cache. It is 
 
 A second process wanting an object being written waits and reuses the result. It never starts a second transfer of the same digest.
 
+A partial is named by the key the run knows. A run that states a content digest names the partial by that digest, and the object it publishes must hash to it. A run that states no digest names the partial by the digest of the source identity, which is the redacted location, the host, and the identity the source published, each length-prefixed, and it publishes the object under the digest the bytes hash to. The lease, the partial, its source record and its owner record all carry one key, so there is one claim per key and never two.
+
 Orphaned staging and partial entries from a previous boot are removed at startup.
 
 Prune marks, waits out a grace period, then sweeps. Objects that are pinned, leased by a running process, or referenced by a lock in the working directory always survive.
@@ -312,7 +320,49 @@ Every directory is an entry, including one that contains only other directories.
 
 Timestamps are excluded. Ownership, ACLs, extended attributes, and alternate data streams are excluded and their presence in an archive is an error.
 
-Rejected during extraction, each by name in the error: absolute paths, `..` traversal, links resolving outside the destination, device and FIFO entries, setuid and setgid bits, duplicate entry paths, entries disagreeing between archive headers, path length above the platform limit, and names unrepresentable on the target filesystem.
+Rejected during extraction. Every rejection stops the run, emits `extract.reject` naming what was rejected, and publishes nothing. A rejection is called per-entry when the error names a member and fatal when it names the archive.
+
+| Rejected | Kind | Names |
+|---|---|---|
+| Absolute member path | `archive.unsafe_path` | the member |
+| A `..` component anywhere in the path | `archive.unsafe_path` | the member |
+| A backslash or drive letter in the path | `archive.unsafe_path` | the member |
+| A path that is not valid UTF-8 | `archive.unsafe_path` | the member, as bytes |
+| A path holding a NUL | `archive.unsafe_path` | the member |
+| A path longer than the volume's maximum | `archive.unsafe_path` | the member and both lengths |
+| A path deeper than the nesting limit | `archive.unsafe_path` | the member and both depths |
+| A link target resolving outside the destination | `archive.link_escape` | the member and the target |
+| A hard link to a member the archive does not hold | `archive.link_escape` | the member and the target |
+| A block device, character device, FIFO, or socket entry | `archive.unsupported` | the member and the type |
+| A setuid or setgid bit | `archive.unsupported` | the member and the bits |
+| Ownership, an access control list, an extended attribute, or an alternate data stream | `archive.unsupported` | the member and which one |
+| Two members with the same path | `archive.collision` | both members |
+| Two members colliding under the volume's case folding or normalization | `archive.collision` | both members |
+| A local header whose path disagrees with the central directory | `archive.unsafe_path` | the member and both paths |
+| A local header whose size or method disagrees with the central directory | `archive.unsupported` | the member and both values |
+| A compression method inside a zip that is not store or deflate | `archive.unsupported` | the member and the method |
+| A container or compression this build does not carry | `archive.unsupported` | the archive and the format |
+| A header the format does not permit, or a truncated archive | `archive.unsupported` | the archive |
+| More members than the entry limit | `archive.bomb` | the archive and both counts |
+| More expanded bytes than the limit | `archive.bomb` | the archive and both counts |
+| An expansion ratio above the limit | `archive.bomb` | the archive and both ratios |
+| A name the target volume refuses | `destination.unrepresentable` | the member and what the volume said |
+
+No member is ever skipped. An archive holding one rejected member cannot be fetched, and a selection excluding that member does not change that.
+
+Formats. These are the only values `archive.format` takes and the only containers extraction recognizes.
+
+| Name | What it is |
+|---|---|
+| `tar` | A POSIX ustar stream |
+| `tar+gzip` | A tar wrapped in a gzip member |
+| `tar+zstd` | A tar wrapped in a zstd frame |
+| `tar+xz` | A tar wrapped in an xz stream |
+| `tar+bzip2` | A tar wrapped in a bzip2 stream |
+| `zip` | A zip container, store and deflate methods only |
+| `gzip`, `zstd`, `xz`, `bzip2` | One compressed object, materialized as one file |
+
+A recognized archive is extracted unless `--no-extract` is given, which materializes it as one file. A manifest states the format. A reference with no manifest takes the format from the location's final extensions, and the archive's own header must agree with it or the run fails with `archive.unsupported` naming what the name said and what the bytes said. Neither the name nor the bytes decide alone.
 
 Collisions. Two entries that differ in raw bytes but collide under the target filesystem case-folding or Unicode normalization are an error. Both names are printed. Nothing is published. Collisions are found by creating each entry exclusively in staging, so the target filesystem's own folding decides rather than a table Fetchloom would have to keep correct.
 
@@ -326,16 +376,22 @@ Clone or copy. Copy-on-write clone is attempted first and falls back to a byte c
 
 ## Reconcile
 
-Running a locked request against an existing destination produces one outcome per entry.
+Running a request against an existing destination produces one outcome per entry, decided against the tree the run resolved. A receipt is a cached copy of that answer, never a second authority for it.
 
 | Outcome | Condition | Action |
 |---|---|---|
-| `unchanged` | Fingerprint or hash matches the receipt | Nothing |
+| `unchanged` | Fingerprint or hash matches the resolved entry | Nothing |
 | `restored` | Entry missing | Materialize from cache |
-| `modified` | Entry differs from the receipt | Stop. Name every modified path. Require `--force` to overwrite or `--adopt` to accept as the new state |
-| `foreign` | Entry present, not in the receipt | Stop and name it. Never deleted implicitly |
+| `modified` | Entry differs from the resolved entry | Stop. Name every modified path. Require `--force` to overwrite or `--adopt` to accept as the new state |
+| `foreign` | Entry present, not in the resolved tree | Stop and name it. Require `--force` to remove it or `--adopt` to accept it. Never deleted implicitly |
 
-Numbered directories are never created. A destination is never partially reconciled.
+Every entry unchanged writes nothing: no staging directory, no rename, status `unchanged`, exit 0.
+
+Entries missing and nothing modified or foreign builds only the missing entries in staging and publishes them into the destination one entry at a time. Anything modified or foreign stops the run before anything is staged and exits 60.
+
+`--adopt` writes nothing and reports the tree the destination holds rather than the one that was resolved. `--force` overwrites through a full staging publication. Both are per-invocation and neither is ever implied.
+
+Numbered directories are never created. A destination is never partially reconciled: it is never left holding a tree that is neither the one it held nor the one that was resolved.
 
 ## Partial success
 
@@ -526,6 +582,19 @@ Four requirements are computed separately: partial transfer bytes, cache object 
 Progress is written only when stderr is a terminal. Prompts appear only when stdin and stderr are both terminals. Otherwise a required prompt is a policy failure.
 
 An operation with nothing to do exits `0` with a result status of `unchanged`.
+
+The result's `status` is one of exactly four values, and no other value is ever written.
+
+| Status | Meaning |
+|---|---|
+| `materialized` | The destination did not exist and every selected entry was staged and published |
+| `unchanged` | The destination held every selected entry already, and nothing was written |
+| `restored` | The destination was missing entries and only those were written |
+| `adopted` | `--adopt` was given, nothing was written, and the reported tree is the one the destination holds |
+
+`restored` and `adopted` are run-level statuses. They share their names with the per-entry reconcile outcomes because they name the same fact at a different scale, and a run whose entries are all `restored` reports `restored`.
+
+The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, and `requests`. Bytes read counts every byte the run read from a file, bytes written counts every byte it wrote to one, and requests counts every request it issued to a source, retries and probes included. All three are identical on identical inputs, so they are what a benchmark gates on. None of them is a duration.
 
 ### Presentation
 

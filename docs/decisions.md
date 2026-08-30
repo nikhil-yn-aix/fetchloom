@@ -2838,3 +2838,1095 @@ correct to remove regardless of what it costs.
 Sources: `cargo xtask bench --iterations 3` three times before and three times
 after, on this machine; the record on asking whether an object is present;
 standards.md Memory.
+
+## A partial is named by what the run knows, and a bare URL knows its source
+
+Question: `get https://host/object` restarts from zero after an interruption. A
+partial is stored at `partial/<content digest>`, and a reference that states no
+digest cannot name one, so nothing on disk can be matched to the response. Phase
+2 shipped a `degrade` on every remote fetch saying exactly that. What names a
+partial.
+
+Options: leave the deferral until the lock arrives in phase 4; key the partial by
+a digest of the source identity always, and take the object lease separately;
+key the partial by whichever of the two the run knows.
+
+Chosen: the partial key is one type with two constructors. When the caller states
+a content digest, the key is that digest and every behavior is what phase 1 and
+phase 2 already do. When the caller states none, the key is the BLAKE3 of the
+canonical source identity, which is the redacted location, the host, and the
+identity the source published, in that order, each length-prefixed. The lease,
+the partial file, the source record beside it and the owner record are all named
+by the key. Publication is still to `objects/<observed digest>`, and when the key
+is a content digest the observed digest must equal it or the bytes are refused.
+
+Because: contracts.md describes `partial/` as holding transfers "with recorded
+source identity", and the resume ladder stands on identity, not on a digest the
+reference happened to state. The digest key was a constraint this implementation
+chose, not one the contract asked for. `SourceRecord` already carries the
+location, the host, the identity, the entity tag, the last modified value, the
+range support and the byte count, so a resume of a bare URL has everything it
+needs and had nowhere to put it.
+
+Keying on source identity always was the other real option and it is the one
+that would break something: a locked run knows the digest before it starts, and
+the single-writer-per-digest claim that makes two concurrent processes do one
+transfer is taken on that digest. Moving the key off the digest would let two
+processes fetching one object from two mirrors each run a transfer. Two
+constructors of one key is not two ways of doing one thing, because there is one
+lease, one partial path, one record and one publication path; the key is an
+input, chosen by what the caller was told.
+
+Costs: two processes fetching the same bare URL through one cache now contend on
+one key, which is the behavior a digest key gave and is what the contract wants.
+Two processes fetching the same bytes from two different bare URLs do two
+transfers and publish one object, which a digest key would also have done only
+after both had finished. A key derived from a location means a location that
+changes spelling without changing bytes starts a new partial; the old one is
+swept by prune like any other.
+
+Uncertain: nothing in the mechanism. Whether a source identity that is a strong
+entity tag alone is stable enough across a long interruption is a property of
+the server, and rung four already exists to say so.
+
+Sources: contracts.md Cache and Resume ladder; the phase 2 gate record naming
+this as inherited debt; `crates/engine/src/source_record.rs`.
+
+## Three counters that are identical on identical inputs, and no clock among them
+
+Question: The wall clock on this machine is recorded and never gated on, and the
+record saying so names what that leaves uncovered: a change that makes a
+transfer twice as slow while moving the same bytes passes. Some of that is
+recoverable without a clock. The quadratic partial reread fixed in phase 2 was
+counted, not timed. What else can be counted.
+
+Options: leave the deterministic gate as cache growth, bytes materialized and
+binary size; add a timing gate back at a wider band; add counters of the work
+itself.
+
+Chosen: the run counts three things and reports them in its `--json` result:
+bytes read from a file, bytes written to a file, and requests issued to a
+source. Each is gated at five percent alongside cache growth, bytes
+materialized and binary size. No timing gate returns.
+
+Because: each of the three is identical on identical inputs, which is what
+standards.md requires of a metric that gates on a developer machine. Together
+they catch the class of regression that a wall clock was being asked to catch
+and could not, because the machine moved more than the code did: a second read
+of a file that was already read, a second write of bytes already written, a
+retry storm, a probe per attempt where one probe would do, and a resume that
+rereads what it already hashed. The phase 2 quadratic reread would have moved
+bytes read by a factor of the interruption count while every existing
+deterministic metric stayed byte-identical.
+
+What they cannot catch, said plainly: an algorithm that gets slower while
+touching the same bytes. A sort that goes quadratic in memory, a lock held
+across a loop, a per-entry syscall storm that moves no bytes, and a
+decompressor that got slower all pass. Syscall counts would catch the third and
+are not counted, because a count of syscalls is not identical on identical
+inputs across three platforms and would have to be gated per platform to mean
+anything.
+
+Costs: the counters have to be threaded to every place that reads a file, writes
+a file, or issues a request, and a path that forgets to count is a hole that is
+invisible rather than loud. They are therefore counted at the boundary each kind
+of work goes through, which is the cache for file bytes and the source for
+requests, so a new caller counts by construction rather than by remembering.
+
+Uncertain: whether requests issued stays deterministic once concurrency is
+measured rather than fixed, in phase 6. It is deterministic today because
+concurrency is a fixed default and every retry is driven by a scripted server.
+When adaptation lands, this gate is re-examined rather than widened.
+
+Sources: standards.md Measure; the record on a wall clock on this machine; the
+record on the quadratic partial reread.
+
+## Two containers, four compressions, and not one line of C
+
+Question: Which archive and compression formats ship, and which crates decode
+them, given that a dataset is fetched by a static binary on six targets and that
+phase 2 already lost two targets to a C dependency.
+
+Options: per container, `zip` against writing a reader here; per compression, the
+C reference implementation with a Rust binding against a pure-Rust decoder;
+and for each format, shipping it against failing on it by name.
+
+Chosen. Containers: `tar` and `zip`. Compressions: gzip, zstd, xz, and bzip2,
+each usable on its own or wrapping a tar. The format names a manifest may
+state, and the only ones:
+
+| Name | What it is |
+|---|---|
+| `tar` | A POSIX ustar stream |
+| `tar+gzip` | A tar wrapped in a gzip member |
+| `tar+zstd` | A tar wrapped in a zstd frame |
+| `tar+xz` | A tar wrapped in an xz stream |
+| `tar+bzip2` | A tar wrapped in a bzip2 stream |
+| `zip` | A zip container, store and deflate methods only |
+| `gzip`, `zstd`, `xz`, `bzip2` | One compressed object, which materializes as one file |
+
+Crates, all pure Rust, no C toolchain and no build script that compiles one:
+
+| Job | Chosen | Version | Brings |
+|---|---|---|---|
+| tar | `tar`, default features off | 0.4.46 | `filetime` |
+| zip | `zip`, default features off, `deflate-flate2` only | 8.6.0 | `indexmap`, `memchr`, `typed-path`, `crc32fast` |
+| gzip | `flate2`, default `miniz_oxide` backend | 1.1.10 | `miniz_oxide`, `adler2`, `simd-adler32`, `crc32fast` |
+| zstd | `ruzstd` | 0.9.0 | `twox-hash` |
+| xz | `lzma-rust2`, `std` and `xz` only | 0.20.0 | `sha2`, which the workspace already carries for the interop digest |
+| bzip2 | `bzip2`, whose default backend is `libbz2-rs-sys` | 0.6.1 | `libbz2-rs-sys` |
+
+Because. What datasets publish decides the list, not what a compression library
+supports. Zip is what Kaggle serves, what Zenodo tells depositors to use for
+more than twenty files, and what Figshare and the OpenML and UCI collections
+hold. Tar is what WebDataset is, which is how Hugging Face ships large
+multimodal datasets as sharded tar archives it documents as orders of magnitude
+faster to stream than separate files. Gzip wraps most of the tar in that world
+and is what Common Crawl's WARC files are. Zstd is what contracts.md's own
+manifest example names and what the newer corpora are moving to. Bzip2 is not
+legacy trivia: the Wikipedia dumps, which are among the most fetched research
+datasets there are, are `.xml.bz2`. Xz is what the Linux-adjacent scientific
+distributions use. Rar and 7-Zip are absent because no dataset publisher of any
+size distributes on them, and both would be a decoder with an attack surface
+larger than everything above it combined.
+
+Zip carries store and deflate and nothing else. A zip entry compressed with
+bzip2, lzma, ppmd, xz or zstd fails with `archive.unsupported` naming the method
+number and the member. Published dataset zips are store or deflate; supporting
+the rest means five more decoders reachable from inside a container for entries
+that do not exist in the wild.
+
+Pure Rust is the whole reason for four of the six crate choices, and phase 2 is
+the evidence. `ring` is C, and the record on what the C in the cryptography
+costs the compile-only lanes says plainly that two crates are not compiled for
+Apple silicon on this machine for want of an Apple software development kit. The
+C zstd binding, `bzip2-sys` and `liblzma` would each add that same cost to a
+target matrix that already cannot run half of itself. Measured against that, the
+one place pure Rust is slower is zstd: `ruzstd` documents itself as roughly 3.5
+times slower than the C decoder on highly compressible data and about 1.4 times
+on data that is already dense. That is a real cost on a hot path and it is paid
+knowingly, because a decoder that cannot be built for a target is infinitely
+slower there.
+
+The other three cost nothing measurable. `flate2`'s default backend is
+`miniz_oxide`, which is Rust. `bzip2` 0.6 made `libbz2-rs-sys`, a Rust port, its
+default backend, so the C library is now the opt-in. `lzma-rust2` is Rust and
+its only dependency is `sha2`, which this workspace already builds for the
+interop digest, so xz costs one crate and zero new transitive ones.
+
+The format of an artifact is stated by its manifest. A reference with no
+manifest takes its format from the location's final extensions, and the
+archive's own header must agree with what the name said or the run fails with
+`archive.unsupported` naming both answers. Neither the name nor the bytes decide
+alone, because a name is a claim and a header without a claim to check is a
+guess.
+
+Costs: six crates and eleven transitive ones, against a workspace that had
+none of them, and a binary that will grow by all of it. Zstd decoding is slower
+than the reference implementation by the factors above. A zip using a
+compression method outside store and deflate fails rather than extracting.
+`tar` brings `filetime`, which extraction never uses, because timestamps are
+excluded from the tree digest.
+
+Uncertain: how much of the binary this is. Nothing has been compiled into the
+release binary yet, so the number goes in the phase 3 gate record next to the
+old one, the way TLS did.
+
+Sources: compiled and linked on `x86_64-pc-windows-msvc` with exactly the
+features above, `cargo tree -e normal` and `cargo tree -e build` showing no
+build-script C compilation; crates.io metadata for every version and feature
+table named; Hugging Face's WebDataset documentation; Zenodo's guidance on
+packaging more than twenty files; `ruzstd`'s own published decode comparison.
+
+## Every rejection stops the run, and the error names the entry that caused it
+
+Question: contracts.md lists what extraction rejects. It does not say whether a
+rejected entry is skipped or ends the run, and it does not map each rejection
+onto one of the five archive error kinds. Both have to be settled before an
+extractor exists.
+
+Options: skip the rejected entry and extract the rest, emitting `extract.reject`
+for each; skip only the rejections that are about the entry and stop on the ones
+about the archive; stop on every rejection.
+
+Chosen: every rejection stops the run. Nothing is published. `extract.reject` is
+emitted naming the member and the reason, and the run exits 70 for an archive
+rejection and 60 for a destination one. A rejection is called per-entry when the
+error names a member path and fatal when it names the archive, which is a
+statement about what the message can point at, not about whether the run
+continues.
+
+The complete list, with the kind each produces and what the error names:
+
+| Rejected | Kind | Names |
+|---|---|---|
+| Absolute member path | `archive.unsafe_path` | the member |
+| A `..` component anywhere in the path | `archive.unsafe_path` | the member |
+| A backslash or drive letter in the path | `archive.unsafe_path` | the member |
+| A path that is not valid UTF-8 | `archive.unsafe_path` | the member, as bytes |
+| A path holding a NUL | `archive.unsafe_path` | the member |
+| A path longer than the volume's maximum | `archive.unsafe_path` | the member and both lengths |
+| A path deeper than the nesting limit | `archive.unsafe_path` | the member and both depths |
+| A link target that resolves outside the destination | `archive.link_escape` | the member and the target |
+| A hard link to a member the archive does not hold | `archive.link_escape` | the member and the target |
+| A block device, character device, FIFO, or socket entry | `archive.unsupported` | the member and the type |
+| A setuid or setgid bit | `archive.unsupported` | the member and the bits |
+| Ownership, an access control list, an extended attribute, or an alternate data stream | `archive.unsupported` | the member and which one |
+| Two members with the same path | `archive.collision` | both members |
+| Two members colliding under the volume's case folding or normalization | `archive.collision` | both members |
+| A local header whose path disagrees with the central directory | `archive.unsafe_path` | the member and both paths |
+| A local header whose size or method disagrees with the central directory | `archive.unsupported` | the member and both values |
+| A compression method that is not store or deflate, inside a zip | `archive.unsupported` | the member and the method |
+| A container or compression this build does not carry | `archive.unsupported` | the archive and the format |
+| A header the format does not permit, or a truncated archive | `archive.unsupported` | the archive |
+| More members than the entry limit | `archive.bomb` | the archive and both counts |
+| More expanded bytes than the limit | `archive.bomb` | the archive and both counts |
+| An expansion ratio above the limit | `archive.bomb` | the archive and both ratios |
+| A name the target volume refuses | `destination.unrepresentable` | the member and what the volume said |
+
+Because: skipping is a silent degradation of exactly the kind standards.md
+forbids, and it is worse here than elsewhere. A user who asked for a dataset and
+received it minus the four members that tried to escape has a tree that is not
+the tree they asked for, has no digest that matches anything, and has no reason
+to look. Emitting `degrade` and continuing does not fix that, because the
+result is still a different dataset wearing the right name. contracts.md already
+says the destination is all or nothing and that a partially materialized
+destination is never visible, and the roadmap's gate for this phase is that the
+hostile corpus is rejected with nothing published. Stopping is the only reading
+consistent with all three.
+
+The mapping puts everything that is a lie about where an entry lands under
+`archive.unsafe_path`, everything that is a lie about what an entry is under
+`archive.unsupported`, and everything that is two entries claiming one name
+under `archive.collision`. Setuid, device nodes and extended attributes are
+`archive.unsupported` rather than a kind of their own because no kind of their
+own exists and inventing one is forbidden; the message carries the specific
+fact.
+
+Nesting depth is `archive.unsafe_path` rather than `archive.bomb` because it is
+a property of one member and the error can name it. The three limits that are
+properties of the whole archive are `archive.bomb`.
+
+Costs: an archive holding one hostile member out of a million cannot be fetched
+at all, even with a selection that excludes that member. That is deliberate: an
+archive that contains an escape attempt is not a dataset with a flaw, and
+selecting around it would mean the safety of the result depends on the user
+having written the right glob.
+
+Uncertain: whether a real published dataset carries a setuid bit or an extended
+attribute by accident of how it was packed. If one does, it fails loudly and
+that is the right first answer; the record is revisited with the evidence rather
+than in advance of it.
+
+Sources: contracts.md Materialization, Errors, Exit codes, Partial success;
+roadmap.md phase 3 Prove; standards.md Failing.
+
+## Reconcile compares against what the run resolved, not against a file it has not written yet
+
+Question: contracts.md says each reconcile outcome is decided against the
+receipt. Receipts arrive in phase 4. Reconcile is a phase 3 deliverable, and
+without it `get` into an existing destination still fails with
+`destination.foreign`, which is inherited debt from phase 2. What does phase 3
+compare against.
+
+Options: bring receipts forward and decide their contents now; keep failing on
+an existing destination until phase 4; compare against the tree the run
+resolved.
+
+Chosen: reconcile compares the destination against the tree the run resolved.
+For each entry the run is about to materialize, the destination holds it with
+the same content digest, holds it differently, or does not hold it; and the
+destination may hold entries the resolved tree does not. Those are exactly the
+four outcomes contracts.md names. A receipt, when phase 4 writes one, is a
+cached copy of the answer this comparison already produces, never a second
+authority for it.
+
+Because: the resolved tree is the only thing that can be an authority. It is
+derived from the digest the manifest or the lock states, so it is the same
+answer on every machine, while a receipt is local, may be absent, may be stale,
+and contracts.md already says a receipt is "never read as an authority for
+identity". Deciding receipt contents now would settle a phase 4 question with
+phase 3 evidence, and it would put a file on disk that the comparison does not
+need.
+
+What a run does with the outcomes. Every entry unchanged means nothing is
+written at all: no staging directory, no rename, status `unchanged`, exit 0. Any
+entry missing and none modified or foreign means the missing entries alone are
+built in staging and published into the destination by rename, one entry at a
+time. A modified or foreign entry stops the run before anything is staged, names
+every such path, and exits 60.
+
+`--force` accepts overwriting modified entries and removing foreign ones.
+`--adopt` accepts the destination as it stands, writes nothing, and reports the
+tree the destination actually holds rather than the one that was resolved. Both
+are per-invocation and neither is ever implied.
+
+A destination is never partially reconciled, and restoring missing entries is
+not a violation of that. The phrase forbids leaving a destination that is
+neither the tree it held nor the tree that was asked for. A restoration only
+ever adds an entry the resolved tree names, so a failure part way through leaves
+a destination that is still a subset of the correct tree and still missing
+entries, which is where it started. Overwriting is different, and that is why
+overwriting needs `--force` and goes through a full staging publication rather
+than an entry at a time.
+
+Costs: the comparison hashes every file in the destination that it cannot rule
+out by fingerprint, so a no-op run over a large tree reads metadata for every
+entry and, under `--verify always`, reads every byte. That is the price of an
+answer that does not depend on a local file being correct, and it is what the
+no-op regime measures.
+
+Uncertain: nothing about the comparison. Whether phase 4's receipt ends up
+holding anything this does not already compute is the open question, and it is
+phase 4's to answer.
+
+Sources: contracts.md Reconcile, Receipt, Partial success, Output streams;
+roadmap.md phase 3 Build; the phase 2 gate record naming reconcile as inherited
+debt.
+
+## A glob is four rules, and a flattened path that empties is an error
+
+Question: contracts.md defines selection as `--select`, `--exclude`, and a
+layout, matched on the canonical member path with `**` crossing directories and
+`*` not. It does not say which other pattern syntax exists, whether selecting a
+directory selects what is under it, or what happens when flattening leaves a
+member with no path.
+
+Options: adopt an existing glob crate's full syntax; define the smallest syntax
+that expresses what selection is for.
+
+Chosen: four rules and nothing else. `*` matches any run of bytes within one
+path component, including none. `**` as a whole component matches any number of
+components, including none. `?` matches exactly one byte within one component.
+Every other byte is literal, including `[`, `{`, and `\`. Matching is on raw
+bytes, case-sensitive, with no normalization, against the canonical
+`/`-separated member path.
+
+A pattern matches member paths, not subtrees: `--select data` selects a member
+named `data` and nothing under it, and `--select data/**` selects what is under
+it. Every ancestor directory of a selected member is included whether or not a
+pattern matched it, because contracts.md requires every directory to be an
+entry and a tree with a file and no directory holding it is not a tree.
+
+`--exclude` is applied to the result of every `--select`. An empty result is an
+error, as contracts.md already states.
+
+Under `--layout flatten:<n>`, a member left with no path at all after dropping
+`n` components fails with `destination.unrepresentable` naming the member and
+the count. Two members left with the same path fail with `archive.collision`
+naming both, which contracts.md already states.
+
+Because: selection is part of identity. A lock records the patterns, and the
+same patterns must select the same members on every machine forever. Character
+classes and brace expansion are the parts of glob syntax where implementations
+disagree with each other, and adopting a crate's syntax makes a crate's version
+part of identity. Four rules have one reading.
+
+Selecting a directory by name selecting everything under it was the alternative,
+and it is what most tools do. It is rejected because `--exclude data` would then
+mean something different from `--select data` inverted, and because a user who
+wrote `--select data` and got a hundred gigabytes was not told that would
+happen. `data/**` says it.
+
+Dropping a member whose path flattens to nothing is the silent loss the
+standards forbid. Failing names the member and the count, and the fix is a
+smaller count.
+
+Costs: a user who wants `*.{jpg,png}` writes two `--select` flags. A user who
+wants a character class cannot express it. Both are repeatable flags, so
+nothing is unreachable, only longer.
+
+Uncertain: whether `**` should also be allowed inside a component, as in
+`a**b`. It is not, and no dataset selection seen so far needs it. If one does,
+allowing it later is additive; allowing it now and finding it ambiguous is not.
+
+Sources: contracts.md Selection, Materialization, Lock.
+
+## Every name in staging is created exclusively, and links are created last
+
+Question: roadmap.md says staging extraction uses handle-relative operations.
+Unix has `openat`, `mkdirat` and `symlinkat` through rustix. The Win32 surface
+this build uses has no relative create, and reaching one means the native API
+and a large amount of unsafe code. What makes extraction safe on all three.
+
+Options: handle-relative on Unix and something else on Windows; handle-relative
+everywhere through the native Windows API; exclusive creation plus an ordering
+rule everywhere.
+
+Chosen: exclusive creation plus an ordering rule, on all three platforms, and no
+handle-relative operations anywhere. Every directory and file in staging is
+created with the exclusive flag, so a name that already exists is a failure
+rather than a reuse. Symbolic links are created after every other entry of the
+archive has been created. A hard link member is materialized as a file holding
+its target's bytes, and a hard link to a member the archive does not hold is
+`archive.link_escape`.
+
+Because: what handle-relative operations buy is that a component of a path
+cannot be swapped for a symbolic link between the moment it is checked and the
+moment it is used. Creating every component exclusively removes that class
+instead of narrowing it: nothing in staging exists that this run did not create,
+so there is no component an archive could have supplied to be followed. Creating
+links last closes the only remaining door, which is an archive that supplies a
+link and then a member underneath it; that member is created first, the link
+then fails to be created exclusively, and the archive is refused with
+`archive.collision` naming both.
+
+contracts.md already relies on exactly this mechanism for collisions: entries
+are created exclusively in staging so the target filesystem's own folding
+decides. Using the same mechanism for path safety is one way of doing one thing.
+Using `openat` on Unix and a different argument on Windows would be two, and the
+second one would have to emit `degrade` on every Windows run, which is the noisy
+per-run degradation this phase deleted from the transfer path.
+
+Costs, stated plainly. This does not protect against a second process that has
+write access to the staging directory while extraction is running and races the
+exclusive create. Handle-relative operations would not fully protect against
+that either, but they would narrow it. Staging lives in the cache, whose
+directory the cache owns, or beside the destination, which is the user's own
+directory, and the phase 1 owner records and advisory locks are what keep two
+Fetchloom runs out of each other's staging. A hostile local process with write
+access to the user's own destination directory is outside what any extractor
+defends against.
+
+Uncertain: whether a filesystem exists that accepts an exclusive create of a
+name that already exists under its own folding rules. That would break collision
+detection as much as it would break this, and contracts.md already stakes
+collision detection on it, so the two stand or fall together and the capability
+probes are where it would be caught.
+
+Sources: contracts.md Materialization and Platform capabilities; roadmap.md
+phase 3 Build; rustix 1.1.4 `fs` module.
+
+## A compressed tar is read twice, and the second read is the one that writes
+
+Question: The Archive seam lists members and then opens them one at a time. A
+zip is random access and a plain tar over a file is seekable, so both answer that
+shape cheaply. A tar inside a gzip, zstd, xz or bzip2 stream is neither. What
+does listing a compressed tar cost.
+
+Options: widen the seam so extraction is one traversal; decompress the tar into
+the cache as a derived object and extract from that; read the compressed stream
+twice.
+
+Chosen: read it twice. Listing decompresses the stream and reads headers,
+skipping member bodies. Extraction decompresses it again and writes. `open` is
+called with members in the order listing returned them, and the tar reader only
+ever moves forward.
+
+Because: the seam is one of six the roadmap says never change shape, and this is
+not a reason strong enough to change one in the phase that first implements
+against it. Listing before extracting is also what makes the phase's gate
+reachable: the entry count, the expanded byte total and the expansion ratio are
+all properties of the whole archive, and refusing a bomb after writing nine
+tenths of it is not refusing it.
+
+Decompressing into the cache as a derived object was the tempting answer and it
+is the one to revisit. It would make every read after the first free, because the
+plain tar would be content-addressed and reusable, and it would make the reader
+deal only with seekable containers. It is not taken now because a derived object
+is a concept `objects/` does not have, the contract says an entry there has been
+fully verified against a digest a source stated, and inventing a second kind of
+object to save a decompression is a larger change than the one it saves.
+
+Costs: a compressed tar is decompressed twice, so the extraction regime pays
+roughly double the decompressor's time for that container. Zstd is the format
+where that is most visible, because the chosen decoder is already the slower of
+the two available. The number is in the benchmarks rather than in this record.
+
+Uncertain: whether the doubling is visible against filesystem time for a real
+dataset, where writing several hundred thousand small files is expected to
+dominate. The many-small-files regime measures the write side and the one-large-
+file regime measures the decompressor, and the two together are what would say
+this was the wrong call.
+
+Sources: contracts.md Materialization and Limits; roadmap.md Seams;
+`crates/engine/src/seam/archive.rs`.
+
+## The zip index cannot hold two entries of one name, so the central directory is counted rather than asked
+
+Question: The corpus holds a zip whose central directory declares two records
+naming one path, which contracts.md says is `archive.collision` naming both. The
+reader listed one member and refused nothing. Why, and what counts entries.
+
+Options: trust the crate's entry count and accept that this collision is
+undetectable; compare the count the end record declares against the count the
+crate exposes; read the central directory's names directly.
+
+Chosen: read the central directory's names directly, before the crate's index is
+consulted at all, and claim each path into a set. The container's own records
+decide how many entries it holds.
+
+Because: `zip` 8.6.0 indexes members by name, so two records naming one path
+collapse into one entry and `len()` answers one. Nothing about that is wrong for
+a library whose job is to find a member by name, and nothing about it is usable
+for a reader whose job is to refuse an archive that names one path twice. The
+crate is not being worked around; it is being asked a different question than the
+one it answers.
+
+Comparing the declared count against the exposed count was tried first and it
+does detect the collision, but it cannot name the path, and contracts.md requires
+both members to be named. An error that says two entries collided without saying
+on what is the kind of message standards.md calls a defect.
+
+Costs: the central directory is parsed twice, once here by hand and once inside
+the crate. That is one extra pass over a structure that is kilobytes, against a
+member listing that already reads every header, so it does not show up in any
+regime. It also means the record layout is written down in this codebase and must
+stay correct; the corpus's own writer is the thing that keeps it honest, because
+the two disagree loudly if either drifts.
+
+Uncertain: whether Zip64 archives with more than 65,535 entries need the Zip64
+end record read instead, which this does not do. The benign Zip64 corpus entry
+passes because it is small. An archive above that count is the entry limit's
+territory and is refused there, so the gap is bounded, but it is a gap and it is
+named here rather than found later.
+
+Sources: `crates/faults/src/archives.rs` zip writer and its record layout tests;
+the APPNOTE record layouts for the local file header, the central directory file
+header, and the end of central directory record; contracts.md Materialization.
+
+## What the reader decides, and what only the destination can
+
+Question: The rejection table in contracts.md lists everything extraction
+refuses. The reader lists members and hands out bytes and never touches a
+filesystem. Which of those rejections can it decide.
+
+Options: have the reader decide everything and take a destination volume as an
+argument; split the table by what a header alone can answer.
+
+Chosen: split it. The reader decides everything decidable from headers and from
+the archive's own structure, and the extractor decides everything that needs the
+target volume or the order entries are created in.
+
+The reader decides: absolute paths, `..` components, backslashes and drive
+letters, paths that are not valid UTF-8, paths holding a NUL, paths deeper than
+the nesting limit, device and FIFO entries, setuid and setgid bits, pax extended
+attributes and ownership, a zip local header disagreeing with its central
+directory, a compression method that is not store or deflate, two members
+claiming one path byte for byte, the three bomb limits, and a link target that is
+absolute, names a drive, or climbs above the destination root by counting `..`
+against the member's own depth.
+
+The extractor decides: two members colliding only under the target volume's case
+folding or normalization, a name the volume refuses, a path longer than the
+volume's maximum, and a link that escapes only because of what the volume does
+with it.
+
+Because: the split is not a convenience, it is what the two have evidence for. A
+link target of `../../etc/passwd` is an escape on every volume and needs nothing
+to prove it. Whether `A.txt` and `a.txt` are one name is a property of the volume
+and contracts.md already says it is answered by creating each entry exclusively
+in staging rather than by a table this project would have to keep correct. Asking
+the reader to answer it would mean either passing it a volume, which makes a
+pure enumerator depend on a destination, or keeping that table.
+
+A link target is checked by counting depth rather than by resolving the path,
+because resolving requires knowing what exists, and at listing time nothing does.
+Counting is exact for the question being asked: a target climbs out when its
+`..` components exceed the member's own directory depth.
+
+Costs: the corpus is now read by two suites rather than one, and an entry the
+reader lists rather than refuses is asserted by name in the reader's suite so it
+cannot be silently forgotten by both. That list is a standing obligation on the
+extraction work rather than a decision that closes anything.
+
+Uncertain: whether a hard link naming a member the archive does hold, but which
+was itself refused, is reachable. Every refusal ends the run, so it is not,
+today.
+
+Sources: contracts.md Materialization and Platform capabilities;
+`crates/archive/tests/corpus.rs`, whose deferred list is the split written down.
+
+## The counters found a speculative write on their first run, and it is not fixed here
+
+Question: The work counters were added to catch a second write of bytes already
+written. Their first run reported that a local `get` into a warm cache writes
+every source byte and then deletes them, because `ingest_from` writes the bytes
+to a scratch file, hashes them, and only then asks whether the cache already
+holds that digest. Cold and warm are byte-identical in both counters. Is that
+fixed now.
+
+Options: hash the source without writing and write only on a miss; keep the
+speculative write and record the finding; change nothing and say nothing.
+
+Chosen: record it, test the behavior that exists, and do not change it in this
+change.
+
+Because: a local source states no digest, so its digest cannot be known without
+reading it, and the write is speculative rather than wasteful by construction.
+Removing it means hashing in one pass and reading the file a second time when
+the digest turns out to be absent. That trades one write for one read on every
+miss to save one write on every hit, and which is better depends on the ratio of
+hits to misses and on what the volume charges for each. standards.md says to
+profile before changing anything and forbids guessing at bottlenecks as a
+justification, and there is no measurement here yet, so the change is not made
+on the strength of the observation alone.
+
+It is recorded rather than left because a counter that finds something on its
+first run and is then quietly re-pointed at something it does not find is worse
+than no counter. The test asserts what is true: both runs read the source once
+and write it once, and it says in its own name why.
+
+The phase gate's claim is a different one. "Repeated runs against an unchanged
+destination write nothing" is about reconcile, which decides before anything is
+staged and therefore never reaches the ingest at all. That test belongs with
+reconcile and is written there, against a destination rather than against a
+cache.
+
+Costs: a warm local run does work it could avoid, and the amount is exactly the
+size of the dataset. On the many-small-files regime that is the whole corpus
+written twice per run. The number is now visible on every `--json` result rather
+than hidden, which is the difference between a known cost and a defect.
+
+Uncertain: whether the second read on a miss is cheaper than the write it
+removes, on any of the three platforms. Nothing here measures it. The
+many-small-files and one-large-file regimes are where that would be answered,
+and the answer may differ between them, in which case the honest outcome is that
+neither ordering is right for both and the choice is made per regime or not at
+all.
+
+Sources: `crates/cli/tests/work.rs`, whose warm and cold counts are equal;
+`crates/cache/src/ingest.rs`; standards.md Measure and Disk.
+
+## What the counters said the first time they ran
+
+Question: The three deterministic counters are recorded in every regime. What do
+they report, and what does that say that the wall clock did not.
+
+Chosen: recorded as the baseline on this machine, and read rather than filed.
+
+The numbers, on `x86_64-pc-windows-msvc`, three iterations:
+
+| Regime | bytes read | bytes written | requests | cache growth |
+|---|---|---|---|---|
+| cold-cache | 16,777,216 | 16,777,216 | 0 | 16,777,216 |
+| warm-cache | 16,777,216 | 16,777,216 | 0 | 0 |
+| cold-transfer | 0 | 4,194,304 | 3 | n/a |
+| interrupted-transfer | 4,194,304 | 4,194,304 | 7 | n/a |
+
+Three of these are worth saying out loud.
+
+A warm cache grows by exactly zero and still reads and writes the whole corpus.
+That is the speculative ingest write, which has its own record. Cache growth was
+the only deterministic metric that saw the warm run before, and it reported
+success, because the cache genuinely did not grow. The work counters report the
+same run doing sixteen mebibytes of avoidable writing. That is precisely the hole
+the counters were added to close, and it was open.
+
+A cold transfer of one object issues three requests. One probe brackets the
+resolve, and the transfer's own attempt probes again before fetching, so a run
+that needs one HEAD and one GET makes two HEADs and one GET. Nothing was
+measuring that before.
+
+An interrupted transfer reads back four mebibytes it already had. That is the
+resume rehashing what is on disk to rebuild the digest, which is correct and is
+what rung one exists to make unnecessary once an outboard tree is stored. It is
+the number that will move when phase 5 lands, and now there is something for it
+to move from.
+
+Across two runs minutes apart every one of these twelve numbers was identical
+while the warm-cache wall clock moved from 394 to 304 milliseconds, which is
+twenty three percent. That is the case for the counters and against the timing
+gate, made by the same two runs.
+
+Costs: none measured. The counters are atomic adds on paths that are already
+doing a syscall.
+
+Uncertain: whether the redundant probe is removable without losing the resolve
+bracket the events depend on. It is not removed here, because removing it means
+deciding whether `resolve.start` may be emitted from inside a transfer attempt,
+and that is an event-ordering question rather than a counting one.
+
+Sources: `cargo xtask bench --save-baseline --iterations 3` and `cargo xtask
+bench --compare --iterations 3` on this machine, both pasted into the phase
+report.
+
+## The small-files regime, the lane it ran in, and the number nobody wants
+
+Question: contracts.md requires the many-small-files regime measured with an
+on-access scanner enabled, not only with one disabled, and requires every
+benchmark number to say which lane it came from. What lane does this machine
+give, and what did the two shape regimes measure.
+
+Chosen: both regimes ship, and every run prints the lane sentence beside the
+numbers rather than leaving the reader to guess.
+
+The lane. Windows enumerates what inspects a write by listing loaded
+minifilters and looking for a scanner altitude, which is why contracts.md gives
+this platform the `present` answer that the others cannot produce. That
+enumeration requires elevation. In an ordinary unelevated shell `fltmc filters`
+fails with `0x80070005`, access denied, so `loaded_minifilters` returns nothing
+and the probe falls to `unknown` carrying the measured ratio. That is exactly
+what contracts.md says an unknown answer is, and it emits `degrade` naming the
+ratio and that the cause cannot be determined. It is correct behavior, and it
+means the `present` answer is only reachable from an elevated run. The roadmap's
+expectation that Windows is the platform that can enumerate is true of the
+platform and not of every process on it.
+
+Defender was verified on for these numbers, out of band:
+`Get-MpComputerStatus` reported `RealTimeProtectionEnabled: True` and
+`OnAccessProtectionEnabled: True`. So the scanner lane is enabled even though
+the probe is not permitted to name it. The measured cost ratio was 48.69, which
+is small writes costing roughly forty-nine times what the same bytes cost
+written to one file.
+
+The numbers, one iteration, on this machine, scanner enabled:
+
+| Regime | wall | bytes read | bytes written |
+|---|---|---|---|
+| many-small-files, 4096 files of 1 KiB | 101,516 ms | 4,194,304 | 4,194,304 |
+| one-large-file, one file of 256 MiB | 629 ms | 268,435,456 | 268,435,456 |
+
+Four mebibytes spread across four thousand files takes a hundred and sixty times
+as long as two hundred and fifty-six mebibytes in one file. That is roughly
+twenty-five milliseconds per one-kilobyte file. It is the worst number this
+project has produced and it is published rather than buried, because
+standards.md says published numbers include the regimes where Fetchloom is
+slower.
+
+It is not diagnosed here and nothing is optimized on the strength of it. What is
+known: the ingest path touches each file about six times, writing a scratch
+file, renaming it to a partial, renaming that to an object, sealing it,
+recording a fingerprint beside it, and then cloning it into the destination. On
+a volume where every file close is inspected, per-entry cost is multiplied by
+that count. The speculative ingest write already has its own record and is one
+of the six. Whether the remainder is the scanner, the rename chain, or the
+per-file fingerprint record is a profile that has not been run, and guessing at
+it is what standards.md forbids.
+
+Costs: the regime takes a hundred seconds per iteration on this machine, so it
+runs at one iteration rather than the default nine.
+
+Uncertain: what the same corpus costs with real-time protection off, which is
+the comparison that would separate the scanner from the code. It was not
+measured, because turning off a machine's virus protection to make a benchmark
+look better is not a measurement anyone should trust, and the honest number is
+the one a user actually gets.
+
+Sources: `cargo xtask bench --iterations 1` on this machine;
+`Get-MpComputerStatus`; `fltmc filters` returning `0x80070005`;
+`crates/platform/src/windows/probe.rs`; contracts.md Platform capabilities.
+
+## The small-files profile, and the three things it actually found
+
+Question: The many-small-files regime measured 4 MiB across 4096 files at a
+hundred seconds, against 256 MiB in one file at six hundred milliseconds. The
+record filing that number said it was not diagnosed and that guessing was
+forbidden. This is the profile.
+
+Method: the release binary against 1024 distinct one-kibibyte files, decomposed
+by flag, then by scaling curve, then against a hand-written replica of the same
+filesystem sequence, then against the real platform primitives measured
+directly. Every number below is from this machine with Defender real-time
+protection confirmed on.
+
+What was falsified first. The durability flush was the obvious suspect, because
+the default tier issues `FlushFileBuffers` per file. It is not the cost:
+`--durability fast`, which issues no flush at all, measured 26,235 ms against
+`normal` at 19,345 ms, which is to say no improvement and a difference inside
+this machine's noise. A hypothesis that survives only because nobody measured it
+is worth exactly nothing, and this one did not survive.
+
+What the decomposition showed:
+
+| Run, 1024 files of 1 KiB | total | per file |
+|---|---|---|
+| cached, normal | 19,345 ms | 18.9 ms |
+| cached, fast | 26,235 ms | 25.6 ms |
+| no cache, normal | 1,904 ms | 1.86 ms |
+| raw `cp -r` | 1,150 ms | 1.12 ms |
+
+The cache path is ten times the cost of the same run without it, and the run
+without it is within a small factor of what the operating system charges to copy
+the tree at all.
+
+The scaling curve is where the real answer is. Without the cache the per-file
+cost is flat: 1.70, 1.59, 1.72 and 1.63 milliseconds at 64, 256, 512 and 1024
+files. With the cache it climbs: 8.81, 10.21, 17.76 and 21.22. The cost per file
+grows with the number of files, which no amount of per-file work can explain.
+
+A hand-written replica of the cache's exact filesystem sequence, using nothing
+but the standard library, reproduces the same climb: 4.5, 4.4, 7.0 and 11.2
+milliseconds at the same four sizes. So the superlinearity is not in Fetchloom's
+logic at all. It is what this filesystem charges as the directories fill, and the
+cache fills them fast, because it writes four files for every one object: the
+object, a lock, a lock owner record, and a fingerprint record. A thousand source
+files leave four thousand and ninety-eight files in the cache, counted.
+
+Directory fanout, which is what git, restic and casync all do for this exact
+reason, was measured and is not adopted here. Across repeated runs the fanout
+variants did not separate from the flat ones by more than this machine's own
+variance, which reached forty percent between identical runs. Adopting a layout
+change on evidence that noisy would be guessing with extra steps. It is written
+down as the first thing to try on a quiet machine.
+
+Three things were fixed, each justified by counting rather than by a clock:
+
+The clone capability was asked per file. `clone_or_copy` attempted a
+copy-on-write clone for every entry, and on NTFS that attempt opens the source,
+stats it, opens it a second time to query the volume, learns that the volume
+does not reference-count blocks, and fails. Whether a volume reference-counts
+blocks is a property of the volume. It is now asked once per volume and
+remembered. Measured against the real primitive: `clone_or_copy` cost 1.670 ms
+per file against 0.837 ms for the plain copy it falls back to, so the failed
+attempt was doubling the cost of every placement.
+
+The same fact was reported a thousand and twenty-four times. Because the clone
+was attempted per file, the run emitted one `degrade` event per file, all
+identical, naming a volume-level fact. Counted before: 1024. Counted after: 1.
+standards.md says to say a thing once, and an event stream that repeats one
+sentence a thousand times is not an event stream anyone can read.
+
+The ingest renamed twice where once suffices. The scratch file is written into
+`partial/`, renamed to `partial/<digest>`, then renamed again into
+`objects/<digest>`. The contract says publication is a write to `partial/`, a
+flush, then an atomic rename into `objects/`, and the scratch file already
+satisfies the first clause, so the middle rename bought nothing. Removed.
+
+Costs, stated plainly: none of the three is provable as a speedup on this
+machine, and none is claimed as one. The wall clock after the changes read
+22,347, 22,358 and 30,794 milliseconds across three runs, which is not
+distinguishable from the 19,345 before it. What is provable is that the run does
+strictly less work: one volume query instead of one per file, one degrade event
+instead of a thousand, one rename per object instead of two. A machine quiet
+enough to show that as time does not exist here.
+
+Uncertain, and the honest gap: the four-files-per-object layout is the cause of
+the superlinearity and it is still there. Fanout, packing small objects the way
+a packfile does, and dropping the separate owner record are all real options and
+none of them can be chosen on this machine's numbers. That is the first work of
+any phase that has a quiet runner.
+
+Sources: every measurement in this record was run on this machine and is
+reproducible from `crates/cli/tests/work.rs` plus the flag decompositions above;
+`Get-MpComputerStatus` for the scanner state; the record on the small-files
+regime for the original number.
+
+## What the rest of the field does about four files per object
+
+Question: The profile found that the cache writes four files per object and that
+per-file cost climbs as those directories fill. Is that a Fetchloom problem or a
+known one, and what is the known answer.
+
+Chosen: it is the known one, the known answer is packing, and packing is not
+done in this phase.
+
+Because: git stores an object per file until it does not. Its own engineering
+writing says that as a repository grows, storing objects loosely "becomes
+infeasible, as it strains the filesystem to have so many files", and that reading
+one packfile is faster than reading many loose objects; `git gc` and `git repack`
+exist to consolidate them. Hosting providers report the same failure mode
+concretely, where a fetch that leaves loose objects behind forces later commands
+to read thousands of small files. restic reaches the same place from the other
+direction: it never writes a file per blob at all, cutting data into blobs
+averaging a mebibyte and grouping them into pack files.
+
+So the shape of the answer is settled by everyone who has hit this: do not put
+one small object in one file. What is not settled is whether Fetchloom should,
+because the two systems above pack for reasons Fetchloom does not share. Git
+packs to delta-compress related versions of a text file; Fetchloom stores whole
+verified artifacts and deltas between them are not a thing it has. restic packs
+partly to hide chunk sizes from an attacker; Fetchloom's cache is not adversarial
+in that direction. What both get incidentally, and what Fetchloom would be
+adopting them for, is one file instead of thousands.
+
+Why it is not done here: a pack file is a second way for an object to exist, and
+every reader of `objects/` would have to know about both. contracts.md says an
+entry in `objects/` has been fully verified and that there is no other way for a
+file to appear there, and the whole prune, lease and fingerprint model is written
+against a file per digest. Changing that is a cache format change, which the
+format fingerprint makes safe to do, but it is not a change to make while the
+only evidence for it is a machine whose repeated runs of identical code differ by
+forty percent.
+
+What is recorded instead, so the next person does not start from nothing: the
+cost is four files per object, counted exactly, of which the object itself is one
+and three are metadata that a pack index would fold into a shared file. The
+scaling curve that proves the problem is in the record on the small-files
+profile. Directory fanout was measured here and did not separate from noise; it
+is the cheaper half-measure and it is still worth trying first on a quiet
+machine, because git uses it too and it needs no second way for an object to
+exist.
+
+Uncertain: whether the fingerprint record can simply be dropped rather than
+packed. It exists to make `--verify fingerprint` cheap, which is the default, and
+it is one of the three metadata files. Whether the same tuple could live in the
+object's own filesystem metadata rather than beside it is a per-platform question
+nobody has asked here.
+
+Sources: GitHub's writing on the packed object store and Git's own packfile
+documentation; restic's design document on blob sizes and pack files; the record
+on the small-files profile for the measurements this rests on.
+
+## Phase 3 gate
+
+What phase 3 was for: extraction is where hostile input meets the filesystem,
+and where most tools are unsafe. What it delivers is an archive reader, bounded
+extraction into staging, selection, reconcile, and the two backlog items phase 2
+left behind.
+
+What passed, and on what.
+
+The hostile corpus is forty-five named archives, each carrying its bytes, what it
+attacks, and either the exact error kind from contracts.md with the member the
+error must name, or the fact that it is benign and must extract cleanly. Every
+one is driven through the reader, and every one through reader-then-extraction
+into a real staging directory. Nothing is skipped, and the split between what
+the reader decides and what only a destination can decide is written down as a
+list asserted by name in both suites, so neither can quietly stop covering an
+entry. Four hundred and eleven tests pass on `x86_64-pc-windows-msvc`.
+
+Ten formats ship and each is read back from bytes it really holds: tar bare and
+wrapped in gzip, zstd, xz and bzip2; zip with store and deflate; and the four
+compressions alone. Every decoder is pure Rust and no build script compiles C,
+which is the lesson phase 2 paid for when `ring` cost this machine two Apple
+targets.
+
+`get https://` resumes. A partial is named by the key the run knows, which is a
+content digest when the reference states one and a digest of the source identity
+when it does not. The `degrade` that phase 2 fired on every remote fetch is
+deleted, and a run that is interrupted until its retries are spent resumes on the
+second attempt at rung three with bytes kept.
+
+Running `get` twice against an unchanged destination writes exactly zero bytes,
+asserted on zero rather than on a comparison, and reports `unchanged` with exit
+zero. That is the headline of this phase and it is the thing `destination.foreign`
+used to make impossible.
+
+Three deterministic counters now ride in every result and gate at five percent:
+bytes read from a file, bytes written to one, and requests issued to a source.
+They found three real defects on their first runs. A warm cache grows by exactly
+zero and still writes the whole corpus, because the ingest writes before it knows
+the digest. A cold transfer of one object issued three requests where two suffice.
+A copy-on-write clone was attempted per file on a volume that can never clone,
+which doubled the cost of every placement and emitted one thousand and twenty-four
+identical `degrade` events for one volume-level fact.
+
+Two of those three are fixed and the fix is proven by counting rather than by a
+clock: requests per cold transfer went three to two and per interrupted transfer
+seven to six with bytes materialized unchanged, and degrade events went 1024 to 1.
+The third is recorded and deliberately not fixed, because the change trades a
+write on every cache hit for a read on every miss and no measurement here can say
+which is better.
+
+A correctness defect this phase found and fixed: `create_symlink` had no caller in
+any materialization path. A tree containing a symbolic link was walked, recorded
+in the tree digest, and never created, so the destination did not reproduce the
+digest the run reported. The walk discarded the target bytes, so the link could
+not even have been recreated from what was kept. Links are now created, last, and
+a test materializes a tree holding one and asserts the destination verifies back
+to the tree the run reported.
+
+The costs, and they are the honest gap.
+
+Nothing ran on macOS or on a real Linux machine this phase. The container lane
+covers the two Linux targets and Apple is compile-only, exactly as phase 2 left
+it. The Windows-reserved-name guard and the case-folding collision heuristic in
+extraction are verified on Windows alone.
+
+Many small files cost about twenty milliseconds each with a scanner enabled,
+against one large file at roughly two microseconds per kilobyte. That is the worst
+number this project has produced and it is published rather than buried. It is
+profiled rather than guessed at: the cause is that the cache writes four files per
+object and this filesystem charges more per operation as those directories fill,
+which the no-cache path does not do and which a hand-written replica of the same
+sequence reproduces exactly. Packing small objects is what git and restic both do
+about it and it is not done here, because it is a cache format change and the only
+evidence available is a machine whose identical runs differ by forty percent.
+
+The scanner answer on this machine is `unknown` rather than `present`, because
+enumerating minifilters needs elevation and an ordinary shell is refused. Defender
+was confirmed on out of band, so the small-files number is a scanner-enabled
+number even though the probe is not permitted to name the scanner.
+
+Expansion ratio is enforced by the reader and not again by extraction, because
+extraction cannot see the archive's on-disk length through the Archive seam.
+
+What phase 4 inherits. The speculative ingest write. The four-files-per-object
+layout and the packing question. Rung two, still, because no source here publishes
+an immutable identity. Two Apple crates no machine compiles. A destination
+fingerprint store, which reconcile does without by hashing, and which phase 4's
+receipt may or may not change.
+
+Sources: `cargo xtask verify` on this machine; `cargo test --workspace`;
+`cargo xtask bench`; `cargo deny check`; and the profile, formats, rejection,
+reconcile, selection, partial key, counters and small-files records above.
+
+## What real archives did that the corpus never asked about
+
+Question: The hostile corpus is forty-five archives this project wrote itself,
+and every one passed. Does `get` read an archive that an ordinary tool produced.
+
+Chosen: it did not, in three ways, and the corpus could not have found any of
+them, because a suite that only reads its own output tests the writer as much as
+the reader.
+
+What a real tool produced, and what happened.
+
+`tar -C dir .`, which is how most people tar a directory, writes every member
+with a `./` prefix and a bare `./` for the root. Every one was refused, because
+`.` is a relative component and an entry path forbids those. The rule is right
+for `..` and wrong for `.`: a single dot names the directory it is already in, so
+`./a` and `a` are one entry. Worse than the refusal is what accepting it
+unchanged would have meant, which is two different tree digests for two archives
+holding identical files. The canonical member path now drops `.` components, and
+a member that is nothing but dots is the archive root and is not an entry at all.
+There is a test asserting that a plain tar, a `./`-prefixed tar, and a pax tar of
+the same three files produce one tree digest, and they do.
+
+`tar --format=pax`, which is the POSIX format and what modern tar writes by
+default, attaches an `mtime` record to every member. Every pax archive was
+refused, because the reader allowed three pax keys and called everything else an
+extended attribute. contracts.md is explicit that timestamps are excluded from a
+tree, which is not the same as an archive stating one being an error. The reader
+now discards `path`, `linkpath`, `size`, `mtime`, `atime`, `ctime`, `charset` and
+`comment`, refuses `uid`, `gid`, `uname` and `gname` as the ownership the
+contract does forbid, refuses a `SCHILY.xattr.` record as the extended attribute
+it is, and refuses a `GNU.sparse.` record because a sparse member is one this
+build cannot reconstruct and quietly writing its holes as zeroes would be a
+different file. Anything else is refused by name rather than assumed harmless.
+
+`Compress-Archive`, the zip command that ships with Windows, writes member names
+separated by backslashes. Those are still refused, and that is the decision
+rather than an oversight. The zip specification says in 4.4.17 that all slashes
+in a stored name must be forward slashes, so such an archive is malformed;
+Microsoft's own .NET changed its writer to conform in 4.6.1 rather than teach
+readers to guess. A backslash is a legal byte in a member name on Unix, so a
+reader that treats it as a separator is inventing structure the archive did not
+state, and inventing structure is how a path escape gets through. What was wrong
+was the message, which said only that the name contained a backslash and left the
+user with no idea their zip was malformed or what to do. It now says to repack
+with a writer that uses forward slashes, and why the archive cannot be read as
+written.
+
+A fourth thing this found, on the other side: the reserved-name list. Extraction
+carried a table of Windows device names and refused `CON` outright. On this
+machine a file named `CON` is created and listed back exactly, so the volume
+represents it and contracts.md's `destination.unrepresentable` does not apply.
+That table was also the thing the collision record already said not to build, a
+table Fetchloom would have to keep correct. The list now decides only which names
+are worth confirming, never the verdict: a suspicious name is created and the
+directory is read back, and the name is refused only when the volume stored
+something other than what was asked for. That is what catches the two cases that
+genuinely are unrepresentable, where Windows silently drops a trailing dot and
+turns a colon into an alternate data stream on a shorter name, and it accepts
+`CON` because this volume genuinely stores it.
+
+Cleanup changed with it. Removing the names extraction recorded is not enough
+when the volume stored a different one, because the file that exists is not a
+file this run can have recorded. Staging is documented as given empty, so a
+failure now empties it rather than unwinding a list.
+
+Costs: the confirming read of a directory happens for a name that looks
+suspicious, which is a syscall those members do not otherwise need. It is bounded
+by how many such names an archive holds, which for every real dataset is none.
+
+Uncertain: whether a volume exists that stores a trailing dot, in which case
+Fetchloom will accept a name that most Windows software cannot open. That is the
+measurement being trusted over the table, deliberately, and the run says what it
+did.
+
+Sources: GNU tar 1.35 output on this machine for the `./` and pax forms;
+`Compress-Archive` on this machine for the backslash form; the zip specification
+section 4.4.17; Microsoft's documentation of the .NET 4.6.1 separator change; the
+pax keyword list the `tar` crate defines; contracts.md Materialization.
