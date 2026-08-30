@@ -43,7 +43,10 @@ fn read(body: impl Read) -> Vec<u8> {
 #[test]
 fn a_credential_is_sent_on_the_first_request() {
     let server = TestServer::start(Script::serving(object())).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let credential = credential();
 
     let body = source
@@ -68,7 +71,10 @@ fn a_credential_is_dropped_across_a_redirect_to_a_different_port() {
     }]))
     .unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let credential = credential();
 
     let body = source
@@ -95,7 +101,10 @@ fn a_credential_survives_a_same_origin_redirect() {
     }]))
     .unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let credential = credential();
 
     let body = source
@@ -122,7 +131,10 @@ fn the_drop_across_a_cross_origin_redirect_is_reported_as_a_degradation() {
     }]))
     .unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let credential = credential();
     let requested_location = format!("{}/object", server.origin());
 
@@ -163,7 +175,10 @@ fn the_secret_never_appears_in_an_error_produced_after_a_cross_origin_redirect()
     }]))
     .unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let credential = credential();
 
     let failure = source

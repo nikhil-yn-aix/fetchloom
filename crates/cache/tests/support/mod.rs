@@ -15,6 +15,7 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
 use fetchloom_engine::hashing::hash_bytes;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_platform::NativePlatform;
@@ -43,6 +44,7 @@ pub fn open_cache_with(
         NativePlatform::new(),
         DurabilityTier::Fast,
         policy,
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     )
 }
 
@@ -71,7 +73,7 @@ pub fn bytes_of(length: usize, seed: u8) -> Vec<u8> {
 /// Publishes bytes into a cache and returns their digest.
 pub fn publish(into: &Cache<NativePlatform>, bytes: &[u8]) -> ContentDigest {
     let digest = hash_bytes(bytes);
-    let lease = into.lease(digest).unwrap();
+    let lease = into.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = into.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(bytes).unwrap();
     into.commit(lease, writer).unwrap();
@@ -100,6 +102,7 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
         NativePlatform::new(),
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     )
 }
 

@@ -20,6 +20,7 @@ pub mod store;
 pub mod verify;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use fetchloom_engine::capability::Backing;
 use fetchloom_engine::durability::DurabilityTier;
@@ -27,6 +28,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::BootId;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::verification::VerificationPolicy;
+use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{DIRECTORIES, Layout};
 
@@ -53,6 +55,7 @@ pub struct Cache<P: Platform> {
     tier: DurabilityTier,
     policy: VerificationPolicy,
     token: OwnerToken,
+    work: Arc<WorkCounter>,
 }
 
 impl<P: Platform> Cache<P> {
@@ -73,6 +76,7 @@ impl<P: Platform> Cache<P> {
         platform: P,
         tier: DurabilityTier,
         policy: VerificationPolicy,
+        work: Arc<WorkCounter>,
     ) -> Result<Self, Error> {
         let layout = Layout::new(root.as_ref());
         create_directories(&layout)?;
@@ -87,6 +91,7 @@ impl<P: Platform> Cache<P> {
             tier,
             policy,
             token,
+            work,
         };
         cache.recover()?;
         Ok(cache)
@@ -114,6 +119,12 @@ impl<P: Platform> Cache<P> {
     #[must_use]
     pub fn policy(&self) -> VerificationPolicy {
         self.policy
+    }
+
+    /// Returns where the run counts the file bytes it moves.
+    #[must_use]
+    pub fn work(&self) -> &Arc<WorkCounter> {
+        &self.work
     }
 
     /// Returns what this process records about itself.

@@ -3,15 +3,18 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::CacheFormatFingerprint;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::store::{CacheStatus, PruneReport, Store};
 use fetchloom_engine::source_record::SourceRecord;
 use fetchloom_engine::verification::VerificationPolicy;
+use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{digest_of, name_of};
 use crate::record::{self, RecordedFingerprint};
@@ -48,6 +51,7 @@ pub struct PartialWriter {
     path: PathBuf,
     hasher: blake3::Hasher,
     written: u64,
+    work: Arc<WorkCounter>,
 }
 
 impl PartialWriter {
@@ -63,6 +67,7 @@ impl Write for PartialWriter {
         let taken = self.file.write(bytes)?;
         self.hasher.update(&bytes[..taken]);
         self.written += taken as u64;
+        self.work.wrote_bytes(taken as u64);
         Ok(taken)
     }
 
@@ -71,19 +76,19 @@ impl Write for PartialWriter {
     }
 }
 
-/// The single-writer claim on one digest.
+/// The single-writer claim on one key.
 #[derive(Debug)]
 pub struct WriteLease<L> {
-    digest: ContentDigest,
+    key: PartialKey,
     waited_for: Option<OwnerToken>,
     lock: L,
 }
 
 impl<L> WriteLease<L> {
-    /// Returns the digest this claim is on.
+    /// Returns the key this claim is on.
     #[must_use]
-    pub fn digest(&self) -> ContentDigest {
-        self.digest
+    pub fn key(&self) -> PartialKey {
+        self.key
     }
 
     /// Returns the holder this claim waited for, when it waited.
@@ -190,6 +195,7 @@ impl<P: Platform> Cache<P> {
                 break;
             }
             hasher.update(&buffer[..filled]);
+            self.work().read_bytes(filled as u64);
         }
         Ok(ContentDigest::from_bytes(*hasher.finalize().as_bytes()))
     }
@@ -255,24 +261,24 @@ impl<P: Platform> Store for Cache<P> {
         Ok(ObjectReader { file, lease })
     }
 
-    fn lease(&self, digest: ContentDigest) -> Result<Self::Lease, Error> {
-        let path = self.layout.lock_of(digest);
+    fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error> {
+        let path = self.layout.lock_of(key.name());
         let (lock, waited_for) = if let Some(held) = self.platform.try_lock(&path)? {
             (held, None)
         } else {
-            let holder = record::read_owner(&self.layout.lock_owner_of(digest))?;
+            let holder = record::read_owner(&self.layout.lock_owner_of(key.name()))?;
             (self.platform.lock(&path)?, holder)
         };
-        record::write(&self.layout.lock_owner_of(digest), &self.token)?;
+        record::write(&self.layout.lock_owner_of(key.name()), &self.token)?;
         Ok(WriteLease {
-            digest,
+            key,
             waited_for,
             lock,
         })
     }
 
     fn begin(&self, lease: &Self::Lease, length: u64) -> Result<Self::Writer, Error> {
-        let path = self.layout.partial_of(lease.digest);
+        let path = self.layout.partial_of(lease.key.name());
         if path.exists() {
             std::fs::remove_file(&path)
                 .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
@@ -285,11 +291,12 @@ impl<P: Platform> Store for Cache<P> {
             path,
             hasher: blake3::Hasher::new(),
             written: 0,
+            work: Arc::clone(self.work()),
         })
     }
 
     fn resume(&self, lease: &Self::Lease, length: u64, valid: u64) -> Result<Self::Writer, Error> {
-        let path = self.layout.partial_of(lease.digest);
+        let path = self.layout.partial_of(lease.key.name());
         if !path.exists() || valid == 0 {
             return self.begin(lease, length);
         }
@@ -316,6 +323,7 @@ impl<P: Platform> Store for Cache<P> {
             }
             hasher.update(&buffer[..taken]);
             written += taken as u64;
+            self.work().read_bytes(taken as u64);
         }
         drop(existing);
 
@@ -329,23 +337,27 @@ impl<P: Platform> Store for Cache<P> {
             path,
             hasher,
             written,
+            work: Arc::clone(self.work()),
         })
     }
 
-    fn record_source(&self, digest: ContentDigest, record: &SourceRecord) -> Result<(), Error> {
-        record::write(&source_record_of(&self.layout.partial_of(digest)), record)
+    fn record_source(&self, key: PartialKey, record: &SourceRecord) -> Result<(), Error> {
+        record::write(
+            &source_record_of(&self.layout.partial_of(key.name())),
+            record,
+        )
     }
 
-    fn recorded_source(&self, digest: ContentDigest) -> Result<Option<SourceRecord>, Error> {
-        let partial = self.layout.partial_of(digest);
+    fn recorded_source(&self, key: PartialKey) -> Result<Option<SourceRecord>, Error> {
+        let partial = self.layout.partial_of(key.name());
         if !partial.exists() {
             return Ok(None);
         }
         record::read(&source_record_of(&partial))
     }
 
-    fn discard_partial(&self, digest: ContentDigest) -> Result<(), Error> {
-        let partial = self.layout.partial_of(digest);
+    fn discard_partial(&self, key: PartialKey) -> Result<(), Error> {
+        let partial = self.layout.partial_of(key.name());
         let _ = std::fs::remove_file(source_record_of(&partial));
         let _ = std::fs::remove_file(owner_record_of(&partial));
         match std::fs::remove_file(&partial) {
@@ -355,16 +367,17 @@ impl<P: Platform> Store for Cache<P> {
         }
     }
 
-    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<(), Error> {
+    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<ContentDigest, Error> {
         let found = ContentDigest::from_bytes(*writer.hasher.finalize().as_bytes());
-        if found != lease.digest {
+        if let Some(expected) = lease.key.expected()
+            && found != expected
+        {
             let _ = std::fs::remove_file(&writer.path);
             let _ = std::fs::remove_file(owner_record_of(&writer.path));
             return Err(Error::new(
                 ErrorKind::IntegrityMismatch,
                 format!(
-                    "fetch it again, because the bytes written hash to {found} rather than {}",
-                    lease.digest
+                    "fetch it again, because the bytes written hash to {found} rather than {expected}"
                 ),
             ));
         }
@@ -372,16 +385,16 @@ impl<P: Platform> Store for Cache<P> {
         self.platform.flush(&writer.file, self.tier)?;
         drop(writer.file);
 
-        let object = self.layout.object(lease.digest);
+        let object = self.layout.object(found);
         self.platform
             .publish_file(&writer.path, &object, self.tier)?;
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
         seal_object(&object)?;
 
-        self.record_fingerprint(lease.digest)?;
-        let _ = std::fs::remove_file(self.layout.mark_of(lease.digest));
+        self.record_fingerprint(found)?;
+        let _ = std::fs::remove_file(self.layout.mark_of(found));
         drop(lease);
-        Ok(())
+        Ok(found)
     }
 
     fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error> {

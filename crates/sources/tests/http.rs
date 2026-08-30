@@ -33,7 +33,10 @@ fn read(body: impl Read) -> Vec<u8> {
 fn a_probe_reports_the_length_the_validator_and_range_support() {
     let server =
         TestServer::start(Script::serving(object()).tagged(vec!["\"one\"".to_owned()])).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let found = source
         .probe(&format!("{}/object", server.origin()), None)
         .unwrap();
@@ -51,7 +54,10 @@ fn a_probe_reports_the_length_the_validator_and_range_support() {
 fn a_weak_validator_is_reported_as_weak() {
     let server =
         TestServer::start(Script::serving(object()).tagged(vec!["W/\"one\"".to_owned()])).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let found = source
         .probe(&format!("{}/object", server.origin()), None)
         .unwrap();
@@ -65,7 +71,10 @@ fn a_weak_validator_is_reported_as_weak() {
 #[test]
 fn a_source_that_withholds_range_support_is_reported_as_withholding_it() {
     let server = TestServer::start(Script::serving(object()).ranges(false)).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let found = source
         .probe(&format!("{}/object", server.origin()), None)
         .unwrap();
@@ -77,7 +86,10 @@ fn a_source_that_withholds_range_support_is_reported_as_withholding_it() {
 #[test]
 fn fetching_the_whole_object_returns_every_byte() {
     let server = TestServer::start(Script::serving(object())).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let body = source
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap();
@@ -88,7 +100,10 @@ fn fetching_the_whole_object_returns_every_byte() {
 #[test]
 fn fetching_a_range_asks_for_it_and_returns_only_that_span() {
     let server = TestServer::start(Script::serving(object())).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let body = source
         .fetch(
             &format!("{}/object", server.origin()),
@@ -112,7 +127,10 @@ fn fetching_a_range_asks_for_it_and_returns_only_that_span() {
 fn a_range_answered_with_the_whole_object_is_refused_as_unsupported() {
     let server =
         TestServer::start(Script::serving(object()).replying(vec![Reply::RangeIgnored])).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let failure = source
         .fetch(
             &format!("{}/object", server.origin()),
@@ -134,7 +152,10 @@ fn a_range_the_server_cannot_satisfy_is_refused_as_unsupported() {
         retry_after: None,
     }]))
     .unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let failure = source
         .fetch(
             &format!("{}/object", server.origin()),
@@ -164,7 +185,10 @@ fn a_terminal_status_is_not_retryable_and_a_transient_one_is() {
             retry_after: None,
         }]))
         .unwrap();
-        let source = HttpSource::new(Limits::default());
+        let source = HttpSource::new(
+            Limits::default(),
+            std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+        );
         let failure = source
             .fetch(&format!("{}/object", server.origin()), None, None)
             .unwrap_err();
@@ -181,7 +205,10 @@ fn a_rate_limited_source_reports_the_wait_it_asked_for() {
         retry_after: Some("120".to_owned()),
     }]))
     .unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let failure = source
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap_err();
@@ -204,7 +231,10 @@ fn every_recognized_index_is_listed_and_an_unrecognized_one_is_unresolved() {
         let server =
             TestServer::start(Script::serving(object()).replying(vec![Reply::Listing { format }]))
                 .unwrap();
-        let source = HttpSource::new(Limits::default());
+        let source = HttpSource::new(
+            Limits::default(),
+            std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+        );
         let listed = source
             .list(&format!("{}/set/", server.origin()), None)
             .unwrap();
@@ -216,7 +246,10 @@ fn every_recognized_index_is_listed_and_an_unrecognized_one_is_unresolved() {
         format: IndexFormat::Unrecognized,
     }]))
     .unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let failure = source
         .list(&format!("{}/set/", server.origin()), None)
         .unwrap_err();
@@ -232,7 +265,10 @@ fn a_redirect_is_followed_and_the_bytes_arrive() {
     }]))
     .unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let body = source
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap();
@@ -248,7 +284,10 @@ fn a_redirect_loop_ends_rather_than_running_forever() {
     };
     let looping = TestServer::start(script).unwrap();
 
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
     let failure = source
         .fetch(&format!("{}/loop", looping.origin()), None, None)
         .unwrap_err();
@@ -267,7 +306,10 @@ fn a_span_that_is_not_the_one_asked_for_is_refused() {
         Script::serving(object()).replying(vec![Reply::WrongRange { shift: 64 }]),
     )
     .unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
 
     let failure = source
         .fetch(
@@ -291,7 +333,10 @@ fn a_span_that_is_not_the_one_asked_for_is_refused() {
 #[test]
 fn the_span_that_was_asked_for_is_accepted() {
     let server = TestServer::start(Script::serving(object())).unwrap();
-    let source = HttpSource::new(Limits::default());
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
 
     let body = source
         .fetch(

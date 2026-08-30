@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::hash_bytes;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
@@ -58,7 +59,7 @@ fn an_object_appears_only_when_a_commit_completes() {
     let bytes = bytes_of(4096, 7);
     let digest = hash_bytes(&bytes);
 
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(&bytes).unwrap();
 
@@ -89,7 +90,7 @@ fn a_committed_object_reads_back_the_bytes_that_were_written() {
     let bytes = bytes_of(1 << 16, 31);
     let digest = hash_bytes(&bytes);
 
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(&bytes).unwrap();
     held.commit(lease, writer).unwrap();
@@ -105,7 +106,7 @@ fn bytes_that_do_not_hash_to_the_digest_are_refused_and_publish_nothing() {
     let claimed = hash_bytes(b"what was asked for");
     let bytes = b"what arrived instead";
 
-    let lease = held.lease(claimed).unwrap();
+    let lease = held.lease(PartialKey::of_content(claimed)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(bytes).unwrap();
     let refused = held.commit(lease, writer).unwrap_err();
@@ -127,7 +128,7 @@ fn an_abandoned_write_leaves_the_object_directory_empty() {
     let bytes = bytes_of(2048, 3);
     let digest = hash_bytes(&bytes);
 
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(&bytes).unwrap();
     drop(writer);
@@ -163,7 +164,7 @@ fn a_second_lease_on_one_digest_is_refused_while_the_first_is_held() {
     let (_scratch, held) = cache();
     let digest = hash_bytes(b"one digest");
 
-    let first = held.lease(digest).unwrap();
+    let first = held.lease(PartialKey::of_content(digest)).unwrap();
     let taken = held
         .platform()
         .try_lock(&held.layout().lock_of(digest))

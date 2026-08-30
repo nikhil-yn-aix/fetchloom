@@ -23,6 +23,7 @@ use std::process::Command;
 
 use fetchloom_cache::layout::Layout;
 use fetchloom_engine::hashing::hash_bytes;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::store::Store;
 
 use support::{bytes_of, cache_in};
@@ -122,7 +123,7 @@ fn race_for_one_digest() {
     let bytes = bytes_of(RACED_LENGTH, 23);
     let digest = hash_bytes(&bytes);
 
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let outcome = if held.contains(digest).unwrap() {
         "reused"
     } else {
@@ -218,7 +219,7 @@ fn publish_until_killed() {
         }
         let bytes = bytes_of(1 << 16, u8::try_from((first + done) % 251).unwrap_or(1));
         let digest = hash_bytes(&bytes);
-        let lease = held.lease(digest).unwrap();
+        let lease = held.lease(PartialKey::of_content(digest)).unwrap();
         let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
         writer.write_all(&bytes).unwrap();
         if done + 1 == after {
@@ -237,7 +238,7 @@ fn recovery_keeps_what_this_boot_wrote_and_removes_what_a_previous_boot_left() {
 
     let bytes = bytes_of(4096, 41);
     let digest = hash_bytes(&bytes);
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(&bytes).unwrap();
     drop(writer);
@@ -273,11 +274,11 @@ fn recovery_removes_the_source_record_beside_a_partial_it_removes() {
 
     let bytes = bytes_of(4096, 43);
     let digest = hash_bytes(&bytes);
-    let lease = held.lease(digest).unwrap();
+    let lease = held.lease(PartialKey::of_content(digest)).unwrap();
     let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
     writer.write_all(&bytes).unwrap();
     drop(writer);
-    held.record_source(digest, &support::a_source_record())
+    held.record_source(PartialKey::of_content(digest), &support::a_source_record())
         .unwrap();
     drop(lease);
     drop(held);

@@ -77,6 +77,7 @@ impl Drop for PlatformLock {
 #[derive(Debug, Default)]
 pub struct NativePlatform {
     degradations: DegradeQueue,
+    refused_cloning: std::sync::Mutex<std::collections::BTreeSet<std::ffi::OsString>>,
 }
 
 impl NativePlatform {
@@ -85,7 +86,44 @@ impl NativePlatform {
     pub fn new() -> Self {
         Self {
             degradations: DegradeQueue::new(),
+            refused_cloning: std::sync::Mutex::new(std::collections::BTreeSet::new()),
         }
+    }
+
+    /// Returns the volume a path is on, as far as its own text says.
+    ///
+    /// Whether a volume reference-counts blocks is a property of the volume
+    /// and never of one file on it, so the answer is remembered under this key
+    /// rather than asked again for every entry of a tree.
+    fn volume_key(path: &Path) -> std::ffi::OsString {
+        path.components()
+            .next()
+            .map_or_else(std::ffi::OsString::new, |first| {
+                first.as_os_str().to_owned()
+            })
+    }
+
+    /// Reports whether this volume has already refused to clone.
+    fn volume_refused_cloning(&self, path: &Path) -> bool {
+        self.refused_cloning
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&Self::volume_key(path))
+    }
+
+    /// Records that this volume cannot clone, so nothing asks it again.
+    fn remember_refusal(&self, path: &Path) {
+        self.refused_cloning
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(Self::volume_key(path));
+    }
+
+    /// Copies the bytes of one file into a path that does not exist.
+    fn copy_bytes(from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
+        std::fs::copy(from, to)
+            .map_err(|error| failure(ErrorKind::DestinationUnrepresentable, to, &error))?;
+        Ok(CopyMechanism::Copy)
     }
 
     /// Removes and returns every fallback performed since the last call.
@@ -242,18 +280,20 @@ impl Platform for NativePlatform {
                 format!("remove {} before placing bytes there", to.display()),
             ));
         }
+        if self.volume_refused_cloning(from) {
+            return Self::copy_bytes(from, to);
+        }
         match imp::clone_file(from, to) {
             Ok(()) => Ok(CopyMechanism::Clone),
             Err(reason) => {
+                self.remember_refusal(from);
                 self.degradations.record(
                     "a copy-on-write clone",
                     "the bytes were copied",
                     reason.next_action().to_owned(),
                 );
                 let _ = std::fs::remove_file(to);
-                std::fs::copy(from, to)
-                    .map_err(|error| failure(ErrorKind::DestinationUnrepresentable, to, &error))?;
-                Ok(CopyMechanism::Copy)
+                Self::copy_bytes(from, to)
             }
         }
     }

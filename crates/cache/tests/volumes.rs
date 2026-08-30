@@ -19,6 +19,7 @@ use std::io::Write;
 
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::hash_bytes;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::store::Store;
 
 use support::{Property, bytes_of, scratch_on, volumes};
@@ -57,7 +58,7 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
         let mut wrote = 0u32;
         let outcome = loop {
             let digest = hash_bytes(&bytes_of(1 << 20, u8::try_from(wrote % 251).unwrap_or(1)));
-            let lease = match held.lease(digest) {
+            let lease = match held.lease(PartialKey::of_content(digest)) {
                 Ok(lease) => lease,
                 Err(refused) => break refused,
             };

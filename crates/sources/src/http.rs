@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use fetchloom_engine::credential::Credential;
@@ -21,6 +21,7 @@ use fetchloom_engine::seam::source::{
 };
 
 use fetchloom_engine::limits::Limits;
+use fetchloom_engine::work::WorkCounter;
 
 use crate::index;
 use crate::origin::Origin;
@@ -48,16 +49,21 @@ pub struct HttpSource {
     agents: Mutex<HashMap<String, ureq::Agent>>,
     degradations: DegradeQueue,
     limits: Limits,
+    work: Arc<WorkCounter>,
 }
 
 impl HttpSource {
     /// Builds a source holding no connections yet.
+    ///
+    /// Takes the bounds every request obeys and where the run counts the
+    /// requests it issues.
     #[must_use]
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
             agents: Mutex::new(HashMap::new()),
             degradations: DegradeQueue::new(),
             limits,
+            work,
         }
     }
 
@@ -113,6 +119,7 @@ impl HttpSource {
                     &format!("bytes={}-{}", range.start, range.end.saturating_sub(1)),
                 );
             }
+            self.work.issued_request();
             let answer = request
                 .call()
                 .map_err(|reason| transport_failure(&current, &reason))?;

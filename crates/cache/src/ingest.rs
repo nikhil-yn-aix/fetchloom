@@ -9,6 +9,7 @@ use std::path::Path;
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
@@ -98,10 +99,12 @@ impl<P: Platform> Cache<P> {
                 .map_err(|reason| failure(ErrorKind::CacheCorrupt, &scratch, &reason))?;
             hasher.update(&buffer[..filled]);
             written += filled as u64;
+            self.work().read_bytes(filled as u64);
+            self.work().wrote_bytes(filled as u64);
         }
         let digest = ContentDigest::from_bytes(*hasher.finalize().as_bytes());
 
-        let lease = self.lease(digest)?;
+        let lease = self.lease(PartialKey::of_content(digest))?;
         let waited_for = lease.waited_for().cloned();
         if self.contains(digest)? {
             drop(lease);
@@ -117,11 +120,9 @@ impl<P: Platform> Cache<P> {
         self.platform().flush(&writing, self.tier())?;
         drop(writing);
 
-        let named = self.layout().partial_of(digest);
-        self.platform()
-            .publish_file(&scratch, &named, self.tier())?;
         let object = self.layout().object(digest);
-        self.platform().publish_file(&named, &object, self.tier())?;
+        self.platform()
+            .publish_file(&scratch, &object, self.tier())?;
         seal_object(&object)?;
         self.record_fingerprint(digest)?;
         drop(lease);
