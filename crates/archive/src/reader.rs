@@ -3,6 +3,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
@@ -10,7 +11,7 @@ use fetchloom_engine::seam::archive::{Archive, ArchiveMember};
 
 use crate::bare::{self, BareCompression};
 use crate::shared::SharedSource;
-use crate::tar_reader::{self, TarCompression, TarOffset};
+use crate::tar_reader::{self, TarCompression, TarOffset, TarStream};
 use crate::zip_reader::{self, ZipOffset};
 
 enum Offsets {
@@ -32,6 +33,8 @@ pub struct ArchiveReader<R> {
     limits: Limits,
     on_disk_bytes: u64,
     cache: Option<(Vec<ArchiveMember>, Offsets)>,
+    tar_stream: Option<TarStream>,
+    degradations: DegradeQueue,
 }
 
 impl<R: Read + Seek + 'static> ArchiveReader<R> {
@@ -64,7 +67,15 @@ impl<R: Read + Seek + 'static> ArchiveReader<R> {
             limits,
             on_disk_bytes,
             cache: None,
+            tar_stream: None,
+            degradations: DegradeQueue::new(),
         })
+    }
+
+    /// Removes and returns every fallback this reader performed so far.
+    #[must_use]
+    pub fn take_degradations(&self) -> Vec<Degradation> {
+        self.degradations.take()
     }
 
     fn tar_compression(&self) -> Option<TarCompression> {
@@ -115,6 +126,7 @@ impl<R: Read + Seek + 'static> ArchiveReader<R> {
                 &self.name,
                 self.on_disk_bytes,
                 self.limits,
+                &self.degradations,
             )?;
             return Ok((members, Offsets::Zip(offsets)));
         }
@@ -169,7 +181,14 @@ impl<R: Read + Seek + 'static> Archive for ArchiveReader<R> {
         match offsets {
             Offsets::Tar(entries) => {
                 let compression = self.tar_compression().unwrap_or(TarCompression::None);
-                tar_reader::open_member(&self.source, compression, &self.name, entries[index])
+                let offset = entries[index];
+                tar_reader::open_member(
+                    &mut self.tar_stream,
+                    &self.source,
+                    compression,
+                    &self.name,
+                    offset,
+                )
             }
             Offsets::Zip(entries) => zip_reader::open_member(&self.source, entries[index]),
             Offsets::Bare(size) => {

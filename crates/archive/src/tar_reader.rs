@@ -1,6 +1,8 @@
 //! Reading a POSIX ustar stream, bare or wrapped in one compression.
 
+use std::cell::{Cell, RefCell};
 use std::io::{Read, Seek, SeekFrom};
+use std::rc::Rc;
 
 use bzip2::read::BzDecoder;
 use fetchloom_engine::error::{Error, ErrorKind};
@@ -236,33 +238,112 @@ pub fn list_members<R: Read + Seek + 'static>(
     Ok((members, offsets))
 }
 
-/// Opens one member's bytes by decompressing the stream from the start and
-/// streaming forward to its offset.
+/// A decompressed tar stream held open between members.
 ///
-/// Takes the shared source, the compression that wraps it, the archive's
-/// name for error messages, and the offset `list_members` recorded for the
-/// member. Returns a reader bounded to exactly the member's size.
+/// A tar is a stream, so a member's bytes can only be reached by reading
+/// everything before them. Rebuilding the decompressor for every member costs
+/// one full decompression per member, which is quadratic in the member count
+/// and is what made a 515-member xz archive take minutes. Holding one stream
+/// open and moving forward through it costs one decompression for the whole
+/// archive, whenever the members are read in the order the archive holds
+/// them, which is the order extraction reads them in.
+pub struct TarStream {
+    decoder: Rc<RefCell<Box<dyn Read>>>,
+    position: Rc<Cell<u64>>,
+}
+
+impl Clone for TarStream {
+    fn clone(&self) -> Self {
+        Self {
+            decoder: Rc::clone(&self.decoder),
+            position: Rc::clone(&self.position),
+        }
+    }
+}
+
+/// One member's bytes, read out of the stream the archive holds open.
+///
+/// Reads at most the member's own length and advances the stream's position
+/// by exactly what it yielded, so a body dropped before it is exhausted
+/// leaves the stream describing itself correctly.
+pub struct MemberBody {
+    stream: TarStream,
+    remaining: u64,
+}
+
+impl Read for MemberBody {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let limit = usize::try_from(self.remaining).unwrap_or(usize::MAX);
+        let take = buffer.len().min(limit);
+        let read = self.stream.decoder.borrow_mut().read(&mut buffer[..take])?;
+        self.remaining -= read as u64;
+        self.stream
+            .position
+            .set(self.stream.position.get() + read as u64);
+        Ok(read)
+    }
+}
+
+/// Opens one member's bytes out of a stream held open across members.
+///
+/// Takes the stream the reader is holding, which is replaced when there is
+/// none or when the member sits behind where the stream has already reached,
+/// the shared source, the compression that wraps it, the archive's name for
+/// error messages, and the offset `list_members` recorded for the member.
+/// Returns a reader bounded to exactly the member's size.
 ///
 /// # Errors
 ///
 /// Fails when the stream cannot be rewound or is truncated or malformed
 /// before reaching the member's offset.
 pub fn open_member<R: Read + Seek + 'static>(
+    held: &mut Option<TarStream>,
     source: &SharedSource<R>,
     compression: TarCompression,
     archive_name: &str,
     offset: TarOffset,
 ) -> Result<Box<dyn Read>, Error> {
-    let mut rewind = source.clone();
-    rewind
-        .seek(SeekFrom::Start(0))
-        .map_err(|error| io_error(archive_name, &error))?;
-    let mut decompressor = build_decompressor(compression, rewind, archive_name)?;
-    let mut remaining = offset.data_start;
+    let reusable = held
+        .as_ref()
+        .is_some_and(|stream| stream.position.get() <= offset.data_start);
+    if !reusable {
+        let mut rewind = source.clone();
+        rewind
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| io_error(archive_name, &error))?;
+        *held = Some(TarStream {
+            decoder: Rc::new(RefCell::new(build_decompressor(
+                compression,
+                rewind,
+                archive_name,
+            )?)),
+            position: Rc::new(Cell::new(0)),
+        });
+    }
+    let Some(stream) = held.as_ref() else {
+        return Err(io_error(
+            archive_name,
+            &std::io::Error::other("the stream was not opened"),
+        ));
+    };
+    skip_to(stream, offset.data_start, archive_name)?;
+    Ok(Box::new(MemberBody {
+        stream: stream.clone(),
+        remaining: offset.size,
+    }))
+}
+
+fn skip_to(stream: &TarStream, target: u64, archive_name: &str) -> Result<(), Error> {
     let mut buffer = vec![0_u8; 65_536];
-    while remaining > 0 {
+    while stream.position.get() < target {
+        let remaining = target - stream.position.get();
         let chunk = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
-        let read = decompressor
+        let read = stream
+            .decoder
+            .borrow_mut()
             .read(&mut buffer[..chunk])
             .map_err(|error| io_error(archive_name, &error))?;
         if read == 0 {
@@ -271,7 +352,7 @@ pub fn open_member<R: Read + Seek + 'static>(
                 &std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "stream ended early"),
             ));
         }
-        remaining -= read as u64;
+        stream.position.set(stream.position.get() + read as u64);
     }
-    Ok(Box::new(decompressor.take(offset.size)))
+    Ok(())
 }
