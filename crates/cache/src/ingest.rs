@@ -46,15 +46,127 @@ impl<P: Platform> Cache<P> {
     /// Fails when the source cannot be read, when the cache cannot be written,
     /// and when the volume has no room.
     pub fn ingest(&self, source: &Path) -> Result<Ingested, Error> {
+        let (digest, length) = self.digest_of(source)?;
+        if self.contains(digest)? {
+            return Ok(Ingested {
+                digest,
+                size: length,
+                was_present: true,
+                waited_for: None,
+            });
+        }
         let reading = std::fs::File::open(source)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
-        let length = reading
-            .metadata()
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?
-            .len();
         self.ingest_from(reading, length, &|reason| {
             failure(ErrorKind::CacheCorrupt, source, reason)
         })
+    }
+
+    /// Reads a file and returns what it hashes to and how long it is, writing
+    /// nothing.
+    ///
+    /// A file already in the cache must cost the cache no write at all, and
+    /// only its digest says whether it is. The cost is that a file the cache
+    /// does not hold is read twice, once to learn its name and once to store
+    /// it; the alternative was writing every byte of every file the cache
+    /// already held, on every run.
+    fn digest_of(&self, source: &Path) -> Result<(ContentDigest, u64), Error> {
+        let mut reading = std::fs::File::open(source)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = vec![0u8; BUFFER];
+        let mut length = 0u64;
+        loop {
+            let filled = reading
+                .read(&mut buffer)
+                .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+            if filled == 0 {
+                break;
+            }
+            hasher.update(&buffer[..filled]);
+            length += filled as u64;
+            self.work().read_bytes(filled as u64);
+        }
+        Ok((
+            ContentDigest::from_bytes(*hasher.finalize().as_bytes()),
+            length,
+        ))
+    }
+
+    /// Puts a file whose digest is already known into the cache.
+    ///
+    /// Takes the digest the file's bytes hash to, its length, and where it
+    /// sits. Returns what the cache did with it. The bytes are cloned
+    /// where the volume can share blocks and copied where it cannot, so a
+    /// caller that had to write the file anyway pays no second read of the
+    /// source to fill the cache, and pays nothing at all when the cache
+    /// already holds the object.
+    ///
+    /// The caller states the digest, so the caller is what makes it true. This
+    /// is for a file this process just wrote and hashed in the same pass, not
+    /// for one whose digest was taken on trust.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read, when the cache cannot be written,
+    /// and when the volume has no room.
+    pub fn adopt(
+        &self,
+        digest: ContentDigest,
+        length: u64,
+        source: &Path,
+    ) -> Result<Ingested, Error> {
+        let present = |waited_for| Ingested {
+            digest,
+            size: length,
+            was_present: true,
+            waited_for,
+        };
+        if self.contains(digest)? {
+            return Ok(present(None));
+        }
+        let scratch = self.scratch_path();
+        let _ = std::fs::remove_file(&scratch);
+        self.platform().clone_or_copy(source, &scratch)?;
+
+        let lease = self.lease(PartialKey::of_content(digest))?;
+        let waited_for = lease.waited_for().cloned();
+        if self.contains(digest)? {
+            drop(lease);
+            let _ = std::fs::remove_file(&scratch);
+            return Ok(present(waited_for));
+        }
+        self.work().wrote_bytes(length);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&scratch)
+            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &scratch, &reason))?;
+        self.platform().flush(&written, self.tier())?;
+        drop(written);
+        self.publish_scratch(&scratch, digest)?;
+        drop(lease);
+        Ok(Ingested {
+            digest,
+            size: length,
+            was_present: false,
+            waited_for,
+        })
+    }
+
+    fn scratch_path(&self) -> std::path::PathBuf {
+        self.layout().partial().join(format!(
+            "{}-{}.ingest",
+            self.token().pid,
+            self.token().start
+        ))
+    }
+
+    fn publish_scratch(&self, scratch: &Path, digest: ContentDigest) -> Result<(), Error> {
+        let object = self.layout().object(digest);
+        self.platform()
+            .publish_file(scratch, &object, self.tier())?;
+        seal_object(&object)?;
+        self.record_fingerprint(digest)
     }
 
     /// Reads a stream once, hashing it as it is written into the cache.
@@ -75,11 +187,7 @@ impl<P: Platform> Cache<P> {
         read_failure: &dyn Fn(&std::io::Error) -> Error,
     ) -> Result<Ingested, Error> {
         let mut reading = reading;
-        let scratch = self.layout().partial().join(format!(
-            "{}-{}.ingest",
-            self.token().pid,
-            self.token().start
-        ));
+        let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
         let mut writing = self.platform().create_file_exclusive(&scratch)?;
         self.platform().preallocate(&writing, length)?;
@@ -120,11 +228,7 @@ impl<P: Platform> Cache<P> {
         self.platform().flush(&writing, self.tier())?;
         drop(writing);
 
-        let object = self.layout().object(digest);
-        self.platform()
-            .publish_file(&scratch, &object, self.tier())?;
-        seal_object(&object)?;
-        self.record_fingerprint(digest)?;
+        self.publish_scratch(&scratch, digest)?;
         drop(lease);
 
         Ok(Ingested {

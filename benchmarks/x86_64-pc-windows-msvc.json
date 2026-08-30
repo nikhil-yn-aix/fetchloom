@@ -3,11 +3,11 @@
   "regimes": [
     {
       "regime": "no-op",
-      "iterations": 1,
+      "iterations": 9,
       "metrics": [
         {
           "name": "binary-size",
-          "value": 4635648.0,
+          "value": 4704768.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -15,7 +15,7 @@
     },
     {
       "regime": "cold-cache",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "cache-growth",
@@ -31,7 +31,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 16777216.0,
+          "value": 33554432.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -45,7 +45,7 @@
     },
     {
       "regime": "warm-cache",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "cache-growth",
@@ -75,7 +75,7 @@
     },
     {
       "regime": "cold-transfer",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "bytes-materialized",
@@ -105,7 +105,7 @@
     },
     {
       "regime": "interrupted-transfer",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "bytes-materialized",
@@ -135,7 +135,7 @@
     },
     {
       "regime": "many-small-files",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "bytes-read",
@@ -145,7 +145,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 1048576.0,
+          "value": 1305600.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -159,7 +159,7 @@
     },
     {
       "regime": "one-large-file",
-      "iterations": 1,
+      "iterations": 3,
       "metrics": [
         {
           "name": "bytes-read",
@@ -169,7 +169,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 268435456.0,
+          "value": 536870912.0,
           "unit": "bytes",
           "kind": "deterministic"
         },

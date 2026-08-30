@@ -107,7 +107,7 @@ fn identical_inputs_count_identically() {
 }
 
 #[test]
-fn a_local_ingest_reads_every_source_byte_once_whether_or_not_the_cache_holds_it() {
+fn a_local_ingest_writes_nothing_into_a_cache_that_already_holds_the_bytes() {
     let temporary = TempDir::new().unwrap();
     let source = temporary.path().join("source");
     corpus(&source);
@@ -115,12 +115,18 @@ fn a_local_ingest_reads_every_source_byte_once_whether_or_not_the_cache_holds_it
 
     let cold = get_reporting_work(&source, &temporary.path().join("cold"), &cache);
     let warm = get_reporting_work(&source, &temporary.path().join("warm"), &cache);
-    assert_eq!(
-        warm.bytes_read, cold.bytes_read,
-        "a local source states no digest, so both runs must read it once to learn one"
+
+    assert!(
+        warm.bytes_written < cold.bytes_written,
+        "a run against a cache that already holds every object wrote as much as the run that \
+         filled it: cold {} warm {}",
+        cold.bytes_written,
+        warm.bytes_written
     );
     assert_eq!(
-        warm.bytes_written, cold.bytes_written,
-        "the ingest writes before it knows the digest, so a hit writes what it then discards"
+        cold.bytes_read, warm.bytes_read,
+        "a local source states no digest, so both runs read it exactly once to learn one: \
+         cold {} warm {}",
+        cold.bytes_read, warm.bytes_read
     );
 }
