@@ -17,10 +17,10 @@ pub const REGRESSION_GATE: f64 = 0.05;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
-    /// Identical on identical inputs, so it gates on every machine.
+    /// Identical on identical inputs. Gates on every machine.
     Deterministic,
-    /// A property of the machine as much as the code, so it gates only on
-    /// a verification run against a baseline from that same machine.
+    /// A property of the machine as much as the code. Gates only on a
+    /// verification run against a baseline from that same machine.
     Timing,
 }
 
@@ -292,8 +292,7 @@ fn binary_name(stem: &str) -> String {
 /// Reports what is inspecting writes on the volume the regimes run on.
 ///
 /// Takes the directory the regimes write into. Returns the sentence the
-/// benchmark prints beside its numbers, so a small-files measurement always
-/// says which lane it came from rather than leaving the reader to guess.
+/// benchmark prints beside its numbers, naming which lane it came from.
 ///
 /// # Errors
 ///
@@ -327,9 +326,7 @@ pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::er
 
 /// How many files the many-small-files regime materializes.
 ///
-/// Enough that per-entry cost dominates the bytes moved, and no more, because
-/// this regime runs under `cargo xtask verify` and a scanner-enabled run of it
-/// costs about a second per hundred files on the machine that measured it.
+/// Enough that per-entry cost dominates the bytes moved, and no more.
 const SMALL_FILES: usize = 1024;
 
 /// How many bytes each of those files holds.
@@ -435,10 +432,8 @@ const CORPUS_FILE_BYTES: usize = 256 * 1024;
 /// Runs the cold cache and warm cache regimes and returns what they measured.
 ///
 /// A cold run starts with an empty cache and writes every object into it. A warm
-/// run uses the cache the cold run filled and writes nothing into it, which is
-/// the deterministic difference between the two: the warm run's cache growth is
-/// zero. Both runs materialize the same tree, so the timing difference is the
-/// work the cache saved.
+/// run uses the cache the cold run filled and writes nothing into it: the warm
+/// run's cache growth is zero. Both runs materialize the same tree.
 ///
 /// # Errors
 ///
@@ -532,7 +527,7 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
 /// Reports whether the warm regime was faster than the cold one.
 ///
 /// Takes the regimes a run measured. Returns nothing when the two are not both
-/// present, which is what a run that measured neither answers.
+/// present.
 #[must_use]
 pub fn warm_beat_cold(regimes: &[RegimeResult]) -> Option<(f64, f64)> {
     let wall = |name: &str| {
@@ -580,9 +575,7 @@ const TRANSFER_OBJECT_BYTES: usize = 4 * 1024 * 1024;
 /// partway through the body, as percentages of the object, before serving it
 /// whole.
 ///
-/// Fewer than the attempt limit allows, because the client may retry a request
-/// of its own on a connection it had pooled, which consumes a scripted reply
-/// without the transfer having made an attempt.
+/// Fewer than the attempt limit allows.
 const TRANSFER_INTERRUPTIONS: [usize; 2] = [25, 50];
 
 /// Runs the cold transfer and interrupted transfer regimes and returns what
@@ -592,8 +585,7 @@ const TRANSFER_INTERRUPTIONS: [usize; 2] = [25, 50];
 /// whole. An interrupted run fetches the same object from a server that
 /// closes the connection four times partway through the body, at twenty,
 /// forty, sixty and eighty percent, before serving it whole. Both regimes
-/// materialize the same object, so the deterministic difference between them
-/// is nothing: both must report the same bytes transferred.
+/// materialize the same object and must report the same bytes transferred.
 ///
 /// # Errors
 ///
@@ -716,10 +708,7 @@ struct RunOutcome {
 
 /// Turns the four work counters into the metrics that gate on them.
 ///
-/// Takes what a run reported. Returns one deterministic metric per counter,
-/// because each is identical on identical inputs and none is a duration. File
-/// operations is what turns the per-object file count from prose into a number
-/// that cannot regress silently.
+/// Takes what a run reported. Returns one deterministic metric per counter.
 fn work_metrics(work: &Work) -> Vec<Metric> {
     #[expect(
         clippy::cast_precision_loss,

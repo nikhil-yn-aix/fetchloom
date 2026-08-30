@@ -1,8 +1,4 @@
 //! What a credential is bound to, and what a redirect leaving it looks like.
-//!
-//! An origin is the scheme, the host and the port. Two locations are the same
-//! origin only when all three match, which is the strictest of the answers
-//! available and the one the web platform's own fetch algorithm applies.
 
 use std::fmt;
 
@@ -49,7 +45,7 @@ impl Origin {
         })
     }
 
-    /// Returns the host, which is what a connection pool is kept per.
+    /// Returns the host.
     #[must_use]
     pub fn host(&self) -> &str {
         &self.host
@@ -62,8 +58,7 @@ impl Origin {
     ///
     /// # Errors
     ///
-    /// Fails when the target is neither, because a relative target that is not
-    /// rooted is not something to guess at.
+    /// Fails when the target is neither.
     pub fn join(from: &str, target: &str) -> Result<String, Error> {
         if target.contains("://") {
             return Ok(target.to_owned());

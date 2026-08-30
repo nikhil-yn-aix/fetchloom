@@ -1,11 +1,4 @@
 //! Content and interop digests computed in one streaming pass.
-//!
-//! There is one place the two digests are paired and one rule for where the
-//! pairing runs. A chunk large enough that entering the processor pool
-//! disappears into the work is paired across it, so neither digest serializes
-//! the other. A shorter chunk is paired on the calling thread, because the
-//! scope costs more than the parallelism returns. The number the rule turns on
-//! was measured rather than assumed.
 
 use std::io::{self, Read};
 
@@ -20,10 +13,7 @@ use crate::pool::Processor;
 /// The number of bytes at which pairing the two digests across the processor
 /// pool starts to pay.
 ///
-/// Measured on this workspace's own pairing rather than taken from either
-/// hash's own figure: below a quarter of this, pairing across the pool runs at
-/// a third of the speed of pairing on one thread, between them the two are
-/// level, and at this size and above the pool is ahead by a tenth or more.
+/// Below this, the two digests are paired on the calling thread.
 pub const POOL_THRESHOLD: usize = 1 << 20;
 
 /// Everything one streaming pass over an object's bytes produces.
@@ -42,9 +32,8 @@ pub struct Digests {
 /// The BLAKE3 side of one pass: the chaining value of each leaf group, and the
 /// group still filling.
 ///
-/// A group's chaining value is the only hash taken of its bytes. The root is
-/// merged from those values rather than taken again, so an object is hashed
-/// once whether or not it ends up large enough to store a tree.
+/// A group's chaining value is the only hash taken of its bytes, and the root
+/// is merged from those values.
 #[derive(Clone, Debug)]
 struct Groups {
     /// The hasher covering the group currently filling.
@@ -71,9 +60,7 @@ impl Default for Groups {
 impl Groups {
     /// Takes bytes, closing a group only once the next group has a byte in it.
     ///
-    /// A group is left open at a boundary because an object that ends exactly
-    /// there is one group whose root is taken directly, and one that continues
-    /// needs that group's value as a leaf. Which of the two it is is not known
+    /// A group is left open at a boundary.
     /// until the next byte arrives or does not.
     fn update(&mut self, mut chunk: &[u8]) {
         while !chunk.is_empty() {

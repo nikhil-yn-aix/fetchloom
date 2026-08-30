@@ -1,9 +1,4 @@
 //! Contract tests over many processes on one cache, and over being killed.
-//!
-//! Two sentences from contracts.md Cache are the whole of this file. A second
-//! process wanting an object being written waits and reuses the result, and it
-//! never starts a second transfer of the same digest. Orphaned staging and
-//! partial entries from a previous boot are removed at startup.
 
 #![expect(
     clippy::unwrap_used,

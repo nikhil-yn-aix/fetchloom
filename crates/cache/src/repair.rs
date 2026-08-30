@@ -1,11 +1,4 @@
 //! Finding which bytes of a cached object are wrong, and putting them right.
-//!
-//! Localization is a claim about which bytes are wrong, and a tree is derived
-//! data that could itself be wrong, so it is never the last word. A repair
-//! rewrites the named ranges, rereads the whole object and hashes it, and
-//! publishes only when it hashes to the digest it is named by. A repair whose
-//! localization was wrong fails loudly rather than publishing bytes nothing
-//! checked whole.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -129,8 +122,7 @@ impl<P: Platform> Cache<P> {
     /// Moves an object into quarantine and writes the diagnosis beside it.
     ///
     /// Takes the digest it is named by and what the cache recorded about where
-    /// its bytes came from. Localizes the damage first, because the tree and
-    /// the object are both still where the walk expects them.
+    /// its bytes came from. Localizes the damage before the move.
     ///
     /// # Errors
     ///
@@ -185,9 +177,8 @@ impl<P: Platform> Cache<P> {
 
     /// Opens a copy of a damaged object for patching.
     ///
-    /// Takes the lease on the digest, because a repair is a transfer and two of
-    /// them are what the lease deduplicates. Returns the file the patched bytes
-    /// are written into, which is never the object itself.
+    /// Takes the lease on the digest. Returns the file the patched bytes are
+    /// written into, which is never the object itself.
     ///
     /// # Errors
     ///
@@ -272,9 +263,7 @@ impl<P: Platform> Cache<P> {
     /// digest it is named by.
     ///
     /// Takes the writer. Returns the digests the whole object produced. The
-    /// object enters `objects/` only when they match, which is the invariant
-    /// every other publication holds and what makes a wrong localization fail
-    /// loudly rather than publish unchecked bytes.
+    /// object enters `objects/` only when they match.
     ///
     /// # Errors
     ///
@@ -410,11 +399,8 @@ fn read_group(
 
 /// Returns the object length a stored tree records, when it can be read.
 ///
-/// The tree states how long the object is supposed to be and the file on disk
-/// states how long it actually is. A truncation is the case where the two
-/// differ, and it is damage in the groups past the truncation rather than a
-/// tree that says nothing, so the walk runs against the length the tree
-/// records.
+/// The walk runs against the length the tree records rather than the length of
+/// the file on disk.
 fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     let mut header = [0u8; 8];
     tree.seek(SeekFrom::Start(0)).ok()?;
@@ -433,10 +419,9 @@ fn read_failure(reason: &std::io::Error) -> Error {
 /// Returns how many bytes at the start of a partial transfer match the
 /// object's outboard tree.
 ///
-/// Only whole leaf groups can be checked, so the answer is the offset of the
-/// first group that is bad or missing and never a byte inside a group. A tree
-/// that does not check out against the digest keeps nothing, because a tree
-/// that says nothing about the object cannot say a prefix of it is good.
+/// The answer is the offset of the first leaf group that is bad or missing and
+/// never a byte inside a group. A tree that does not check out against the
+/// digest keeps nothing.
 ///
 /// # Errors
 ///

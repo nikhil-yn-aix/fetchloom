@@ -1,7 +1,4 @@
 //! Contract tests over where a transfer starts and how long it waits.
-//!
-//! These cover the decisions a transfer makes before it touches a socket: which
-//! rung of the resume ladder the bytes on disk earn, and what the backoff is.
 
 use blake3 as _;
 use rayon as _;

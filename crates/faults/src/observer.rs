@@ -5,8 +5,7 @@ use std::sync::{Mutex, PoisonError};
 use fetchloom_engine::event::Event;
 use fetchloom_engine::seam::observer::Observer;
 
-/// An observer that keeps every event, so a test can assert the sequence a run
-/// produced.
+/// An observer that keeps every event a run produced.
 #[derive(Debug, Default)]
 pub struct RecordingObserver {
     events: Mutex<Vec<Event>>,

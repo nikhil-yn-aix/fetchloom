@@ -1,9 +1,4 @@
 //! Reading the lock a run is held to, and writing the one it produced.
-//!
-//! A lock is portable: it holds what was resolved and nothing about the machine
-//! that resolved it. What a run resolved is therefore built out of the manifest
-//! digest, the selection, and the digests of the bytes, and never out of a path,
-//! a host, or a clock.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,8 +21,7 @@ use crate::run::ResolvedArtifact;
 /// # Errors
 ///
 /// Fails with `policy.trust_refused` when the run is locked and the lock states
-/// nothing about this dataset, because resolution would then be first-use trust
-/// and a locked run never accepts that. Fails when the lock cannot be read.
+/// nothing about this dataset. Fails when the lock cannot be read.
 pub fn pinned(path: &Path, dataset: &str, locked: bool) -> Result<Option<LockedDataset>, Error> {
     let held = Lock::read(path, &Limits::default())?;
     let entry = held.datasets.get(dataset).cloned();
@@ -49,10 +43,8 @@ pub fn pinned(path: &Path, dataset: &str, locked: bool) -> Result<Option<LockedD
 ///
 /// Takes the manifest the run resolved from, every artifact that verified, and
 /// the tree the run materialized when it materialized one. Returns nothing when
-/// the run verified no object, which is what a reference naming a directory
-/// does: there is no artifact to pin and a tree alone states no bytes. A run
-/// that failed part way pins what it verified and no tree, because a lock
-/// without a tree still pins bytes.
+/// the run verified no object. A run that failed part way pins what it verified
+/// and no tree.
 ///
 /// # Errors
 ///
@@ -89,8 +81,7 @@ pub fn resolved(
 /// Holds a locked run to the lock, or records what an unlocked run resolved.
 ///
 /// Takes the lock file, the dataset name, what the lock pins, what the run
-/// resolved, and whether the run was locked. A locked run writes nothing,
-/// because a run that may not differ from the lock has nothing to add to it.
+/// resolved, and whether the run was locked. A locked run writes nothing.
 ///
 /// # Errors
 ///

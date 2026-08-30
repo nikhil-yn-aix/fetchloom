@@ -29,8 +29,7 @@ impl ThreadBudget {
     /// asked for.
     ///
     /// Takes the detected count and an optional user ceiling. Returns the
-    /// smaller of the two, together with the origin of the value, so a ceiling
-    /// above the detected count is reported as clamped rather than honored.
+    /// smaller of the two, together with the origin of the value.
     #[must_use]
     pub fn resolve(detected: NonZeroUsize, requested: Option<NonZeroUsize>) -> Self {
         let (threads, origin) = match requested {

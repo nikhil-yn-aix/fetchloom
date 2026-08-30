@@ -1,9 +1,4 @@
 //! Contract tests over localized verification and repair.
-//!
-//! Every other tool can say an object is corrupt. These say which bytes, and
-//! fetch only those. The counters are what the claims rest on: a repair of one
-//! megabyte transfers about one megabyte, and no stopwatch appears anywhere,
-//! because a stopwatch cannot state that.
 
 #![expect(
     clippy::unwrap_used,
@@ -80,7 +75,7 @@ impl Ground {
             .unwrap()
     }
 
-    /// Fetches the object once, so the cache holds it and its tree.
+    /// Fetches the object once, leaving it and its tree in the cache.
     fn fetch(&self) -> serde_json::Value {
         let url = self.url();
         let output = self.run(&[
@@ -338,10 +333,6 @@ fn a_truncated_object_is_repaired_by_fetching_only_the_groups_past_the_truncatio
 }
 
 #[test]
-/// The tree written here is the strongest one an attacker can produce: it is
-/// built over the bytes they wrote, so every node in it is internally
-/// consistent. It still roots to the wrong digest, which is the only comparison
-/// the walk trusts.
 fn a_tree_an_attacker_controls_cannot_make_bad_bytes_verify() {
     let object = large_object();
     let ground = Ground::serving(object.clone());
@@ -529,11 +520,6 @@ fn cache_repair_leaves_an_object_whose_own_bytes_fail_in_quarantine_and_names_th
 }
 
 #[test]
-/// What `never` promises, stated because this is where it is tested: nothing
-/// about a cache hit. It does not reach verification and reject damaged bytes.
-/// It does not verify at all, which is why the class it produces is
-/// `unverified` and not any other, and why the run is allowed to use damaged
-/// cached bytes as long as it says so rather than claiming they were checked.
 fn verification_never_passes_on_damaged_content_under_any_policy() {
     for policy in ["always", "fingerprint", "never"] {
         let object = large_object();

@@ -1,8 +1,4 @@
-//! Enumeration and bounded reading of the archive formats phase 3 ships.
-//!
-//! This crate does not write to a filesystem and does not know about
-//! staging, destinations, or selection. It only lists members and hands out
-//! their bytes.
+//! Enumeration and bounded reading of the archive formats this build reads.
 
 mod bare;
 mod bomb;

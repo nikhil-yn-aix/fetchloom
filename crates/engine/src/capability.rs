@@ -22,7 +22,7 @@ pub enum Normalization {
     InsensitivePreserving,
     /// Two spellings are one name, and the bytes stored are a normalized form.
     Normalizing,
-    /// The volume refused the name the probe measures with, so nothing is known.
+    /// The volume refused the name the probe measures with.
     Unknown,
 }
 
@@ -42,8 +42,7 @@ pub enum Backing {
 ///
 /// Presence and absence are only ever reported where the platform can
 /// enumerate what inspects a write. Where it cannot, the measured cost is
-/// reported with the answer left unknown, because the measurement cannot tell a
-/// scanner from a filesystem that is slow at small writes.
+/// reported with the answer left unknown.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scanner {
@@ -135,7 +134,7 @@ pub struct ProcessorCapabilities {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CopyMechanism {
-    /// The filesystem shared the blocks rather than writing them again.
+    /// The filesystem shared the blocks.
     Clone,
     /// The bytes were written again.
     Copy,

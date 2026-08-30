@@ -158,8 +158,7 @@ fn dispatch(
 /// Refetches the damaged ranges of a cached object.
 ///
 /// The digest comes from the lock when one pins it and from what the cache last
-/// resolved the reference to otherwise, because a repair puts right an object
-/// this cache already holds.
+/// resolved the reference to otherwise.
 fn run_repair(
     reference: &str,
     transfer: &surface::TransferFlags,
@@ -226,9 +225,8 @@ fn run_repair(
 
 /// Returns the check a run applies to a cache hit and to a destination entry.
 ///
-/// One policy governs both sides rather than two, because the question is the
-/// same on each: whether a recorded fingerprint may stand in for reading the
-/// bytes.
+/// One policy governs both sides: whether a recorded fingerprint may stand in
+/// for reading the bytes.
 fn verification_of(transfer: &surface::TransferFlags) -> VerificationPolicy {
     match transfer.verify {
         Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
@@ -576,10 +574,8 @@ struct Recording<'a> {
 
 /// Records what a run resolved and reports what it did.
 ///
-/// The lock is written whatever the outcome, because every artifact that
-/// verified is in the cache and the next run should not fetch it again. The
-/// receipt is written only when something was materialized, because a receipt
-/// records a destination.
+/// The lock is written whatever the outcome. The receipt is written only when
+/// something was materialized.
 fn record(
     produced: &run::DatasetRun,
     into: &Recording<'_>,
@@ -616,9 +612,8 @@ fn record(
 
 /// Reports what a run would do, moving no bytes.
 ///
-/// The plan is the result of this command, so it goes to stdout: in the one
-/// canonical form by default, and as JSON when the caller asked for machine
-/// readable output. Both parse back into the same plan.
+/// The plan goes to stdout, in the canonical form by default and as JSON under
+/// `--json`. Both parse back into the same plan.
 fn run_plan(
     references: &[String],
     transfer: &surface::TransferFlags,
@@ -705,8 +700,7 @@ fn run_plan(
 ///
 /// The digests the plan records are re-resolved: an object the cache holds is
 /// materialized from it, and one it does not is fetched under the plan's own
-/// digest, so a source now serving something else fails on integrity and never
-/// falls back.
+/// digest.
 fn run_apply(
     plan_path: &std::path::Path,
     transfer: &surface::TransferFlags,
@@ -829,7 +823,7 @@ fn lock_path_of(
 ///
 /// A local path carrying a manifest extension is a manifest, as the reference
 /// grammar states. Everything else resolves from a manifest synthesized to
-/// describe it, so a lock entry states a manifest digest either way.
+/// describe it.
 fn resolve_manifest(
     reference: &str,
     source: &std::path::Path,
@@ -863,9 +857,7 @@ fn destination_for(
 
 /// Runs the materialization a reference names.
 ///
-/// A locked run hands the transfer the digest the lock pins, so a cache that
-/// already holds those bytes asks the source for nothing and a source that
-/// serves other bytes fails before anything is published.
+/// A locked run hands the transfer the digest the lock pins.
 #[expect(
     clippy::too_many_arguments,
     reason = "the flags, the lock, and the two observers each name a contract behavior of their own"
@@ -935,8 +927,7 @@ fn resolve_places(
 /// Returns what the lock pins for this run, having refused a locked run the
 /// lock does not describe.
 ///
-/// Everything compared here is known before a byte moves, so a locked run whose
-/// request differs from the lock is refused before it publishes anything.
+/// Everything compared here is compared before a byte moves.
 fn held_to_lock(
     lock_path: &std::path::Path,
     dataset: &str,
@@ -953,9 +944,7 @@ fn held_to_lock(
 
 /// Records what a run produced and reports it.
 ///
-/// The receipt is written before the result is printed, because a result that
-/// named a tree no receipt describes would leave `verify` unable to reproduce
-/// the digest that was just reported.
+/// The receipt is written before the result is printed.
 fn finish_get(
     result: &run::RunResult,
     cache: Option<&fetchloom_cache::Cache<NativePlatform>>,

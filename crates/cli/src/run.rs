@@ -35,9 +35,6 @@ use fetchloom_sources::HttpSource;
 use crate::materialize;
 
 /// The one object a run resolved, when it resolved one.
-///
-/// A directory source resolves to no object, so a run against one records
-/// nothing here and pins no bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedArtifact {
     /// The name the artifact is recorded under.
@@ -74,8 +71,7 @@ pub struct RunResult {
     /// What the run read, wrote, and asked for.
     pub work: Work,
     /// The entry paths the run materialized with the executable mode, in
-    /// ascending order. Local to the run, so it is never part of the
-    /// machine-readable result.
+    /// ascending order. Never part of the machine-readable result.
     #[serde(skip)]
     pub executable: Vec<String>,
     /// The object the run resolved, when it resolved one.
@@ -84,9 +80,6 @@ pub struct RunResult {
 }
 
 /// Returns the entry paths that carry the executable mode, in ascending order.
-///
-/// A filesystem tree states no mode, so this is what a receipt records and what
-/// lets a later verification reproduce the digest the run reported.
 #[must_use]
 pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
     let mut paths: Vec<String> = entries
@@ -159,14 +152,11 @@ pub fn default_destination(source: &Path) -> PathBuf {
     PathBuf::from(".").join(name)
 }
 
-/// Resolves a path the user named against the working directory, once, so it
-/// never travels through a join or a `parent` call still bearing a relative
-/// form.
+/// Resolves a path the user named against the working directory.
 ///
 /// Takes the path named by `--output` or `--cache-dir`. Returns it unchanged
 /// when it is already absolute, and joined onto the working directory
-/// otherwise. Never touches the filesystem, because the path named may not
-/// exist yet.
+/// otherwise. Never touches the filesystem.
 ///
 /// # Errors
 ///
@@ -197,8 +187,7 @@ fn containing_directory(path: &Path) -> PathBuf {
     }
 }
 
-/// Everything a materialization runs against, so one call does not take a list
-/// of loose arguments.
+/// Everything a materialization runs against.
 #[derive(Clone, Copy)]
 pub struct Materialization<'a> {
     /// The pool the digests are computed on.
@@ -211,12 +200,12 @@ pub struct Materialization<'a> {
     pub cache: Option<&'a Cache<NativePlatform>>,
     /// Where the run counts the work it did.
     pub work: &'a Arc<WorkCounter>,
-    /// Whether a recognized archive is extracted rather than kept as a file.
+    /// Whether a recognized archive is extracted or kept as a file.
     pub extract: bool,
     /// The one buffer every stream this run hashes is read through.
     pub digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
     /// What a destination entry and a cache hit are both checked against before
-    /// they are reused, because one policy governs both sides rather than two.
+    /// they are reused.
     pub verify: fetchloom_engine::verification::VerificationPolicy,
 }
 
@@ -369,10 +358,8 @@ fn entry_size(entry: &TreeEntry) -> u64 {
 /// tree.
 ///
 /// Takes the tree the run resolved and the entries a walk of the destination
-/// found. A walk states no mode, so an entry the resolved tree names carries
-/// the mode that tree states and a mode is never a reconcile signal. An entry
-/// the resolved tree does not name is foreign and keeps the mode the walk gave
-/// it, which is the same on every platform.
+/// found. An entry the resolved tree names carries the mode that tree states.
+/// An entry the resolved tree does not name keeps the mode the walk gave it.
 fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     let modes: HashMap<&str, Mode> = resolved
         .iter()
@@ -421,8 +408,6 @@ struct Settlement<'a> {
 ///
 /// Takes what the run resolved, how to rebuild the destination whole when
 /// `--force` says to, and how to restore the entries reconcile found missing.
-/// Both are given because a directory source and an archive rebuild and
-/// restore differently while reaching the same four outcomes.
 ///
 /// # Errors
 ///
@@ -705,9 +690,9 @@ fn fill_staging(
 
 /// Places one file at its target, through the cache when one is open.
 ///
-/// Takes whether an earlier file in this run already gave up on the cache,
-/// so every later file goes straight to a byte copy without repeating the
-/// same failure. Returns the length and content digest that were written.
+/// Takes whether an earlier file in this run already gave up on the cache, in
+/// which case this one goes straight to a byte copy. Returns the length and
+/// content digest that were written.
 ///
 /// # Errors
 ///
@@ -767,12 +752,9 @@ fn place_file(
 
 /// Materializes one file and offers it to the cache.
 ///
-/// Reads the source once, hashing it as it is written to its destination,
-/// which the run has to write regardless, and then hands the cache that file
-/// rather than the source. The cache shares blocks with it where the volume
-/// can. A source the cache already holds costs nothing more at all: no second
-/// read of the source to learn what it was, and no write into a cache that
-/// already has it.
+/// Reads the source once, hashing it as it is written to its destination, and
+/// then hands the cache that file. A source the cache already holds is neither
+/// read again nor written.
 fn through_cache(
     digester: &mut hashing::Digester,
     cache: &Cache<NativePlatform>,
@@ -804,10 +786,8 @@ fn staging_beside(destination: &Path) -> PathBuf {
 /// Recomputes the tree digest of a materialized directory.
 ///
 /// Takes the directory to read and the receipt that describes it, when one
-/// describes it. A walk states no mode, so a receipt is what supplies the mode
-/// of each file and what lets this reproduce the digest the run reported. A
-/// receipt never supplies a digest, because a record that attested to its own
-/// correctness would prove nothing. Returns the entries and their tree digest.
+/// describes it. A receipt supplies the mode of each file and never a digest.
+/// Returns the entries and their tree digest.
 ///
 /// # Errors
 ///
@@ -887,10 +867,8 @@ fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Vec<TreeEntry
 
 /// Reports that a tree's modes were not read from what was walked.
 ///
-/// Takes whether the walk found any file at all and where to emit. A walk
-/// states no mode, so every file it found is recorded at `0644` on every
-/// platform. Nothing is emitted for a tree holding no file, because there was
-/// nothing to read.
+/// Takes whether the walk found any file at all and where to emit. Nothing is
+/// emitted for a tree holding no file.
 fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
     if !found_a_file {
         return;
@@ -970,9 +948,7 @@ impl<R: Read> Read for CountedRead<'_, R> {
 /// Walks a destination directory and returns the entries it currently holds.
 ///
 /// Takes the destination, the processor pool, and where bytes read are
-/// counted. Reuses the same walk a source is read through, so there is one
-/// walk rather than two. Returns every directory, symlink, and hashed file
-/// found.
+/// counted. Returns every directory, symlink, and hashed file found.
 ///
 /// # Errors
 ///
@@ -1004,8 +980,7 @@ fn destination_entries(
 
 /// Returns the fingerprints the run that wrote this destination recorded.
 ///
-/// A destination with no receipt has none, so every file is hashed, which is
-/// what every destination did before a receipt could hold one.
+/// A destination with no receipt has none, and every file is hashed.
 fn recorded_fingerprints(
     with: &Materialization<'_>,
     destination: &Path,
@@ -1020,8 +995,7 @@ fn recorded_fingerprints(
 ///
 /// Answers only when the policy allows a fingerprint to decide, when one was
 /// recorded for the path, when it still matches, and when the resolved tree
-/// names that path, because the entry reported is the resolved one and there is
-/// no resolved entry to report otherwise. Every other case reads the bytes.
+/// names that path. Every other case reads the bytes.
 fn unchanged_by_fingerprint(
     with: &Materialization<'_>,
     root: &Path,
@@ -1320,7 +1294,7 @@ pub fn materialize_remote(
 /// the name it materializes under, and the flags reconcile answers to. An
 /// object that is a recognized archive resolves to the tree it holds; one that
 /// is not resolves to a destination holding that single file. Either way an
-/// existing destination is reconciled against that tree rather than refused.
+/// existing destination is reconciled against that tree.
 ///
 /// # Errors
 ///
@@ -1440,8 +1414,7 @@ fn object_tree(
 /// Restores the entries reconcile found missing from a cached object.
 ///
 /// Builds the object's tree in a staging directory of its own and moves only
-/// the missing entries into the destination, one entry at a time, so a
-/// destination that is merely incomplete is completed rather than rebuilt.
+/// the missing entries into the destination, one entry at a time.
 fn restore_object(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -1643,9 +1616,7 @@ fn packed_format(
 /// Returns the archive format an object holds, honoring a format a manifest
 /// declared.
 ///
-/// A declared format is what the publisher says the bytes are, and it is
-/// checked against the bytes rather than believed, which is what the recognizer
-/// does with it.
+/// A declared format is checked against the archive's own leading bytes.
 fn recognized_format(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -1754,7 +1725,7 @@ fn extract_into(
     result
 }
 
-/// Puts a local archive into the cache so it can be extracted from there.
+/// Puts a local archive into the cache, where extraction reads it from.
 ///
 /// Takes what the materialization runs against, the source, and the name the
 /// source is known by. Returns nothing when the source is not one file, when
@@ -1783,12 +1754,9 @@ fn archive_to_unpack(
 
 /// Returns the manifest a run that was given no manifest resolved from.
 ///
-/// A reference names one dataset holding one artifact, so the manifest that
-/// describes it is written out rather than left implicit, and the lock and the
-/// receipt state its digest like any other. It holds the dataset name and, for
-/// a reference that names a network location, that location. A local path is
-/// not recorded, because a manifest digest that changed with the directory a
-/// file happened to sit in would put one machine inside a portable artifact.
+/// The synthesized manifest holds the dataset name and, for a reference that
+/// names a network location, that location. A local path is never recorded in
+/// it.
 #[must_use]
 pub fn synthesized_manifest(
     dataset: &str,
@@ -1879,8 +1847,7 @@ pub fn write_receipt(
     })
 }
 
-/// Returns what names this run, so two witnesses it records are one
-/// observation.
+/// Returns what names this run.
 fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
     let token = cache.token();
     RunId::new(format!(
@@ -1893,8 +1860,7 @@ fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
 
 /// Returns the fingerprint every file of a destination carries right now.
 ///
-/// A file the platform will not fingerprint is left out rather than recorded
-/// wrong, which costs the next run a read of that file and nothing else.
+/// A file the platform will not fingerprint is left out.
 fn fingerprints_of(
     cache: &Cache<NativePlatform>,
     destination: &Path,
@@ -1919,7 +1885,7 @@ fn fingerprints_of(
 ///
 /// Takes the reference the user wrote and the local path it resolved to. A
 /// network location is named by its last path component and a local path by its
-/// own last component, which is what a destination is named after too.
+/// own last component.
 #[must_use]
 pub fn dataset_name(reference: &str, source: &Path) -> String {
     if is_remote(reference) {
@@ -1935,7 +1901,7 @@ pub fn dataset_name(reference: &str, source: &Path) -> String {
 ///
 /// Takes what the materialization runs against, the object a plan resolved,
 /// the name it materializes under, and the flags reconcile answers to. Nothing
-/// is fetched, because the bytes are already here.
+/// is fetched.
 ///
 /// # Errors
 ///
@@ -2007,21 +1973,18 @@ pub struct ResolvedArtifact {
     pub size: u64,
     /// The source that served it, redacted as it was recorded.
     pub source: SafeUrl,
-    /// The name the object is known by, which is what states its format.
+    /// The name the object is known by, which its format is read from.
     pub name: String,
     /// The members the artifact contributes.
     pub selection: Selection,
     /// The format the manifest declared, when it declared one.
     pub declared: Option<ArchiveFormat>,
-    /// The digest that was supplied before the run, when one was, which is what
-    /// makes a match `verified` rather than anything weaker.
+    /// The digest that was supplied before the run, when one was.
     pub prior: Option<ContentDigest>,
     /// The origin that served the bytes, present only when this run transferred
     /// them in full and verified them as they arrived.
     ///
-    /// A cache hit and a local file both leave it absent, because neither is an
-    /// observation of what a source is serving and neither may become a
-    /// witness.
+    /// A cache hit and a local file both leave it absent.
     pub observed: Option<String>,
 }
 
@@ -2030,8 +1993,7 @@ pub struct DatasetRun {
     /// Every artifact that resolved, in manifest order, whether or not the run
     /// went on to publish anything.
     ///
-    /// A run that failed on its third artifact still verified its first two,
-    /// and their objects are in the cache, so the lock records them.
+    /// A run that failed partway still lists the artifacts that resolved.
     pub resolved: Vec<ResolvedArtifact>,
     /// What the run did, or what stopped it.
     pub outcome: Result<RunResult, Error>,
@@ -2069,9 +2031,8 @@ pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::M
 /// Takes what the materialization runs against, the manifest, the directory a
 /// relative source is resolved against, the destination, and what the lock
 /// pins. Artifacts are resolved in the order the manifest gives them and every
-/// one that verifies stays in the cache. The destination is all or nothing: it
-/// is published once, after every artifact has resolved, so a run that fails on
-/// its last artifact leaves the previous destination untouched.
+/// one that verifies stays in the cache. The destination is all or nothing and
+/// is published once, after every artifact has resolved.
 #[expect(
     clippy::too_many_arguments,
     reason = "the manifest, the lock, and the reconcile flags each name a contract behavior of their own"
@@ -2236,9 +2197,8 @@ fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
     }
 }
 
-/// Returns what the cache already holds for a reference, so a warm run of one
-/// no digest pins asks one conditional question instead of fetching the object
-/// again to learn the answer.
+/// Returns what the cache already holds for a reference, which is what a
+/// conditional request is built from.
 fn prior_from(
     cache: &Cache<NativePlatform>,
 ) -> impl Fn(&str) -> Option<fetchloom_engine::transfer::Prior> + '_ {
@@ -2256,9 +2216,7 @@ fn prior_from(
 
 /// Records what a reference resolved to and the validator that came with it.
 ///
-/// A transfer that learned no validator leaves whatever was recorded alone,
-/// because a run that was answered from the cache observed nothing about what
-/// the source is serving now.
+/// A transfer that learned no validator leaves whatever was recorded alone.
 fn remember(
     cache: &Cache<NativePlatform>,
     location: &str,

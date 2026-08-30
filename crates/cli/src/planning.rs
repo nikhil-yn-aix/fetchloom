@@ -1,9 +1,4 @@
 //! Turning a lock into a plan, and a plan back into a run.
-//!
-//! A plan moves no bytes, so every digest in it comes from the lock rather than
-//! from a transfer. That is what makes a plan executable with no network: apply
-//! re-resolves the digests the plan records, and a source that now serves
-//! something else fails on integrity rather than falling back.
 
 use std::path::Path;
 
@@ -19,22 +14,18 @@ use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_platform::NativePlatform;
 
-/// The field a plan could not fill because no source stated it.
+/// The field a plan reports as unknown when no source states it.
 const EXPANDED: &str = "expanded";
 
 /// Builds the plan a reference resolves to, moving no bytes.
 ///
 /// Takes what the lock pins for the dataset, the reference, the destination,
-/// and the cache the run would use. The selection comes from the lock, because
-/// selection is part of identity and the lock is what states this identity. Returns the plan. The digest
-/// of every artifact comes from the lock, because a plan states resolved
-/// digests and reading them from a source would be moving bytes.
+/// and the cache the run would use. The selection and the digest of every
+/// artifact both come from the lock. Returns the plan.
 ///
 /// # Errors
 ///
-/// Fails with `policy.trust_refused` when the lock pins nothing for the
-/// dataset, because a plan with no digest cannot be executed offline and
-/// nothing here may invent one.
+/// Fails with `policy.trust_refused` when the lock pins nothing for the dataset.
 pub fn build(
     pinned: Option<&LockedDataset>,
     dataset: &str,
@@ -138,8 +129,7 @@ pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
 ///
 /// # Errors
 ///
-/// Fails when the plan names no artifact, because a plan that resolves nothing
-/// cannot be applied.
+/// Fails when the plan names no artifact.
 pub fn only_artifact(plan: &Plan) -> Result<&PlanArtifact, Error> {
     plan.artifacts.first().ok_or_else(|| {
         Error::new(
@@ -165,8 +155,7 @@ fn conflicts(destination: &Path) -> Vec<String> {
 
 /// Returns the name of the volume a path sits on.
 ///
-/// The name is the path's own root, which is what a person reading a plan
-/// recognizes, and it is reported rather than acted on.
+/// The name is the path's own root.
 fn volume_of(path: &Path) -> String {
     let mut components = path.components();
     match components.next() {

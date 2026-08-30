@@ -1,9 +1,4 @@
 //! Moving bytes from a source into the store, once, with retry and resume.
-//!
-//! The bytes are hashed as they are written and never read back to hash. What
-//! is on disk decides where a transfer starts, what the source says identifies
-//! its bytes decides whether starting there is allowed, and every fall to a
-//! lower rung is reported rather than inferred.
 
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -41,16 +36,12 @@ pub struct Transferred {
     pub rung: ResumeRung,
     /// How many attempts were made.
     pub attempts: u32,
-    /// What the source said identifies these bytes, so a later run can ask
-    /// whether they are still what the reference names. Empty when the run
-    /// learned nothing, which is what an object the cache already held teaches.
+    /// What the source said identifies these bytes. Empty when the run learned
+    /// nothing.
     pub validator: Validator,
 }
 
 /// The two impure things a retry needs: a random fraction and a wait.
-///
-/// A test supplies one that records instead of sleeping, so the retry ladder is
-/// asserted without a test that sleeps.
 pub trait Pause: Send + Sync {
     /// Returns a value between zero and one for the jitter.
     fn fraction(&self) -> f64;
@@ -73,8 +64,7 @@ pub fn backoff(limits: &Limits, attempt: u32, fraction: f64) -> Duration {
 
 /// Reports whether a wait a source asked for is one this run may honor.
 ///
-/// A wait longer than the ceiling is not waited out, because the ceiling is what
-/// the run was told its longest wait is.
+/// A wait longer than the retry ceiling is not honored.
 #[must_use]
 pub fn honors(limits: &Limits, retry_after: Duration) -> bool {
     retry_after <= limits.retry_ceiling
@@ -82,9 +72,8 @@ pub fn honors(limits: &Limits, retry_after: Duration) -> bool {
 
 /// What a run already holds for a reference no digest pins.
 ///
-/// A warm run of one asks whether the object it holds is still what the
-/// reference names, in one conditional request, rather than fetching the object
-/// again to find out.
+/// A warm run of one asks in a conditional request whether the object it holds
+/// is still what the reference names.
 pub struct Prior {
     /// What the reference resolved to last time.
     pub digest: ContentDigest,
@@ -99,10 +88,7 @@ pub struct Prior {
 /// are on disk, and how many of those an outboard tree has already been shown
 /// to cover. Returns the rung and how many of those bytes may be kept.
 ///
-/// A verified prefix is kept whatever the source now says identifies its bytes,
-/// because the tree is stronger evidence than any validator: it says these
-/// exact bytes belong to this exact digest, where a validator only says the
-/// source believes nothing changed.
+/// A verified prefix is kept whatever the source now says identifies its bytes.
 #[must_use]
 pub fn rung_for(
     recorded: Option<&SourceRecord>,
@@ -341,9 +327,8 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     /// Asks a source in one request whether an object this run already holds is
     /// still what the reference names.
     ///
-    /// Asks nothing when the run's digest is pinned, because a cache holding
-    /// those bytes is already the answer, and nothing when there is no recorded
-    /// validator to ask with.
+    /// Asks nothing when the run's digest is pinned and nothing when there is no
+    /// recorded validator to ask with.
     fn ask_whether_it_changed(
         &self,
         expected: Option<ContentDigest>,
@@ -379,10 +364,9 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
 /// What one conditional question produced.
 enum Asked<B> {
-    /// No question was asked, so the transfer proceeds as it always did.
+    /// No question was asked.
     Silence,
-    /// The source restated the validator, so the cache already holds the
-    /// answer.
+    /// The source restated the validator it already gave.
     Unchanged(ContentDigest),
     /// The bytes changed, and the response carries them.
     Changed(SourceMetadata, B),
@@ -546,7 +530,7 @@ impl Pause for SleepingPause {
 ///
 /// Takes where the bytes were coming from and what the read reported. Returns a
 /// timeout when the source went quiet and a refusal when it closed the
-/// connection. Every answer is retryable, because neither is terminal.
+/// connection. Every answer is retryable.
 #[must_use]
 pub fn body_failure(location: &str, reason: &std::io::Error) -> Error {
     let quiet = matches!(

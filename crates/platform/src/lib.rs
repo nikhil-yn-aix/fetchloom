@@ -1,11 +1,4 @@
 //! The Platform seam implemented for Windows and Linux.
-//!
-//! Everything that decides behavior lives here and is written once: the volume
-//! comparison that refuses a cross-volume publish, the rename-aside sequence
-//! that publishes a tree, the fallback from cloning to copying, the advisory
-//! lock, and the liveness ladder. Each platform module supplies only the calls
-//! that differ between platforms, so there is one behavior and two sets of
-//! syscalls behind it.
 
 use std::fs::File;
 use std::num::NonZeroUsize;
@@ -48,9 +41,7 @@ use crate::windows as imp;
 
 /// A name fragment no other probe uses at the same moment.
 ///
-/// Returns this process's identifier and a count that never repeats within it,
-/// so two probes of one directory, in this process or in another, never contend
-/// for a name and never read each other's file as the filesystem's answer.
+/// Returns this process's identifier and a count that never repeats within it.
 pub(crate) fn probe_tag() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -84,8 +75,7 @@ pub struct NativePlatform {
 impl NativePlatform {
     /// Builds the platform for this machine.
     ///
-    /// Takes where the run counts the file operations it performs, so every
-    /// create, rename and flush is counted here rather than at each call site.
+    /// Takes where the run counts the file operations it performs.
     #[must_use]
     pub fn new(work: std::sync::Arc<fetchloom_engine::work::WorkCounter>) -> Self {
         Self {
@@ -103,9 +93,7 @@ impl NativePlatform {
 
     /// Returns the volume a path is on, as far as its own text says.
     ///
-    /// Whether a volume reference-counts blocks is a property of the volume
-    /// and never of one file on it, so the answer is remembered under this key
-    /// rather than asked again for every entry of a tree.
+    /// The key the clone answer for a volume is remembered under.
     fn volume_key(path: &Path) -> std::ffi::OsString {
         path.components()
             .next()
@@ -122,7 +110,7 @@ impl NativePlatform {
             .contains(&Self::volume_key(path))
     }
 
-    /// Records that this volume cannot clone, so nothing asks it again.
+    /// Records that this volume cannot clone.
     fn remember_refusal(&self, path: &Path) {
         self.refused_cloning
             .lock()
@@ -460,9 +448,7 @@ const LOCK_ATTEMPTS: u32 = 16;
 /// Takes an advisory lock over the file a path currently names.
 ///
 /// The identity of the locked handle is compared against the identity of the
-/// path afterwards, because a lock file can be removed and recreated between
-/// the open and the lock, and a lock over a name nothing refers to any more
-/// would let a second holder take the same digest.
+/// path afterwards, and the acquisition is retried when they differ.
 fn acquire(path: &Path, sharing: Sharing, waiting: Waiting) -> Result<Option<PlatformLock>, Error> {
     for _ in 0..LOCK_ATTEMPTS {
         let file = open_lock_file(path)?;

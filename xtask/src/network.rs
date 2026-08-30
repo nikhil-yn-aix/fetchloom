@@ -1,9 +1,4 @@
 //! The lane that fetches real archives from real servers.
-//!
-//! Every other test in this workspace reads an archive this workspace wrote,
-//! which tests the writer as much as the reader. This lane fetches archives
-//! nobody here made, from hosts that will still be there, and holds each one
-//! to a tree digest recorded in this file.
 
 use std::path::Path;
 use std::process::Command;
@@ -62,14 +57,8 @@ pub enum Outcome {
 ///
 /// Takes the workspace root and the binary to run, which defaults to the
 /// debug build under `target`. Writes under the platform's temporary
-/// directory rather than under the workspace, because the workspace is a bind
-/// mount inside the container lane and a cache is refused on a volume whose
-/// locks cannot be trusted across the machines that share it.
-///
-/// Returns whether the lane passed, was skipped
-/// because no host could be reached, or failed. A host that cannot be reached
-/// skips the lane rather than passing it, because a lane that passes when it
-/// ran nothing is worse than no lane.
+/// directory, never under the workspace. Returns whether the lane passed, was
+/// skipped because no host could be reached, or failed.
 pub fn run(workspace: &Path, binary: Option<&Path>) -> Outcome {
     let binary = binary.map_or_else(
         || {
@@ -233,9 +222,7 @@ fn number(body: &str, key: &str) -> Option<u64> {
 /// later run touched it.
 ///
 /// Takes the destination root. Returns each path with its length and the time
-/// it was last written, sorted. `bytes_written` cannot answer this, because it
-/// counts the cache and the destination alike and a second fetch of a remote
-/// object writes the cache by necessity: nothing yet tells this build the
+/// it was last written, sorted.
 /// object is the one it already holds without downloading it again. What the
 /// destination itself must show is that nothing under it moved.
 fn state_of(destination: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {

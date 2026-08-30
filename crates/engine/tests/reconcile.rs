@@ -1,8 +1,5 @@
 //! Contract tests over reconciling the tree a run resolved against what a
 //! destination currently holds.
-//!
-//! Covers docs/contracts.md Reconcile: unchanged, restored, modified, and
-//! foreign are decided from the entries alone, never from a receipt.
 
 #![expect(
     clippy::unwrap_used,

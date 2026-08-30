@@ -1,9 +1,4 @@
 //! The verification matrix, and everything it cannot reach.
-//!
-//! One command runs what used to run on six runners: the host natively, Linux
-//! inside a privileged container against real loopback filesystems, and the same
-//! image under emulation behind a flag. Every target it does not execute is
-//! named in its own output, on every run.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,9 +7,7 @@ use std::time::{Duration, Instant};
 
 /// The target linted on the host with the whole workspace.
 ///
-/// The other targets moved to the lanes that have a C compiler for them, because
-/// the cryptography the client performs its handshake with is C and this machine
-/// cross-compiles no C at all.
+/// Every other target is linted in the container lane.
 const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
 
 /// The Linux targets the container lane builds and runs.
@@ -118,9 +111,7 @@ impl Report {
 
     /// Records a step that declined to run, with the reason it declined.
     ///
-    /// A skipped step is reported as skipped and counted as neither a pass nor
-    /// a failure, because a lane that passes when it ran nothing is worse than
-    /// no lane at all.
+    /// A skipped step is counted as neither a pass nor a failure.
     fn skipped(&mut self, name: &str, took: Duration, reason: &str) {
         println!("skip {name} in {:.1} s: {reason}", took.as_secs_f64());
         self.steps.push(Step {
@@ -314,7 +305,7 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
     offline(workspace, report, arch, &image, &platform, lane);
 }
 
-/// Runs the phase four gate with the network physically absent.
+/// Runs the plan, bundle and apply sequence with the network physically absent.
 ///
 /// One container prepares a plan and a bundle from a real host and a second
 /// runs with no network device at all, so what proves the apply is offline is

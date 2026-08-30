@@ -1,9 +1,4 @@
 //! The command surface.
-//!
-//! Before 1.0 a command, flag, or value exists here only once it performs what
-//! contracts.md says it does. Nothing is present and unable to act, so the
-//! generated help and completion scripts describe exactly what this build can
-//! do. The roadmap says which phase delivers each of the rest.
 
 use std::path::PathBuf;
 

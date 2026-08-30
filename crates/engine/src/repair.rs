@@ -1,15 +1,11 @@
 //! Deciding what a repair fetches, once the damage is known.
-//!
-//! A ranged repair trades bytes for requests: each span costs a request and a
-//! round trip and saves the bytes it does not carry. Past either bound the
-//! trade stops paying, and the object is fetched whole and said so.
 
 use std::ops::Range;
 
 use crate::limits::Limits;
 use crate::seam::source::ByteRange;
 
-/// Why a repair fetches the whole object rather than the damaged spans.
+/// Why a repair fetches the whole object instead of the damaged spans.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WholeReason {
     /// More damaged spans than one repair may ask a source for.
@@ -33,7 +29,7 @@ pub enum WholeReason {
 /// What one repair will fetch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RepairPlan {
-    /// Nothing is damaged, so nothing is fetched.
+    /// Nothing is damaged.
     Nothing,
     /// Exactly these spans are fetched, in ascending order.
     Spans(Vec<ByteRange>),

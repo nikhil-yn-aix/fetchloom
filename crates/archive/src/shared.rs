@@ -15,7 +15,7 @@ pub struct SharedSource<R> {
 }
 
 impl<R> SharedSource<R> {
-    /// Wraps a source so it can be cloned into independent handles.
+    /// Wraps a source in a handle that can be cloned.
     pub fn new(source: R) -> Self {
         Self {
             inner: Rc::new(RefCell::new(source)),

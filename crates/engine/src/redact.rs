@@ -21,12 +21,12 @@ pub fn is_sensitive_header(name: &str) -> bool {
 /// A value that is never written to any stream, file, or record.
 ///
 /// Takes any value. Its debug, display, and serialized forms are the fixed
-/// redacted text, so the value can only leave through an explicit exposure.
+/// redacted text. It leaves only through an explicit exposure.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Secret<T>(T);
 
 impl<T> Secret<T> {
-    /// Wraps a value so it cannot be written by accident.
+    /// Wraps a value.
     #[must_use]
     pub fn new(value: T) -> Self {
         Self(value)
@@ -61,8 +61,7 @@ impl<T> Serialize for Secret<T> {
 ///
 /// Takes any reference or location text. Returns text whose userinfo component
 /// and whose every query parameter value have been replaced with the fixed
-/// redacted text. It cannot be constructed any other way, so a secret cannot
-/// reach an event, an error, a receipt, or a plan through it.
+/// redacted text. It cannot be constructed any other way.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct SafeUrl(String);

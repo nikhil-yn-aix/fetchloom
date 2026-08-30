@@ -1,11 +1,4 @@
 //! Contract tests over locating damage in an object and bounding its repair.
-//!
-//! The walk is what turns "this object is wrong" into "these byte ranges are
-//! wrong", which is the difference between refetching an object and repairing
-//! one. Every case here is a shape of damage a real disk or a real network
-//! produces: one flipped bit, a whole group, the first group, the last group,
-//! a region spanning two groups, a truncation, and damage to the tree itself
-//! rather than to the object.
 
 #![expect(
     clippy::unwrap_used,

@@ -1,6 +1,5 @@
 //! A reference that names a manifest resolves to every artifact the manifest
-//! names, which is what makes a lock pin more than one thing and what makes
-//! partial success something a run can reach.
+//! names.
 
 #![expect(
     clippy::unwrap_used,

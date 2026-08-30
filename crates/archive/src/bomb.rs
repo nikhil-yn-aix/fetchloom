@@ -1,6 +1,5 @@
 //! Tracks an archive against the entry, expanded-byte, and expansion-ratio
-//! limits while it is being read, so a bomb is caught before it is fully
-//! consumed.
+//! limits while it is being read.
 
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;

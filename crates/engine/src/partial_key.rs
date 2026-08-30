@@ -20,8 +20,7 @@ impl PartialKey {
     /// Names a partial by the content digest a run already states.
     ///
     /// Takes that digest. Returns a key whose name is the digest and whose
-    /// expectation is the same digest, so a commit that does not hash to it
-    /// is refused.
+    /// expectation is the same digest.
     #[must_use]
     pub fn of_content(digest: ContentDigest) -> Self {
         Self {

@@ -1,11 +1,4 @@
 //! Carrying objects between machines that do not trust each other.
-//!
-//! A bundle is an uncompressed tar whose every member is named by the lowercase
-//! hexadecimal of the content digest of its own bytes. The name is a claim and
-//! never an instruction: import derives the digest from the bytes it reads and
-//! refuses a member whose bytes do not hash to the name it arrived under. There
-//! is no index to trust, because a tar has none, and nothing enters `objects/`
-//! until every member has been read and checked.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -256,9 +249,8 @@ fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
 
 /// Reads the members of a bundle in the order they were written.
 ///
-/// A tar carries no index, so there is nothing here that could be trusted
-/// instead of the bytes: every member is found by walking the stream from the
-/// beginning, and every digest comes from the bytes that were read.
+/// Every member is found by walking the stream from the beginning, and every
+/// digest comes from the bytes that were read.
 pub struct BundleReader {
     file: std::fs::File,
     at: u64,

@@ -108,9 +108,6 @@ pub(crate) fn detected_parallelism() -> NonZeroUsize {
 }
 
 /// Returns the vector instruction level selected for the content digest.
-///
-/// This is a vector width and never a dedicated instruction, because the
-/// content digest algorithm has none.
 pub(crate) fn vector_level() -> VectorLevel {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -134,10 +131,8 @@ pub(crate) fn vector_level() -> VectorLevel {
     }
 }
 
-/// Reports whether the interop digest can use a hardware instruction.
-///
-/// Reports that the instruction cannot be detected rather than claiming it,
-/// where the target has no runtime detection for it.
+/// Reports whether the interop digest can use a hardware instruction, or that
+/// this target cannot detect one.
 pub(crate) fn interop_acceleration(degradations: &DegradeQueue) -> InteropAcceleration {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -287,8 +282,7 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
 
 /// Returns this machine's own identity.
 ///
-/// Returns nothing when the value cannot be read, which the caller treats as a
-/// holder that must not be disturbed rather than a stale one.
+/// Returns nothing when the value cannot be read.
 pub(crate) fn machine_id() -> Option<MachineId> {
     ffi::registry_string(MACHINE_KEY, "MachineGuid").map(MachineId::new)
 }
@@ -296,8 +290,7 @@ pub(crate) fn machine_id() -> Option<MachineId> {
 /// Returns the identity of this boot of this machine.
 ///
 /// This is the counter the session manager raises on each boot, never a value
-/// derived from uptime: two live processes subtracting two independently
-/// drifting clocks would disagree and each could declare the other stale.
+/// derived from uptime.
 ///
 /// Returns nothing when the value cannot be read.
 pub(crate) fn boot_id() -> Option<BootId> {
@@ -308,8 +301,7 @@ pub(crate) fn boot_id() -> Option<BootId> {
 ///
 /// Returns that no such process exists only when the platform says so. A
 /// process that exists and cannot be inspected is reported as unreadable, never
-/// as gone, because reporting it as gone would let a running holder lose its
-/// lock.
+/// as gone.
 pub(crate) fn process_start(pid: u32) -> ProcessState {
     match ffi::process_start(pid) {
         ffi::ProcessQuery::Started(start) => ProcessState::Started(start),
@@ -336,9 +328,7 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
 /// Reports whether a file belongs to the user this process runs as.
 ///
 /// Compares the file's owner against both the token's user and the token's
-/// owner, because a process running with an elevated token creates files owned
-/// by the administrators group rather than by the user, and both are this
-/// process.
+/// owner, either of which is this process.
 ///
 /// # Errors
 ///

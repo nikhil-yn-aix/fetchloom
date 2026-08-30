@@ -1,9 +1,4 @@
 //! A server that answers exactly what a test told it to answer.
-//!
-//! One thread per connection, a script the test writes, and no timing anywhere
-//! except the stall a test asks for. It exists so a transfer can be driven
-//! against truncation, corruption, a changed validator, a rate-limit storm and a
-//! connection that dies mid-body without reaching the network.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -130,8 +125,7 @@ impl Script {
 
     /// Returns the script with conditional requests answered or ignored.
     ///
-    /// A source that ignores one answers with the whole object, which is what a
-    /// run has to keep working against.
+    /// A source that ignores one answers with the whole object.
     #[must_use]
     pub fn conditional(mut self, honors: bool) -> Self {
         self.honors_conditionals = honors;

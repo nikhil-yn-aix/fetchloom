@@ -1,10 +1,4 @@
 //! The content-addressed store behind the Store seam.
-//!
-//! An entry in `objects/` has been verified and published by a rename, and
-//! there is no other way for a file to appear there. One writer holds a digest
-//! at a time and a reader holds the same lock shared, so a reader that is
-//! running keeps its object from being pruned and a reader that was killed
-//! releases it with no record to sweep.
 
 #[cfg(test)]
 use fetchloom_platform as _;
@@ -40,19 +34,17 @@ use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{DIRECTORIES, Layout};
 
-/// The mode a cache directory carries, so every user of the directory can add
-/// entries and only an entry's owner can remove it.
+/// The mode a cache directory carries.
 #[cfg(unix)]
 const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 
-/// The mode a published object carries, because an object never changes.
+/// The mode a published object carries.
 #[cfg(unix)]
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
 /// The name a probe writes to learn whether a volume locks.
 ///
-/// The name carries this process's identity, because a probe that every process
-/// shared would be a file each of them removes under the others.
+/// The name carries this process's identity, so two probes never share one.
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
 /// A cache directory this process may read and write.
@@ -306,7 +298,7 @@ fn share_directory(_directory: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Makes a published object read-only, because an object never changes.
+/// Makes a published object read-only.
 #[cfg(unix)]
 pub(crate) fn seal_object(path: &Path) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;

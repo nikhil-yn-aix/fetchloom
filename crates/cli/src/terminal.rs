@@ -67,7 +67,7 @@ pub struct ForcedDisplay {
 /// mode is forced to plain or none when standard error is not a terminal, when
 /// the terminal cannot address the cursor, or when a continuous integration
 /// environment is detected. Returns the mode used and, when it differs from the
-/// one requested, the reason, so the caller can report the degradation.
+/// one requested, the reason.
 #[must_use]
 pub fn resolve_display(
     requested: DisplayMode,

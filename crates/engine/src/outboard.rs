@@ -42,8 +42,7 @@ impl Outboard {
 ///
 /// Takes the total object length and one chaining value per group implied by
 /// that length, in order. Returns the digest the whole object hashes to and the
-/// tree, which is absent at or below the outboard threshold because the digest
-/// already authenticates an object that small whole.
+/// tree, which is absent at or below the outboard threshold.
 ///
 /// # Panics
 ///
@@ -204,17 +203,14 @@ enum Expectation {
 ///
 /// Takes the zero-based group index and the buffer to fill, which the callee
 /// clears. A group past the end of what is readable is filled with what is
-/// there, because a truncated object is damage in the groups past the
-/// truncation rather than an object that cannot be read.
+/// there.
 type GroupBytes<'a> = &'a mut dyn FnMut(u64, &mut Vec<u8>) -> Result<(), Error>;
 
 /// Why a walk stopped before it finished.
 enum Stopped {
     /// The tree or the object could not be read.
     Unreadable(Error),
-    /// A node of the tree does not check out against the digest, so the tree
-    /// says nothing about the object and the range it covers is all that is
-    /// known.
+    /// A node of the tree does not check out against the digest.
     TreeCorrupt(Range<u64>),
 }
 
@@ -275,7 +271,7 @@ pub fn verify_range(
 }
 
 /// Returns every byte range of an object whose bytes do not match the tree,
-/// ascending, with adjacent ranges merged so one request serves them.
+/// ascending, with adjacent ranges merged.
 ///
 /// Takes an outboard opened for reading and seeking, the object's recorded
 /// length, its content digest, and a callback filling the raw bytes of a leaf
@@ -286,10 +282,7 @@ pub fn verify_range(
 ///
 /// Returns `cache.corrupt` when the tree cannot be read, when its recorded
 /// length disagrees with `object_len`, and when any node in it does not check
-/// out against the digest. In each of those the tree says nothing about the
-/// object and the caller discards it rather than believing it. Returns
-/// whatever the callback fails with, because a group that could not be read is
-/// never reported as undamaged.
+/// out against the digest. Returns whatever the callback fails with.
 pub fn find_damage(
     outboard: &mut (impl Read + Seek),
     object_len: u64,
@@ -432,9 +425,7 @@ fn verify_subtree(
 
 /// Checks one leaf group against the chaining value its parent stores for it.
 ///
-/// A group that yielded no bytes is damaged rather than hashed, because a leaf
-/// of a tree with more than one group always covers at least one byte and an
-/// empty one is what a truncated object gives back.
+/// A group that yielded no bytes is reported as damaged rather than hashed.
 fn check_leaf(
     group: u64,
     expectation: Expectation,

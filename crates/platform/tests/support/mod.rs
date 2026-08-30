@@ -81,8 +81,7 @@ impl Property {
 ///
 /// Returns the paths named by the property's variable, which the volume script
 /// writes after it builds the filesystems. An empty answer in a verification run
-/// that promised the property fails rather than skipping, so a filesystem that
-/// did not get built is a failure and not a silent pass.
+/// that promised the property fails rather than skipping.
 pub fn volumes(property: Property) -> Vec<PathBuf> {
     let named = std::env::var_os(property.variable()).unwrap_or_default();
     let found: Vec<PathBuf> = std::env::split_paths(&named)
@@ -161,8 +160,7 @@ pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
 
 /// Reports whether this build can create a symbolic link in a directory.
 ///
-/// Answers by attempting one and removing it, so the answer is the filesystem's
-/// rather than a guess about privilege.
+/// Answers by attempting one and removing it.
 pub fn symlink_works(directory: &Path) -> bool {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
@@ -201,8 +199,7 @@ pub fn names(directory: &Path) -> Vec<String> {
 /// the directory is the volume's own rather than one created inside it.
 ///
 /// Windows carries case sensitivity on the directory itself and does not pass
-/// it to a directory created inside one, so a test about case has to work in
-/// the directory the environment named.
+/// it to a directory created inside one.
 pub fn volume_directories(property: Property) -> Vec<PathBuf> {
     volumes(property)
 }

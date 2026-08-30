@@ -127,10 +127,7 @@ impl<P: Platform> Cache<P> {
 
     /// Reports whether an object is present right now.
     ///
-    /// Takes no lock, because the writer holding a digest asks this question
-    /// while it holds that digest exclusively, and because the answer is only
-    /// ever a reason to open the object. Opening it takes the lease and looks
-    /// again, which is what makes a hit safe.
+    /// Takes no lock. Opening the object takes the lease and looks again.
     fn present(&self, digest: ContentDigest) -> bool {
         self.layout.object(digest).is_file()
     }
@@ -140,8 +137,7 @@ impl<P: Platform> Cache<P> {
     ///
     /// Every path that reuses an object goes through this, whether it opens the
     /// object to read it or clones its blocks into a destination without
-    /// reading a byte, because the policy is about reusing the object rather
-    /// than about how the bytes travel.
+    /// reading a byte.
     ///
     /// # Errors
     ///
@@ -189,10 +185,7 @@ impl<P: Platform> Cache<P> {
     ///
     /// An object with a stored tree is walked group by group against that tree,
     /// which reads the tree as well as the object and fails naming the byte
-    /// ranges that are wrong rather than only naming the object. That is not
-    /// less work than a rehash; it is a failure that can be repaired instead of
-    /// refetched, which is what the tree is for. An object with no tree is
-    /// rehashed whole.
+    /// ranges that are wrong. An object with no tree is rehashed whole.
     fn check_bytes(&self, digest: ContentDigest) -> Result<(), Error> {
         if self.has_outboard(digest)? {
             let found = self.localize(digest)?;

@@ -1,7 +1,4 @@
 //! Fault injection, and the observer that records what a run emitted.
-//!
-//! Faults are scheduled against named operations and are part of the product,
-//! not a mock written inside a test.
 
 mod archives;
 mod http;

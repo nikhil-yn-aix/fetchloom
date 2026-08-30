@@ -1,9 +1,4 @@
 //! Contract tests over witnesses and the trust class they can raise.
-//!
-//! The definition of independence is the one most easily weakened by accident,
-//! so most of these tests are adversarial: two witnesses that differ in only
-//! one of the three ways must not corroborate, and neither must a pair that
-//! looks independent by a name rather than by an origin.
 
 #![expect(
     clippy::unwrap_used,

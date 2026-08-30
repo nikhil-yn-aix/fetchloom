@@ -1,8 +1,4 @@
 //! What a reference last resolved to, and the validator the source gave for it.
-//!
-//! Derived data: losing it costs one transfer. It exists so a warm run of a
-//! reference no digest pins can ask one conditional question instead of
-//! fetching the whole object to learn the answer.
 
 use fetchloom_engine::digest::{ContentDigest, RESOLUTION_KEY_CONTEXT};
 use fetchloom_engine::error::Error;
@@ -34,8 +30,7 @@ impl Resolution {
 
 /// One resolution and the reference it was recorded for.
 ///
-/// The location is held so a quarantine can ask which reference an object came
-/// from, which is the question the key cannot be run backwards to answer.
+/// The location is held alongside, since the key cannot be run backwards.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Located {
@@ -48,8 +43,7 @@ struct Located {
 /// Returns the name a reference's resolution is filed under.
 ///
 /// Takes the location as the run wrote it. The location is hashed under its own
-/// derived key, so the name is a value no filesystem refuses and can never be
-/// mistaken for an object digest.
+/// derived key, which no filesystem refuses and no object digest collides with.
 #[must_use]
 pub fn key_of(location: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key(RESOLUTION_KEY_CONTEXT);
@@ -72,8 +66,8 @@ impl<P: Platform> Cache<P> {
 
     /// Returns the location and validator this cache recorded for an object.
     ///
-    /// Reads every resolution record, because they are keyed by the reference
-    /// that was fetched and this asks the question the other way round. Only a
+    /// Reads every resolution record, which are keyed by reference rather than
+    /// by digest. Only a
     /// quarantine asks it, and a quarantine is rare enough to pay for a walk of
     /// a directory holding one small record per reference this cache has ever
     /// fetched.

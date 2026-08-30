@@ -1,9 +1,4 @@
 //! The local record of what a run actually did.
-//!
-//! A receipt is local, may hold absolute paths, and is never read as an
-//! authority for identity. It supplies what a filesystem does not state, which
-//! is the mode of each file, and it never supplies a digest: a record that
-//! attested to its own correctness would prove nothing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,8 +40,7 @@ pub struct Receipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeDigest>,
     /// The entry paths the run materialized with the executable mode, in
-    /// ascending order. Every other file entry carries the read and write mode,
-    /// because a tree digest records those two and no others.
+    /// ascending order. Every other file entry carries the read and write mode.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executable: Vec<String>,
     /// The fingerprint each file entry carried when the run published it.
@@ -116,9 +110,7 @@ impl RecordedFingerprint {
 impl Receipt {
     /// Returns the name a receipt for a destination is stored under.
     ///
-    /// Takes the destination as it was resolved against the working directory,
-    /// so a receipt is found from any working directory and a destination that
-    /// moved is simply not found.
+    /// Takes the destination as it was resolved against the working directory.
     #[must_use]
     pub fn key(destination: &Path) -> ContentDigest {
         let mut hasher = blake3::Hasher::new_derive_key(RECEIPT_KEY_CONTEXT);

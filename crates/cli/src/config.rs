@@ -74,8 +74,8 @@ impl<T> Sourced<T> {
 
 /// Everything a configuration file may set.
 ///
-/// Only settings this build acts on are accepted. Unknown keys are an error,
-/// which is what keeps the `x-` prefix reserved rather than silently accepted.
+/// Only settings this build acts on are accepted. Unknown keys, and the `x-`
+/// prefix, are an error.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ConfigFile {
@@ -93,8 +93,7 @@ pub struct ConfigFile {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CacheSection {
-    /// Where the cache is. Relative in a project file, where it names a cache
-    /// beside the project rather than the one every project shares.
+    /// Where the cache is. Relative in a project file.
     pub dir: Option<PathBuf>,
 }
 
@@ -145,7 +144,7 @@ pub struct LoadedConfig {
 ///
 /// Takes the path of a file that is expected to exist. Returns what it set.
 /// Fails when the file cannot be read and when it sets a key that is not
-/// defined, which is how the reserved prefix stays rejected.
+/// defined, the reserved prefix among them.
 ///
 /// # Errors
 ///

@@ -623,9 +623,8 @@ impl ZipCentralHeader {
     }
 }
 
-/// One zip member: a local file header and data pair, and the central
-/// directory entry that describes it, held separately so the two can
-/// disagree.
+/// One zip member: a local file header and data pair, and the central directory
+/// entry that describes it, held separately.
 #[derive(Clone, Debug)]
 pub struct ZipMember {
     /// The local file header written at the member's offset.

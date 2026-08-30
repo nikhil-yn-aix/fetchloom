@@ -1,8 +1,4 @@
 //! The cross-platform conformance corpus: pure data, no filesystem access.
-//!
-//! A driver on any platform materializes [`portable_core`] and compares its
-//! tree digest against the others; [`declared_failures`] lists the entries a
-//! conforming implementation must instead reject, and why.
 
 use crate::digest::ContentDigest;
 use crate::error::ErrorKind;
@@ -91,9 +87,8 @@ pub fn portable_core() -> Vec<TreeEntry> {
     ]
 }
 
-/// One combination the target filesystem or platform cannot represent,
-/// paired with the exact kind and reason a conforming implementation reports
-/// instead of succeeding.
+/// One combination the target filesystem or platform cannot represent, with the
+/// exact kind and reason a conforming implementation reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclaredFailure {
     /// What this case demonstrates.
@@ -107,9 +102,9 @@ pub struct DeclaredFailure {
 }
 
 /// The entries a conforming implementation must reject, each with the exact
-/// kind and reason, rather than materialize.
+/// kind and reason.
 ///
-/// None of these appear in [`portable_core`], because the core must succeed
+/// None of these appear in [`portable_core`]. The core must succeed
 /// everywhere. Covers a case-folding collision, a Unicode normalization
 /// collision, a symlink a platform forbids creating, and a path longer than
 /// a target's maximum.

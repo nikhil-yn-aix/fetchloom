@@ -1,10 +1,4 @@
 //! The restricted block subset of YAML this build reads.
-//!
-//! Anchors, aliases, merge keys, tags, directives, block scalars, and multiple
-//! documents are refused by name rather than resolved, because every one of
-//! them lets a document mean something other than what it appears to say. What
-//! is left is block mappings, block sequences, flow sequences, flow mappings,
-//! and three kinds of scalar.
 
 use serde_json::{Map, Number, Value};
 
@@ -242,8 +236,7 @@ impl Reader {
     }
 }
 
-/// Reports whether the text after a dash begins a nested block rather than a
-/// scalar.
+/// Reports whether the text after a dash begins a nested block.
 fn opens_block(rest: &str) -> bool {
     rest == "-" || rest.starts_with("- ") || split_key(rest).is_some()
 }
@@ -522,8 +515,7 @@ fn refuse_reserved(raw: &str, number: usize) -> Result<(), Error> {
 /// Returns the value an unquoted scalar stands for.
 ///
 /// Only `true`, `false`, and `null` are read as anything other than text, and
-/// only a run of digits with an optional sign is read as a number, so a word
-/// that merely looks like a yes is text.
+/// only a run of digits with an optional sign is read as a number.
 fn plain_value(raw: &str) -> Value {
     match raw {
         "true" => return Value::Bool(true),

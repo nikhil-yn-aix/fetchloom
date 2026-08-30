@@ -1,8 +1,4 @@
 //! Recognizing a directory index before parsing it.
-//!
-//! A parser is never tried speculatively. A body that matches no signature
-//! fails as unresolved, because a parser that succeeds on the wrong input
-//! produces a listing that is wrong rather than an error that is right.
 
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
@@ -28,7 +24,7 @@ const GENERATED_HEADING: &str = "<h1>Index of ";
 /// # Errors
 ///
 /// Fails with `reference.unresolved` when the body matches no recognized
-/// signature, because an index is never guessed at.
+/// signature.
 pub fn parse(location: &str, status: u16, body: &str) -> Result<Vec<ListingEntry>, Error> {
     if body.contains(OBJECT_STORE_ROOT) && body.contains(OBJECT_STORE_NAMESPACE) {
         return Ok(entries(location, &between_all(body, "<Key>", "</Key>")));

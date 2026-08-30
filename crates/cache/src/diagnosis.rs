@@ -1,8 +1,4 @@
 //! What travels beside a quarantined object.
-//!
-//! The run that quarantined an object is over by the time anyone asks what
-//! happened to it, and `cache verify` quarantines objects in bulk, so the
-//! evidence has to live next to the evidence.
 
 use std::ops::Range;
 
@@ -19,11 +15,9 @@ use crate::record;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotLocalized {
-    /// The object is at or below the outboard threshold, so no tree was stored
-    /// and the digest is all there is to compare.
+    /// The object is at or below the outboard threshold, so no tree was stored.
     NoTreeStored,
-    /// A tree was stored and does not check out against the digest, so it says
-    /// nothing about which bytes are wrong.
+    /// A tree was stored and does not check out against the digest.
     TreeDoesNotCheckOut,
     /// The object's own bytes could not be read.
     ObjectUnreadable,
@@ -46,7 +40,7 @@ pub struct DamagedRange {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Diagnosis {
-    /// The digest the object is named by, which is what it should hash to.
+    /// The digest the object is named by, and what it should hash to.
     pub digest: ContentDigest,
     /// What the bytes actually hash to, absent when they could not be read.
     pub found: Option<ContentDigest>,
@@ -56,9 +50,8 @@ pub struct Diagnosis {
     pub damaged: Vec<DamagedRange>,
     /// Why `damaged` is empty, absent when it is not.
     ///
-    /// An empty list is never read as no damage. The object is in quarantine
-    /// because it failed, so an empty list means the damage could not be
-    /// narrowed and this says which of the three reasons applies.
+    /// An empty list means the damage could not be narrowed, never that there
+    /// was none.
     pub localized: Option<NotLocalized>,
     /// The redacted location the bytes came from, when the cache recorded one.
     pub source: Option<String>,

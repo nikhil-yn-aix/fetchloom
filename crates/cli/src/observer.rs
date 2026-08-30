@@ -15,8 +15,7 @@ pub const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 
 /// An observer that writes the event stream as newline-delimited JSON.
 ///
-/// Writing is best effort: an observer that cannot write drops the event rather
-/// than failing a run, because no display mode may change a result.
+/// An observer that cannot write drops the event rather than failing a run.
 pub struct EventStream {
     sink: Mutex<Box<dyn Write + Send>>,
 }
@@ -66,8 +65,7 @@ struct Progress {
 
 /// The one renderer for the whole run.
 ///
-/// It consumes the event stream and has no other input, so it cannot display a
-/// fact the stream does not carry and cannot influence the run. It paints the
+/// It consumes the event stream and has no other input. It paints the
 /// plain view and stays silent in the none view.
 #[derive(Debug)]
 pub struct Renderer {

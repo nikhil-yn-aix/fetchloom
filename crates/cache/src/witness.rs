@@ -1,9 +1,4 @@
 //! Where a run's own observations of an artifact are kept.
-//!
-//! A witness is written only by a run on this machine that transferred the
-//! bytes in full and verified them as they arrived. Nothing read from a source,
-//! a bundle, a lock, a receipt or a plan ever becomes one, so no remote party
-//! can put a witness here.
 
 use fetchloom_engine::error::Error;
 use fetchloom_engine::seam::platform::Platform;
@@ -24,8 +19,7 @@ pub struct Witnesses {
 impl<P: Platform> Cache<P> {
     /// Returns every witness recorded for an artifact.
     ///
-    /// Returns nothing recorded when the cache holds no record, which is what a
-    /// cache that has never fetched the artifact holds.
+    /// Returns nothing recorded when the cache holds no record.
     ///
     /// # Errors
     ///
@@ -37,9 +31,7 @@ impl<P: Platform> Cache<P> {
 
     /// Records one observation of an artifact, keeping every earlier one.
     ///
-    /// An observation identical to one already recorded is not written again,
-    /// because the same observation twice is still one observation and a record
-    /// that grew on every run would count it as two.
+    /// An observation identical to one already recorded is not written again.
     ///
     /// # Errors
     ///
@@ -60,9 +52,7 @@ impl<P: Platform> Cache<P> {
 
 /// Reports whether two records are the same observation.
 ///
-/// The instant is not compared, because one machine observing one origin in one
-/// run twice at two times is one observation and recording it under two
-/// instants is how that would be counted as two.
+/// The instant is not compared.
 fn same_observation(one: &Witness, other: &Witness) -> bool {
     one.digest == other.digest
         && one.machine == other.machine

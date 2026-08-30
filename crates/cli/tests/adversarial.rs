@@ -1,8 +1,4 @@
 //! The adversarial proofs phase two is judged on.
-//!
-//! Every failure the roadmap names is produced against a real server or a real
-//! unresolvable name, and each is asserted to leave the transfer in a state a
-//! later run can continue from.
 
 #![expect(
     clippy::unwrap_used,
@@ -147,8 +143,7 @@ fn impatient() -> Limits {
     }
 }
 
-/// A run with nothing recorded for the reference, which is what a cold cache
-/// holds and what every transfer test here starts from.
+/// A run with nothing recorded for the reference.
 fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
     None
 }

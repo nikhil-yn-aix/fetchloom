@@ -1,11 +1,4 @@
 //! Contract tests over what a volume and the processor can actually do.
-//!
-//! Every probe is checked against what the filesystem itself does, never
-//! against a value hardcoded for one machine, so these assertions are the same
-//! on all three platforms. A capability that needs a filesystem this machine
-//! does not have runs against the volumes the environment names, and a runner
-//! that promised such a volume and did not build it fails rather than passing
-//! quietly.
 
 #![expect(
     clippy::unwrap_used,

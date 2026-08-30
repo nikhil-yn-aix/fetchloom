@@ -1,9 +1,4 @@
 //! Contract tests over the invariants in contracts.md Cache.
-//!
-//! Every assertion here is a sentence from that section: an entry in `objects/`
-//! has been verified and there is no other way for a file to appear there,
-//! publication is a rename, a format mismatch fails every operation, and prune
-//! never removes what is pinned or leased.
 
 #![expect(
     clippy::unwrap_used,

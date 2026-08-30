@@ -1,8 +1,4 @@
 //! What a locked run found at each destination entry.
-//!
-//! The comparison is against the tree the run resolved, never against a
-//! receipt: a receipt, once one exists, is a cached copy of this answer and
-//! never a second authority for it.
 
 use serde::{Deserialize, Serialize};
 

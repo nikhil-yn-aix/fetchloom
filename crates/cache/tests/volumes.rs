@@ -1,8 +1,4 @@
 //! Contract tests that need a particular kind of volume underneath them.
-//!
-//! Each one runs against the volumes the environment names, which continuous
-//! integration builds before the suite runs. A runner that promised a volume
-//! and did not build it fails rather than passing quietly.
 
 #![expect(
     clippy::unwrap_used,

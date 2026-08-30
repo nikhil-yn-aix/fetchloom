@@ -1,10 +1,4 @@
 //! Where a run's receipt is kept, and how it is found again.
-//!
-//! A receipt is named by the destination it describes, so it is found from any
-//! working directory and a destination that moved is simply not found. It lives
-//! in the cache because it can always be produced again by running the same
-//! request, which is what makes it derived rather than something a user must
-//! keep.
 
 use std::path::Path;
 
@@ -18,8 +12,7 @@ use crate::{Cache, failure};
 impl<P: Platform> Cache<P> {
     /// Writes the receipt for the destination it names.
     ///
-    /// Writes beside the receipt and renames onto it, so a reader finds it
-    /// whole or not at all.
+    /// Writes beside the receipt and renames onto it.
     ///
     /// # Errors
     ///
@@ -45,8 +38,7 @@ impl<P: Platform> Cache<P> {
     ///
     /// Takes the destination as it was resolved against the working directory.
     /// Returns nothing when no receipt is stored under that name and when the
-    /// receipt stored there describes another destination, which is what a
-    /// receipt carried from another machine describes.
+    /// receipt stored there describes another destination.
     ///
     /// # Errors
     ///

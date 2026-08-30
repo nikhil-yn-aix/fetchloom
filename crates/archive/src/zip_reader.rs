@@ -128,9 +128,7 @@ fn validate_central_directory_paths(
 /// Takes the raw name exactly as the archive wrote it, whether this archive
 /// was decided to be backslash-separated, and the nesting depth limit.
 /// Returns the validated path. This is the only place a raw zip member name
-/// reaches `validate_member_path`, so a backslash-separated archive can never
-/// have its `..` components checked against the original, unnormalized
-/// bytes: normalization always runs first.
+/// reaches `validate_member_path`.
 ///
 /// # Errors
 ///

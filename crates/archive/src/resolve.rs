@@ -1,9 +1,4 @@
 //! Reading an archive's tree without writing a byte anywhere.
-//!
-//! Reconcile has to know the tree a request resolves to before it decides
-//! whether anything needs writing. Extraction cannot answer that, because
-//! extraction writes; this pass answers it by hashing each selected member's
-//! bytes as they stream past.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -23,11 +18,10 @@ use crate::extract::{BUFFER_LEN, build_plan, io_failure, select_members};
 /// Takes an archive reader, the selection to apply, and the limits to
 /// enforce. Reads every selected member's bytes and returns the same entries
 /// extraction would have written, in no particular order, having created
-/// nothing. The limits are enforced against what the members hold rather than
-/// against what was written, because nothing is written.
+/// nothing. The limits are enforced against what the members hold.
 ///
-/// A name the destination volume refuses is not found here, because only
-/// creating a name on that volume finds it. This pass answers what the
+/// A name the destination volume refuses is not found here. This pass answers
+/// what the
 /// request resolves to; extraction answers what the volume accepts.
 ///
 /// # Errors

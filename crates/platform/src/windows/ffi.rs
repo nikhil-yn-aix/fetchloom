@@ -53,8 +53,8 @@ const DRIVE_REMOTE: u32 = 4;
 
 /// The flag that permits an unprivileged process to create a symbolic link.
 ///
-/// Named here because `windows-sys` types it as a symbolic link flag while the
-/// call takes the two flags combined.
+/// `windows-sys` types it as a symbolic link flag; the call takes the two flags
+/// combined.
 const ALLOW_UNPRIVILEGED_CREATE: u32 = 0x2;
 
 /// Encodes a path the way every wide-character Windows call expects it.
@@ -184,8 +184,8 @@ pub(crate) fn volume_information(file: &File) -> io::Result<VolumeInformation> {
 /// Renames a file or a directory onto its final name.
 ///
 /// Takes the two paths and whether the rename must reach the disk before it
-/// returns. Replaces an existing target. Never copies across volumes, because
-/// the flag that would permit that is never passed. Fails when the rename does
+/// returns. Replaces an existing target. Never copies across volumes. Fails
+/// when the rename does
 /// not complete.
 pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<()> {
     let source = wide(from);
@@ -218,7 +218,7 @@ pub(crate) fn flush_file_buffers(file: &File) -> io::Result<()> {
 /// Reserves clusters for a file and then sets its length.
 ///
 /// Takes an open handle and the length to reserve. The allocation is set before
-/// the end of file, because the end of file must never exceed the allocation.
+/// the end of file.
 /// Fails when the volume has no room.
 pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
     let signed = i64::try_from(length).unwrap_or(i64::MAX);
@@ -438,8 +438,7 @@ pub(crate) fn process_start(pid: u32) -> ProcessQuery {
 /// Counts the processors this process may actually run on.
 ///
 /// Returns the smallest of the process affinity mask, any job object rate
-/// limit, and the machine's own count across every processor group, because the
-/// standard library's own answer reads none of those.
+/// limit, and the machine's own count across every processor group.
 pub(crate) fn usable_processors() -> Option<usize> {
     let mut process_mask = 0usize;
     let mut system_mask = 0usize;
@@ -710,7 +709,7 @@ pub(crate) fn process_owners() -> io::Result<Vec<String>> {
 /// Reads one security identifier out of an access token.
 ///
 /// Both classes this is asked for answer with a record whose first field is the
-/// identifier, so one reader serves both.
+/// identifier.
 fn token_sid(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String> {
     let mut needed = 0u32;
     // SAFETY: the token handle is open for the call, and a null buffer with a zero length is how the call is asked for the size it needs.

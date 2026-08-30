@@ -1,9 +1,5 @@
-//! The gate of phase four: plan on a connected machine, carry the bundle,
-//! apply with no network, and get the same tree.
-//!
-//! The bundle is treated the way the archive corpus treats an archive. It
-//! arrives from somewhere else, it states things about itself, and none of what
-//! it states is believed.
+//! Plan on a connected machine, carry the bundle, apply with no network, and
+//! get the same tree.
 
 #![expect(
     clippy::unwrap_used,

@@ -1,10 +1,4 @@
 //! Contract tests over the hostile archive corpus itself.
-//!
-//! The corpus is a fixture the archive-reader suite will stand on, so the
-//! bytes it hands out have to be asserted directly rather than trusted.
-//! Every assertion here reads the tar and zip structures back with its own
-//! parsing, independent of the writer in `fetchloom_faults::archives`, so a
-//! bug in the writer cannot hide behind a reader built the same way.
 
 #![expect(
     clippy::unwrap_used,

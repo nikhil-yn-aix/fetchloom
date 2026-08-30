@@ -15,14 +15,13 @@ pub struct VerifyReport {
     pub verified: u64,
     /// The objects that did not, each now in quarantine.
     pub quarantined: Vec<String>,
-    /// How many objects another writer held, so they were not read.
+    /// How many objects another writer held and were not read.
     pub held: u64,
 }
 
 /// Rereads and rehashes every object, quarantining each mismatch.
 ///
-/// An object a writer holds is left alone and counted, because reading it while
-/// it is being written would report a mismatch that is not one. Every mismatch
+/// An object a writer holds is left alone and counted. Every mismatch
 /// is localized against its tree before it is moved, and the diagnosis is
 /// written beside it.
 ///

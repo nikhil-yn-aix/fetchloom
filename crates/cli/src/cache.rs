@@ -18,7 +18,7 @@ use fetchloom_platform::NativePlatform;
 
 use crate::surface::CacheCommand;
 
-/// A cache this run may use, or the reason it may not.
+/// A cache this run may use, or why it may not.
 pub enum Opened {
     /// The cache is open and usable.
     Ready(Box<Cache<NativePlatform>>),
@@ -27,21 +27,14 @@ pub enum Opened {
         /// What the platform said.
         reason: String,
     },
-    /// The cache was written in a format this build does not read, which stops
-    /// the run rather than silently refetching everything it held.
+    /// The cache was written in a format this build does not read.
     Refused(Box<Error>),
 }
 
 /// Opens the cache at a root, deciding what an unusable one means.
 ///
-/// A format mismatch stops the run, because it has exactly one fix and
-/// continuing would refetch everything the cache already held. A volume that
-/// cannot express cross-user locking stops the run too, because contracts.md
-/// says such a cache is refused rather than used and because degrading leaves
-/// the run with no cache at all, which every remote fetch then fails on with a
-/// message about a flag the user never gave. Every other failure degrades to
-/// no-cache behavior, because the user often cannot act on it now and the
-/// cache is never required.
+/// A format mismatch stops the run, and so does a volume that cannot express
+/// cross-user locking. Every other failure degrades to no-cache behavior.
 #[must_use]
 pub fn open(
     root: &Path,

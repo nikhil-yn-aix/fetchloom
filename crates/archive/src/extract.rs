@@ -111,10 +111,8 @@ where
 
 /// Returns the member path as an entry path names it.
 ///
-/// Drops the trailing separator a directory member carries and the `.`
-/// components a writer used to mean the archive root, because `./a` and `a`
-/// name one entry and a tree digest that told them apart would differ between
-/// two archives holding the same files.
+/// Drops the trailing separator a directory member carries and the leading `.`
+/// components that name the archive root.
 pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
     let raw = if member.kind == MemberKind::Directory {
         member.path.trim_end_matches('/')
@@ -130,9 +128,7 @@ pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
 /// Empties the staging directory this call was given.
 ///
 /// Takes the staging directory, which was given empty. Removes everything
-/// inside it rather than only the names this call recorded, because a volume
-/// may store a name other than the one asked for and that name is not one
-/// this call can have recorded.
+/// inside it, not only the names this call recorded.
 fn cleanup(staging: &Path) {
     let Ok(entries) = std::fs::read_dir(staging) else {
         return;
@@ -151,8 +147,7 @@ fn cleanup(staging: &Path) {
 ///
 /// Takes the members the archive listed and the selection. Returns the
 /// selection's answer with every index pointing back at the member list it
-/// was given, so a caller reads modes and targets from the archive's own
-/// entry rather than from the filtered one.
+/// was given.
 pub(crate) fn select_members(
     members: &[ArchiveMember],
     selection: &Selection,
@@ -428,8 +423,8 @@ fn worth_confirming(_component: &str) -> bool {
 /// Confirms that the volume stored the name that was asked for.
 ///
 /// Takes the path just created. Reads the containing directory back and looks
-/// for that exact final component, because a volume may accept a create and
-/// store something else: Windows strips a trailing dot or space, and a name
+/// for that exact final component. A volume may accept a create and store
+/// something else: Windows strips a trailing dot or space, and a name
 /// holding a colon becomes an alternate data stream on a file of the shorter
 /// name.
 ///

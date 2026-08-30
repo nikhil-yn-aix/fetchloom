@@ -1,8 +1,4 @@
 //! Contract tests over the adversarial server itself.
-//!
-//! The server is a fixture the transfer suite stands on, so what it does has to
-//! be asserted directly rather than inferred from a client's behavior. Every
-//! assertion here reads raw bytes off a socket.
 
 #![expect(
     clippy::unwrap_used,

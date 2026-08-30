@@ -1,10 +1,5 @@
 //! Contract tests over where witnesses are kept and what the store does with
 //! them.
-//!
-//! The store is the one place a witness can arrive from, and a shared cache
-//! directory is the only channel by which one machine's observation reaches
-//! another. These assert that the store counts observations the way the rule
-//! states rather than the way a directory listing happens to look.
 
 #![expect(
     clippy::unwrap_used,

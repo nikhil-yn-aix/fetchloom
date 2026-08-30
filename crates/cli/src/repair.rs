@@ -1,10 +1,4 @@
 //! Refetching the damaged ranges of a cached object.
-//!
-//! The tree names which bytes are wrong and the refetch asks for exactly those.
-//! The tree is never the last word: the repaired object is reread whole and
-//! published only when it hashes to the digest it is named by, so a
-//! localization that was wrong fails loudly instead of publishing bytes nothing
-//! checked.
 
 use std::sync::Arc;
 
@@ -186,9 +180,7 @@ impl Repair<'_> {
 
 /// Returns how long the whole object is.
 ///
-/// The source is asked rather than the file on disk, because a truncation is the
-/// damage that makes the two differ and a repair that fetched the length of the
-/// damaged file would restore the damage.
+/// The source is asked rather than the file on disk.
 fn whole_of(
     metadata: &fetchloom_engine::seam::source::SourceMetadata,
     localized: &fetchloom_cache::repair::Localized,
@@ -201,9 +193,7 @@ fn whole_of(
 ///
 /// # Errors
 ///
-/// Fails with `reference.unresolved` when neither states one, because a repair
-/// works on an object this cache holds and a reference it has never fetched
-/// names none.
+/// Fails with `reference.unresolved` when neither states one.
 pub fn digest_for(
     cache: &Cache<NativePlatform>,
     reference: &str,

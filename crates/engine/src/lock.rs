@@ -56,17 +56,12 @@ impl LockedDataset {
     /// Checks what a run resolved against what the lock pins.
     ///
     /// Takes what the lock holds for this dataset and what the run resolved.
-    /// A difference in the bytes is an integrity failure, because the lock
-    /// stated a digest and the source did not serve it. A difference in what
-    /// was asked for is a resolution failure, because the lock describes a
-    /// different request than the one that was made, and refetching cannot fix
-    /// it.
     ///
     /// # Errors
     ///
     /// Fails with `integrity.mismatch` naming the field, the value the lock
     /// pins, and the value the run resolved, and with `alias.unstable` for a
-    /// difference in identity rather than in bytes.
+    /// difference in identity.
     pub fn check(&self, resolved: &Self) -> Result<(), Error> {
         for (id, found) in &resolved.artifacts {
             let Some(pinned) = self.artifacts.get(id) else {
@@ -111,8 +106,7 @@ impl LockedDataset {
     ///
     /// Takes the digest of the manifest the run resolved from, the release it
     /// names, and the selection the run was given. Everything compared here is
-    /// known before a byte moves, so a run the lock does not describe is
-    /// refused before it publishes anything.
+    /// compared before a byte moves.
     ///
     /// # Errors
     ///
@@ -238,8 +232,7 @@ impl Lock {
 
     /// Writes the lock at a path, in the one canonical form.
     ///
-    /// Writes beside the lock and renames onto it, so a reader finds it whole
-    /// or not at all.
+    /// Writes beside the lock and renames onto it.
     ///
     /// # Errors
     ///

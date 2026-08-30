@@ -1,9 +1,4 @@
 //! Contract tests over advisory locking and the liveness ladder.
-//!
-//! The ladder is decided in a fixed order and never from a file modification
-//! time. Two rules matter more than the rest and are asserted directly: a live
-//! holder is never reported stale, and a holder on another machine is never
-//! reported stale at all, because it cannot be inspected.
 
 #![expect(
     clippy::unwrap_used,

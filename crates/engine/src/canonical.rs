@@ -6,8 +6,8 @@ use crate::tree::TreeEntry;
 /// Encodes entries into the canonical byte stream the tree digest is taken
 /// over.
 ///
-/// Entries are sorted ascending by their raw path bytes before encoding, so
-/// the order they are given in does not affect the result. Each entry is
+/// Entries are sorted ascending by their raw path bytes before encoding. Each
+/// entry is
 /// framed by its type tag, an eight-byte little-endian path length, the path
 /// bytes, and then the fixed field list its type carries; a field that does
 /// not apply to a type is absent rather than a placeholder value.

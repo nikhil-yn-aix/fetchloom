@@ -9,7 +9,6 @@ use crate::event::Event;
 pub trait Observer: Send + Sync {
     /// Writes one event.
     ///
-    /// An observer that cannot write drops the event rather than failing a
-    /// run, because no display mode may change a result.
+    /// An observer that cannot write drops the event rather than failing a run.
     fn emit(&self, event: &Event);
 }

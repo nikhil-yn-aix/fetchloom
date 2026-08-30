@@ -1,8 +1,4 @@
 //! Contract tests over the file operation counter.
-//!
-//! The contract says file operations counts every file or directory the run
-//! created, every rename it performed, and every flush it issued, and that it
-//! is counted where the platform performs the operation.
 
 #![expect(
     clippy::unwrap_used,

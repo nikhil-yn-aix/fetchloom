@@ -1,9 +1,4 @@
 //! Rebuilding the derived data the cache can regenerate from what it holds.
-//!
-//! Everything here comes from bytes that are already on this machine and have
-//! already been verified. Nothing reaches a network and nothing resolves a
-//! reference. An object whose own bytes fail is not repairable from the cache
-//! and is left in quarantine for `repair` to fetch again.
 
 use std::io::Read;
 
@@ -32,8 +27,7 @@ pub struct RebuildReport {
     /// How many partial and staging entries with nothing behind them were
     /// removed.
     pub orphans_removed: u64,
-    /// The objects whose own bytes failed, each now in quarantine and each
-    /// needing a source rather than this cache.
+    /// The objects whose own bytes failed, each now in quarantine.
     pub needing_a_source: Vec<String>,
     /// How many objects another writer held, so they were left alone.
     pub held: u64,
@@ -41,10 +35,9 @@ pub struct RebuildReport {
 
 /// Rebuilds every piece of derived data this cache can produce from itself.
 ///
-/// Reads each object once, which is what both a tree and a record need. An
-/// object that still hashes to its name gets whichever of the two it is
-/// missing; one that does not is quarantined with a diagnosis and named in the
-/// report as needing a source.
+/// Reads each object once. An object that still hashes to its name gets
+/// whichever of a tree and a record it is missing; one that does not is
+/// quarantined with a diagnosis and named in the report as needing a source.
 ///
 /// # Errors
 ///
@@ -106,9 +99,7 @@ fn missing_tree(digest: fetchloom_engine::digest::ContentDigest) -> Error {
 
 /// Reports whether a stored tree fails against the digest it belongs to.
 ///
-/// Reads only the tree's nodes, because a tree that does not check out fails at
-/// a node rather than at a leaf and the object's bytes are never consulted to
-/// learn it.
+/// Reads only the tree's nodes, never the object's bytes.
 fn tree_does_not_check_out<P: Platform>(
     cache: &Cache<P>,
     digest: fetchloom_engine::digest::ContentDigest,
@@ -161,8 +152,7 @@ fn write_record<P: Platform>(
 /// Removes every lock whose recorded holder is a process that no longer exists.
 ///
 /// A holder on another machine is never treated as stale, and neither is one
-/// whose liveness could not be decided, because a lock removed underneath a
-/// running writer is the one failure this whole directory exists to prevent.
+/// whose liveness could not be decided.
 fn release_dead_locks<P: Platform>(
     cache: &Cache<P>,
     report: &mut RebuildReport,

@@ -1,8 +1,4 @@
 //! The fingerprint of the on-disk cache format.
-//!
-//! The format is defined by a set of statements, each naming one fact about
-//! what is written and where. The fingerprint is an unordered hash of that set,
-//! so nothing about it can be branched on and no statement is first.
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::identity::CacheFormatFingerprint;
@@ -46,8 +42,7 @@ fn statements() -> Vec<String> {
 
 /// Returns the fingerprint of the format this build writes.
 ///
-/// Combines the statements by exclusive or, so the value cannot depend on the
-/// order they are written in.
+/// Combines the statements by exclusive or, which is unordered.
 #[must_use]
 pub fn fingerprint() -> CacheFormatFingerprint {
     let mut accumulator = [0u8; 32];

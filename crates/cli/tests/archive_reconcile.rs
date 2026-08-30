@@ -105,8 +105,7 @@ fn complaint(output: &Output) -> String {
     body(output)["kind"].as_str().unwrap_or_default().to_owned()
 }
 
-/// Every path under a root with its length and write time, so a test can say
-/// that a run touched nothing rather than only that it reported so.
+/// Every path under a root with its length and write time.
 fn state_of(root: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
     let mut found = Vec::new();
     walk(root, root, &mut found);

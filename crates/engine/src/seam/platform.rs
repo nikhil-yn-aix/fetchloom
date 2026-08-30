@@ -32,10 +32,9 @@ pub enum Liveness {
     Live,
     /// The holder is a process that no longer exists.
     Stale,
-    /// The holder is on another machine, so it cannot be inspected and is
-    /// never treated as stale.
+    /// The holder is on another machine and cannot be inspected.
     OtherMachine,
-    /// A field could not be read, so the holder is treated as running.
+    /// A field could not be read.
     Undecidable {
         /// The field that could not be read.
         missing: String,
@@ -64,8 +63,7 @@ pub trait Platform: Send + Sync {
 
     /// Returns the identifier of an open file within its volume.
     ///
-    /// Takes a handle rather than a name, so the answer is about the file that
-    /// was opened and not about whatever the name refers to now.
+    /// Takes an open handle rather than a name.
     ///
     /// # Errors
     ///
@@ -73,10 +71,6 @@ pub trait Platform: Send + Sync {
     fn file_id_of(&self, file: &File) -> Result<FileId, Error>;
 
     /// Reports whether a file belongs to the user this process runs as.
-    ///
-    /// Asks the filesystem rather than reading a recorded claim, because in a
-    /// directory several users write to, a record is written by the parties it
-    /// would be protecting against.
     ///
     /// # Errors
     ///
@@ -94,8 +88,7 @@ pub trait Platform: Send + Sync {
 
     /// Reports what the volume behind a path sits on.
     ///
-    /// Answers with one query rather than the whole probe, because a cache
-    /// refuses a network-backed volume before it does any other work.
+    /// Answers with one query rather than the whole capability probe.
     ///
     /// # Errors
     ///
@@ -104,8 +97,8 @@ pub trait Platform: Send + Sync {
 
     /// Detects what the volume behind a directory can do.
     ///
-    /// Takes a directory Fetchloom owns, because probing creates and removes
-    /// files inside it. Returns everything detected about that volume.
+    /// Takes a directory Fetchloom owns, inside which the probe creates and
+    /// removes files. Returns everything detected about that volume.
     ///
     /// # Errors
     ///
@@ -150,8 +143,7 @@ pub trait Platform: Send + Sync {
 
     /// Publishes one file by renaming it onto its final name.
     ///
-    /// Takes a source and a target on the same volume. Fails rather than
-    /// copying when they are on different volumes.
+    /// Takes a source and a target on the same volume.
     ///
     /// # Errors
     ///
@@ -161,8 +153,8 @@ pub trait Platform: Send + Sync {
 
     /// Publishes a staging tree onto a destination.
     ///
-    /// An existing destination is renamed aside first, so the destination is
-    /// briefly absent and never partial.
+    /// An existing destination is renamed aside first, leaving it briefly
+    /// absent and never partial.
     ///
     /// # Errors
     ///

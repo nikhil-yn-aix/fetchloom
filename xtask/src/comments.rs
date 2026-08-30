@@ -66,7 +66,7 @@ fn is_decoration(character: char) -> bool {
 /// comment that is not a docstring, a block comment in any form, a safety line
 /// that does not precede an unsafe block, and any decorative symbol. Text
 /// inside a string, a character, or a raw string literal is not scanned for
-/// comments, so a pair of slashes inside a literal is not a finding.
+/// comments.
 #[must_use]
 pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();

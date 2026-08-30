@@ -1,9 +1,5 @@
 //! Bounded extraction driven over the hostile archive corpus and the
 //! properties the reader defers to it.
-//!
-//! `corpus.rs` asserts what the reader decides from headers alone.
-//! `DECIDED_BY_EXTRACTION` there names the entries the reader lists rather
-//! than refuses; this suite is where every one of them is finally decided.
 
 #![expect(
     clippy::unwrap_used,
@@ -52,8 +48,8 @@ const VOLUME_DEPENDENT_NAMES: &[&str] = &[
 /// Reports whether this volume stores a name exactly as it was asked to.
 ///
 /// Takes the member name the archive holds. Creates it in a directory of its
-/// own and reads that directory back, because a volume may accept the create
-/// and store something else: Windows strips a trailing dot, and a name holding
+/// own and reads that directory back. A volume may accept the create and store
+/// something else: Windows strips a trailing dot, and a name holding
 /// a colon becomes an alternate data stream on a file of the shorter name.
 /// Returns whether the name that came back is the name that went in.
 fn volume_stores_this_name(name: &str) -> bool {

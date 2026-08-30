@@ -1,14 +1,4 @@
 //! What a run did, counted so that identical inputs count identically.
-//!
-//! Every number here is a count of work, never a duration, because a duration
-//! is a property of the machine and cannot gate on a developer's desktop. A
-//! second read of a file already read, a second write of bytes already
-//! written, and a request that need not have been issued all move one of
-//! these and move no wall clock the harness is allowed to trust.
-//!
-//! File operations are counted because the cost of holding many small objects
-//! is dominated by how many files each one takes rather than by how many bytes,
-//! and a count is the only form of that fact a gate can hold.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,9 +22,7 @@ pub struct Work {
 
 /// Where every part of a run counts the work it did.
 ///
-/// Shared by reference so one run has one set of numbers. Counting is done at
-/// the boundary each kind of work goes through rather than at each call site,
-/// so a new caller counts by construction.
+/// Shared by reference: one run has one set of numbers.
 #[derive(Debug, Default)]
 pub struct WorkCounter {
     bytes_read: AtomicU64,

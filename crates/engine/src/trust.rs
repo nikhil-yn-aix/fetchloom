@@ -1,11 +1,5 @@
 //! What is known about the bytes a run produced, and the witnesses that raise
 //! it.
-//!
-//! Corroboration is the class most easily weakened by accident, so the rule is
-//! mechanical: two witnesses are independent only when they differ in the
-//! machine that observed them, the origin that served the bytes, and the run
-//! that recorded them. Two observations from one machine are one observation,
-//! and so are two from one origin and two from one run.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,8 +23,7 @@ pub enum TrustClass {
 
 /// The identity of one run, which is one process on one machine.
 ///
-/// Two witnesses recorded by one run are one observation, because one run has
-/// one view of the network, so a run has to be nameable.
+/// Two witnesses recorded by one run are one observation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RunId(String);
@@ -92,8 +85,7 @@ pub struct Witness {
     pub digest: ContentDigest,
     /// The machine that observed them.
     pub machine: MachineId,
-    /// The origin that served them, as the host and path rather than the alias
-    /// the user typed, so a mirror proxying another is one origin.
+    /// The origin that served them, as the host and path.
     pub origin: String,
     /// The run that recorded the observation.
     pub run: RunId,

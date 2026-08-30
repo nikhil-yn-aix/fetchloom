@@ -202,15 +202,13 @@ impl Layout {
 
 /// Returns the file name a digest is stored under.
 ///
-/// The text form of a digest carries its algorithm and a colon, which is not a
-/// name every filesystem accepts, so the name is the hexadecimal alone.
+/// The name is the digest's hexadecimal alone, without its algorithm.
 #[must_use]
 pub fn name_of(digest: ContentDigest) -> String {
     hexadecimal(digest.bytes())
 }
 
-/// Returns the lowercase hexadecimal of some bytes, which is how every key in
-/// the cache becomes a file name every filesystem accepts.
+/// Returns the lowercase hexadecimal of some bytes.
 fn hexadecimal(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -223,8 +221,7 @@ fn hexadecimal(bytes: &[u8]) -> String {
 
 /// Returns the digest a file name stands for.
 ///
-/// Returns nothing when the name is not the hexadecimal of a digest, which is
-/// how a foreign file in the cache is ignored rather than misread.
+/// Returns nothing when the name is not the hexadecimal of a digest.
 #[must_use]
 pub fn digest_of(name: &str) -> Option<ContentDigest> {
     if name.len() != 64 {

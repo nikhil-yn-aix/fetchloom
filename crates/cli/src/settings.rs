@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
 use crate::surface::{DisplayMode, GlobalFlags};
 
-/// Somewhere a value can be read from, so a test can supply one without
-/// changing the process environment.
+/// Somewhere a value can be read from.
 pub trait Environment: Send + Sync {
     /// Returns the value of a variable, or nothing when it is unset.
     fn get(&self, name: &str) -> Option<String>;
@@ -63,8 +62,8 @@ pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
 /// Resolves the cache directory a project file names, against the directory
 /// that file is in.
 ///
-/// A project file names a cache beside the project, so its value is relative
-/// and is read against the file rather than against the working directory.
+/// A project file names a cache beside itself, so its value is read against the
+/// file rather than against the working directory.
 fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
     let named = loaded.values.cache.as_ref()?.dir.as_ref()?;
     let beside = loaded.path.parent().unwrap_or(Path::new("."));

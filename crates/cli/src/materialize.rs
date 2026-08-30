@@ -1,9 +1,4 @@
 //! Walking a local tree into entries, and copying it into a destination.
-//!
-//! The file operations here go through the standard library rather than the
-//! Platform seam, because no implementation of that seam exists yet. Atomic
-//! publication, capability detection, and advisory locking are therefore absent
-//! and every one of them is reported as a degradation rather than assumed.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -15,14 +10,8 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
-/// The mode every file a filesystem walk finds is recorded under.
-///
-/// A bare filesystem tree is neither an archive nor a manifest, so it states
-/// no mode Materialization accepts. Reading one back from a stat answers
-/// differently on a volume that carries an executable bit and one that does
-/// not, and the same tree then digests differently on Windows and on Linux.
-/// Every walked file is `0644` on every platform instead, and the run reports
-/// that it read none.
+/// The mode every file a filesystem walk finds is recorded under, on every
+/// platform.
 pub const WALKED_MODE: Mode = Mode::ReadWrite;
 
 /// One file found while walking a source tree.
@@ -59,8 +48,7 @@ pub struct Walked {
     /// The directory every relative path is taken from.
     ///
     /// A reference naming a directory walks that directory. A reference naming
-    /// one object walks its parent and takes only that object, so a single
-    /// object materializes as a destination holding one entry.
+    /// one object walks its parent and takes only that object.
     pub root: PathBuf,
 }
 

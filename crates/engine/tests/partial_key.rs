@@ -1,10 +1,5 @@
 //! Contract tests for the key a partial, its lease, and its records are
 //! named by.
-//!
-//! Covers docs/contracts.md Cache: a run that states a content digest is
-//! named by that digest, and a run that states none is named by the digest
-//! of the source identity, so the same identity always names the same
-//! partial and a changed identity never collides with it.
 
 use blake3 as _;
 use rayon as _;

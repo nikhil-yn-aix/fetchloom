@@ -1,9 +1,4 @@
 //! Mark, grace, sweep.
-//!
-//! The lock is the authority in both directions. An object under any lock is
-//! never swept, and an object being swept is under the sweeper's exclusive
-//! lock, so no reader can be part way through opening it. The grace period only
-//! stops a prune from removing an object a run is about to lease.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,8 +13,7 @@ use crate::record::{self, Mark};
 
 /// How long an object stays marked before a sweep may remove it.
 ///
-/// A race window rather than a retention policy, so it is not configurable: a
-/// shorter one is a corruption and a longer one is a wait with no benefit.
+/// A race window rather than a retention policy, and not configurable.
 pub const GRACE: Duration = Duration::from_secs(60);
 
 /// Marks what nothing refers to, then removes what has been marked longer than
@@ -91,9 +85,7 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
 
 /// Removes the quarantined objects this user created.
 ///
-/// A quarantined object is never served, so nothing can claim one between a
-/// mark and a sweep, which is the only thing the grace period protects. It is
-/// removed under its lock so a repair reading one is never removed underneath.
+/// A quarantined object takes no grace period and is removed under its lock.
 fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> Result<(), Error> {
     for digest in cache.quarantined()? {
         let path = cache.layout().quarantined(digest);
@@ -114,7 +106,7 @@ fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> 
     Ok(())
 }
 
-/// Removes a mark, because the object it named is referenced again.
+/// Removes a mark from an object that is referenced again.
 fn clear_mark<P: Platform>(cache: &Cache<P>, digest: ContentDigest) -> Result<(), Error> {
     remove(&cache.layout().mark_of(digest))
 }

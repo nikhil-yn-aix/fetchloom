@@ -29,11 +29,9 @@ enum Located {
     Bare(u64),
 }
 
-/// Everything one listing pass produced, kept so a second pass never runs.
+/// Everything one listing pass produced.
 ///
-/// `at` maps a member's path to its position in `members`, because a member
-/// path is claimed by exactly one entry and an extraction opens every member
-/// it selected: finding each one by walking the list would cost the square of
+/// `at` maps a member's path to its position in `members`.
 /// the entry count.
 struct Listing {
     members: Vec<ArchiveMember>,
@@ -41,7 +39,7 @@ struct Listing {
     at: std::collections::HashMap<String, usize>,
 }
 
-/// Reads the container or compression formats phase 3 ships, over any
+/// Reads the container or compression formats this build carries, over any
 /// `Read + Seek` source.
 ///
 /// The caller always holds the archive as a cached object file, so this

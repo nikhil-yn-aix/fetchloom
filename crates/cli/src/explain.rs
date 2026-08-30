@@ -83,8 +83,7 @@ pub fn rows(settings: &Settings) -> Vec<Explained> {
 /// Describes where the configuration files came from.
 ///
 /// Takes the files a run discovered. Returns one line per level, naming the
-/// path that was found or that the level supplied nothing, so the search is
-/// never a mystery.
+/// path that was found, or that the level supplied nothing.
 #[must_use]
 pub fn file_lines(discovered: &Discovered) -> Vec<String> {
     let project = discovered.project.as_ref().map_or_else(

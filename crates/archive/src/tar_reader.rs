@@ -80,10 +80,7 @@ fn build_decompressor<R: Read + 'static>(
 
 /// The pax records extraction reads or discards without complaint.
 ///
-/// `path`, `linkpath` and `size` are read. The three timestamps are discarded,
-/// because contracts.md excludes timestamps from a tree rather than refusing
-/// an archive that states them, and the pax format is what every modern tar
-/// writes by default. `charset` and `comment` describe the header itself.
+/// `path`, `linkpath` and `size` are read. The three timestamps are discarded.
 const IGNORED_PAX_KEYS: [&str; 8] = [
     "path", "linkpath", "size", "mtime", "atime", "ctime", "charset", "comment",
 ];
@@ -240,9 +237,8 @@ pub fn list_members<R: Read + Seek + 'static>(
 
 /// A decompressed tar stream held open between members.
 ///
-/// A tar is a stream, so a member's bytes can only be reached by reading
-/// everything before them. Rebuilding the decompressor for every member costs
-/// one full decompression per member, which is quadratic in the member count
+/// A member's bytes are reached by reading everything before them, so the
+/// stream is held open across members.
 /// and is what made a 515-member xz archive take minutes. Holding one stream
 /// open and moving forward through it costs one decompression for the whole
 /// archive, whenever the members are read in the order the archive holds
@@ -264,8 +260,7 @@ impl Clone for TarStream {
 /// One member's bytes, read out of the stream the archive holds open.
 ///
 /// Reads at most the member's own length and advances the stream's position
-/// by exactly what it yielded, so a body dropped before it is exhausted
-/// leaves the stream describing itself correctly.
+/// by exactly what it yielded.
 pub struct MemberBody {
     stream: TarStream,
     remaining: u64,

@@ -1,8 +1,5 @@
 //! Detecting what a volume can do, by query where Windows answers and by
 //! probe where it does not.
-//!
-//! Every probe runs inside a directory Fetchloom owns and removes what it
-//! creates, so nothing is ever written into a user's destination.
 
 use std::collections::HashMap;
 use std::path::Path;

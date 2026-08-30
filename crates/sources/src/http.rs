@@ -1,10 +1,4 @@
 //! The source that fetches over HTTP and HTTPS.
-//!
-//! Blocking throughout, because the Source seam's body is a reader and this
-//! workspace has no asynchronous runtime. One agent per host holds that host's
-//! connection pool, so a connection is never opened per request. Redirects are
-//! followed here rather than inside the client, because the credential drop is
-//! a contract and has to be decided and reported rather than inherited.
 
 use std::collections::HashMap;
 use std::io::Read;

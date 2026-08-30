@@ -101,12 +101,9 @@ impl Validator {
 
 /// What one conditional request learned.
 pub enum Revalidated<B> {
-    /// The source restated the validator it already gave, so what the caller
-    /// holds is what the reference names. Nothing about the bytes is new, so
-    /// nothing about their trust changes.
+    /// The source restated the validator it already gave.
     Unchanged,
-    /// The bytes are different, and the response carries them, so the answer is
-    /// also the transfer.
+    /// The bytes are different, and the response carries them.
     Changed(Box<Served<B>>),
 }
 
@@ -156,9 +153,7 @@ pub trait Source {
     ///
     /// Takes the location, what the run recorded about the bytes it holds, and
     /// the credential. Returns that nothing changed, or the new metadata and
-    /// the bytes, because a source answering that the object changed has
-    /// already begun sending it and a second request would leave a window in
-    /// which it changes again.
+    /// the bytes.
     ///
     /// # Errors
     ///

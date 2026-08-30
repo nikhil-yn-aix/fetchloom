@@ -38,8 +38,7 @@ pub struct Limits {
     pub listing_entries: u64,
     /// Largest directory index that will be read.
     ///
-    /// An index is parsed as one document rather than streamed, so it is the
-    /// one response this build holds whole and it carries its own ceiling.
+    /// An index is parsed as one document and is the one response held whole.
     pub listing_bytes: u64,
     /// Most candidate sources probed in parallel.
     pub probed_candidates: u32,

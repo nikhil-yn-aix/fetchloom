@@ -83,8 +83,7 @@ fn matches_component(pattern: &str, name: &str) -> bool {
 
 /// How member paths are rewritten on the way to the destination.
 ///
-/// Written as the same text the flag takes, so a manifest, a lock, a plan, and
-/// a command line all say it the one way.
+/// Written as the same text the flag takes.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]

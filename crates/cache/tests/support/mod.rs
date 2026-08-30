@@ -63,7 +63,7 @@ pub fn cache() -> (tempfile::TempDir, Cache<NativePlatform>) {
     (scratch, held)
 }
 
-/// Bytes that differ from every other seed, so two objects are two digests.
+/// Bytes that differ from every other seed.
 pub fn bytes_of(length: usize, seed: u8) -> Vec<u8> {
     (0..length)
         .map(|index| {
@@ -83,7 +83,7 @@ pub fn publish(into: &Cache<NativePlatform>, bytes: &[u8]) -> ContentDigest {
     digest
 }
 
-/// Makes a published object writable, so a test can damage it.
+/// Makes a published object writable.
 pub fn make_writable(path: &Path) {
     let mut permissions = std::fs::metadata(path).unwrap().permissions();
     #[expect(
@@ -148,8 +148,8 @@ pub fn entries_in(directory: &Path) -> Vec<std::path::PathBuf> {
 
 /// Rewrites every owner record in the cache as though a previous boot wrote it.
 ///
-/// A test cannot restart the machine, so the generation the records name is what
-/// is changed, which is exactly what recovery reads.
+/// The generation the records name is what is changed, which is what recovery
+/// reads.
 pub fn pretend_a_previous_boot(layout: &fetchloom_cache::layout::Layout) {
     let _ = std::fs::remove_file(layout.recovered());
     for directory in [layout.partial(), layout.staging()] {
@@ -250,8 +250,7 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
 
 /// Points a name at a directory on another volume.
 ///
-/// Returns whether the platform allowed it, because a symbolic link needs a
-/// privilege on one of the three.
+/// Returns whether the platform allowed it.
 pub fn link_directory(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     {

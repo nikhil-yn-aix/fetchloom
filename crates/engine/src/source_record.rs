@@ -8,8 +8,8 @@ use crate::seam::source::SourceIdentity;
 
 /// What a partial file records about the response its bytes came from.
 ///
-/// Written when the partial is opened and removed with it. Nothing in it is a
-/// secret, because the location was redacted where it was constructed.
+/// Written when the partial is opened and removed with it. The location it
+/// holds was redacted where it was constructed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRecord {
@@ -31,8 +31,7 @@ pub struct SourceRecord {
     ///
     /// The file itself is preallocated to its full length, so its size says
     /// nothing about how much of it is real. This is the only offset a resume
-    /// may append at, and a stale low value costs a refetch rather than a
-    /// corruption.
+    /// may append at.
     pub written: u64,
     /// The rung the transfer was on when the record was written.
     pub rung: ResumeRung,
@@ -41,8 +40,8 @@ pub struct SourceRecord {
 impl SourceRecord {
     /// Reports whether a response identifies the same bytes this record does.
     ///
-    /// Answers on identity alone, because identity is what the contract says
-    /// resume stands on. A record with no identity never matches anything.
+    /// Answers on identity alone. A record with no identity never matches
+    /// anything.
     #[must_use]
     pub fn identifies_the_same_bytes_as(&self, now: &SourceIdentity) -> bool {
         !matches!(self.identity, SourceIdentity::None) && &self.identity == now

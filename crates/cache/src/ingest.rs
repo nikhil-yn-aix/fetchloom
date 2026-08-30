@@ -1,14 +1,4 @@
 //! Putting bytes into the cache whose digest is not known until they are read.
-//!
-//! A transfer named by a manifest knows its digest before it starts and takes a
-//! lease on it. A local source does not, so the bytes are written once, hashed
-//! as they arrive, and given their name at the end.
-//!
-//! No lock is taken here. The lock exists to deduplicate a transfer, and bytes
-//! that are already on this machine have no transfer to deduplicate: a
-//! content-addressed write is idempotent, and the rename already makes a torn
-//! object impossible, so coordinating two processes writing identical bytes
-//! costs more than the local copy it would save.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -44,8 +34,7 @@ impl<P: Platform> Cache<P> {
     ///
     /// Returns the digest the bytes hash to, their length, and whether the
     /// cache already held them. The bytes are written to a name of this
-    /// process's own and given the digest's name only once the digest is known,
-    /// so nothing appears under a digest it does not hash to.
+    /// process's own and given the digest's name only once the digest is known.
     ///
     /// # Errors
     ///
@@ -100,13 +89,11 @@ impl<P: Platform> Cache<P> {
     ///
     /// Takes what the caller's own pass over the bytes produced, its length,
     /// and where it sits. Returns what the cache did with it. The bytes are
-    /// cloned where the volume can share blocks and copied where it cannot, so
-    /// a caller that had to write the file anyway pays no second read of the
-    /// source to fill the cache, and pays nothing at all when the cache already
-    /// holds the object.
+    /// cloned where the volume can share blocks and copied where it cannot. A
+    /// cache that already holds the object neither reads nor writes.
     ///
-    /// The caller states the digest, so the caller is what makes it true. This
-    /// is for a file this process just wrote and hashed in the same pass, not
+    /// The caller states the digest. This is for a file this process just wrote
+    /// and hashed in the same pass, not
     /// for one whose digest was taken on trust.
     ///
     /// # Errors
@@ -162,8 +149,7 @@ impl<P: Platform> Cache<P> {
 
     /// Returns the interop digest recorded for an object.
     ///
-    /// Returns nothing when the cache holds no record for the object, which is
-    /// what a cache that never held it holds.
+    /// Returns nothing when the cache holds no record for the object.
     ///
     /// # Errors
     ///
@@ -243,15 +229,9 @@ impl<P: Platform> Cache<P> {
     /// Records everything the cache knows about a published object that is not
     /// in its bytes.
     ///
-    /// One record rather than one per fact: holding an object costs what it
-    /// takes in files rather than in bytes, and a second record is a second
-    /// create, a second write, and a second name in a directory that already
-    /// holds one per object. The tree is the exception, because it is read
-    /// without the object and by a run that has not decided to open the object
-    /// yet.
+    /// One record holds every fact but the tree, which is stored separately.
     ///
-    /// Clears the prune mark, because an object that has just been published is
-    /// referenced by the run that published it.
+    /// Clears the prune mark.
     ///
     /// # Errors
     ///

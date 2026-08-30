@@ -19,10 +19,9 @@ pub struct PruneReport {
     pub removed: u64,
     /// How many bytes those objects held.
     pub bytes_removed: u64,
-    /// How many objects were kept because they are pinned, leased, or
-    /// referenced.
+    /// How many objects were kept, being pinned, leased, or referenced.
     pub kept: u64,
-    /// How many objects were kept because another user created them.
+    /// How many objects another user created and were kept.
     pub skipped_other_owner: u64,
     /// How many quarantined objects were removed.
     pub quarantined_removed: u64,
@@ -47,10 +46,7 @@ pub struct CacheStatus {
 
 /// Content-addressed storage that one run reads from and writes to.
 pub trait Store {
-    /// A completed object opened for reading.
-    ///
-    /// Seekable, because a tree is walked by descending to the nodes one range
-    /// needs rather than by reading every node before it.
+    /// A completed object opened for reading, seekable.
     type Reader: Read + Seek;
     /// An in-progress object opened for writing.
     type Writer: Write;
@@ -99,8 +95,7 @@ pub trait Store {
     /// and hashing them back into the digest as it goes.
     ///
     /// Takes the claim, the length the source stated, and how many bytes of the
-    /// partial are known to have arrived. Discards anything past `valid`,
-    /// because a preallocated file is longer than what was written.
+    /// partial are known to have arrived. Discards anything past `valid`.
     ///
     /// # Errors
     ///
@@ -172,14 +167,13 @@ pub trait Store {
     /// Takes the key the partial is named by, the digest the run expects, and
     /// how many bytes are recorded as having arrived. Returns the offset of the
     /// first leaf group that is bad or missing, which is where a resume on the
-    /// first rung appends. Only whole groups can be checked, so the answer is
-    /// never past the last group boundary at or below what is on disk.
+    /// first rung appends. The answer is never past the last group boundary at
+    /// or below what is on disk.
     ///
     /// # Errors
     ///
     /// Fails when the tree cannot be read and when it does not check out
-    /// against the digest, in which case the caller falls to a lower rung
-    /// rather than trusting a tree that says nothing.
+    /// against the digest.
     fn verified_prefix(
         &self,
         key: PartialKey,

@@ -1,8 +1,4 @@
 //! Contract tests over a transfer that moves real bytes into a real store.
-//!
-//! Every one drives the whole path: the HTTPS source, the retry ladder, the
-//! resume ladder, and the cache the bytes land in. Nothing here sleeps, because
-//! the wait is supplied by the test.
 
 #![expect(
     clippy::unwrap_used,
@@ -140,8 +136,7 @@ fn at(server: &TestServer) -> Vec<String> {
     vec![format!("{}/object", server.origin())]
 }
 
-/// A run with nothing recorded for the reference, which is what a cold cache
-/// holds and what every transfer test here starts from.
+/// A run with nothing recorded for the reference.
 fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
     None
 }

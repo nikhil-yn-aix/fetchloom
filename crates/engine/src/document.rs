@@ -1,10 +1,5 @@
 //! The one model every accepted surface syntax parses into, and the canonical
 //! forms written back out.
-//!
-//! A manifest is written by a stranger in one of three syntaxes and a lock, a
-//! receipt, and a plan are written by this build in one. All four parse into
-//! the same model, and every digest that covers a document covers its canonical
-//! form rather than the bytes anyone typed.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -91,8 +86,7 @@ pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Err
 ///
 /// Every mapping is ordered by the raw bytes of its keys, an absent value is
 /// omitted rather than written as null, there is no insignificant whitespace,
-/// and there is no line ending anywhere, so the same model produces the same
-/// bytes on every platform.
+/// and there is no line ending anywhere.
 #[must_use]
 pub fn canonical_json(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();
@@ -187,8 +181,7 @@ fn write_json(value: &Value, out: &mut Vec<u8>) {
 
 /// Returns a mapping's entries ordered by the raw bytes of their keys.
 ///
-/// The order is a property of the keys alone, so a model built by any route
-/// renders the same way.
+/// The order is a property of the keys alone.
 fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut entries: Vec<(&String, &Value)> = fields.iter().collect();
     entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
@@ -330,9 +323,7 @@ pub fn read_model_in<T: serde::de::DeserializeOwned>(
 /// name.
 ///
 /// Takes the document and what it is called in a failure. A key beginning with
-/// the reserved prefix is refused by name, because that prefix is what a later
-/// version's extension fields will use and accepting one today would make the
-/// reservation meaningless.
+/// the reserved prefix is refused by name.
 ///
 /// # Errors
 ///
@@ -374,8 +365,7 @@ fn refuse_reserved_keys(document: &Value, called: &str) -> Result<(), Error> {
 ///
 /// # Errors
 ///
-/// Fails when the model cannot be written, which is a defect in the model
-/// rather than in anything a user wrote.
+/// Fails when the model cannot be written.
 pub fn canonical_json_of<T: serde::Serialize>(model: &T) -> Result<Vec<u8>, Error> {
     Ok(canonical_json(&to_value(model)?))
 }

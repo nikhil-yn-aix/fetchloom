@@ -1,10 +1,5 @@
 //! Where the time in the hashing pipeline goes, measured rather than reasoned
 //! about.
-//!
-//! The engine pairs a content digest with an interop digest and runs them on
-//! the processor pool. This times the shapes that pairing can take, over the
-//! input sizes the regimes actually see, so a change to it is chosen by a
-//! number instead of by an argument.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -43,8 +38,7 @@ impl Shape {
     }
 }
 
-/// How many bytes one chunk of a stream carries, which is what the engine
-/// reads through today.
+/// How many bytes one chunk of a stream carries.
 const CHUNK: usize = 1 << 20;
 
 /// Runs the profile and prints one line per measurement.

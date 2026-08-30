@@ -1,7 +1,4 @@
 //! Detecting what a volume can do on Linux.
-//!
-//! Every probe runs inside a directory Fetchloom owns and removes what it
-//! creates, so nothing is ever written into a user's destination.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -44,8 +41,7 @@ fn failure(path: &Path, reason: &std::io::Error) -> Error {
 
 /// Detects everything about the volume behind a directory.
 ///
-/// Returns the same answer every time it is asked about one volume, because the
-/// answer is kept for the life of the process.
+/// The answer is kept for the life of the process and returned unchanged.
 ///
 /// # Errors
 ///

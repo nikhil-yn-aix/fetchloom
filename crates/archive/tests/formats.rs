@@ -25,8 +25,7 @@ use fetchloom_faults::{Corpus, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression as GzCompression;
 use flate2::write::GzEncoder;
 
-/// The bytes of `xz -9` over `fetchloom xz round trip\n`, embedded because
-/// the xz decoder this build carries does not encode.
+/// The bytes of `xz -9` over one greeting, embedded rather than encoded.
 const GREETING_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 28, 24, 33, 1, 28, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 211, 125, 61, 97, 1, 0, 23, 102, 101, 116, 99, 104, 108, 111, 111, 109, 32, 120, 122,

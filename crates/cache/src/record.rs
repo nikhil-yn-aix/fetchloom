@@ -10,12 +10,7 @@ use crate::failure;
 use serde::{Deserialize, Serialize};
 
 /// Everything the cache knows about a published object that is not in its
-/// bytes.
-///
-/// One record rather than one per fact, because the cost of holding an object
-/// is dominated by how many files it takes rather than by how large they are,
-/// and a second record is a second create, a second write, and a second entry
-/// in a directory that already holds one per object.
+/// bytes, in one record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectRecord {
@@ -72,11 +67,8 @@ pub struct Mark {
 
 /// Writes a record where a reader finds it whole or not at all.
 ///
-/// Writes beside the record and renames onto it, because a reader of a record
-/// another process is part way through writing would otherwise see a file that
-/// is empty or half a value. Takes where the run counts file operations,
-/// because a record is a create and a rename and a counter that could not see
-/// them could not see what an object costs.
+/// Writes beside the record and renames onto it. Takes where the run counts
+/// file operations.
 ///
 /// # Errors
 ///

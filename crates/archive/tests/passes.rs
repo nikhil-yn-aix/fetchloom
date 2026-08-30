@@ -1,9 +1,4 @@
 //! What extracting an archive costs beyond the bytes it writes.
-//!
-//! Two things are asserted on the bytes rather than argued about. A
-//! compressed tar is decompressed exactly twice, once to list and once to
-//! read, and never once per member. Finding the member a body belongs to
-//! costs the same whether the archive holds ten entries or ten thousand.
 
 #![expect(
     clippy::unwrap_used,
