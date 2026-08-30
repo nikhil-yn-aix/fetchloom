@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use fetchloom_engine::digest::ContentDigest;
 
 /// The directories a cache root holds.
-pub(crate) const DIRECTORIES: [&str; 8] = [
+pub(crate) const DIRECTORIES: [&str; 9] = [
     "objects",
+    "receipts",
     "outboard",
     "partial",
     "staging",
@@ -69,6 +70,18 @@ impl Layout {
     #[must_use]
     pub fn quarantined(&self, digest: ContentDigest) -> PathBuf {
         self.quarantine().join(name_of(digest))
+    }
+
+    /// Returns the directory holding receipts.
+    #[must_use]
+    pub fn receipts(&self) -> PathBuf {
+        self.root.join("receipts")
+    }
+
+    /// Returns the receipt stored under the given key.
+    #[must_use]
+    pub fn receipt_of(&self, key: ContentDigest) -> PathBuf {
+        self.receipts().join(name_of(key))
     }
 
     /// Returns the directory holding resolution metadata.
@@ -141,6 +154,12 @@ impl Layout {
     #[must_use]
     pub fn pin_of(&self, digest: ContentDigest) -> PathBuf {
         self.pins().join(name_of(digest))
+    }
+
+    /// Returns the directory holding one record per published object.
+    #[must_use]
+    pub fn records(&self) -> PathBuf {
+        self.meta().join("object")
     }
 
     /// Returns the prune mark of the object with the given digest.

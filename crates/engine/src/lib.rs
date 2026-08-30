@@ -6,6 +6,7 @@ pub mod conformance;
 pub mod credential;
 pub mod degrade;
 pub mod digest;
+pub mod document;
 pub mod durability;
 pub mod error;
 pub mod event;
@@ -35,6 +36,4 @@ pub mod tree;
 pub mod trust;
 pub mod verification;
 pub mod work;
-
-#[cfg(test)]
-use serde_json as _;
+mod yaml;

@@ -9,10 +9,18 @@ use fetchloom_engine::seam::platform::OwnerToken;
 use crate::failure;
 use serde::{Deserialize, Serialize};
 
-/// The fingerprint of an object as it was when the object was published.
+/// Everything the cache knows about a published object that is not in its
+/// bytes.
+///
+/// One record rather than one per fact, because the cost of holding an object
+/// is dominated by how many files it takes rather than by how large they are,
+/// and a second record is a second create, a second write, and a second entry
+/// in a directory that already holds one per object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RecordedFingerprint {
+pub struct ObjectRecord {
+    /// The interop digest of the object's bytes, taken as they were written.
+    pub interop: fetchloom_engine::digest::InteropDigest,
     /// The volume the object is on.
     pub volume: u64,
     /// The object within that volume.
@@ -25,23 +33,26 @@ pub struct RecordedFingerprint {
     pub changed_nanos: i128,
 }
 
-impl From<Fingerprint> for RecordedFingerprint {
-    fn from(value: Fingerprint) -> Self {
+impl ObjectRecord {
+    /// Builds the record of an object from what was observed as it was
+    /// published.
+    #[must_use]
+    pub fn new(fingerprint: Fingerprint, interop: fetchloom_engine::digest::InteropDigest) -> Self {
         Self {
-            volume: value.volume.value(),
-            file: value.file.value(),
-            size: value.size,
-            modified_nanos: value.modified_nanos,
-            changed_nanos: value.changed_nanos,
+            interop,
+            volume: fingerprint.volume.value(),
+            file: fingerprint.file.value(),
+            size: fingerprint.size,
+            modified_nanos: fingerprint.modified_nanos,
+            changed_nanos: fingerprint.changed_nanos,
         }
     }
-}
 
-impl RecordedFingerprint {
     /// Reports whether a fingerprint read now is the one that was recorded.
     #[must_use]
     pub fn matches(self, now: Fingerprint) -> bool {
-        self == Self::from(now)
+        let observed = Self::new(now, self.interop);
+        self == observed
     }
 
     /// Returns the volume the object was on when it was recorded.

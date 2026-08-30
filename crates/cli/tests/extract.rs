@@ -50,6 +50,7 @@ fn corpus_archive() -> Vec<u8> {
 
 fn get(source: &Path, destination: &Path, cache: &Path, extra: &[&str]) -> Output {
     Command::new(binary())
+        .current_dir(scratch())
         .arg("get")
         .arg(source)
         .arg("--output")
@@ -165,4 +166,13 @@ fn a_name_that_disagrees_with_the_bytes_is_refused() {
         complaint.contains("tar+gzip") && complaint.contains("zip"),
         "the refusal named only one of the two answers: {complaint}"
     );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

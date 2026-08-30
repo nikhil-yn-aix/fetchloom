@@ -4,7 +4,6 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Range;
 
 use blake3::hazmat::{self, ChainingValue, HasherExt, Mode};
-use sha2::Digest as _;
 
 use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
@@ -63,8 +62,7 @@ pub struct BuildOutput {
 /// Fails when `reader` fails.
 pub fn build_stream(processor: &Processor, mut reader: impl Read) -> io::Result<BuildOutput> {
     let mut buffer = vec![0u8; usize_from_u64(GROUP_LEN)];
-    let mut content = blake3::Hasher::new();
-    let mut interop = sha2::Sha256::new();
+    let mut pair = hashing::Pair::new();
     let mut leaves: Vec<ChainingValue> = Vec::new();
     let mut group_index: u64 = 0;
     let mut object_len: u64 = 0;
@@ -75,13 +73,13 @@ pub fn build_stream(processor: &Processor, mut reader: impl Read) -> io::Result<
             break;
         }
         let chunk = &buffer[..filled];
-        hashing::update_digests(processor, &mut content, &mut interop, chunk);
+        pair.update(processor, chunk);
         leaves.push(leaf_chaining_value(group_index, chunk));
         object_len += u64::try_from(filled).unwrap_or(u64::MAX);
         group_index += 1;
     }
 
-    let digests = hashing::finish(&content, interop);
+    let digests = pair.finish();
     let outboard = build_outboard(object_len, &leaves);
     Ok(BuildOutput { digests, outboard })
 }

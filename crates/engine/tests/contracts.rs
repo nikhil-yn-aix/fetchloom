@@ -9,6 +9,7 @@ use blake3 as _;
 use rayon as _;
 use serde as _;
 use sha2 as _;
+use toml as _;
 
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;

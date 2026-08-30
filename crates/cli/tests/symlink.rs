@@ -44,6 +44,7 @@ fn links_are_permitted(directory: &Path) -> bool {
 
 fn get(source: &Path, destination: &Path, cache: &Path) -> std::process::Output {
     Command::new(binary())
+        .current_dir(scratch())
         .arg("get")
         .arg(source)
         .arg("--output")
@@ -115,6 +116,7 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
     let materialized = reported["tree"].as_str().expect("a tree digest").to_owned();
 
     let verified = Command::new(binary())
+        .current_dir(scratch())
         .arg("verify")
         .arg(&destination)
         .arg("--json")
@@ -132,4 +134,13 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
         materialized,
         "the destination does not reproduce the tree the run reported"
     );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

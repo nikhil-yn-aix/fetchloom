@@ -82,16 +82,63 @@ fn matches_component(pattern: &str, name: &str) -> bool {
 }
 
 /// How member paths are rewritten on the way to the destination.
+///
+/// Written as the same text the flag takes, so a manifest, a lock, a plan, and
+/// a command line all say it the one way.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 pub enum Layout {
     /// Preserve archive paths.
     #[default]
     Keep,
     /// Drop the first n path components.
     Flatten(u32),
+}
+
+impl std::fmt::Display for Layout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Keep => f.write_str("keep"),
+            Self::Flatten(dropped) => write!(f, "flatten:{dropped}"),
+        }
+    }
+}
+
+impl From<Layout> for String {
+    fn from(layout: Layout) -> Self {
+        layout.to_string()
+    }
+}
+
+impl std::str::FromStr for Layout {
+    type Err = String;
+
+    /// Reads the text a layout is written as.
+    ///
+    /// Takes `keep` or `flatten:<n>`. Fails with the text that was given when
+    /// it is neither.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text == "keep" {
+            return Ok(Self::Keep);
+        }
+        let Some(count) = text.strip_prefix("flatten:") else {
+            return Err(format!("{text} is not keep or flatten:<n>"));
+        };
+        let dropped: u32 = count
+            .parse()
+            .map_err(|_| format!("{text} is not keep or flatten:<n>"))?;
+        Ok(Self::Flatten(dropped))
+    }
+}
+
+impl TryFrom<String> for Layout {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
 }
 
 /// One member a selection took, and the path it lands under.

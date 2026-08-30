@@ -138,7 +138,11 @@ pub trait Store {
     /// Fails when the claim states a digest the bytes do not hash to, when
     /// the two directories are on different volumes, and when the rename
     /// does not complete.
-    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<ContentDigest, Error>;
+    fn commit(
+        &self,
+        lease: Self::Lease,
+        writer: Self::Writer,
+    ) -> Result<crate::hashing::Digests, Error>;
 
     /// Reports whether an outboard tree is stored for an object.
     ///

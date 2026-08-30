@@ -88,6 +88,7 @@ impl Harness {
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
             std::sync::Arc::clone(&work),
+            test_processor(),
         )
         .unwrap();
         Self {
@@ -379,6 +380,7 @@ fn materialization<'a>(
     platform: &'a NativePlatform,
     cache: &'a Cache<NativePlatform>,
     work: &'a std::sync::Arc<fetchloom_engine::work::WorkCounter>,
+    digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
 ) -> Materialization<'a> {
     Materialization {
         processor,
@@ -387,6 +389,7 @@ fn materialization<'a>(
         cache: Some(cache),
         work,
         extract: true,
+        digester,
     }
 }
 
@@ -407,12 +410,14 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
         std::sync::Arc::clone(&work),
+        test_processor(),
     )
     .unwrap();
     let platform = NativePlatform::new();
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
-    let with = materialization(&processor, &platform, &cache, &work);
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let with = materialization(&processor, &platform, &cache, &work, &digester);
     let destination = root.path().join("dest").join("object");
 
     let first_observer = RecordingObserver::new();
@@ -424,6 +429,7 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         &Selection::default(),
         false,
         false,
+        None,
         &first_observer,
         &first_sequence,
     );
@@ -445,6 +451,7 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         &Selection::default(),
         false,
         false,
+        None,
         &second_observer,
         &second_sequence,
     )
@@ -472,4 +479,13 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         "the destination did not materialize the whole object"
     );
     assert_eq!(second.bytes, bytes.len() as u64);
+}
+
+/// The processor pool every cache in a test is opened with.
+fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
+    let budget = fetchloom_engine::threads::ThreadBudget::resolve(
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        None,
+    );
+    std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }

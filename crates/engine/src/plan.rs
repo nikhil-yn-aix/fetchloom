@@ -36,6 +36,12 @@ pub struct PlanArtifact {
     pub cached: bool,
     /// The source the plan chose, redacted when it was recorded.
     pub source: SafeUrl,
+    /// The member paths the plan covers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub select: Vec<crate::selection::Glob>,
+    /// How member paths are rewritten.
+    #[serde(default)]
+    pub layout: crate::selection::Layout,
 }
 
 /// How much space one requirement needs, and on which volume.
@@ -89,4 +95,32 @@ pub struct Plan {
     pub conflicts: Vec<String>,
     /// Every field the source could not supply.
     pub unknown: Vec<String>,
+}
+
+impl Plan {
+    /// Renders this plan as the canonical text it is written in.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the model cannot be written.
+    pub fn render(&self) -> Result<String, crate::error::Error> {
+        crate::document::render_model(self)
+    }
+
+    /// Reads a plan from a document written in any accepted syntax.
+    ///
+    /// Takes the bytes, the syntax to read them in, and the bounds a document
+    /// may not exceed.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `manifest.invalid` when the document does not parse or holds
+    /// a key this build does not read.
+    pub fn parse(
+        bytes: &[u8],
+        syntax: crate::document::Syntax,
+        limits: &crate::limits::Limits,
+    ) -> Result<Self, crate::error::Error> {
+        crate::document::read_model_in(bytes, syntax, "plan", limits)
+    }
 }

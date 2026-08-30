@@ -10,6 +10,7 @@ use rayon as _;
 use serde as _;
 use serde_json as _;
 use sha2 as _;
+use toml as _;
 
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::selection::{Glob, Layout, Selection};

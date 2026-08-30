@@ -13,6 +13,10 @@ pub const TREE_DIGEST_CONTEXT: &str = "fetchloom tree digest";
 /// The derived key context separating manifest digests from every other domain.
 pub const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
 
+/// The derived key context separating the name of a receipt from every other
+/// domain.
+pub const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
+
 /// The derived key context separating partial key names from every other domain.
 pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
 
@@ -213,6 +217,22 @@ macro_rules! domain_digest {
         impl From<$name> for Digest {
             fn from(value: $name) -> Self {
                 value.0
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = String;
+
+            /// Reads a digest written as its algorithm, a colon, and lowercase
+            /// hexadecimal.
+            ///
+            /// Fails with what the text broke when it is not a digest of this
+            /// domain's algorithm.
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                let digest: Digest = text
+                    .parse()
+                    .map_err(|reason: ParseDigestError| reason.to_string())?;
+                Self::try_from(digest).map_err(|reason| reason.to_string())
             }
         }
 

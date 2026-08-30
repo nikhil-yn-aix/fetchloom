@@ -20,6 +20,27 @@ enum Offsets {
     Bare(u64),
 }
 
+/// Where one member's bytes are, taken out of the listing by value so the
+/// listing is no longer borrowed when the stream is opened.
+#[derive(Clone, Copy)]
+enum Located {
+    Tar(TarOffset),
+    Zip(ZipOffset),
+    Bare(u64),
+}
+
+/// Everything one listing pass produced, kept so a second pass never runs.
+///
+/// `at` maps a member's path to its position in `members`, because a member
+/// path is claimed by exactly one entry and an extraction opens every member
+/// it selected: finding each one by walking the list would cost the square of
+/// the entry count.
+struct Listing {
+    members: Vec<ArchiveMember>,
+    offsets: Offsets,
+    at: std::collections::HashMap<String, usize>,
+}
+
 /// Reads the container or compression formats phase 3 ships, over any
 /// `Read + Seek` source.
 ///
@@ -32,7 +53,7 @@ pub struct ArchiveReader<R> {
     name: String,
     limits: Limits,
     on_disk_bytes: u64,
-    cache: Option<(Vec<ArchiveMember>, Offsets)>,
+    cache: Option<Listing>,
     tar_stream: Option<TarStream>,
     degradations: DegradeQueue,
 }
@@ -109,6 +130,28 @@ impl<R: Read + Seek + 'static> ArchiveReader<R> {
         }
     }
 
+    fn listing(&mut self) -> Result<&Listing, Error> {
+        if self.cache.is_none() {
+            let (members, offsets) = self.populate()?;
+            let at = members
+                .iter()
+                .enumerate()
+                .map(|(index, member)| (member.path.clone(), index))
+                .collect();
+            self.cache = Some(Listing {
+                members,
+                offsets,
+                at,
+            });
+        }
+        self.cache.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::ArchiveUnsupported,
+                format!("archive \"{}\" listed nothing", self.name),
+            )
+        })
+    }
+
     fn populate(&mut self) -> Result<(Vec<ArchiveMember>, Offsets), Error> {
         if let Some(compression) = self.tar_compression() {
             let (members, offsets) = tar_reader::list_members(
@@ -152,36 +195,30 @@ impl<R: Read + Seek + 'static> Archive for ArchiveReader<R> {
     }
 
     fn members(&mut self) -> Result<Vec<ArchiveMember>, Error> {
-        if self.cache.is_none() {
-            self.cache = Some(self.populate()?);
-        }
-        Ok(self
-            .cache
-            .as_ref()
-            .map(|(members, _)| members.clone())
-            .unwrap_or_default())
+        Ok(self.listing()?.members.clone())
     }
 
     fn open(&mut self, member: &ArchiveMember) -> Result<Self::Body, Error> {
-        if self.cache.is_none() {
-            self.cache = Some(self.populate()?);
-        }
-        let Some((members, offsets)) = &self.cache else {
+        let listing = self.listing()?;
+        let found = listing
+            .at
+            .get(&member.path)
+            .copied()
+            .filter(|index| listing.members[*index] == *member);
+        let Some(index) = found else {
             return Err(Error::new(
                 ErrorKind::ArchiveUnsupported,
                 format!("member \"{}\" is not in this archive", member.path),
             ));
         };
-        let Some(index) = members.iter().position(|candidate| candidate == member) else {
-            return Err(Error::new(
-                ErrorKind::ArchiveUnsupported,
-                format!("member \"{}\" is not in this archive", member.path),
-            ));
+        let located = match &listing.offsets {
+            Offsets::Tar(entries) => Located::Tar(entries[index]),
+            Offsets::Zip(entries) => Located::Zip(entries[index]),
+            Offsets::Bare(size) => Located::Bare(*size),
         };
-        match offsets {
-            Offsets::Tar(entries) => {
+        match located {
+            Located::Tar(offset) => {
                 let compression = self.tar_compression().unwrap_or(TarCompression::None);
-                let offset = entries[index];
                 tar_reader::open_member(
                     &mut self.tar_stream,
                     &self.source,
@@ -190,11 +227,11 @@ impl<R: Read + Seek + 'static> Archive for ArchiveReader<R> {
                     offset,
                 )
             }
-            Offsets::Zip(entries) => zip_reader::open_member(&self.source, entries[index]),
-            Offsets::Bare(size) => {
+            Located::Zip(offset) => zip_reader::open_member(&self.source, offset),
+            Located::Bare(size) => {
                 let compression = self.bare_compression().unwrap_or(BareCompression::Gzip);
                 let member_name = bare::member_name(&self.name, self.bare_extension());
-                bare::open_member(&self.source, compression, &member_name, *size)
+                bare::open_member(&self.source, compression, &member_name, size)
             }
         }
     }

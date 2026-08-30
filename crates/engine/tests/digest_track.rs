@@ -14,6 +14,7 @@ use rayon as _;
 use serde as _;
 use serde_json as _;
 use sha2 as _;
+use toml as _;
 
 use std::io::Cursor;
 use std::num::NonZeroUsize;
@@ -22,7 +23,7 @@ use fetchloom_engine::canonical::{encode_entries, tree_digest};
 use fetchloom_engine::conformance::{declared_failures, portable_core};
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::ErrorKind;
-use fetchloom_engine::hashing::hash_stream;
+use fetchloom_engine::hashing::Digester;
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
 use fetchloom_engine::outboard::{build_outboard, build_stream, verify_range};
 use fetchloom_engine::pool::Processor;
@@ -68,16 +69,19 @@ fn content_digest_of_one_call_matches_content_digest_of_many_small_chunks() {
     let processor = processor();
     let data = pattern(5_000_003);
 
-    let whole = hash_stream(&processor, Cursor::new(data.clone())).unwrap();
+    let whole = Digester::new()
+        .hash(&processor, Cursor::new(data.clone()))
+        .unwrap();
 
-    let trickled = hash_stream(
-        &processor,
-        Trickle {
-            data: &data,
-            offset: 0,
-        },
-    )
-    .unwrap();
+    let trickled = Digester::new()
+        .hash(
+            &processor,
+            Trickle {
+                data: &data,
+                offset: 0,
+            },
+        )
+        .unwrap();
 
     assert_eq!(whole.content, trickled.content);
     assert_eq!(whole.interop, trickled.interop);
@@ -87,7 +91,9 @@ fn content_digest_of_one_call_matches_content_digest_of_many_small_chunks() {
 #[test]
 fn interop_digest_matches_a_known_sha256_value() {
     let processor = processor();
-    let digests = hash_stream(&processor, Cursor::new(b"abc".to_vec())).unwrap();
+    let digests = Digester::new()
+        .hash(&processor, Cursor::new(b"abc".to_vec()))
+        .unwrap();
     assert_eq!(*digests.interop.bytes(), known_sha256_of_abc());
 }
 

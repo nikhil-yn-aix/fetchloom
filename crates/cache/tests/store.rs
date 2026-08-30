@@ -369,3 +369,34 @@ fn prune_removes_a_quarantined_object() {
         "prune left a quarantined object behind"
     );
 }
+
+#[test]
+fn a_published_object_costs_four_files_and_no_more() {
+    let (scratch, cache) = cache();
+    let source = scratch.path().join("one.bin");
+    std::fs::write(&source, b"hello\n").unwrap();
+    let ingested = cache.ingest(&source).unwrap();
+
+    let mut held: Vec<String> = Vec::new();
+    let mut stack = vec![cache.layout().root().to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                held.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let name = fetchloom_cache::layout::name_of(ingested.digest);
+    let per_object: Vec<&String> = held
+        .iter()
+        .filter(|entry| entry.starts_with(&name))
+        .collect();
+    assert_eq!(
+        per_object.len(),
+        4,
+        "an object costs a different number of files than the four it is allowed: {per_object:?}"
+    );
+}

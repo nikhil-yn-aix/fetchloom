@@ -30,6 +30,7 @@ fn binary() -> &'static str {
 
 fn run(cache: &Path, arguments: &[&str]) -> Output {
     Command::new(binary())
+        .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache)
         .stdin(Stdio::null())
@@ -402,4 +403,13 @@ fn a_cache_that_fills_part_way_through_degrades_and_the_run_completes() {
         elsewhere.path().join("out").exists(),
         "the destination was not materialized"
     );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

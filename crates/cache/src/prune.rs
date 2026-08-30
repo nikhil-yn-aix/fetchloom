@@ -71,7 +71,7 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
         let size = std::fs::metadata(&object).map_or(0, |found| found.len());
         remove(&object)?;
         remove(&cache.layout().outboard_of(digest))?;
-        remove(&cache.fingerprint_record(digest))?;
+        remove(&cache.object_record(digest))?;
         remove(&cache.layout().mark_of(digest))?;
         report.removed += 1;
         report.bytes_removed += size;

@@ -9,8 +9,10 @@ use fetchloom_faults as _;
 #[cfg(test)]
 use tempfile as _;
 pub mod explain;
+pub mod locked;
 pub mod materialize;
 pub mod observer;
+pub mod planning;
 pub mod policy;
 pub mod run;
 pub mod settings;

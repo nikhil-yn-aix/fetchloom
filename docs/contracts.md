@@ -38,6 +38,35 @@ Three digests are domain-separated by derived key so a value from one can never 
 
 The outboard tree groups chunks and stores a length followed by parent nodes in pre-order. Group size and threshold are in Limits. An object at or below one group never stores an outboard, because its content digest already authenticates it whole.
 
+## Canonical form
+
+Every portable artifact has one canonical form and every digest over one covers
+that form rather than the text anyone typed.
+
+A manifest is accepted as YAML, TOML, or JSON. A lock, a receipt, and a plan are
+written in the YAML subset and read back from any of the three.
+
+The YAML subset is block mappings, block sequences, flow sequences, flow
+mappings, and plain, single-quoted and double-quoted scalars. Anchors, aliases,
+merge keys, tags, directives, block scalars, document separators, and tabs used
+as indentation are each refused by name. `true`, `false`, and `null` are the only
+words read as anything but text, and a run of digits with an optional sign is the
+only text read as a number, so `yes` is a word.
+
+Canonical JSON is the form every digest covers. Every mapping is ordered by the
+raw bytes of its keys. An absent value is omitted rather than written as null.
+There is no insignificant whitespace and no line ending anywhere, so the bytes
+are identical on every platform.
+
+The canonical text form written to a file follows the same ordering, writes every
+scalar as a double-quoted JSON string, writes a mapping key plain when it is
+alphanumeric with underscores, hyphens and dots and quoted otherwise, indents by
+two spaces, and ends every line with one line feed on every platform. A carriage
+return before a line feed is read and never written.
+
+A byte order mark is read and never written. Unknown keys and the `x-` prefix are
+refused wherever a document is read.
+
 ## Reference grammar
 
 | Form | Example |
@@ -56,6 +85,15 @@ The outboard tree groups chunks and stores a length followed by parent nodes in 
 Resolution order is deterministic: explicit scheme, then local path if it exists, then configured source priority. A bare name that matches nothing fails; it is never guessed.
 
 A reference naming one object materializes a destination directory holding that one entry, under the object's own name. Its dataset name is that name and its tree is the one-entry tree. A reference naming a container materializes every entry the container holds. The two forms differ only in what is walked, never in what a destination is.
+
+A local path is read as a manifest when its extension is one a manifest is
+written in, and as data otherwise. Nothing else decides it, and a directory is
+never searched for one.
+
+A reference that names no manifest resolves to a synthesized one: the dataset
+name and one artifact carrying that name and, when the reference names a network
+location, that location. A local path is never recorded in it, so its digest is
+the same on every machine holding the same data.
 
 A reference naming nothing fails with `reference.unresolved` saying nothing is there. A reference naming something that cannot be read fails with `reference.unresolved` saying to make it readable. The two are never reported as each other.
 
@@ -145,10 +183,32 @@ artifacts:
     source_used: https://host/silesia.tar.zst
     trust: verified
 tree: blake3:...
+executable:
+  - bin/run.sh
 destination: D:\data\silesia
 fetchloom: 0.1.0-dev
 completed_at: 2026-08-29T04:11:02Z
 ```
+
+`executable` lists the entry paths the run materialized with the executable mode,
+ascending. Every other file entry carries the read and write mode, because a tree
+digest records those two and no others.
+
+`fetchloom` is provenance. It says which build produced a result and nothing ever
+branches on it.
+
+A receipt is stored in the cache under the digest of the absolute destination it
+describes, so it is found from any working directory and a destination that moved
+is not found. A receipt is used only when its own `destination` is the path being
+verified.
+
+`verify <path>` recomputes the tree digest of a destination and compares it to the
+receipt's. The receipt supplies the mode of each file, which a filesystem does not
+state, and never supplies a digest: a record attesting to its own correctness
+proves nothing. Without a receipt every file is `0644`, the run emits `degrade`
+saying so, and nothing is compared. A tree that no longer matches its receipt
+fails with `integrity.mismatch`. A cache that cannot be opened means no receipt
+and never fails `verify`.
 
 ## Plan
 
@@ -180,6 +240,21 @@ conflicts: []
 unknown: [expanded]
 ```
 
+An artifact also carries `select` and `layout`, because selection is part of
+identity and apply must reproduce the tree the plan resolved.
+
+`plan` writes the plan to standard output, in the canonical text form or as JSON
+under `--json`. Both read back as the same plan. The plan is the result of the
+command, so nothing else is written there.
+
+The digests in a plan come from the lock. A reference the lock pins nothing for
+cannot be planned and fails with `policy.trust_refused`, because a plan states
+resolved digests and moves no bytes to learn one.
+
+`cached`, `disk`, `conflicts`, and `destination` describe the machine the plan was
+made on. Apply reports them and acts on none of them, and `--output` names the
+destination when the plan's own is not this machine's.
+
 Volumes are reported separately. Requirements on the same volume are summed.
 
 `unknown` lists every field the source could not supply. A field is never estimated into a number.
@@ -200,6 +275,61 @@ Mechanical definitions. No other meaning is implied.
 Accepting `tofu` is allowed by default for a first fetch and never for a locked run. Accepting `unverified` requires an explicit flag on every invocation.
 
 Publisher identity, manifest authenticity, and content integrity are recorded as three separate facts.
+
+## Locked runs
+
+`--locked` holds a run to what the lock states. What is compared and what a
+difference means:
+
+| Field | Compared | Difference |
+|---|---|---|
+| dataset present in the lock | before the run | `policy.trust_refused`, exit 40 |
+| `manifest`, `release` | before the run | `alias.unstable`, exit 10 |
+| `select`, `layout` | before the run | `alias.unstable`, exit 10 |
+| artifact present in both | after resolution | `alias.unstable`, exit 10 |
+| `digest`, `interop`, `size` | during the transfer | `integrity.mismatch`, exit 30 |
+| `tree` | after materialization | `integrity.mismatch`, exit 30 |
+
+Everything compared before the run is compared before a byte moves, so a run the
+lock does not describe publishes nothing.
+
+A locked run never accepts `tofu`. A dataset the lock does not pin would be a
+first use, which is why it is refused on policy rather than resolved.
+
+A locked run hands the transfer the digest the lock pins. A cache already holding
+those bytes therefore issues no request at all, and a source serving other bytes
+fails on integrity without falling back.
+
+A locked run writes no lock, because a run that may not differ from the lock has
+nothing to add to it.
+
+An unlocked run records what it resolved. A reference resolving to no object,
+which is what a directory does, writes no lock entry and emits `degrade` saying
+so, because a lock pins objects and a tree alone states no bytes.
+
+## Bundles
+
+A bundle carries objects between machines that do not trust each other.
+
+It is an uncompressed tar whose every member is named by the lowercase
+hexadecimal of the content digest of its own bytes. A tar has no index, so there
+is nothing in a bundle that could be trusted instead of its bytes.
+
+`cache export <bundle>` writes every object the cache holds. `cache import
+<bundle>` reads one.
+
+Import derives every digest from the bytes it reads. A member name is a claim and
+never an instruction: it is compared against what the bytes hash to and is never
+used as a path. Every member is staged and checked before anything is published,
+so a bundle that fails anywhere publishes nothing.
+
+| Input | Failure |
+|---|---|
+| A member named like a path | `archive.unsafe_path` |
+| A member named anything but a digest | `cache.corrupt` |
+| A header that does not check out | `cache.corrupt` |
+| Bytes that do not hash to the name | `integrity.mismatch` |
+| A bundle that ends early | `integrity.truncated` |
 
 ## Resume ladder
 
@@ -247,6 +377,8 @@ Verification during transfer is always on and is not configurable.
   staging/    extraction trees not yet published
   quarantine/ objects that failed verification, kept for diagnosis and repair
   meta/       resolution metadata, per-host measurements, witnesses
+              object/<hex> is one record per object, holding its interop
+              digest and the fingerprint it was published with
   locks/      advisory single-writer locks
   pins/       pin records
   format      cache format fingerprint
@@ -405,6 +537,11 @@ Artifacts are independent. Objects that verified are kept in the cache and are r
 The destination is all or nothing. If any selected artifact fails, nothing is published and the previous destination is left untouched.
 
 The result reports each artifact separately with its own status and error.
+
+A run where one artifact of several failed records every artifact that verified in
+the lock and no `tree`, because a lock without a tree still pins bytes. It writes
+no receipt at all, because a receipt records what a run materialized and nothing
+was materialized.
 
 ## Command surface
 

@@ -115,16 +115,7 @@ impl std::str::FromStr for LayoutArg {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        if text == "keep" {
-            return Ok(Self(Layout::Keep));
-        }
-        let Some(count) = text.strip_prefix("flatten:") else {
-            return Err(format!("{text} is not keep or flatten:<n>"));
-        };
-        let dropped: u32 = count
-            .parse()
-            .map_err(|_| format!("{text} is not keep or flatten:<n>"))?;
-        Ok(Self(Layout::Flatten(dropped)))
+        text.parse().map(Self)
     }
 }
 
@@ -150,6 +141,12 @@ pub struct TransferFlags {
     /// How far a write is pushed before publication.
     #[arg(long, value_name = "strict|normal|fast")]
     pub durability: Option<DurabilityChoice>,
+    /// Lock file location.
+    #[arg(long, value_name = "path")]
+    pub lock: Option<PathBuf>,
+    /// Fail when resolution differs from the lock.
+    #[arg(long)]
+    pub locked: bool,
     /// Bypass the cache for this operation.
     #[arg(long)]
     pub no_cache: bool,
@@ -188,6 +185,18 @@ pub enum CacheCommand {
         #[arg(value_name = "digest")]
         digest: String,
     },
+    /// Write every object the cache holds into a bundle.
+    Export {
+        /// Where the bundle is written.
+        #[arg(value_name = "bundle")]
+        bundle: PathBuf,
+    },
+    /// Read the objects a bundle holds into the cache.
+    Import {
+        /// The bundle to read.
+        #[arg(value_name = "bundle")]
+        bundle: PathBuf,
+    },
     /// Mark what nothing refers to, then sweep what has been marked longest.
     Prune,
     /// Remove every object.
@@ -202,6 +211,24 @@ pub enum Command {
         /// What to fetch.
         #[arg(required = true, value_name = "ref")]
         references: Vec<String>,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Resolve and report what a run would do, moving no bytes.
+    Plan {
+        /// What to plan.
+        #[arg(required = true, value_name = "ref")]
+        references: Vec<String>,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Execute a plan.
+    Apply {
+        /// The plan to execute.
+        #[arg(value_name = "plan")]
+        plan: PathBuf,
         /// The flags that control materialization.
         #[command(flatten)]
         transfer: Box<TransferFlags>,

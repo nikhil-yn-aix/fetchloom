@@ -84,6 +84,7 @@ impl Harness {
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
             std::sync::Arc::clone(&work),
+            test_processor(),
         )
         .unwrap();
         Self {
@@ -367,4 +368,13 @@ fn a_weak_validator_resumes_on_the_fourth_rung() {
     assert_eq!(done.rung, ResumeRung::WeakValidator);
     assert_eq!(done.rung.number(), 4);
     assert_eq!(done.bytes_kept, 16 * 1024);
+}
+
+/// The processor pool every cache in a test is opened with.
+fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
+    let budget = fetchloom_engine::threads::ThreadBudget::resolve(
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        None,
+    );
+    std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }

@@ -11,10 +11,12 @@ use fetchloom_platform as _;
 #[cfg(test)]
 use tempfile as _;
 
+pub mod bundle;
 pub mod format;
 pub mod ingest;
 pub mod layout;
 pub mod prune;
+pub mod receipts;
 pub mod record;
 pub mod store;
 pub mod verify;
@@ -26,6 +28,7 @@ use fetchloom_engine::capability::Backing;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::identity::BootId;
+use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
@@ -56,6 +59,7 @@ pub struct Cache<P: Platform> {
     policy: VerificationPolicy,
     token: OwnerToken,
     work: Arc<WorkCounter>,
+    processor: Arc<Processor>,
 }
 
 impl<P: Platform> Cache<P> {
@@ -77,6 +81,7 @@ impl<P: Platform> Cache<P> {
         tier: DurabilityTier,
         policy: VerificationPolicy,
         work: Arc<WorkCounter>,
+        processor: Arc<Processor>,
     ) -> Result<Self, Error> {
         let layout = Layout::new(root.as_ref());
         create_directories(&layout)?;
@@ -92,6 +97,7 @@ impl<P: Platform> Cache<P> {
             policy,
             token,
             work,
+            processor,
         };
         cache.recover()?;
         Ok(cache)
@@ -125,6 +131,12 @@ impl<P: Platform> Cache<P> {
     #[must_use]
     pub fn work(&self) -> &Arc<WorkCounter> {
         &self.work
+    }
+
+    /// Returns the pool the two digests of an object are taken on.
+    #[must_use]
+    pub fn processor(&self) -> &Arc<Processor> {
+        &self.processor
     }
 
     /// Returns what this process records about itself.
@@ -249,6 +261,7 @@ fn create_directories(layout: &Layout) -> Result<(), Error> {
         wanted.push(layout.root().join(name));
     }
     wanted.push(layout.marks());
+    wanted.push(layout.records());
     for directory in wanted {
         std::fs::create_dir_all(&directory)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory.as_path(), &reason))?;

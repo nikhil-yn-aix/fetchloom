@@ -9,7 +9,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::hashing;
 use fetchloom_engine::pool::Processor;
@@ -185,21 +184,22 @@ fn walk_one(
     Ok(())
 }
 
-/// Copies one file and returns its length and content digest.
+/// Copies one file and returns its length and both its digests.
 ///
-/// Takes the processor pool, the source, and the destination, which must not
-/// already exist. Copies the bytes and digests them in the same pass, so the
+/// Takes the run's digester, the processor pool, the source, and the
+/// destination, which must not already exist. Copies the bytes and digests them in the same pass, so the
 /// file is never read twice.
 ///
 /// # Errors
 ///
 /// Fails when the source cannot be read or the destination cannot be written.
 pub fn copy_file(
+    digester: &mut hashing::Digester,
     processor: &Processor,
     work: &WorkCounter,
     from: &Path,
     to: &Path,
-) -> Result<(u64, ContentDigest), Error> {
+) -> Result<(u64, hashing::Digests), Error> {
     let source = fs::File::open(from).map_err(|reason| read_failure(from, &reason))?;
     let target = fs::File::create(to).map_err(|reason| read_failure(to, &reason))?;
     let length = source
@@ -212,12 +212,13 @@ pub fn copy_file(
         path: to.to_path_buf(),
         work,
     };
-    let digests =
-        hashing::hash_stream(processor, &mut tee).map_err(|reason| read_failure(from, &reason))?;
+    let digests = digester
+        .hash(processor, &mut tee)
+        .map_err(|reason| read_failure(from, &reason))?;
     tee.target
         .flush()
         .map_err(|reason| read_failure(to, &reason))?;
-    Ok((length, digests.content))
+    Ok((length, digests))
 }
 
 struct Tee<'a> {

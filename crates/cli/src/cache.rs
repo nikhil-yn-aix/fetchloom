@@ -48,8 +48,9 @@ pub fn open(
     tier: DurabilityTier,
     policy: VerificationPolicy,
     work: Arc<WorkCounter>,
+    processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Opened {
-    match Cache::open(root, NativePlatform::new(), tier, policy, work) {
+    match Cache::open(root, NativePlatform::new(), tier, policy, work, processor) {
         Ok(held) => Opened::Ready(Box::new(held)),
         Err(refused)
             if refused.kind() == ErrorKind::CacheFormatMismatch
@@ -68,13 +69,18 @@ pub fn open(
 /// # Errors
 ///
 /// Fails when the cache cannot be opened for any reason.
-pub fn require(root: &Path, work: Arc<WorkCounter>) -> Result<Cache<NativePlatform>, Error> {
+pub fn require(
+    root: &Path,
+    work: Arc<WorkCounter>,
+    processor: Arc<fetchloom_engine::pool::Processor>,
+) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         root,
         NativePlatform::new(),
         DurabilityTier::Normal,
         VerificationPolicy::Fingerprint,
         work,
+        processor,
     )
 }
 
@@ -96,8 +102,14 @@ pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path,
 /// readable, and whether every confirmation is already answered. Returns the
 /// exit code the run ends with.
 #[must_use]
-pub fn run(root: &Path, command: &CacheCommand, json: bool, yes: bool) -> ExitCode {
-    let held = match require(root, Arc::new(WorkCounter::new())) {
+pub fn run(
+    root: &Path,
+    command: &CacheCommand,
+    processor: Arc<fetchloom_engine::pool::Processor>,
+    json: bool,
+    yes: bool,
+) -> ExitCode {
+    let held = match require(root, Arc::new(WorkCounter::new()), processor) {
         Ok(held) => held,
         Err(refused) => return crate::report(&refused, json),
     };
@@ -108,6 +120,12 @@ pub fn run(root: &Path, command: &CacheCommand, json: bool, yes: bool) -> ExitCo
         CacheCommand::Verify => report_verify(&held, json),
         CacheCommand::Pin { digest } => change_pin(&held, digest, true, json),
         CacheCommand::Unpin { digest } => change_pin(&held, digest, false, json),
+        CacheCommand::Export { bundle } => report_bundle(&held.export(bundle), json),
+        CacheCommand::Import { bundle } => {
+            let read = fetchloom_cache::bundle::BundleReader::open(bundle)
+                .and_then(|reader| held.import(bundle, reader));
+            report_bundle(&read, json)
+        }
         CacheCommand::Prune => report_prune(&held, json),
         CacheCommand::Clear => clear(&held, json, yes),
     }
@@ -283,5 +301,32 @@ fn print_json<T: serde::Serialize>(body: &T) {
     match serde_json::to_string(body) {
         Ok(rendered) => println!("{rendered}"),
         Err(reason) => eprintln!("the result could not be written: {reason}"),
+    }
+}
+
+/// Reports what an export or an import moved.
+fn report_bundle(
+    outcome: &Result<fetchloom_cache::bundle::BundleReport, Error>,
+    json: bool,
+) -> ExitCode {
+    match outcome {
+        Ok(report) => {
+            if json {
+                let body = serde_json::json!({
+                    "status": "bundled",
+                    "objects": report.objects,
+                    "bytes": report.bytes,
+                    "already_held": report.already_held,
+                });
+                println!("{body}");
+            } else {
+                println!(
+                    "{} objects  {} bytes  {} already held",
+                    report.objects, report.bytes, report.already_held
+                );
+            }
+            ExitCode::Success
+        }
+        Err(refused) => crate::report(refused, json),
     }
 }

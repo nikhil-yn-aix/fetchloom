@@ -73,7 +73,7 @@ pub fn quarantine<P: Platform>(cache: &Cache<P>, digest: ContentDigest) -> Resul
                 ),
             )
         });
-    let _ = std::fs::remove_file(cache.fingerprint_record(digest));
+    let _ = std::fs::remove_file(cache.object_record(digest));
     drop(held);
     moved
 }

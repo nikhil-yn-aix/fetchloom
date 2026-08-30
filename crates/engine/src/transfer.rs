@@ -29,6 +29,8 @@ const BUFFER: usize = 1 << 20;
 pub struct Transferred {
     /// The digest the bytes hash to.
     pub digest: ContentDigest,
+    /// The interop digest of the same bytes, taken in the same pass.
+    pub interop: Option<crate::digest::InteropDigest>,
     /// How many bytes arrived from the source in this run.
     pub bytes_transferred: u64,
     /// How many bytes were already on disk and kept.
@@ -205,6 +207,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         {
             return Ok(Transferred {
                 digest,
+                interop: None,
                 bytes_transferred: 0,
                 bytes_kept: 0,
                 rung: ResumeRung::Outboard,
@@ -284,14 +287,15 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             }
             arrived?;
         }
-        let digest = self.store.commit(lease, writer)?;
+        let digests = self.store.commit(lease, writer)?;
         self.emit(EventPayload::TransferEnd {
             bytes: moved,
             duration_ms: duration_ms(started.elapsed()),
         });
 
         Ok(Transferred {
-            digest,
+            digest: digests.content,
+            interop: Some(digests.interop),
             bytes_transferred: moved,
             bytes_kept: keep,
             rung,

@@ -327,7 +327,60 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
         "/workspace/verify/linux.sh",
     ]);
     run.args(targets);
-    report.step(&format!("{lane} suite"), run);
+    if !report.step(&format!("{lane} suite"), run) {
+        return;
+    }
+    offline(workspace, report, arch, &image, &platform, lane);
+}
+
+/// Runs the phase four gate with the network physically absent.
+///
+/// One container prepares a plan and a bundle from a real host and a second
+/// runs with no network device at all, so what proves the apply is offline is
+/// the absence of a network rather than the presence of a flag.
+fn offline(
+    workspace: &Path,
+    report: &mut Report,
+    arch: &str,
+    image: &str,
+    platform: &str,
+    lane: &str,
+) {
+    let mounts = [
+        format!("{}:/workspace", workspace.display()),
+        format!("fetchloom-target-{arch}:/target"),
+        format!("fetchloom-offline-{arch}:/offline"),
+    ];
+    let mut prepare = Command::new("docker");
+    prepare.args(["run", "--rm", "--privileged", "--platform", platform]);
+    for mount in &mounts {
+        prepare.args(["--volume", mount]);
+    }
+    prepare.args([image, "bash", "/workspace/verify/offline.sh", "prepare"]);
+    if !report.step(&format!("{lane} offline prepare"), prepare) {
+        report.degrade(
+            "a plan and a bundle prepared from a real host",
+            "nothing",
+            "the connected half of the offline lane did not run",
+        );
+        return;
+    }
+
+    let mut apply = Command::new("docker");
+    apply.args([
+        "run",
+        "--rm",
+        "--privileged",
+        "--network",
+        "none",
+        "--platform",
+        platform,
+    ]);
+    for mount in &mounts {
+        apply.args(["--volume", mount]);
+    }
+    apply.args([image, "bash", "/workspace/verify/offline.sh", "apply"]);
+    report.step(&format!("{lane} offline apply"), apply);
 }
 
 fn apple(workspace: &Path, report: &mut Report) {

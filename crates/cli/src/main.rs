@@ -1,6 +1,8 @@
 //! The composition root: the only place the seams are wired together.
 
-use fetchloom_cli::{cache, config, explain, report, run, settings, surface, terminal};
+use fetchloom_cli::{
+    cache, config, explain, locked, planning, report, run, settings, surface, terminal,
+};
 
 use fetchloom_cache as _;
 #[cfg(test)]
@@ -21,6 +23,7 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
+use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
@@ -124,18 +127,32 @@ fn dispatch(
     match &parsed.command {
         Command::Explain { key } => run_explain(resolved, discovered, key.as_deref()),
         Command::Completions { shell } => write_completions(*shell),
-        Command::Verify { target } => run_verify(target, parsed.global.json, observer, sequence),
+        Command::Verify { target } => {
+            run_verify(target, resolved, parsed.global.json, observer, sequence)
+        }
         Command::Get {
             references,
             transfer,
         } => run_get(references, transfer, parsed, resolved, observer, sequence),
-        Command::Cache { command } => {
-            run_cache(resolved, command, parsed.global.json, parsed.global.yes)
+        Command::Plan {
+            references,
+            transfer,
+        } => run_plan(references, transfer, parsed, resolved, observer, sequence),
+        Command::Apply { plan, transfer } => {
+            run_apply(plan, transfer, parsed, resolved, observer, sequence)
         }
+        Command::Cache { command } => run_cache(
+            parsed,
+            resolved,
+            command,
+            parsed.global.json,
+            parsed.global.yes,
+        ),
     }
 }
 
 fn run_cache(
+    parsed: &CommandLine,
     resolved: &settings::Settings,
     command: &surface::CacheCommand,
     json: bool,
@@ -145,7 +162,11 @@ fn run_cache(
         Ok(root) => root,
         Err(error) => return report(&error, json),
     };
-    cache::run(&root, command, json, yes)
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    cache::run(&root, command, Arc::new(processor), json, yes)
 }
 
 fn run_explain(
@@ -186,14 +207,70 @@ fn write_completions(shell: Shell) -> ExitCode {
     ExitCode::Success
 }
 
-fn run_verify(target: &str, json: bool, observer: &dyn Observer, sequence: &Sequence) -> ExitCode {
-    let path = match run::local_path(target) {
+fn run_verify(
+    target: &str,
+    resolved: &settings::Settings,
+    json: bool,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let path = match run::local_path(target).and_then(|path| run::resolve_path(&path)) {
         Ok(path) => path,
         Err(error) => return report(&error, json),
     };
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
-    match run::verify_tree(&path, &emit) {
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
+    let work = Arc::new(WorkCounter::new());
+    let Ok(processor) = Processor::new(ThreadBudget::resolve(
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        None,
+    )) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    let held = match open_cache(
+        &surface::TransferFlags::default(),
+        &root,
+        DurabilityTier::Normal,
+        &work,
+        &Arc::new(processor),
+        observer,
+        sequence,
+    ) {
+        Ok(held) => held,
+        Err(refused) => {
+            cache::report_degrade(observer, sequence, &root, refused.next_action());
+            None
+        }
+    };
+    let receipt = match held.as_deref().map(|cache| cache.read_receipt(&path)) {
+        Some(Ok(receipt)) => receipt,
+        Some(Err(error)) => return report(&error, json),
+        None => None,
+    };
+    match run::verify_tree(&path, receipt.as_ref(), &emit) {
         Ok((tree, entries)) => {
+            if let Some(recorded) = receipt.as_ref().and_then(|receipt| receipt.tree)
+                && recorded != tree
+            {
+                let error = fetchloom_engine::error::Error::new(
+                    fetchloom_engine::error::ErrorKind::IntegrityMismatch,
+                    format!(
+                        "fetch {} again, because it now holds {tree} where the run that wrote it                          reported {recorded}",
+                        path.display()
+                    ),
+                );
+                observer.emit(&Event::new(
+                    sequence,
+                    EventPayload::Failure {
+                        error: error.clone(),
+                    },
+                ));
+                return report(&error, json);
+            }
             if json {
                 let body = serde_json::json!({
                     "status": "verified",
@@ -224,29 +301,26 @@ fn run_get(
         eprintln!("this build takes exactly one reference at a time");
         return ExitCode::Usage;
     }
-    if let Err(error) = run::allowed_offline(&references[0], resolved.offline.value) {
-        observer.emit(&Event::new(
-            sequence,
-            EventPayload::Failure {
-                error: error.clone(),
-            },
-        ));
-        return report(&error, json);
-    }
     let remote = run::is_remote(&references[0]);
-    let source = if remote {
-        PathBuf::from(run::remote_name(&references[0]))
-    } else {
-        match run::local_path(&references[0]) {
-            Ok(source) => source,
-            Err(error) => return report(&error, json),
+    let (source, named) = match resolve_places(&references[0], transfer, resolved) {
+        Ok(places) => places,
+        Err(error) => {
+            observer.emit(&Event::new(
+                sequence,
+                EventPayload::Failure {
+                    error: error.clone(),
+                },
+            ));
+            return report(&error, json);
         }
     };
-    let requested_destination = transfer
-        .output
-        .clone()
-        .unwrap_or_else(|| run::default_destination(&source));
-    let destination = match run::resolve_path(&requested_destination) {
+
+    let (manifest, is_dataset) = match resolve_manifest(&references[0], &source, remote) {
+        Ok(found) => found,
+        Err(error) => return report(&error, json),
+    };
+    let dataset = manifest.name.clone();
+    let destination = match destination_for(named, &dataset) {
         Ok(destination) => destination,
         Err(error) => return report(&error, json),
     };
@@ -256,71 +330,562 @@ fn run_get(
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
+    let processor = Arc::new(processor);
     let platform = NativePlatform::new();
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
         Err(error) => return report(&error, json),
     };
     let work = Arc::new(WorkCounter::new());
-    let held = match open_cache(transfer, &root, durability, &work, observer, sequence) {
+    let held = match open_cache(
+        transfer, &root, durability, &work, &processor, observer, sequence,
+    ) {
         Ok(held) => held,
         Err(refused) => return report(&refused, json),
     };
 
+    let lock_path = match lock_path_of(transfer) {
+        Ok(path) => path,
+        Err(error) => return report(&error, json),
+    };
+    let selection = selection_of(transfer);
+    let pinned = match held_to_lock(&lock_path, &dataset, &manifest, &selection, transfer.locked) {
+        Ok(pinned) => pinned,
+        Err(error) => return report(&error, json),
+    };
+
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
-        processor: &processor,
+        processor: processor.as_ref(),
+        digester: &digester,
         platform: &platform,
         durability,
         cache: held.as_deref(),
         work: &work,
         extract: !transfer.no_extract,
     };
-    let produced = if remote {
-        run::materialize_remote(
-            &with,
-            &references[0],
-            &destination,
-            &selection_of(transfer),
-            transfer.force,
-            transfer.adopt,
+    let produced = resolve_and_publish(
+        &with,
+        &Request {
+            reference: &references[0],
+            remote,
+            is_dataset,
+            source: &source,
+            destination: &destination,
+            manifest: &manifest,
+            selection: &selection,
+            transfer,
+            pinned: pinned.as_ref(),
+        },
+        observer,
+        sequence,
+    );
+
+    record(
+        &produced,
+        &Recording {
+            manifest: &manifest,
+            dataset: &dataset,
+            lock_path: &lock_path,
+            pinned: pinned.as_ref(),
+            locked: transfer.locked,
+            cache: held.as_deref(),
+            json,
+        },
+        observer,
+        sequence,
+    )
+}
+
+/// Everything one materialization is asked for.
+struct Request<'a> {
+    /// The reference the user wrote.
+    reference: &'a str,
+    /// Whether it names a network location.
+    remote: bool,
+    /// Whether it names a manifest.
+    is_dataset: bool,
+    /// The path it resolved to.
+    source: &'a std::path::Path,
+    /// Where the run publishes.
+    destination: &'a std::path::Path,
+    /// The manifest the run resolves from.
+    manifest: &'a fetchloom_engine::manifest::Manifest,
+    /// The members the run takes.
+    selection: &'a fetchloom_engine::selection::Selection,
+    /// The flags that control materialization.
+    transfer: &'a surface::TransferFlags,
+    /// What the lock pins.
+    pinned: Option<&'a fetchloom_engine::lock::LockedDataset>,
+}
+
+/// Resolves what a reference names and publishes it.
+///
+/// A reference that named a manifest resolves every artifact the manifest
+/// names into one destination. Every other reference resolves one object, which
+/// is the same shape with one artifact in it.
+fn resolve_and_publish(
+    with: &run::Materialization<'_>,
+    request: &Request<'_>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> run::DatasetRun {
+    if request.is_dataset {
+        let base = request
+            .source
+            .parent()
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+        return run::materialize_manifest(
+            with,
+            request.manifest,
+            &base,
+            request.destination,
+            request.transfer.force,
+            request.transfer.adopt,
+            request.pinned,
+            observer,
+            sequence,
+        );
+    }
+    let outcome = materialize(
+        with,
+        request.reference,
+        request.remote,
+        request.source,
+        request.destination,
+        request.selection,
+        request.transfer,
+        request.pinned,
+        observer,
+        sequence,
+    );
+    let resolved = outcome
+        .as_ref()
+        .map(|result| run::resolved_object(result, request.selection))
+        .unwrap_or_default();
+    run::DatasetRun { resolved, outcome }
+}
+
+/// Everything writing down a run needs to know.
+struct Recording<'a> {
+    /// The manifest the run resolved from.
+    manifest: &'a fetchloom_engine::manifest::Manifest,
+    /// The name the dataset is recorded under.
+    dataset: &'a str,
+    /// Where the lock is.
+    lock_path: &'a std::path::Path,
+    /// What the lock pinned before the run.
+    pinned: Option<&'a fetchloom_engine::lock::LockedDataset>,
+    /// Whether the run may only do what the lock states.
+    locked: bool,
+    /// The cache the receipt is kept in, when the run has one.
+    cache: Option<&'a fetchloom_cache::Cache<NativePlatform>>,
+    /// Whether the result is machine readable.
+    json: bool,
+}
+
+/// Records what a run resolved and reports what it did.
+///
+/// The lock is written whatever the outcome, because every artifact that
+/// verified is in the cache and the next run should not fetch it again. The
+/// receipt is written only when something was materialized, because a receipt
+/// records a destination.
+fn record(
+    produced: &run::DatasetRun,
+    into: &Recording<'_>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let tree = produced.outcome.as_ref().ok().map(|result| result.tree);
+    let settled = locked::resolved(into.manifest, &produced.resolved, tree).and_then(|recorded| {
+        locked::settle(
+            into.lock_path,
+            into.dataset,
+            into.pinned,
+            recorded.as_ref(),
+            into.locked,
             observer,
             sequence,
         )
+    });
+    if let Err(error) = settled {
+        return report(&error, into.json);
+    }
+    match &produced.outcome {
+        Ok(result) => finish_get(
+            result,
+            into.cache,
+            into.manifest,
+            &produced.resolved,
+            into.json,
+        ),
+        Err(error) => report(error, into.json),
+    }
+}
+
+/// Reports what a run would do, moving no bytes.
+///
+/// The plan is the result of this command, so it goes to stdout: in the one
+/// canonical form by default, and as JSON when the caller asked for machine
+/// readable output. Both parse back into the same plan.
+fn run_plan(
+    references: &[String],
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let json = parsed.global.json;
+    if references.len() != 1 {
+        eprintln!("this build takes exactly one reference at a time");
+        return ExitCode::Usage;
+    }
+    let (source, named) = match resolve_places(&references[0], transfer, resolved) {
+        Ok(places) => places,
+        Err(error) => return report(&error, json),
+    };
+    let dataset = run::dataset_name(&references[0], &source);
+    let destination = match named {
+        Some(named) => named,
+        None => match run::resolve_path(&PathBuf::from(".").join(&dataset)) {
+            Ok(destination) => destination,
+            Err(error) => return report(&error, json),
+        },
+    };
+    let lock_path = match lock_path_of(transfer) {
+        Ok(path) => path,
+        Err(error) => return report(&error, json),
+    };
+    let pinned = match locked::pinned(&lock_path, &dataset, true) {
+        Ok(pinned) => pinned,
+        Err(error) => return report(&error, json),
+    };
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
+    let work = Arc::new(WorkCounter::new());
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    let held = match open_cache(
+        transfer,
+        &root,
+        DurabilityTier::Normal,
+        &work,
+        &Arc::new(processor),
+        observer,
+        sequence,
+    ) {
+        Ok(held) => held,
+        Err(refused) => return report(&refused, json),
+    };
+    let plan = match planning::build(
+        pinned.as_ref(),
+        &dataset,
+        &references[0],
+        &destination,
+        held.as_deref(),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return report(&error, json),
+    };
+    observer.emit(&Event::new(sequence, EventPayload::PlanReady));
+    let written = if json {
+        serde_json::to_string(&plan).map_err(|reason| reason.to_string())
     } else {
-        let selection = selection_of(transfer);
-        run::materialize_local(
+        plan.render().map_err(|reason| reason.to_string())
+    };
+    match written {
+        Ok(body) => {
+            println!("{body}");
+            ExitCode::Success
+        }
+        Err(reason) => {
+            eprintln!("the plan could not be written: {reason}");
+            ExitCode::Usage
+        }
+    }
+}
+
+/// Executes a plan.
+///
+/// The digests the plan records are re-resolved: an object the cache holds is
+/// materialized from it, and one it does not is fetched under the plan's own
+/// digest, so a source now serving something else fails on integrity and never
+/// falls back.
+fn run_apply(
+    plan_path: &std::path::Path,
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let json = parsed.global.json;
+    let plan = match planning::read(plan_path, &fetchloom_engine::limits::Limits::default()) {
+        Ok(plan) => plan,
+        Err(error) => return report(&error, json),
+    };
+    let artifact = match planning::only_artifact(&plan) {
+        Ok(artifact) => artifact.clone(),
+        Err(error) => return report(&error, json),
+    };
+    let destination =
+        match run::resolve_path(transfer.output.as_deref().unwrap_or(&plan.destination)) {
+            Ok(destination) => destination,
+            Err(error) => return report(&error, json),
+        };
+    let durability = durability_of(transfer);
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    let processor = Arc::new(processor);
+    let platform = NativePlatform::new();
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
+    let work = Arc::new(WorkCounter::new());
+    let held = match open_cache(
+        transfer, &root, durability, &work, &processor, observer, sequence,
+    ) {
+        Ok(held) => held,
+        Err(refused) => return report(&refused, json),
+    };
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let with = run::Materialization {
+        processor: processor.as_ref(),
+        digester: &digester,
+        platform: &platform,
+        durability,
+        cache: held.as_deref(),
+        work: &work,
+        extract: !transfer.no_extract,
+    };
+    let selection = fetchloom_engine::selection::Selection {
+        include: artifact.select.clone(),
+        exclude: Vec::new(),
+        layout: artifact.layout,
+    };
+    let cached = held
+        .as_deref()
+        .is_some_and(|cache| cache.contains(artifact.digest).unwrap_or(false));
+    let produced = if cached {
+        run::materialize_cached(
             &with,
-            &source,
+            artifact.digest,
+            artifact.size,
+            &plan.dataset,
             &destination,
             &selection,
             transfer.force,
             transfer.adopt,
+            &artifact.source,
+            observer,
+            sequence,
+        )
+    } else if let Err(error) =
+        run::allowed_offline(artifact.source.as_str(), resolved.offline.value)
+    {
+        return report(&error, json);
+    } else {
+        run::materialize_remote(
+            &with,
+            artifact.source.as_str(),
+            &destination,
+            &selection,
+            transfer.force,
+            transfer.adopt,
+            Some(artifact.digest),
             observer,
             sequence,
         )
     };
-    match produced {
-        Ok(result) => {
-            if json {
-                match serde_json::to_string(&result) {
-                    Ok(body) => println!("{body}"),
-                    Err(error) => {
-                        eprintln!("the result could not be written: {error}");
-                        return ExitCode::Usage;
-                    }
-                }
-            } else {
-                println!(
-                    "{}  {} entries  {}",
-                    result.tree,
-                    result.entries,
-                    result.destination.display()
-                );
-            }
-            ExitCode::Success
-        }
-        Err(error) => report(&error, json),
+    let result = match produced {
+        Ok(result) => result,
+        Err(error) => return report(&error, json),
+    };
+    let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
+    let resolved = run::resolved_object(&result, &selection);
+    finish_get(&result, held.as_deref(), &manifest, &resolved, json)
+}
+
+/// Returns the lock file this run reads and writes.
+fn lock_path_of(
+    transfer: &surface::TransferFlags,
+) -> Result<PathBuf, fetchloom_engine::error::Error> {
+    run::resolve_path(
+        &transfer
+            .lock
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("fetchloom.lock")),
+    )
+}
+
+/// Returns the manifest a reference resolves from, and whether it named one.
+///
+/// A local path carrying a manifest extension is a manifest, as the reference
+/// grammar states. Everything else resolves from a manifest synthesized to
+/// describe it, so a lock entry states a manifest digest either way.
+fn resolve_manifest(
+    reference: &str,
+    source: &std::path::Path,
+    remote: bool,
+) -> Result<(fetchloom_engine::manifest::Manifest, bool), fetchloom_engine::error::Error> {
+    let read = if remote {
+        None
+    } else {
+        run::manifest_at(source).transpose()?
+    };
+    let is_dataset = read.is_some();
+    let manifest = read.unwrap_or_else(|| {
+        run::synthesized_manifest(&run::dataset_name(reference, source), reference)
+    });
+    Ok((manifest, is_dataset))
+}
+
+/// Returns the destination a run publishes to.
+///
+/// A destination the user named is used as it was named. One nobody named is
+/// the dataset's own name under the working directory.
+fn destination_for(
+    named: Option<PathBuf>,
+    dataset: &str,
+) -> Result<PathBuf, fetchloom_engine::error::Error> {
+    match named {
+        Some(named) => Ok(named),
+        None => run::resolve_path(&PathBuf::from(".").join(dataset)),
     }
+}
+
+/// Runs the materialization a reference names.
+///
+/// A locked run hands the transfer the digest the lock pins, so a cache that
+/// already holds those bytes asks the source for nothing and a source that
+/// serves other bytes fails before anything is published.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the flags, the lock, and the two observers each name a contract behavior of their own"
+)]
+fn materialize(
+    with: &run::Materialization<'_>,
+    reference: &str,
+    remote: bool,
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    selection: &fetchloom_engine::selection::Selection,
+    transfer: &surface::TransferFlags,
+    pinned: Option<&fetchloom_engine::lock::LockedDataset>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<run::RunResult, fetchloom_engine::error::Error> {
+    if remote {
+        return run::materialize_remote(
+            with,
+            reference,
+            destination,
+            selection,
+            transfer.force,
+            transfer.adopt,
+            pinned
+                .filter(|_| transfer.locked)
+                .and_then(|entry| entry.artifacts.values().next())
+                .map(|artifact| artifact.digest),
+            observer,
+            sequence,
+        );
+    }
+    run::materialize_local(
+        with,
+        source,
+        destination,
+        selection,
+        transfer.force,
+        transfer.adopt,
+        observer,
+        sequence,
+    )
+}
+
+/// Returns the source a reference names and the destination it materializes to.
+///
+/// Both are resolved against the working directory once, where the user named
+/// them, so no filesystem call ever receives a path it cannot open.
+fn resolve_places(
+    reference: &str,
+    transfer: &surface::TransferFlags,
+    resolved: &settings::Settings,
+) -> Result<(PathBuf, Option<PathBuf>), fetchloom_engine::error::Error> {
+    run::allowed_offline(reference, resolved.offline.value)?;
+    let source = if run::is_remote(reference) {
+        PathBuf::from(run::remote_name(reference))
+    } else {
+        run::local_path(reference)?
+    };
+    let named = match transfer.output.clone() {
+        Some(requested) => Some(run::resolve_path(&requested)?),
+        None => None,
+    };
+    Ok((source, named))
+}
+
+/// Returns what the lock pins for this run, having refused a locked run the
+/// lock does not describe.
+///
+/// Everything compared here is known before a byte moves, so a locked run whose
+/// request differs from the lock is refused before it publishes anything.
+fn held_to_lock(
+    lock_path: &std::path::Path,
+    dataset: &str,
+    manifest: &fetchloom_engine::manifest::Manifest,
+    selection: &fetchloom_engine::selection::Selection,
+    is_locked: bool,
+) -> Result<Option<fetchloom_engine::lock::LockedDataset>, fetchloom_engine::error::Error> {
+    let pinned = locked::pinned(lock_path, dataset, is_locked)?;
+    if is_locked && let Some(pinned) = pinned.as_ref() {
+        pinned.check_request(manifest.digest()?, manifest.release.as_deref(), selection)?;
+    }
+    Ok(pinned)
+}
+
+/// Records what a run produced and reports it.
+///
+/// The receipt is written before the result is printed, because a result that
+/// named a tree no receipt describes would leave `verify` unable to reproduce
+/// the digest that was just reported.
+fn finish_get(
+    result: &run::RunResult,
+    cache: Option<&fetchloom_cache::Cache<NativePlatform>>,
+    manifest: &fetchloom_engine::manifest::Manifest,
+    artifacts: &[run::ResolvedArtifact],
+    json: bool,
+) -> ExitCode {
+    if let Some(cache) = cache
+        && let Err(error) = run::write_receipt(cache, manifest, artifacts, result)
+    {
+        return report(&error, json);
+    }
+    if json {
+        match serde_json::to_string(result) {
+            Ok(body) => println!("{body}"),
+            Err(error) => {
+                eprintln!("the result could not be written: {error}");
+                return ExitCode::Usage;
+            }
+        }
+    } else {
+        println!(
+            "{}  {} entries  {}",
+            result.tree,
+            result.entries,
+            result.destination.display()
+        );
+    }
+    ExitCode::Success
 }
 
 fn selection_of(transfer: &surface::TransferFlags) -> fetchloom_engine::selection::Selection {
@@ -365,6 +930,7 @@ fn open_cache(
     root: &std::path::Path,
     durability: DurabilityTier,
     work: &Arc<WorkCounter>,
+    processor: &Arc<Processor>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
@@ -379,7 +945,13 @@ fn open_cache(
             reason: "this run asked for no cache".to_owned(),
         }
     } else {
-        cache::open(root, durability, policy, Arc::clone(work))
+        cache::open(
+            root,
+            durability,
+            policy,
+            Arc::clone(work),
+            Arc::clone(processor),
+        )
     };
     match opened {
         cache::Opened::Ready(held) => Ok(Some(held)),

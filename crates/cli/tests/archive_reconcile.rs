@@ -77,6 +77,7 @@ fn fetched() -> Subject {
 
 fn get(subject: &Subject, extra: &[&str]) -> Output {
     Command::new(binary())
+        .current_dir(scratch())
         .arg("get")
         .arg(&subject.archive)
         .arg("--output")
@@ -260,9 +261,11 @@ fn adopt_reports_the_destination_and_writes_nothing() {
     );
 
     let verified = Command::new(binary())
+        .current_dir(scratch())
         .arg("verify")
         .arg(&subject.destination)
         .arg("--json")
+        .env("FETCHLOOM_CACHE_DIR", &subject.cache)
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -271,4 +274,13 @@ fn adopt_reports_the_destination_and_writes_nothing() {
         body(&verified)["tree"].as_str().unwrap_or_default(),
         "--adopt reported a tree the destination does not hold"
     );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

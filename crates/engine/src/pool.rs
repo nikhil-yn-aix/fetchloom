@@ -10,6 +10,7 @@ use crate::threads::ThreadBudget;
 /// implicit global pool, so a dependency calling `rayon::join` or `scope`
 /// outside `install` cannot silently spin up a second pool sized to the raw
 /// core count.
+#[derive(Debug)]
 pub struct Processor {
     pool: ThreadPool,
 }

@@ -18,6 +18,7 @@ use fetchloom_engine::hashing;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
 use fetchloom_engine::pool::Processor;
+use fetchloom_engine::receipt::Receipt;
 use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
@@ -31,6 +32,24 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources::HttpSource;
 
 use crate::materialize;
+
+/// The one object a run resolved, when it resolved one.
+///
+/// A directory source resolves to no object, so a run against one records
+/// nothing here and pins no bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedArtifact {
+    /// The name the artifact is recorded under.
+    pub id: String,
+    /// The digest the bytes hash to.
+    pub digest: ContentDigest,
+    /// The interop digest of the same bytes, when the run learned it.
+    pub interop: Option<fetchloom_engine::digest::InteropDigest>,
+    /// The length of the object in bytes.
+    pub size: u64,
+    /// Where the bytes came from, redacted as it was recorded.
+    pub source: SafeUrl,
+}
 
 /// What a completed run reports.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -49,6 +68,35 @@ pub struct RunResult {
     pub bytes: u64,
     /// What the run read, wrote, and asked for.
     pub work: Work,
+    /// The entry paths the run materialized with the executable mode, in
+    /// ascending order. Local to the run, so it is never part of the
+    /// machine-readable result.
+    #[serde(skip)]
+    pub executable: Vec<String>,
+    /// The object the run resolved, when it resolved one.
+    #[serde(skip)]
+    pub artifact: Option<RecordedArtifact>,
+}
+
+/// Returns the entry paths that carry the executable mode, in ascending order.
+///
+/// A filesystem tree states no mode, so this is what a receipt records and what
+/// lets a later verification reproduce the digest the run reported.
+#[must_use]
+pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
+    let mut paths: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            TreeEntry::File {
+                path,
+                mode: Mode::Executable,
+                ..
+            } => Some(path.as_str().to_owned()),
+            _ => None,
+        })
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// Turns a reference into the local path it names.
@@ -160,6 +208,8 @@ pub struct Materialization<'a> {
     pub work: &'a Arc<WorkCounter>,
     /// Whether a recognized archive is extracted rather than kept as a file.
     pub extract: bool,
+    /// The one buffer every stream this run hashes is read through.
+    pub digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
 }
 
 /// Materializes a local source tree into a destination.
@@ -216,6 +266,8 @@ pub fn materialize_local(
             selection,
             force,
             adopt,
+            Some(ingested.interop),
+            &SafeUrl::new(&source.to_string_lossy()),
             &emit,
         );
     }
@@ -292,6 +344,8 @@ fn materialize_fresh(
         entries: entries.len() as u64,
         bytes: walked.bytes,
         work: with.work.taken(),
+        executable: executable_paths(&entries),
+        artifact: None,
     })
 }
 
@@ -350,6 +404,8 @@ struct Settlement<'a> {
     adopt: bool,
     /// What the run calls the dataset.
     dataset: &'a str,
+    /// The object the run resolved, when it resolved one.
+    artifact: Option<RecordedArtifact>,
 }
 
 /// Decides one run against an existing destination.
@@ -377,9 +433,11 @@ fn settle(
         force,
         adopt,
         dataset,
+        ..
     } = *settlement;
+    let artifact = settlement.artifact.clone();
 
-    let found = destination_entries(destination, with.processor, with.work)?;
+    let found = destination_entries(with.digester, destination, with.processor, with.work)?;
     let destination_tree = with_resolved_modes(resolved, found);
     let outcomes = reconcile(resolved, &destination_tree);
     for found in &outcomes {
@@ -401,6 +459,8 @@ fn settle(
             entries: resolved.len() as u64,
             bytes: resolved.iter().map(entry_size).sum(),
             work: with.work.taken(),
+            executable: executable_paths(resolved),
+            artifact,
         });
     }
 
@@ -413,6 +473,8 @@ fn settle(
             entries: destination_tree.len() as u64,
             bytes: destination_tree.iter().map(entry_size).sum(),
             work: with.work.taken(),
+            executable: executable_paths(&destination_tree),
+            artifact,
         });
     }
 
@@ -460,6 +522,8 @@ fn settle(
         entries: resolved.len() as u64,
         bytes: resolved.iter().map(entry_size).sum(),
         work: with.work.taken(),
+        executable: executable_paths(resolved),
+        artifact,
     })
 }
 
@@ -474,6 +538,7 @@ fn reconcile_existing(
 ) -> Result<RunResult, Error> {
     let mut resolved: Vec<TreeEntry> = walked.entries.clone();
     resolved.extend(hash_files(
+        with.digester,
         &walked.root,
         &walked.files,
         with.processor,
@@ -488,6 +553,7 @@ fn reconcile_existing(
             force,
             adopt,
             dataset,
+            artifact: None,
         },
         emit,
         &|| materialize_fresh(with, walked, destination, dataset, emit),
@@ -594,14 +660,14 @@ fn fill_staging(
             std::fs::create_dir_all(&parent)
                 .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
         }
-        let (size, content) = place_file(with, &gave_up, &from, &to, emit)?;
+        let (size, digests) = place_file(with, &gave_up, &from, &to, emit)?;
         copied += size;
         emit(EventPayload::TransferProgress { bytes: copied });
         entries.push(TreeEntry::File {
             path: file.entry.clone(),
             mode: file.mode,
             size,
-            content,
+            content: digests.content,
         });
     }
 
@@ -643,14 +709,28 @@ fn place_file(
     from: &Path,
     to: &Path,
     emit: &dyn Fn(EventPayload),
-) -> Result<(u64, ContentDigest), Error> {
+) -> Result<(u64, hashing::Digests), Error> {
     let Materialization {
         processor, cache, ..
     } = *with;
     let usable = cache.filter(|_| !gave_up.get());
     match usable {
-        None => materialize::copy_file(processor, with.work, from, to),
-        Some(held) => match through_cache(held, processor, with.work, from, to, emit) {
+        None => materialize::copy_file(
+            &mut with.digester.borrow_mut(),
+            processor,
+            with.work,
+            from,
+            to,
+        ),
+        Some(held) => match through_cache(
+            &mut with.digester.borrow_mut(),
+            held,
+            processor,
+            with.work,
+            from,
+            to,
+            emit,
+        ) {
             Ok(measured) => Ok(measured),
             Err(refused)
                 if refused.layer() == Layer::Cache || refused.layer() == Layer::Resource =>
@@ -663,7 +743,13 @@ fn place_file(
                     reason: refused.next_action().to_owned(),
                 });
                 let _ = std::fs::remove_file(to);
-                materialize::copy_file(processor, with.work, from, to)
+                materialize::copy_file(
+                    &mut with.digester.borrow_mut(),
+                    processor,
+                    with.work,
+                    from,
+                    to,
+                )
             }
             Err(refused) => Err(refused),
         },
@@ -679,15 +765,17 @@ fn place_file(
 /// read of the source to learn what it was, and no write into a cache that
 /// already has it.
 fn through_cache(
+    digester: &mut hashing::Digester,
     cache: &Cache<NativePlatform>,
     processor: &Processor,
     work: &WorkCounter,
     from: &Path,
     to: &Path,
     emit: &dyn Fn(EventPayload),
-) -> Result<(u64, ContentDigest), Error> {
-    let (size, digest) = materialize::copy_file(processor, work, from, to)?;
-    let adopted = cache.adopt(digest, size, to)?;
+) -> Result<(u64, hashing::Digests), Error> {
+    let (size, digests) = materialize::copy_file(digester, processor, work, from, to)?;
+    let digest = digests.content;
+    let adopted = cache.adopt(digests, size, to)?;
     if adopted.waited_for.is_some() {
         emit(EventPayload::CacheWait { digest });
     }
@@ -696,7 +784,7 @@ fn through_cache(
     } else {
         emit(EventPayload::CacheMiss { digest });
     }
-    Ok((size, digest))
+    Ok((size, digests))
 }
 
 fn staging_beside(destination: &Path) -> PathBuf {
@@ -709,15 +797,21 @@ fn staging_beside(destination: &Path) -> PathBuf {
 
 /// Recomputes the tree digest of a materialized directory.
 ///
-/// Takes the directory to read. Returns its entries and their tree digest. This
-/// build recomputes and reports; comparing against a receipt arrives with
-/// receipts.
+/// Takes the directory to read and the receipt that describes it, when one
+/// describes it. A walk states no mode, so a receipt is what supplies the mode
+/// of each file and what lets this reproduce the digest the run reported. A
+/// receipt never supplies a digest, because a record that attested to its own
+/// correctness would prove nothing. Returns the entries and their tree digest.
 ///
 /// # Errors
 ///
 /// Fails when the directory cannot be read and when an entry cannot be
 /// represented on this platform.
-pub fn verify_tree(path: &Path, emit: &dyn Fn(EventPayload)) -> Result<(TreeDigest, u64), Error> {
+pub fn verify_tree(
+    path: &Path,
+    receipt: Option<&Receipt>,
+    emit: &dyn Fn(EventPayload),
+) -> Result<(TreeDigest, u64), Error> {
     if !path.exists() {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
@@ -735,14 +829,46 @@ pub fn verify_tree(path: &Path, emit: &dyn Fn(EventPayload)) -> Result<(TreeDige
         )
     })?;
     let work = WorkCounter::new();
-    let entries = destination_entries(path, &processor, &work)?;
-    report_unread_modes(
-        entries
-            .iter()
-            .any(|entry| matches!(entry, TreeEntry::File { .. })),
-        emit,
-    );
+    let digester = std::cell::RefCell::new(hashing::Digester::new());
+    let entries = destination_entries(&digester, path, &processor, &work)?;
+    let Some(receipt) = receipt else {
+        report_unread_modes(
+            entries
+                .iter()
+                .any(|entry| matches!(entry, TreeEntry::File { .. })),
+            emit,
+        );
+        return Ok((canonical::tree_digest(&entries), entries.len() as u64));
+    };
+    let entries = with_receipt_modes(receipt, entries);
     Ok((canonical::tree_digest(&entries), entries.len() as u64))
+}
+
+/// Returns a walk's entries with every mode taken from the receipt.
+///
+/// An entry the receipt does not list as executable carries the read and write
+/// mode, which is the only other mode a tree digest records.
+fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Vec<TreeEntry> {
+    found
+        .into_iter()
+        .map(|entry| match entry {
+            TreeEntry::File {
+                path,
+                mode: _,
+                size,
+                content,
+            } => {
+                let mode = receipt.mode_of(path.as_str());
+                TreeEntry::File {
+                    path,
+                    mode,
+                    size,
+                    content,
+                }
+            }
+            other => other,
+        })
+        .collect()
 }
 
 /// Reports that a tree's modes were not read from what was walked.
@@ -777,6 +903,7 @@ fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
 ///
 /// Fails when a file cannot be opened or read.
 fn hash_files(
+    digester: &std::cell::RefCell<hashing::Digester>,
     root: &Path,
     files: &[materialize::SourceFile],
     processor: &Processor,
@@ -795,7 +922,9 @@ fn hash_files(
             inner: handle,
             work,
         };
-        let digests = hashing::hash_stream(processor, counted)
+        let digests = digester
+            .borrow_mut()
+            .hash(processor, counted)
             .map_err(|reason| failure(ErrorKind::IntegrityMismatch, &full, &reason))?;
         entries.push(TreeEntry::File {
             path: file.entry.clone(),
@@ -835,13 +964,20 @@ impl<R: Read> Read for CountedRead<'_, R> {
 ///
 /// Fails when the destination cannot be read or a file cannot be hashed.
 fn destination_entries(
+    digester: &std::cell::RefCell<hashing::Digester>,
     destination: &Path,
     processor: &Processor,
     work: &WorkCounter,
 ) -> Result<Vec<TreeEntry>, Error> {
     let walked = materialize::walk(destination)?;
     let mut entries = walked.entries.clone();
-    entries.extend(hash_files(&walked.root, &walked.files, processor, work)?);
+    entries.extend(hash_files(
+        digester,
+        &walked.root,
+        &walked.files,
+        processor,
+        work,
+    )?);
     Ok(entries)
 }
 
@@ -1021,6 +1157,7 @@ pub fn materialize_remote(
     selection: &Selection,
     force: bool,
     adopt: bool,
+    pinned: Option<ContentDigest>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
@@ -1051,7 +1188,7 @@ pub fn materialize_remote(
         observer,
         sequence,
     };
-    let transferred = transfer.run(None, &[location.to_owned()])?;
+    let transferred = transfer.run(pinned, &[location.to_owned()])?;
     for entry in source.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,
@@ -1067,7 +1204,17 @@ pub fn materialize_remote(
         });
     }
 
-    let size = transferred.bytes_kept + transferred.bytes_transferred;
+    let interop = match transferred.interop {
+        Some(interop) => Some(interop),
+        None => cache.recorded_interop(transferred.digest)?,
+    };
+    let size = if transferred.bytes_kept + transferred.bytes_transferred > 0 {
+        transferred.bytes_kept + transferred.bytes_transferred
+    } else {
+        std::fs::metadata(cache.layout().object(transferred.digest))
+            .map(|found| found.len())
+            .unwrap_or_default()
+    };
     materialize_object(
         with,
         transferred.digest,
@@ -1077,6 +1224,8 @@ pub fn materialize_remote(
         selection,
         force,
         adopt,
+        interop,
+        &SafeUrl::new(location),
         &emit,
     )
 }
@@ -1108,21 +1257,35 @@ fn materialize_object(
     selection: &Selection,
     force: bool,
     adopt: bool,
+    interop: Option<fetchloom_engine::digest::InteropDigest>,
+    source: &SafeUrl,
     emit: &dyn Fn(EventPayload),
 ) -> Result<RunResult, Error> {
-    if !destination.exists() {
-        let (tree, entries) =
+    let recorded = RecordedArtifact {
+        id: dataset.to_owned(),
+        digest,
+        interop,
+        size,
+        source: source.clone(),
+    };
+    let published = |emit: &dyn Fn(EventPayload)| -> Result<RunResult, Error> {
+        let entries =
             publish_one_object(with, digest, size, dataset, destination, selection, emit)?;
         emit(EventPayload::PublishCommit);
-        return Ok(RunResult {
+        Ok(RunResult {
             status: "materialized",
             dataset: dataset.to_owned(),
-            tree,
+            tree: canonical::tree_digest(&entries),
             destination: destination.to_path_buf(),
-            entries,
+            entries: entries.len() as u64,
             bytes: size,
             work: with.work.taken(),
-        });
+            executable: executable_paths(&entries),
+            artifact: Some(recorded.clone()),
+        })
+    };
+    if !destination.exists() {
+        return published(emit);
     }
 
     let resolved = object_tree(with, digest, size, dataset, selection, emit)?;
@@ -1134,22 +1297,10 @@ fn materialize_object(
             force,
             adopt,
             dataset,
+            artifact: Some(recorded.clone()),
         },
         emit,
-        &|| {
-            let (tree, entries) =
-                publish_one_object(with, digest, size, dataset, destination, selection, emit)?;
-            emit(EventPayload::PublishCommit);
-            Ok(RunResult {
-                status: "materialized",
-                dataset: dataset.to_owned(),
-                tree,
-                destination: destination.to_path_buf(),
-                entries,
-                bytes: size,
-                work: with.work.taken(),
-            })
-        },
+        &|| published(emit),
         &|outcomes| {
             restore_object(
                 with,
@@ -1332,7 +1483,7 @@ fn publish_one_object(
     destination: &Path,
     selection: &Selection,
     emit: &dyn Fn(EventPayload),
-) -> Result<(TreeDigest, u64), Error> {
+) -> Result<Vec<TreeEntry>, Error> {
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
@@ -1374,7 +1525,7 @@ fn publish_one_object(
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error);
     }
-    Ok((canonical::tree_digest(&entries), entries.len() as u64))
+    Ok(entries)
 }
 
 /// Returns the archive format an object holds, when it holds one this build
@@ -1394,13 +1545,28 @@ fn packed_format(
     digest: ContentDigest,
     name: &str,
 ) -> Result<Option<ArchiveFormat>, Error> {
+    recognized_format(with, digest, name, None)
+}
+
+/// Returns the archive format an object holds, honoring a format a manifest
+/// declared.
+///
+/// A declared format is what the publisher says the bytes are, and it is
+/// checked against the bytes rather than believed, which is what the recognizer
+/// does with it.
+fn recognized_format(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    name: &str,
+    declared: Option<ArchiveFormat>,
+) -> Result<Option<ArchiveFormat>, Error> {
     if !with.extract {
         return Ok(None);
     }
     let Some(cache) = with.cache else {
         return Ok(None);
     };
-    if fetchloom_archive::format_from_extension(name).is_none() {
+    if declared.is_none() && fetchloom_archive::format_from_extension(name).is_none() {
         return Ok(None);
     }
     let object = cache.layout().object(digest);
@@ -1408,7 +1574,7 @@ fn packed_format(
         .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
     let mut header = [0_u8; 16];
     let filled = read_up_to(&mut file, &mut header)?;
-    fetchloom_archive::recognize(None, name, &header[..filled])
+    fetchloom_archive::recognize(declared, name, &header[..filled])
 }
 
 fn read_up_to(file: &mut std::fs::File, into: &mut [u8]) -> Result<usize, Error> {
@@ -1521,4 +1687,626 @@ fn archive_to_unpack(
         return Ok(None);
     }
     Ok(Some(cache.ingest(source)?))
+}
+
+/// Returns the manifest a run that was given no manifest resolved from.
+///
+/// A reference names one dataset holding one artifact, so the manifest that
+/// describes it is written out rather than left implicit, and the lock and the
+/// receipt state its digest like any other. It holds the dataset name and, for
+/// a reference that names a network location, that location. A local path is
+/// not recorded, because a manifest digest that changed with the directory a
+/// file happened to sit in would put one machine inside a portable artifact.
+#[must_use]
+pub fn synthesized_manifest(
+    dataset: &str,
+    reference: &str,
+) -> fetchloom_engine::manifest::Manifest {
+    let sources = if is_remote(reference) {
+        vec![reference.to_owned()]
+    } else {
+        Vec::new()
+    };
+    fetchloom_engine::manifest::Manifest {
+        name: dataset.to_owned(),
+        release: None,
+        artifacts: vec![fetchloom_engine::manifest::Artifact {
+            id: dataset.to_owned(),
+            sources,
+            size: None,
+            digest: None,
+            media_type: None,
+            archive: None,
+            select: Vec::new(),
+            layout: fetchloom_engine::selection::Layout::Keep,
+        }],
+        license: None,
+    }
+}
+
+/// Writes the receipt that records what a run materialized.
+///
+/// Takes the cache the receipt is kept in, the manifest the run resolved from,
+/// every artifact it resolved, and what it produced. A receipt is local, so it
+/// holds the absolute destination and the sources that were used; it is never
+/// read as an authority for identity.
+///
+/// # Errors
+///
+/// Fails when the manifest digest cannot be taken and when the receipt cannot
+/// be written.
+pub fn write_receipt(
+    cache: &Cache<NativePlatform>,
+    manifest: &fetchloom_engine::manifest::Manifest,
+    artifacts: &[ResolvedArtifact],
+    result: &RunResult,
+) -> Result<(), Error> {
+    let mut recorded = std::collections::BTreeMap::new();
+    for artifact in artifacts {
+        recorded.insert(
+            artifact.id.clone(),
+            fetchloom_engine::receipt::ReceiptArtifact {
+                digest: artifact.digest,
+                source_used: artifact.source.clone(),
+                trust: fetchloom_engine::trust::TrustClass::Tofu,
+            },
+        );
+    }
+    cache.write_receipt(&Receipt {
+        dataset: result.dataset.clone(),
+        manifest: manifest.digest()?,
+        artifacts: recorded,
+        tree: Some(result.tree),
+        executable: result.executable.clone(),
+        destination: result.destination.clone(),
+        accepted_terms: None,
+        fetchloom: env!("CARGO_PKG_VERSION").to_owned(),
+        completed_at: fetchloom_engine::timestamp::Timestamp::now(),
+    })
+}
+
+/// Returns the name a reference's dataset is recorded under.
+///
+/// Takes the reference the user wrote and the local path it resolved to. A
+/// network location is named by its last path component and a local path by its
+/// own last component, which is what a destination is named after too.
+#[must_use]
+pub fn dataset_name(reference: &str, source: &Path) -> String {
+    if is_remote(reference) {
+        return remote_name(reference);
+    }
+    source.file_name().map_or_else(
+        || "dataset".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// Materializes an object the cache already holds.
+///
+/// Takes what the materialization runs against, the object a plan resolved,
+/// the name it materializes under, and the flags reconcile answers to. Nothing
+/// is fetched, because the bytes are already here.
+///
+/// # Errors
+///
+/// Fails when the object is absent, when the destination is modified or
+/// foreign and neither `--force` nor `--adopt` was given, and when staging
+/// cannot be published.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the selection, force, and adopt flags each name a contract behavior of their own"
+)]
+pub fn materialize_cached(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    size: u64,
+    dataset: &str,
+    destination: &Path,
+    selection: &Selection,
+    force: bool,
+    adopt: bool,
+    source: &SafeUrl,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<RunResult, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    emit(EventPayload::ResolveStart);
+    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::CacheHit { digest });
+    emit(EventPayload::PlanReady);
+    let interop = match with.cache {
+        Some(cache) => cache.recorded_interop(digest)?,
+        None => None,
+    };
+    materialize_object(
+        with,
+        digest,
+        size,
+        dataset,
+        destination,
+        selection,
+        force,
+        adopt,
+        interop,
+        source,
+        &emit,
+    )
+}
+
+/// One artifact a manifest named, as this run resolved it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedArtifact {
+    /// The name the manifest gave it.
+    pub id: String,
+    /// The digest its bytes hash to.
+    pub digest: ContentDigest,
+    /// The interop digest of the same bytes.
+    pub interop: fetchloom_engine::digest::InteropDigest,
+    /// The length of the object in bytes.
+    pub size: u64,
+    /// The source that served it, redacted as it was recorded.
+    pub source: SafeUrl,
+    /// The name the object is known by, which is what states its format.
+    pub name: String,
+    /// The members the artifact contributes.
+    pub selection: Selection,
+    /// The format the manifest declared, when it declared one.
+    pub declared: Option<ArchiveFormat>,
+}
+
+/// What a run against a manifest produced.
+pub struct DatasetRun {
+    /// Every artifact that resolved, in manifest order, whether or not the run
+    /// went on to publish anything.
+    ///
+    /// A run that failed on its third artifact still verified its first two,
+    /// and their objects are in the cache, so the lock records them.
+    pub resolved: Vec<ResolvedArtifact>,
+    /// What the run did, or what stopped it.
+    pub outcome: Result<RunResult, Error>,
+}
+
+/// Reads the manifest a local reference names, when it names one.
+///
+/// Takes the path the reference resolved to. Returns nothing when the path does
+/// not carry one of the extensions a manifest is written under, which is how a
+/// data file is told from a document describing one.
+///
+/// # Errors
+///
+/// Fails with `manifest.invalid` when the path carries a manifest extension and
+/// does not hold a manifest.
+#[must_use]
+pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::Manifest, Error>> {
+    let syntax = fetchloom_engine::document::Syntax::of_path(source)?;
+    if !source.is_file() {
+        return None;
+    }
+    let read = std::fs::read(source).map_err(|reason| {
+        Error::new(
+            ErrorKind::ManifestInvalid,
+            format!("make {} readable: {reason}", source.display()),
+        )
+    });
+    Some(read.and_then(|bytes| {
+        fetchloom_engine::manifest::Manifest::parse(&bytes, syntax, &Limits::default())
+    }))
+}
+
+/// Materializes every artifact a manifest names into one destination.
+///
+/// Takes what the materialization runs against, the manifest, the directory a
+/// relative source is resolved against, the destination, and what the lock
+/// pins. Artifacts are resolved in the order the manifest gives them and every
+/// one that verifies stays in the cache. The destination is all or nothing: it
+/// is published once, after every artifact has resolved, so a run that fails on
+/// its last artifact leaves the previous destination untouched.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the manifest, the lock, and the reconcile flags each name a contract behavior of their own"
+)]
+pub fn materialize_manifest(
+    with: &Materialization<'_>,
+    manifest: &fetchloom_engine::manifest::Manifest,
+    base: &Path,
+    destination: &Path,
+    force: bool,
+    adopt: bool,
+    pinned: Option<&fetchloom_engine::lock::LockedDataset>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> DatasetRun {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    emit(EventPayload::ResolveStart);
+
+    let mut resolved = Vec::new();
+    for artifact in &manifest.artifacts {
+        match resolve_artifact(with, artifact, base, pinned, observer, sequence) {
+            Ok(found) => resolved.push(found),
+            Err(error) => {
+                return DatasetRun {
+                    resolved,
+                    outcome: Err(error.with_dataset(manifest.name.clone())),
+                };
+            }
+        }
+    }
+    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::PlanReady);
+
+    let outcome = publish_dataset(
+        with,
+        &resolved,
+        &manifest.name,
+        destination,
+        force,
+        adopt,
+        &emit,
+    );
+    DatasetRun { resolved, outcome }
+}
+
+/// Puts one artifact's bytes in the cache and reports what they are.
+fn resolve_artifact(
+    with: &Materialization<'_>,
+    artifact: &fetchloom_engine::manifest::Artifact,
+    base: &Path,
+    pinned: Option<&fetchloom_engine::lock::LockedDataset>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<ResolvedArtifact, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let Some(first) = artifact.sources.first() else {
+        return Err(Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!(
+                "name a source for {}, because an artifact with none resolves to nothing",
+                artifact.id
+            ),
+        )
+        .with_artifact(artifact.id.clone()));
+    };
+    let expected = artifact
+        .digest
+        .and_then(|claims| claims.blake3)
+        .or_else(|| {
+            pinned
+                .and_then(|entry| entry.artifacts.get(&artifact.id))
+                .map(|locked| locked.digest)
+        });
+
+    let selection = Selection {
+        include: artifact.select.clone(),
+        exclude: Vec::new(),
+        layout: artifact.layout,
+    };
+    let name = object_name(first);
+    let declared = artifact.archive.as_ref().map(|spec| spec.format);
+
+    if is_remote(first) {
+        let (digest, interop, size) =
+            transfer_object(with, &artifact.sources, expected, observer, sequence)?;
+        return Ok(ResolvedArtifact {
+            id: artifact.id.clone(),
+            digest,
+            interop,
+            size,
+            source: SafeUrl::new(first),
+            name,
+            selection,
+            declared,
+        });
+    }
+
+    let path = resolve_source_path(base, first);
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "run without --no-cache, because this build resolves an artifact through the cache",
+        )
+        .with_artifact(artifact.id.clone()));
+    };
+    if !path.exists() {
+        return Err(Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!("check that {} names a path that exists", path.display()),
+        )
+        .with_artifact(artifact.id.clone()));
+    }
+    let ingested = cache
+        .ingest(&path)
+        .map_err(|reason| reason.with_artifact(artifact.id.clone()))?;
+    if let Some(expected) = expected
+        && expected != ingested.digest
+    {
+        return Err(Error::new(
+            ErrorKind::IntegrityMismatch,
+            format!(
+                "correct the manifest or replace the bytes, because {} hashes to {} where {} was \
+                 stated",
+                path.display(),
+                ingested.digest,
+                expected
+            ),
+        )
+        .with_artifact(artifact.id.clone()));
+    }
+    if ingested.was_present {
+        emit(EventPayload::CacheHit {
+            digest: ingested.digest,
+        });
+    } else {
+        emit(EventPayload::CacheMiss {
+            digest: ingested.digest,
+        });
+    }
+    Ok(ResolvedArtifact {
+        id: artifact.id.clone(),
+        digest: ingested.digest,
+        interop: ingested.interop,
+        size: ingested.size,
+        source: SafeUrl::new(&path.to_string_lossy()),
+        name,
+        selection,
+        declared,
+    })
+}
+
+/// Returns the path a manifest's source names, relative to the manifest.
+fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
+    let stated = PathBuf::from(source.strip_prefix("file://").unwrap_or(source));
+    if stated.is_absolute() {
+        stated
+    } else {
+        base.join(stated)
+    }
+}
+
+/// Moves one artifact's bytes from the first source that can serve them.
+fn transfer_object(
+    with: &Materialization<'_>,
+    locations: &[String],
+    expected: Option<ContentDigest>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<(ContentDigest, fetchloom_engine::digest::InteropDigest, u64), Error> {
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "run without --no-cache, because this build streams a remote object through the cache",
+        ));
+    };
+    let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
+    let pause = SleepingPause;
+    let limits = Limits::default();
+    let degradations = DegradeQueue::new();
+    let transfer = Transfer {
+        store: cache,
+        source: &source,
+        pause: &pause,
+        limits: &limits,
+        degradations: &degradations,
+        observer,
+        sequence,
+    };
+    let transferred = transfer.run(expected, locations)?;
+    for entry in source
+        .take_degradations()
+        .into_iter()
+        .chain(degradations.take())
+    {
+        observer.emit(&Event::new(
+            sequence,
+            EventPayload::Degrade {
+                requested: entry.requested,
+                used: entry.used,
+                reason: entry.reason,
+            },
+        ));
+    }
+    let interop = match transferred.interop {
+        Some(interop) => interop,
+        None => cache.recorded_interop(transferred.digest)?.ok_or_else(|| {
+            Error::new(
+                ErrorKind::CacheCorrupt,
+                "run cache verify, because the cache holds an object it recorded nothing about",
+            )
+        })?,
+    };
+    let moved = transferred.bytes_kept + transferred.bytes_transferred;
+    let size = if moved > 0 {
+        moved
+    } else {
+        std::fs::metadata(cache.layout().object(transferred.digest))
+            .map(|found| found.len())
+            .unwrap_or_default()
+    };
+    Ok((transferred.digest, interop, size))
+}
+
+/// Publishes every resolved artifact into one destination.
+fn publish_dataset(
+    with: &Materialization<'_>,
+    resolved: &[ResolvedArtifact],
+    dataset: &str,
+    destination: &Path,
+    force: bool,
+    adopt: bool,
+    emit: &dyn Fn(EventPayload),
+) -> Result<RunResult, Error> {
+    let bytes = resolved.iter().map(|artifact| artifact.size).sum();
+    let build = || -> Result<RunResult, Error> {
+        let entries = build_dataset_staging(with, resolved, destination, emit)?;
+        emit(EventPayload::PublishCommit);
+        Ok(RunResult {
+            status: "materialized",
+            dataset: dataset.to_owned(),
+            tree: canonical::tree_digest(&entries),
+            destination: destination.to_path_buf(),
+            entries: entries.len() as u64,
+            bytes,
+            work: with.work.taken(),
+            executable: executable_paths(&entries),
+            artifact: None,
+        })
+    };
+    if !destination.exists() {
+        return build();
+    }
+
+    let mut expected = Vec::new();
+    for artifact in resolved {
+        expected.extend(dataset_entries(with, artifact, emit)?);
+    }
+    settle(
+        with,
+        destination,
+        &Settlement {
+            resolved: &expected,
+            force,
+            adopt,
+            dataset,
+            artifact: None,
+        },
+        emit,
+        &build,
+        &|_| build().map(|_| ()),
+    )
+}
+
+/// Returns the entries one resolved artifact contributes, writing nothing.
+fn dataset_entries(
+    with: &Materialization<'_>,
+    artifact: &ResolvedArtifact,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<TreeEntry>, Error> {
+    let Some(format) = recognized_format(with, artifact.digest, &artifact.name, artifact.declared)?
+    else {
+        return Ok(vec![TreeEntry::File {
+            path: EntryPath::new(&artifact.name)
+                .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+            size: artifact.size,
+            mode: Mode::ReadWrite,
+            content: artifact.digest,
+        }]);
+    };
+    let mut reader = open_archive(with, artifact.digest, format)?;
+    let result = fetchloom_archive::resolve(&mut reader, &artifact.selection, Limits::default());
+    for entry in reader.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: entry.requested,
+            used: entry.used,
+            reason: entry.reason,
+        });
+    }
+    result
+}
+
+/// Builds every resolved artifact into one staging directory and publishes it.
+fn build_dataset_staging(
+    with: &Materialization<'_>,
+    resolved: &[ResolvedArtifact],
+    destination: &Path,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<TreeEntry>, Error> {
+    let staging = staging_beside(destination);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    }
+    std::fs::create_dir_all(&staging)
+        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+
+    let built = fill_dataset_staging(with, resolved, &staging, emit);
+    let entries = match built {
+        Ok(entries) => entries,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+    {
+        let parent = containing_directory(destination);
+        std::fs::create_dir_all(&parent)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+    }
+    if let Err(error) = with
+        .platform
+        .publish_directory(&staging, destination, with.durability)
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(entries)
+}
+
+fn fill_dataset_staging(
+    with: &Materialization<'_>,
+    resolved: &[ResolvedArtifact],
+    staging: &Path,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<TreeEntry>, Error> {
+    let mut entries = Vec::new();
+    for artifact in resolved {
+        if let Some(format) =
+            recognized_format(with, artifact.digest, &artifact.name, artifact.declared)?
+        {
+            entries.extend(extract_into(
+                with,
+                artifact.digest,
+                format,
+                staging,
+                &artifact.selection,
+                emit,
+            )?);
+        } else {
+            {
+                let at = staging.join(&artifact.name);
+                if at.exists() {
+                    return Err(Error::new(
+                        ErrorKind::ArchiveCollision,
+                        format!(
+                            "rename one of them, because two artifacts both land on {}",
+                            artifact.name
+                        ),
+                    ));
+                }
+                place_object(with, artifact.digest, &at)?;
+                entries.push(TreeEntry::File {
+                    path: EntryPath::new(&artifact.name).map_err(|reason| {
+                        Error::new(ErrorKind::ReferenceUnresolved, reason.to_string())
+                    })?,
+                    size: artifact.size,
+                    mode: Mode::ReadWrite,
+                    content: artifact.digest,
+                });
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Returns what a run against a single object resolved, in the form the lock
+/// and the receipt record it.
+///
+/// Returns nothing when the run resolved no object, which is what a reference
+/// naming a directory does.
+#[must_use]
+pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<ResolvedArtifact> {
+    let Some(artifact) = &result.artifact else {
+        return Vec::new();
+    };
+    let Some(interop) = artifact.interop else {
+        return Vec::new();
+    };
+    vec![ResolvedArtifact {
+        id: artifact.id.clone(),
+        digest: artifact.digest,
+        interop,
+        size: artifact.size,
+        source: artifact.source.clone(),
+        name: artifact.id.clone(),
+        selection: selection.clone(),
+        declared: None,
+    }]
 }

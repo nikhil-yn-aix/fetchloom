@@ -4261,3 +4261,565 @@ anyway.
 Both halves matter. The refusal is the contract. The lane's location is why the
 contract was reachable at all: nothing before it had ever run this binary against
 a real server from inside the container.
+
+## A receipt lives in the cache, supplies modes, and never supplies a digest
+
+Question: `verify <path>` reported `0644` for every file and a degrade with it,
+because a filesystem tree states no mode. That made `verify` unable to confirm
+any tree that came out of an archive, which is the thing `verify` is for. A
+receipt records what a run materialized. What may it be used for.
+
+Answer: a receipt supplies the mode of each file and nothing else.
+
+The circularity a receipt invites is real and it is avoided by taking exactly one
+thing from it. Verify walks the destination, hashes every file, and builds the
+entry stream from what is actually there: the paths, the sizes, the content
+digests, the entry set. The one field it cannot read back from a filesystem is
+the mode, because a volume that carries no executable bit answers differently
+from one that does, and phase three already refused to guess. The receipt states
+that field, and the tree digest that comes out is then the digest `get` reported.
+The receipt's own `tree` is compared against the result and never substituted for
+it. A record that attested to its own correctness would prove nothing, and this
+one does not: delete a file, change a byte, add an entry, and the recomputed
+digest moves while the receipt does not.
+
+The cost is stated rather than hidden: a mode that changed on disk after the run
+is not detected, because nothing here reads a mode. That is the same cost phase
+three accepted when it stopped reading modes from a stat, and it is the price of
+one tree digesting the same way on Windows and on Linux.
+
+Where a receipt lives. contracts.md says a receipt is local, may hold absolute
+paths, and is never committed. It does not say where it is kept, and there were
+three candidates. Inside the destination is wrong: it would become an entry of
+the tree it describes. Beside the destination is wrong: it writes into a
+directory the user did not ask to be written into, and reconcile would then call
+it foreign. So it lives in the cache, under `receipts/<hex>` where the hex is a
+derived-key digest of the absolute destination path.
+
+That makes a receipt derived data, and it is: running the same request again
+produces the same one. `cache clear` discards receipts and the degrade returns,
+which is honest, because a discarded receipt costs a rerun and never a wrong
+answer.
+
+Three cases, decided and asserted by name.
+
+No receipt. The degrade stands, every file is `0644`, and nothing is compared.
+This is the phase three behavior and it is not deleted.
+
+A destination that moved. The receipt is named by the path, so a moved
+destination finds nothing and the degrade stands. There is no search, because a
+search would have to guess which of several receipts describes this directory.
+
+A receipt from another machine. It is used only when its own `destination` field
+is the path being verified. A receipt copied here from elsewhere names that
+machine's path and is ignored. If the paths do coincide, it is used, and that is
+safe for exactly the reason above: it supplies no digest, so the worst it can do
+is state the wrong mode for a file and produce a digest that does not match its
+own recorded tree, which fails.
+
+Sources: contracts.md Receipt and Verification policy; the phase three amendment
+that named this gap; `crates/cli/tests/mode.rs`.
+
+## One canonical form, ordered by key, with no line ending in it
+
+Question: the manifest digest appears in every lock, and it covers the canonical
+form rather than the source text. What exactly is that form.
+
+Answer: canonical JSON, ordered by the raw bytes of every mapping key, with no
+whitespace, no null, and no line ending.
+
+Ordering by key rather than by declaration is the decision that could have gone
+the other way. contracts.md's examples list a lock's fields as manifest, release,
+artifacts, tree, and a form ordered by declaration would print them that way.
+Ordered by key it prints artifacts, manifest, release, tree, which reads slightly
+worse. It was taken anyway, because declaration order is a property of a Rust
+struct and a canonical form may not depend on one. Reordering two fields in a
+source file would otherwise change the digest of every manifest in the world, and
+nothing in review would catch it.
+
+No line ending is the answer to the thing that was going to bite. A canonical
+form holding a newline has to state which newline, and a Windows editor, a git
+checkout with `core.autocrlf`, and a shell redirect each have opinions. The
+canonical form holds none: it is one line with no separators, so there is nothing
+for a platform to disagree about. The test asserts on the absence of `\n` and
+`\r` in the bytes rather than on their equality across two machines, which is the
+stronger statement and the one a single machine can make.
+
+The text form written to a lock, a receipt, and a plan does hold line endings, and
+it always writes one line feed. It is read back tolerantly: a carriage return
+before a line feed is stripped, so a file that travelled through a checkout still
+parses to the same model and digests the same. Tolerant on the way in, exact on
+the way out.
+
+Every scalar in the written form is double-quoted with JSON escaping. That is one
+rule rather than a decision per value, so nothing has to reason about whether a
+digest, a glob, or a release string needs quoting, and nothing read back can mean
+something other than what was written. A mapping key is written plain when it is
+alphanumeric with underscores, hyphens and dots, and quoted otherwise, because a
+lock whose every key was quoted is harder to read for no gain in exactness.
+
+Sources: contracts.md Compatibility and Canonical form;
+`crates/engine/tests/document.rs`.
+
+## A YAML subset written here, rather than a YAML library
+
+Question: manifests parse from YAML, TOML, and JSON. TOML and JSON already have
+parsers in this workspace. YAML does not. Add a dependency or write one.
+
+Answer: write one, for the restricted subset contracts.md already describes.
+
+contracts.md requires refusing anchors, aliases, merge keys, and implicit boolean
+coercion of strings, and bounding depth and node count. A general YAML library
+does the opposite of three of those by design: it resolves anchors and aliases,
+applies merge keys, and coerces `yes` to a boolean under YAML 1.1 rules. Using
+one would mean parsing the document, then scanning the source text for the
+constructs the library had already silently resolved, which is two passes and a
+guess. The parser here refuses them where they appear, by name, with the line
+number.
+
+It is also the smaller commitment. The subset is block mappings, block sequences,
+flow sequences, flow mappings, and three kinds of scalar. That is what the
+manifest, lock, receipt, and plan shapes need and nothing else, and every line of
+it is covered by tests that assert the refusals rather than only the acceptances.
+
+The dependency that was added instead is `serde_json`, which the workspace
+already carried, promoted from a development dependency to a real one. It is the
+canonical form's own writer and the intermediate every surface syntax parses into,
+so there is one model and three front doors rather than three models. `toml` was
+already the configuration parser and is now also one of those doors.
+
+Sources: contracts.md Manifest and Canonical form; `crates/engine/src/yaml.rs`.
+
+## Portable versus local, field by field
+
+Question: a lock carries no absolute paths, no local hostnames, no usernames, and
+no timestamps of the local run. Which fields is that, and where does each of the
+things a run knows go.
+
+Answer: the table, decided before the code was written.
+
+| Field | Where | Why |
+|---|---|---|
+| dataset name | lock | The last component of a reference, which is the same everywhere |
+| `manifest` | lock | A digest of a model that holds no path |
+| `release` | lock | The publisher's word |
+| `digest`, `interop`, `size` | lock | Properties of the bytes |
+| `select`, `layout` | lock | Part of identity, and identical on every machine |
+| `tree` | lock | The same on every platform or the run fails naming what cannot be represented |
+| `source_used` | receipt | Which of several sources answered here |
+| `trust` | receipt | What was known here, at this moment |
+| `destination` | receipt | An absolute path |
+| `executable` | receipt | What a filesystem does not state |
+| `completed_at` | receipt | A wall clock |
+| `fetchloom` | receipt | Provenance |
+| `cached`, `disk`, `conflicts` | plan | This machine's answer, reported and never acted on |
+| fingerprint | neither | A cache of the phrase probably unchanged |
+
+The subtle one is the manifest digest for a reference that names no manifest. A
+run against `https://host/x.tar.gz` has no manifest, and a lock entry needs one.
+The answer is a synthesized manifest holding the dataset name and one artifact
+carrying that name and, for a network reference, that location. A location is
+portable and belongs there.
+
+A local path is not, and this is where a machine would have leaked. Synthesizing
+`sources: [D:\data\raw]` would have produced a manifest digest that differed
+between two people holding the same bytes, and the difference would only surface
+the moment two people compared locks. So a local reference records no source at
+all, and its synthesized manifest reduces to the dataset name. The lock it
+produces pins the bytes and says nothing about where they sat.
+
+The test asserts on the bytes rather than on the fields: the lock is read back as
+text and searched for the destination, the cache path, the value of `USERNAME`,
+`USER`, `COMPUTERNAME` and `HOSTNAME`, for `completed_at`, for `destination`, and
+for a backslash, which is how a Windows path leaks in. A second test fetches one
+source into two scenes and asserts the two locks are byte-identical.
+
+Sources: contracts.md Lock and Receipt; `crates/cli/tests/lock.rs`.
+
+## What a locked run compares, and which failure each difference is
+
+Question: `--locked` fails if resolution differs from the lock. Differs how, and
+which of the exit codes does each kind of difference take.
+
+Answer: two kinds, and the split is whether refetching could fix it.
+
+A difference in the bytes is an integrity failure and exits 30. The lock stated a
+digest, the source served something that does not hash to it, and the run has been
+lied to by a source. `digest`, `interop`, and `size` are that, and so is `tree`,
+because a tree that differs from the pinned one means the same bytes materialized
+differently.
+
+A difference in identity is a resolution failure and exits 10, as
+`alias.unstable`. The lock describes a different request than the one being made:
+another manifest, another release, another selection, another set of artifacts.
+Refetching cannot fix that and the user has to decide, which is what the message
+says.
+
+A dataset the lock does not pin at all is a policy failure and exits 40, as
+`policy.trust_refused`. This is not an invented rule. contracts.md says a locked
+run never accepts `tofu`, and a run with no prior digest is by definition `tofu`.
+The refusal is that sentence applied.
+
+No new error kind was added for any of this, which was a constraint rather than a
+convenience: `alias.unstable` already meant a name resolving to something other
+than what it resolved to before, and that is exactly what a moved manifest digest
+is.
+
+When each comparison happens matters as much as what it compares. Everything
+knowable before a byte moves is compared before a byte moves: the manifest digest,
+the release, and the selection are all properties of the request. So a locked run
+whose request differs from the lock publishes nothing and writes nothing. The byte
+comparisons happen where they can: the digest is handed to the transfer, so the
+store refuses the commit itself, and the destination never exists.
+
+A locked run writes no lock. A run that may not differ from the lock has nothing
+to add to it, and writing one would mean rewriting a file the user is holding the
+run to.
+
+Sources: contracts.md Locked runs; `crates/cli/tests/lock.rs`.
+
+## Rung two, closed by the lock rather than by a source
+
+Question: standing debt from phase two and three. A remote refetch re-downloads,
+because nothing tells this build the server holds what the cache holds. Rung two
+needs a source publishing immutable identity, which is phase seven.
+
+Answer: it is closed for a locked run, and the counter says so.
+
+A lock states a digest. A cache holding that digest needs no request, and the
+transfer already knew how to short-circuit on an expected digest that is present.
+What was missing was anyone handing it one. A locked run does, and a second
+locked run against a warm cache issues zero requests, asserted on zero rather than
+on a comparison.
+
+It is closed only for a locked run, and that is deliberate. contracts.md defines
+`--locked` as failing when resolution differs from the lock and says nothing about
+a lock steering a run that was not locked. Reading a digest out of a lock and
+skipping the network on the strength of it, in a run the user did not lock, would
+be choosing a behavior the contract is silent about. The first version of this did
+exactly that and the test suite caught it within the minute: a stale lock file left
+in the workspace by an earlier test made an unrelated transfer fail on integrity,
+because a run nobody had locked was being held to a digest nobody had asked for.
+
+Phase seven still owns the other half. A source that publishes an immutable
+identity lets a run with no lock skip the request too, and no source here does.
+
+Sources: contracts.md Locked runs and Resume ladder;
+`crates/cli/tests/lock.rs`; the phase three gate's inherited debt.
+
+## A plan takes its digests from the lock, and is written to standard output
+
+Question: a plan contains resolved digests so it can execute offline, and `plan`
+moves no bytes. Those two together leave nowhere for a digest to come from.
+
+Answer: from the lock. A reference the lock pins nothing for cannot be planned.
+
+The alternatives were both worse. Probing the source for a digest is moving bytes
+and would make `plan` need the network to describe a run that may not. Leaving the
+digest out makes a plan that cannot execute offline, which is the only reason a
+plan exists. So a plan is downstream of a lock: `get` records what a reference
+resolves to, and `plan` reads it. Planning something with no recorded digest fails
+with `policy.trust_refused` and says to run `get` once, for the same reason a
+locked run with no entry does.
+
+How a plan proves it is still valid at apply time: it does not, and nothing about
+a plan expires. Apply re-resolves the digests the plan records. An object the
+cache holds is materialized from it. One it does not is fetched with the plan's
+digest handed to the transfer, so a source now serving something else fails on
+integrity and never falls back to another source. There is no clock in this and no
+signature over the plan, because a plan that a machine will act on is only as good
+as the digests in it, and those are checked against the bytes every time.
+
+`unknown: [expanded]` means the source stated no expanded size. A run that needs
+that number is the disk precheck, and it does not get one: the plan reports `?`
+and apply proceeds and fails with `resource.disk` if the volume runs out. A field
+is never estimated into a number, so the alternative was inventing one.
+
+A plan applied against a cache that already holds some of its objects uses them.
+The `cached` field a plan records is what the machine that made the plan saw and
+is reported rather than acted on, along with `disk`, `conflicts`, and
+`destination`, which are all that machine's answers. `--output` names the
+destination when the plan's own is not this machine's.
+
+Where a plan goes. contracts.md gives `plan` no output flag and says stdout
+carries the final result. The plan is the final result of `plan`, so it is written
+there: the canonical text form by default and JSON under `--json`, both reading
+back as the same plan. Nothing was invented to make this work, which was the
+point.
+
+Sources: contracts.md Plan and Output streams; `crates/cli/tests/portable.rs`.
+
+## A bundle is a tar, because a tar has no index to trust
+
+Question: a bundle travels on removable media between machines that do not trust
+each other. What container, and how is it verified without trusting what it says
+about itself.
+
+Answer: an uncompressed tar whose member names are content digests.
+
+The rule this follows is the one that made the backslash-zip call right in phase
+three: do not trust structure the input asserts. A zip has a central directory
+that says where every member is and how long it is, and an importer that walked it
+would be believing the attacker's index. A tar has no index at all. Every member
+is found by walking the stream from the beginning, and there is nothing in the
+format that could be believed instead of the bytes.
+
+A member name is a claim, never an instruction. Import hashes the bytes it reads
+and compares the result to the name; the name is never used as a path, never
+joined onto anything, and never reaches a filesystem call. A member named
+`../../etc/passwd` is refused as `archive.unsafe_path` before anything else looks
+at it, and a member named anything else that is not a digest is refused as
+`cache.corrupt`.
+
+Nothing is published until all of it checks out. Every member is staged into the
+cache's partial area, hashed as it is read, and held against its name; only when
+the whole bundle has been read does anything enter `objects/`. A truncated bundle,
+a flipped byte, and a member whose bytes hash to something other than its name
+each fail with nothing published, asserted by counting the objects directory
+afterwards.
+
+Uncompressed, because the objects a cache holds are usually already compressed
+archives and a second compression pass would cost the whole bundle for nothing.
+
+`cache export` writes every object the cache holds. A plan-scoped export would be
+smaller and is not invented here, because no flag in contracts.md names one and a
+cache is already the set of objects a machine chose to keep.
+
+Sources: contracts.md Bundles; `crates/cli/tests/portable.rs`.
+
+## The interop digest now rides in the transfer, and the seam widened for it
+
+Question: a lock records `interop` for every artifact it pins. Nothing computed
+one for a transfer.
+
+Answer: both digests are taken in the one pass the bytes make, and the Store seam
+returns both.
+
+contracts.md has said from phase zero that both digests are computed on every
+transfer. It was true for a local walk, which goes through `hash_stream`, and
+false for everything that went through the store, which kept a single BLAKE3
+hasher. Nobody noticed because nothing read the interop digest until a lock did.
+
+The fix widens a seam, which is not free: `Store::commit` returned a content
+digest and now returns both. The justification is the one the roadmap asks for.
+The alternative was rereading every object to answer a question the bytes had
+already gone past, which is a full read on every run and exactly the kind of
+second read standards.md forbids.
+
+The cache also had to learn to answer the question for an object it already holds,
+because a warm run never reads those bytes at all. The interop digest of a
+published object is recorded beside it, under `meta/interop/<hex>`, at the moment
+it is published. It is a separate record rather than a field of the fingerprint
+record, because a fingerprint is a cache of the phrase probably unchanged and
+never appears in a lock, and mixing the two would have put a fingerprint one
+`serde` derive away from a portable artifact.
+
+Both hashers are updated through `hashing::update_digests`, which runs them on
+separate threads of the processor pool, so neither serializes the other. That
+required handing the cache a processor pool, which it did not have. It now takes
+one the way it takes the work counter.
+
+Sources: contracts.md Identity; standards.md CPU; `crates/cache/src/store.rs`.
+
+## What a lock and a receipt record when part of a run failed
+
+Question: artifacts are independent, verified objects stay cached, and the
+destination is all or nothing. What is written down for a run where one artifact
+of five failed.
+
+Answer: the lock records the four that verified, with no tree. No receipt is
+written at all.
+
+contracts.md already contains the sentence that decides half of this: a lock
+without a tree still pins the bytes. That sentence exists for exactly this run.
+The four objects that verified are in the cache and are reused next time, and the
+lock says what they are, so the next run has less to do and a `--locked` run
+against the missing fifth is refused on policy rather than resolving it as a first
+use. A partial lock entry cannot be mistaken for a complete one, because the
+artifact that failed is simply absent and the missing-artifact comparison is what
+a locked run does first.
+
+The receipt is the other half. A receipt records what a run materialized, and this
+run materialized nothing: the destination is all or nothing and was left alone. A
+receipt naming a tree that was never published would make `verify` compare a
+destination against a run that did not happen. So none is written, and `verify`
+falls back to the pathless behavior, which is the truth.
+
+Sources: contracts.md Partial success and Lock.
+
+## The binary grew ten percent, and nineteen kilobytes of that is the TOML parser
+
+The deterministic gate failed on the one metric that moved: binary size went
+4,704,768 bytes to 5,199,360, which is 10.5 percent and twice the five percent a
+deterministic metric is allowed. Every other deterministic metric is unchanged to
+the byte: cache growth, bytes read, bytes written and requests are identical in
+all six regimes, so nothing this phase added moves any bytes that were not being
+moved before.
+
+The number was attributed rather than guessed at. Building the release binary with
+the TOML arm of the document reader removed and the dependency dropped from the
+engine gives 5,180,416 bytes. The TOML parser therefore costs 18,944 bytes, and it
+costs that little because the binary already linked it for configuration, which is
+written in TOML and always was. The remaining 475,648 bytes are this phase's own
+code: the canonical model and its two writers, the YAML subset reader, the JSON
+writer promoted from a development dependency into the engine, locks and locked
+runs, receipts, plans, bundles, and the `plan` and `apply` commands.
+
+The baseline is re-recorded rather than the change reverted, which is what phase
+two did when the binary doubled learning to speak TLS. The rule the baseline
+exists for is that a regression is visible and explained, and this one is both.
+What it would take to shrink it is not a smaller feature set but a smaller way of
+writing the same one, and no measurement here says which part of the 475 kilobytes
+is worth attacking.
+
+Sources: `cargo run -p xtask -- bench` before and after; the release binary built
+twice, once with the TOML arm removed.
+
+## Phase 4 gate
+
+What phase 4 was for: reproducibility stops being a property of one run and
+becomes a file someone else can act on. What it delivers is the canonical form
+every portable artifact is written in, locks and locked runs, receipts and a
+`verify` that can use one, `plan` and `apply`, and bundles.
+
+What passed, and on what.
+
+Everything below ran on `x86_64-pc-windows-msvc`.
+
+The verify gap phase three opened is closed and gated. Fetching an archive holding
+a `0755` file and verifying the destination against its receipt reproduces the
+digest `get` reported, asserted on equality of the two rather than on a constant.
+The degrade still fires with no receipt, for a destination that moved, and for a
+receipt naming another destination, each asserted by name. A destination changed
+after its receipt was written fails `verify` with exit 30.
+
+One model, three surface syntaxes, one digest. The same manifest written in YAML,
+TOML and JSON parses to one model and digests identically. Reformatting it,
+reordering its keys, and putting a carriage return before every line feed change
+nothing. The canonical form holds no line ending at all, which is asserted on the
+bytes. Anchors, aliases, merge keys, tags, directives, block scalars, document
+separators, tabs as indentation, and a repeated key are each refused by name, and
+`yes` is a word rather than a boolean.
+
+A lock pins the bytes and the tree, holds nothing that belongs to one machine, and
+is byte-identical across two runs of one source. One archive written out byte for
+byte produces a lock asserted character for character, which is the cross-platform
+statement a single machine can make: the container lane runs the same assertion
+against the same bytes.
+
+A locked run with no entry exits 40. A locked run of an unchanged source issues
+zero requests, which is rung two closed by the lock. A locked run against a source
+that has started serving different bytes exits 30 and publishes no destination.
+
+The gate itself, as one test: fetch from a server, plan against the lock, export a
+bundle, drop the server, import the bundle into a cold cache, apply the plan
+offline, and get the tree digest the connected run reported, with zero requests
+issued.
+
+Bundles are hostile input. Truncated, one byte flipped inside a member, a member
+whose bytes do not hash to its name, and a member named `../../etc/passwd` each
+fail by the named kind with the objects directory still empty afterwards.
+
+The costs, and they are the honest gap.
+
+The offline lane in the container is written and wired into `cargo xtask verify`
+as two runs, the second with `--network none` and a check that name resolution
+itself fails, but the container lane has not been executed in this session. The
+in-process gate proves the flow and the request counter proves no request was
+issued; what is unproven here is that the flow survives with no network device at
+all. That is the first thing to run on return.
+
+Nothing ran on macOS or on a real Linux machine, exactly as phase two and three
+left it. Apple stays compile-only.
+
+The binary grew 10.5 percent and the deterministic gate failed on it. Every other
+deterministic metric is unchanged to the byte. The growth is attributed in the
+record above and the baseline is re-recorded rather than the change reverted.
+
+`plan` and `apply` take one reference and one artifact, as `get` does. Partial
+success across several artifacts is decided and written down and is not reachable
+yet, because nothing in this build resolves more than one artifact.
+
+`cache export` writes the whole cache. A plan-scoped bundle is smaller and is not
+invented here.
+
+Manifests parse and digest but nothing yet resolves a reference to one: every run
+still resolves to the synthesized manifest a direct reference describes. The
+parser, the canonical form, and the digest are what phase eight builds `init` on.
+
+A reference resolves to a manifest, and partial success is reachable. A local
+path whose extension is one a manifest is written in is read as a manifest, and
+nothing else decides it, and a directory is never searched for one. The remote
+manifest the grammar names is not resolved by this build, as the object store,
+provider and metadata forms beside it are not. `crates/cli/tests/manifest.rs` runs a two-artifact dataset
+through materialization, pinning, a second unchanged run, an artifact that cannot
+be resolved, a declared digest the bytes do not have, a manifest that does not
+parse, and two artifacts landing on one path. Partial success is no longer
+written down and unreachable.
+
+The archive is listed once and read once, and that is now asserted on the bytes
+rather than argued about. `crates/archive/tests/passes.rs` counts the compressed
+bytes pulled through the source and holds an extraction to two passes over it.
+Breaking the held-stream reuse makes it read 513 times the archive's own size for
+a 512-member archive instead of twice, so the test fails for the reason it
+exists. Two passes is the floor for a compressed tar: the member list is only
+knowable by inflating the whole stream, and selection is decided against the
+whole list before any member is read. Removing the second pass costs either the
+decompressed size in memory or a spill file, and contracts name neither.
+
+Finding a member no longer costs the entry count. `open` walked the member list
+comparing whole members, so an extraction cost the square of the entry count in
+string comparisons. The listing now carries a map from member path to position,
+which is exact rather than approximate because a member path is claimed by
+exactly one entry, and the equality check is kept on the one candidate the map
+returns.
+
+Measured, on this machine, a cold run of 2000 files of 4 KiB each: 42.20 seconds
+with the cache and 5.13 seconds with `--no-cache`, for the same tree digest. The
+cache write path is 88 percent of that run. Per object it performs the lock file,
+the lock owner record, the partial, the partial owner record, the durability
+flush, the rename into `objects/`, and the object record; timed one at a time on
+this volume those sum to 4.8 milliseconds, against a measured 18.5. The remainder
+is what an on-access scanner charges for creating six files where one would do.
+Every one of those operations is named by the cache contract: one writer per
+digest held by an advisory lock, the lease and the partial and its source record
+and its owner record all carrying one key, and publication as write then flush
+then rename. None of them can be removed without changing that contract, so none
+were. The `exists` check before the exclusive create is one syscall either way
+and was left alone.
+
+An unlocked warm run of a remote reference refetches everything. Measured against
+a local server: two requests and the whole object, on every run, where the same
+run with `--locked` makes no request and writes nothing. Contracts state the
+resume ladder for an interrupted transfer and state nothing about revalidating a
+completed object an unpinned URL still names, so nothing was invented. Whether an
+unpinned remote should revalidate with a conditional request is a contract
+decision and is written here rather than answered.
+
+Reconcile still hashes the destination rather than fingerprinting it. Contracts
+allow it: `unchanged` is fingerprint or hash. What is missing is a place to keep a
+destination fingerprint. A receipt cannot hold one, because a receipt is never an
+authority for identity, and `meta/` holds resolution metadata and per-host
+measurements and witnesses, which a destination fingerprint is not. The store it
+needs is a cache format change. Measured, a warm run over 256 MiB takes 0.48
+seconds, of which the destination rehash is about half.
+
+The binary is 5,302,272 bytes. Against the baseline phase 3 committed, 4,704,768,
+that is 12.7 percent, and phase 4 is what grew it: the document model, the YAML
+subset, the bundle reader, planning, and locked runs. Against the baseline phase 4
+re-recorded, 5,199,360, resolving a reference to a manifest and indexing archive
+members added 102,912 bytes, which is 1.98 percent and under the five percent
+gate. The growth is attributed rather than reverted, as it was above.
+
+What phase 5 inherits. The four-files-per-object cache layout and the packing
+question, now with numbers: it is the dominant cost of a many-small-files run and
+the numbers are above. Two Apple crates no machine compiles. A destination
+fingerprint store. Revalidation of an unpinned remote. Rung two for a run that is
+not locked, which needs a source publishing immutable identity and is phase
+seven.
+
+Sources: `cargo xtask verify` and `cargo test --workspace --exclude xtask` on this
+machine; `cargo run -p xtask -- bench`; the records above;
+`crates/engine/tests/document.rs`, `crates/cli/tests/lock.rs`,
+`crates/cli/tests/mode.rs`, `crates/cli/tests/portable.rs`,
+`crates/cli/tests/manifest.rs`, `crates/archive/tests/passes.rs`.

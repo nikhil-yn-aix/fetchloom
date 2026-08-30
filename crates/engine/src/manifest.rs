@@ -164,3 +164,51 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<License>,
 }
+
+impl Manifest {
+    /// Reads a manifest written in any of the three accepted syntaxes.
+    ///
+    /// Takes the bytes exactly as they were read, the syntax to read them in,
+    /// and the bounds a document may not exceed. Returns the one model all
+    /// three syntaxes parse into.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `manifest.invalid` when the document does not parse, when it
+    /// holds a key this build does not read, and when it names no artifact.
+    pub fn parse(
+        bytes: &[u8],
+        syntax: crate::document::Syntax,
+        limits: &crate::limits::Limits,
+    ) -> Result<Self, Error> {
+        let manifest: Self = crate::document::read_model_in(bytes, syntax, "manifest", limits)?;
+        if manifest.name.is_empty() {
+            return Err(Error::new(
+                ErrorKind::ManifestInvalid,
+                "give the manifest a name, because a dataset is named",
+            ));
+        }
+        if manifest.artifacts.is_empty() {
+            return Err(Error::new(
+                ErrorKind::ManifestInvalid,
+                "name at least one artifact, because a manifest with none resolves to nothing",
+            ));
+        }
+        Ok(manifest)
+    }
+
+    /// Returns the digest of this manifest's canonical form.
+    ///
+    /// The digest covers the canonical JSON of the model, never the text a
+    /// manifest was written in, so reformatting a manifest or writing it in
+    /// another accepted syntax does not change what it identifies.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the canonical form cannot be written.
+    pub fn digest(&self) -> Result<crate::digest::ManifestDigest, Error> {
+        Ok(crate::canonical::manifest_digest(
+            &crate::document::canonical_json_of(self)?,
+        ))
+    }
+}

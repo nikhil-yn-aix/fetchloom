@@ -66,6 +66,7 @@ fn mixed_mode_directory(at: &Path) -> PathBuf {
 
 fn get(source: &Path, destination: &Path, cache: &Path, extra: &[&str]) -> Output {
     Command::new(binary())
+        .current_dir(scratch())
         .arg("get")
         .arg(source)
         .arg("--output")
@@ -73,16 +74,6 @@ fn get(source: &Path, destination: &Path, cache: &Path, extra: &[&str]) -> Outpu
         .arg("--json")
         .args(extra)
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
-}
-
-fn verify(path: &Path) -> Output {
-    Command::new(binary())
-        .arg("verify")
-        .arg(path)
-        .arg("--json")
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -132,9 +123,10 @@ fn get_and_verify_agree_for_a_directory_source() {
     let temporary = TempDir::new().unwrap();
     let root = mixed_mode_directory(temporary.path());
     let destination = temporary.path().join("out");
-    let fetched = get(&root, &destination, &temporary.path().join("cache"), &[]);
+    let cache = temporary.path().join("cache");
+    let fetched = get(&root, &destination, &cache, &[]);
     assert!(fetched.status.success());
-    let verified = verify(&destination);
+    let verified = verify_with_cache(&destination, &cache);
     assert!(
         verified.status.success(),
         "verify failed: {}",
@@ -228,22 +220,63 @@ fn a_second_get_of_a_directory_writes_nothing() {
     assert_eq!(second["work"]["bytes_written"], 0);
 }
 
+fn verify_with_cache(path: &Path, cache: &Path) -> Output {
+    Command::new(binary())
+        .current_dir(scratch())
+        .arg("verify")
+        .arg(path)
+        .arg("--json")
+        .env("FETCHLOOM_CACHE_DIR", cache)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 #[test]
-fn verify_reports_that_it_read_no_mode() {
+fn verify_against_a_receipt_reproduces_the_digest_get_reported() {
     let temporary = TempDir::new().unwrap();
-    let root = mixed_mode_directory(temporary.path());
+    let archive = temporary.path().join("tools.tar.gz");
+    std::fs::write(&archive, mixed_mode_archive()).unwrap();
     let destination = temporary.path().join("out");
+    let cache = temporary.path().join("cache");
+
+    let fetched = get(&archive, &destination, &cache, &[]);
     assert!(
-        get(&root, &destination, &temporary.path().join("cache"), &[])
-            .status
-            .success()
+        fetched.status.success(),
+        "the run failed: {}",
+        String::from_utf8_lossy(&fetched.stderr)
     );
 
+    let verified = verify_with_cache(&destination, &cache);
+    assert!(
+        verified.status.success(),
+        "verify failed: {}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    assert_eq!(
+        field(&body(&fetched), "tree"),
+        field(&body(&verified), "tree"),
+        "verify could not reproduce the digest get reported for an archive stating a mode"
+    );
+}
+
+#[test]
+fn verify_reads_no_mode_when_no_receipt_names_the_destination() {
+    let temporary = TempDir::new().unwrap();
+    let archive = temporary.path().join("tools.tar.gz");
+    std::fs::write(&archive, mixed_mode_archive()).unwrap();
+    let destination = temporary.path().join("out");
+    let cache = temporary.path().join("cache");
+    assert!(get(&archive, &destination, &cache, &[]).status.success());
+
+    let elsewhere = temporary.path().join("other-cache");
     let output = Command::new(binary())
+        .current_dir(scratch())
         .arg("verify")
         .arg(&destination)
         .arg("--events")
         .arg("-")
+        .env("FETCHLOOM_CACHE_DIR", &elsewhere)
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -251,6 +284,63 @@ fn verify_reports_that_it_read_no_mode() {
     let events = String::from_utf8_lossy(&output.stdout);
     assert!(
         events.contains("\"event\":\"degrade\"") && events.contains("mode"),
-        "verify did not report that it read no mode: {events}"
+        "verify without a receipt did not say it read no mode: {events}"
     );
+}
+
+#[test]
+fn a_receipt_naming_another_destination_is_not_read_for_this_one() {
+    let temporary = TempDir::new().unwrap();
+    let archive = temporary.path().join("tools.tar.gz");
+    std::fs::write(&archive, mixed_mode_archive()).unwrap();
+    let destination = temporary.path().join("out");
+    let cache = temporary.path().join("cache");
+    assert!(get(&archive, &destination, &cache, &[]).status.success());
+
+    let moved = temporary.path().join("moved");
+    std::fs::rename(&destination, &moved).unwrap();
+    let output = Command::new(binary())
+        .current_dir(scratch())
+        .arg("verify")
+        .arg(&moved)
+        .arg("--events")
+        .arg("-")
+        .env("FETCHLOOM_CACHE_DIR", &cache)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let events = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        events.contains("\"event\":\"degrade\"") && events.contains("mode"),
+        "a receipt written for another path was read for this one: {events}"
+    );
+}
+
+#[test]
+fn verify_against_a_receipt_reports_a_destination_that_changed() {
+    let temporary = TempDir::new().unwrap();
+    let archive = temporary.path().join("tools.tar.gz");
+    std::fs::write(&archive, mixed_mode_archive()).unwrap();
+    let destination = temporary.path().join("out");
+    let cache = temporary.path().join("cache");
+    assert!(get(&archive, &destination, &cache, &[]).status.success());
+
+    std::fs::write(destination.join("tools").join("notes.txt"), b"changed\n").unwrap();
+    let verified = verify_with_cache(&destination, &cache);
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "a changed destination verified against its receipt: {}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

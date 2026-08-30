@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::hashing;
 use fetchloom_engine::identity::CacheFormatFingerprint;
 use fetchloom_engine::partial_key::PartialKey;
+use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::store::{CacheStatus, PruneReport, Store};
 use fetchloom_engine::source_record::SourceRecord;
@@ -17,7 +19,7 @@ use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{digest_of, name_of};
-use crate::record::{self, RecordedFingerprint};
+use crate::record::{self, ObjectRecord};
 use crate::{Cache, failure, owner_record_of, seal_object, source_record_of};
 
 /// How many bytes a resume reads back at a time to rebuild the digest.
@@ -45,13 +47,17 @@ impl<L> Read for ObjectReader<L> {
 }
 
 /// An object being written, hashed as its bytes arrive.
-#[derive(Debug)]
+///
+/// Both digests are taken in the one pass the bytes make, on separate threads
+/// of the processor pool, so neither serializes the other and neither costs a
+/// second read.
 pub struct PartialWriter {
     file: std::fs::File,
     path: PathBuf,
-    hasher: blake3::Hasher,
+    pair: hashing::Pair,
     written: u64,
     work: Arc<WorkCounter>,
+    processor: Arc<Processor>,
 }
 
 impl PartialWriter {
@@ -65,7 +71,7 @@ impl PartialWriter {
 impl Write for PartialWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let taken = self.file.write(bytes)?;
-        self.hasher.update(&bytes[..taken]);
+        self.pair.update(&self.processor, &bytes[..taken]);
         self.written += taken as u64;
         self.work.wrote_bytes(taken as u64);
         Ok(taken)
@@ -135,8 +141,8 @@ impl<P: Platform> Cache<P> {
 
     fn check_fingerprint(&self, digest: ContentDigest) -> Result<(), Error> {
         let path = self.layout.object(digest);
-        let recorded: RecordedFingerprint = record::read(&self.fingerprint_record(digest))?
-            .ok_or_else(|| {
+        let recorded: ObjectRecord =
+            record::read(&self.object_record(digest))?.ok_or_else(|| {
                 Error::new(
                     ErrorKind::CacheCorrupt,
                     format!(
@@ -201,8 +207,8 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Returns where the fingerprint of an object is recorded.
-    pub(crate) fn fingerprint_record(&self, digest: ContentDigest) -> PathBuf {
-        self.layout.meta().join("fingerprint").join(name_of(digest))
+    pub(crate) fn object_record(&self, digest: ContentDigest) -> PathBuf {
+        self.layout.records().join(name_of(digest))
     }
 
     /// Lists every object that failed verification.
@@ -289,9 +295,10 @@ impl<P: Platform> Store for Cache<P> {
         Ok(PartialWriter {
             file,
             path,
-            hasher: blake3::Hasher::new(),
+            pair: hashing::Pair::new(),
             written: 0,
             work: Arc::clone(self.work()),
+            processor: Arc::clone(self.processor()),
         })
     }
 
@@ -311,7 +318,7 @@ impl<P: Platform> Store for Cache<P> {
 
         let mut existing = std::fs::File::open(&path)
             .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
-        let mut hasher = blake3::Hasher::new();
+        let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; RESUME_BUFFER_BYTES];
         let mut written = 0u64;
         loop {
@@ -321,7 +328,7 @@ impl<P: Platform> Store for Cache<P> {
             if taken == 0 {
                 break;
             }
-            hasher.update(&buffer[..taken]);
+            pair.update(self.processor(), &buffer[..taken]);
             written += taken as u64;
             self.work().read_bytes(taken as u64);
         }
@@ -335,9 +342,10 @@ impl<P: Platform> Store for Cache<P> {
         Ok(PartialWriter {
             file,
             path,
-            hasher,
+            pair,
             written,
             work: Arc::clone(self.work()),
+            processor: Arc::clone(self.processor()),
         })
     }
 
@@ -367,8 +375,9 @@ impl<P: Platform> Store for Cache<P> {
         }
     }
 
-    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<ContentDigest, Error> {
-        let found = ContentDigest::from_bytes(*writer.hasher.finalize().as_bytes());
+    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<hashing::Digests, Error> {
+        let digests = writer.pair.finish();
+        let found = digests.content;
         if let Some(expected) = lease.key.expected()
             && found != expected
         {
@@ -391,10 +400,10 @@ impl<P: Platform> Store for Cache<P> {
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
         seal_object(&object)?;
 
-        self.record_fingerprint(found)?;
+        self.record_object(found, digests.interop)?;
         let _ = std::fs::remove_file(self.layout.mark_of(found));
         drop(lease);
-        Ok(found)
+        Ok(digests)
     }
 
     fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error> {

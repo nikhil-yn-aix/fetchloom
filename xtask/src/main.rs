@@ -4,6 +4,7 @@
 mod bench;
 mod comments;
 mod network;
+mod profile;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         "bench" => run_bench(&workspace, &rest, verification_run()),
         "completions" => generate_completions(&workspace, &rest),
         "network" => run_network(&workspace, &rest),
+        "profile" => profile::run(&rest),
         "verify" => {
             if verify::run(&workspace, &rest) {
                 ExitCode::SUCCESS
@@ -43,6 +45,7 @@ usage:
   cargo xtask bench [--save-baseline] [--compare] [--iterations <n>]
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
+  cargo xtask profile [--rounds <n>]
   cargo xtask verify [--fast] [--arm] [--install-hook]";
 
 fn workspace_root() -> PathBuf {
@@ -242,7 +245,7 @@ fn generate_completions(workspace: &Path, arguments: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn argument_value<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
+pub(crate) fn argument_value<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
     let position = arguments.iter().position(|argument| argument == name)?;
     arguments.get(position + 1).map(String::as_str)
 }

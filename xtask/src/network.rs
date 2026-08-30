@@ -16,12 +16,9 @@ struct Subject {
     name: &'static str,
     /// How many entries the archive holds.
     entries: u64,
-    /// The tree digest `get` reports, taken from the archive's own modes.
+    /// The tree digest `get` reports, taken from the archive's own modes, and
+    /// the one `verify` must reproduce from the run's receipt.
     fetched_tree: &'static str,
-    /// The tree digest `verify` reports for the same destination, taken from
-    /// a walk that reads no mode. The two differ for an archive holding an
-    /// executable, and closing that gap is what a receipt is for.
-    walked_tree: &'static str,
 }
 
 /// The archives this lane holds to a recorded answer.
@@ -36,21 +33,18 @@ const SUBJECTS: [Subject; 3] = [
         name: "hello",
         entries: 462,
         fetched_tree: "blake3:516b098d76cd000fe6001281327f1752d89d3cf9d5bbe39bc74ece250f22bbec",
-        walked_tree: "blake3:5d356751698d3090e06a830e84ae64a92113d1e58c87e495c31da4bfce591361",
     },
     Subject {
         location: "https://files.pythonhosted.org/packages/source/s/six/six-1.16.0.tar.gz",
         name: "six",
         entries: 19,
         fetched_tree: "blake3:779c05c09bbcb5b8f7c38df8bafa46bb6d5a1403331e296bdce412c6d53887e6",
-        walked_tree: "blake3:779c05c09bbcb5b8f7c38df8bafa46bb6d5a1403331e296bdce412c6d53887e6",
     },
     Subject {
         location: "https://ftp.gnu.org/gnu/gzip/gzip-1.12.tar.xz",
         name: "gzip",
         entries: 515,
         fetched_tree: "blake3:efed332979fab239c085f4492eda93c46af9364a1d11fbff9836e7400b793ba9",
-        walked_tree: "blake3:581f08b17e857040a55140eeb59ef62071c2399c9d91a7aaf4f89469db223d46",
     },
 ];
 
@@ -136,16 +130,16 @@ pub fn run(workspace: &Path, binary: Option<&Path>) -> Outcome {
             ));
         }
 
-        let verified = match verify(&binary, &destination) {
+        let verified = match verify(&binary, &destination, &cache) {
             Ok(body) => body,
             Err(reason) => return Outcome::Failed(format!("verify: {reason}")),
         };
-        if field(&verified, "tree") != subject.walked_tree {
+        if field(&verified, "tree") != subject.fetched_tree {
             return Outcome::Failed(format!(
-                "verify of {} reported {} rather than the recorded {}",
+                "verify of {} reported {} rather than the {} the fetch reported",
                 subject.name,
                 field(&verified, "tree"),
-                subject.walked_tree
+                subject.fetched_tree
             ));
         }
     }
@@ -183,6 +177,8 @@ fn fetch(
         .arg(location)
         .arg("--output")
         .arg(destination)
+        .arg("--lock")
+        .arg(cache.join("fetchloom.lock"))
         .arg("--cache-dir")
         .arg(cache)
         .arg("--json")
@@ -195,10 +191,12 @@ fn fetch(
     Err(body)
 }
 
-fn verify(binary: &Path, destination: &Path) -> Result<String, String> {
+fn verify(binary: &Path, destination: &Path, cache: &Path) -> Result<String, String> {
     let output = Command::new(binary)
         .arg("verify")
         .arg(destination)
+        .arg("--cache-dir")
+        .arg(cache)
         .arg("--json")
         .output()
         .map_err(|reason| reason.to_string())?;

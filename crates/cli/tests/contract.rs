@@ -31,6 +31,7 @@ fn binary() -> &'static str {
 fn run(arguments: &[&str]) -> Output {
     let cache = TempDir::new().unwrap();
     Command::new(binary())
+        .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache.path())
         .stdin(Stdio::null())
@@ -41,6 +42,7 @@ fn run(arguments: &[&str]) -> Output {
 fn run_in(directory: &Path, arguments: &[&str]) -> Output {
     let cache = TempDir::new().unwrap();
     Command::new(binary())
+        .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache.path())
         .current_dir(directory)
@@ -422,7 +424,11 @@ fn a_run_that_degrades_nothing_reports_no_degradation() {
         .collect();
     let unexpected: Vec<&serde_json::Value> = degradations
         .iter()
-        .filter(|event| event["requested"] != "the mode each file carries")
+        .filter(|event| {
+            let requested = event["requested"].as_str().unwrap_or_default();
+            requested != "the mode each file carries"
+                && !requested.starts_with("a lock pinning what")
+        })
         .collect();
     assert!(
         unexpected.is_empty(),
@@ -430,8 +436,8 @@ fn a_run_that_degrades_nothing_reports_no_degradation() {
     );
     assert_eq!(
         degradations.len(),
-        1,
-        "a walk of a filesystem tree reads no mode and must say so exactly once: {degradations:?}"
+        2,
+        "a walk of a filesystem tree reads no mode and pins no object, and must say each once:          {degradations:?}"
     );
 }
 
@@ -509,10 +515,18 @@ fn completions_are_written_for_every_shell() {
 fn the_surface_holds_exactly_the_commands_this_build_performs() {
     let output = run(&["--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
-    for present in ["get", "verify", "completions", "explain", "cache"] {
+    for present in [
+        "get",
+        "plan",
+        "apply",
+        "verify",
+        "completions",
+        "explain",
+        "cache",
+    ] {
         assert!(help.contains(present), "{present} is missing from {help}");
     }
-    for absent in ["init", "plan", "apply", "repair", "watch", "doctor", "why"] {
+    for absent in ["init", "repair", "watch", "doctor", "why"] {
         assert!(
             !help.contains(absent),
             "{absent} is in the surface and performs nothing: {help}"
@@ -522,7 +536,7 @@ fn the_surface_holds_exactly_the_commands_this_build_performs() {
 
 #[test]
 fn a_command_this_build_does_not_perform_is_not_accepted() {
-    for absent in ["init", "plan", "apply", "repair", "watch", "doctor", "why"] {
+    for absent in ["init", "repair", "watch", "doctor", "why"] {
         let output = run(&[absent]);
         assert_eq!(
             output.status.code(),
@@ -552,6 +566,7 @@ fn a_credential_never_reaches_any_stream() {
     let secret = "super-secret-token-value";
 
     let output = Command::new(binary())
+        .current_dir(scratch())
         .args([
             "get",
             &format!("https://user:{secret}@example.invalid/data.tar?sig={secret}"),
@@ -650,6 +665,7 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
     let location = format!("{}/object.bin", server.origin());
 
     let first = Command::new(binary())
+        .current_dir(scratch())
         .args(["get", &location, "--output", destination.to_str().unwrap()])
         .env("FETCHLOOM_CACHE_DIR", cache.path())
         .stdin(Stdio::null())
@@ -666,6 +682,7 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
     );
 
     let second = Command::new(binary())
+        .current_dir(scratch())
         .args([
             "get",
             &location,
@@ -678,7 +695,12 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert_eq!(second.status.code(), Some(0));
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "second: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
 
     let events = String::from_utf8_lossy(&second.stdout);
     let resume = events
@@ -700,4 +722,13 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
         std::fs::read(destination.join("object.bin")).unwrap(),
         bytes
     );
+}
+
+/// The directory every command in this file runs in.
+///
+/// A run writes its lock beside the working directory, so each test binary is
+/// given one of its own rather than writing into the workspace.
+fn scratch() -> &'static std::path::Path {
+    static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }

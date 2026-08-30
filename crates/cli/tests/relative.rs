@@ -48,6 +48,7 @@ fn get(cwd: &Path, source: &Path, output: &str, cache_dir: &str) -> (Output, ser
         .arg(cache_dir)
         .arg("--json")
         .current_dir(cwd)
+        .env("FETCHLOOM_CACHE_DIR", cwd.join("cache"))
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -163,6 +164,7 @@ fn verify(cwd: &Path, target: &str) -> Output {
         .arg(target)
         .arg("--json")
         .current_dir(cwd)
+        .env("FETCHLOOM_CACHE_DIR", cwd.join("cache"))
         .stdin(Stdio::null())
         .output()
         .unwrap()

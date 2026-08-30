@@ -17,7 +17,7 @@ const FORMAT_CONTEXT: &str = "fetchloom cache format";
 /// and that change makes every existing cache fail with `cache.format_mismatch`.
 fn statements() -> Vec<String> {
     vec![
-        "the cache root holds objects, outboard, partial, staging, quarantine, meta, locks, pins, and format"
+        "the cache root holds objects, outboard, partial, staging, quarantine, receipts, meta, locks, pins, and format"
             .to_owned(),
         "an object is objects/<hex>, where hex is the lowercase hexadecimal of the content digest"
             .to_owned(),
@@ -28,13 +28,18 @@ fn statements() -> Vec<String> {
         "a lock is locks/<hex>.lock and is empty, and its holder is locks/<hex>.owner".to_owned(),
         "a pin is pins/<hex> and is empty".to_owned(),
         "an object that failed verification is quarantine/<hex>".to_owned(),
+        "a receipt is receipts/<hex>, where hex is the derived-key digest of the absolute destination path"
+            .to_owned(),
         "a prune mark is meta/prune/<hex> and holds the instant it was marked".to_owned(),
+        "one record per object is meta/object/<hex> and holds its interop digest and its fingerprint"
+            .to_owned(),
         "the boot of the last recovery is meta/recovered".to_owned(),
         "the content digest is BLAKE3 over the object bytes".to_owned(),
         "every record is canonical JSON with no unknown keys".to_owned(),
         format!("the outboard chunk group is {OUTBOARD_CHUNK_GROUP} bytes"),
         format!("an outboard tree is stored above {OUTBOARD_THRESHOLD} bytes"),
         "an owner record holds machine, boot, pid, and start".to_owned(),
+        "a bundle is an uncompressed tar whose member names are object digests".to_owned(),
         "a prune mark holds digest and marked_nanos".to_owned(),
     ]
 }

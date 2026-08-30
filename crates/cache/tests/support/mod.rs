@@ -45,6 +45,7 @@ pub fn open_cache_with(
         DurabilityTier::Fast,
         policy,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+        processor(),
     )
 }
 
@@ -103,6 +104,7 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+        processor(),
     )
 }
 
@@ -322,4 +324,13 @@ pub fn a_source_record() -> fetchloom_engine::source_record::SourceRecord {
         written: 4096,
         rung: fetchloom_engine::resume::ResumeRung::StrongValidator,
     }
+}
+
+/// The processor pool every cache in a test is opened with.
+pub fn processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
+    let budget = fetchloom_engine::threads::ThreadBudget::resolve(
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        None,
+    );
+    std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }
