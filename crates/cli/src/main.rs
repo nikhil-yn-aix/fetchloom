@@ -12,8 +12,10 @@ use toml as _;
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{CommandFactory, Parser};
+use fetchloom_archive as _;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
@@ -21,8 +23,11 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::verification::VerificationPolicy;
+use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
+#[cfg(test)]
+use flate2 as _;
 
 use fetchloom_cli::observer::{EventStream, Fanout, Renderer};
 use fetchloom_cli::settings::{Environment, ProcessEnvironment};
@@ -238,7 +243,8 @@ fn run_get(
     };
     let platform = NativePlatform::new();
     let root = resolved.cache_dir.value.clone();
-    let held = match open_cache(transfer, &root, durability, observer, sequence) {
+    let work = Arc::new(WorkCounter::new());
+    let held = match open_cache(transfer, &root, durability, &work, observer, sequence) {
         Ok(held) => held,
         Err(refused) => return report(&refused, json),
     };
@@ -248,11 +254,30 @@ fn run_get(
         platform: &platform,
         durability,
         cache: held.as_deref(),
+        work: &work,
+        extract: !transfer.no_extract,
     };
     let produced = if remote {
-        run::materialize_remote(&with, &references[0], &destination, observer, sequence)
+        run::materialize_remote(
+            &with,
+            &references[0],
+            &destination,
+            &selection_of(transfer),
+            observer,
+            sequence,
+        )
     } else {
-        run::materialize_local(&with, &source, &destination, observer, sequence)
+        let selection = selection_of(transfer);
+        run::materialize_local(
+            &with,
+            &source,
+            &destination,
+            &selection,
+            transfer.force,
+            transfer.adopt,
+            observer,
+            sequence,
+        )
     };
     match produced {
         Ok(result) => {
@@ -275,6 +300,24 @@ fn run_get(
             ExitCode::Success
         }
         Err(error) => report(&error, json),
+    }
+}
+
+fn selection_of(transfer: &surface::TransferFlags) -> fetchloom_engine::selection::Selection {
+    fetchloom_engine::selection::Selection {
+        include: transfer
+            .select
+            .iter()
+            .map(|text| fetchloom_engine::selection::Glob::new(text.clone()))
+            .collect(),
+        exclude: transfer
+            .exclude
+            .iter()
+            .map(|text| fetchloom_engine::selection::Glob::new(text.clone()))
+            .collect(),
+        layout: transfer
+            .layout
+            .map_or(fetchloom_engine::selection::Layout::Keep, |arg| arg.0),
     }
 }
 
@@ -301,6 +344,7 @@ fn open_cache(
     transfer: &surface::TransferFlags,
     root: &std::path::Path,
     durability: DurabilityTier,
+    work: &Arc<WorkCounter>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
@@ -315,7 +359,7 @@ fn open_cache(
             reason: "this run asked for no cache".to_owned(),
         }
     } else {
-        cache::open(root, durability, policy)
+        cache::open(root, durability, policy, Arc::clone(work))
     };
     match opened {
         cache::Opened::Ready(held) => Ok(Some(held)),

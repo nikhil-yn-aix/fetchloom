@@ -125,9 +125,14 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
         Ok(regimes) => regimes,
         Err(code) => return code,
     };
+    let shapes = match measure_shapes(&binary, iterations) {
+        Ok(regimes) => regimes,
+        Err(code) => return code,
+    };
     let mut regimes = vec![regime];
     regimes.extend(cache);
     regimes.extend(transfer);
+    regimes.extend(shapes);
     let mut current = bench::Baseline {
         target: target_triple(),
         regimes,
@@ -139,6 +144,10 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
                 regime.regime, metric.name, metric.value, metric.unit
             );
         }
+    }
+    match bench::scanner_lane(&std::env::temp_dir().join("fetchloom-bench-lane")) {
+        Ok(lane) => println!("many-small-files {lane}"),
+        Err(error) => println!("many-small-files lane unknown: {}", error.next_action()),
     }
 
     let path = baseline_path(workspace, &current.target);
@@ -278,6 +287,16 @@ fn measure_cache(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResu
 
 fn measure_transfer(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
     match bench::run_transfer(binary, iterations.min(3)) {
+        Ok(regimes) => Ok(regimes),
+        Err(error) => {
+            eprintln!("{error}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn measure_shapes(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
+    match bench::run_shapes(binary, iterations.min(3)) {
         Ok(regimes) => Ok(regimes),
         Err(error) => {
             eprintln!("{error}");

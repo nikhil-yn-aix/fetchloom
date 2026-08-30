@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use fetchloom_engine::selection::Layout;
 
 /// How progress is presented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -103,21 +104,67 @@ pub enum VerifyChoice {
     Never,
 }
 
+/// The value `--layout` was given, parsed into what selection acts on.
+///
+/// Takes `keep` or `flatten:<n>`. Fails when the text is neither, which
+/// `clap` reports as a usage error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutArg(pub Layout);
+
+impl std::str::FromStr for LayoutArg {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text == "keep" {
+            return Ok(Self(Layout::Keep));
+        }
+        let Some(count) = text.strip_prefix("flatten:") else {
+            return Err(format!("{text} is not keep or flatten:<n>"));
+        };
+        let dropped: u32 = count
+            .parse()
+            .map_err(|_| format!("{text} is not keep or flatten:<n>"))?;
+        Ok(Self(Layout::Flatten(dropped)))
+    }
+}
+
 /// Flags for the commands that materialize bytes.
 #[derive(Args, Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a flag the contract names, and they are independent"
+)]
 pub struct TransferFlags {
     /// Destination directory.
     #[arg(long, short, value_name = "path")]
     pub output: Option<PathBuf>,
+    /// Include members. Repeatable.
+    #[arg(long = "select", value_name = "glob")]
+    pub select: Vec<String>,
+    /// Exclude members. Repeatable.
+    #[arg(long = "exclude", value_name = "glob")]
+    pub exclude: Vec<String>,
+    /// Path rewriting.
+    #[arg(long, value_name = "keep|flatten:n")]
+    pub layout: Option<LayoutArg>,
     /// How far a write is pushed before publication.
     #[arg(long, value_name = "strict|normal|fast")]
     pub durability: Option<DurabilityChoice>,
     /// Bypass the cache for this operation.
     #[arg(long)]
     pub no_cache: bool,
+    /// Keep a recognized archive as a file rather than extracting it.
+    #[arg(long)]
+    pub no_extract: bool,
     /// What a cache hit is checked against before it is reused.
     #[arg(long, value_name = "always|fingerprint|never")]
     pub verify: Option<VerifyChoice>,
+    /// Overwrite modified destination entries and remove foreign ones.
+    #[arg(long)]
+    pub force: bool,
+    /// Accept current destination contents as correct.
+    #[arg(long)]
+    pub adopt: bool,
 }
 
 /// What to do with the cache.

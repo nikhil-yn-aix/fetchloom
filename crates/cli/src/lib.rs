@@ -37,3 +37,6 @@ pub fn report(
     }
     fetchloom_engine::outcome::ExitCode::from(error.layer())
 }
+
+#[cfg(test)]
+use flate2 as _;

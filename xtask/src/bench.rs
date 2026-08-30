@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use fetchloom_engine::work::Work;
 use fetchloom_faults::{Reply, Script, TestServer};
 use serde::{Deserialize, Serialize};
 
@@ -275,6 +276,141 @@ fn binary_name(stem: &str) -> String {
     }
 }
 
+/// Reports what is inspecting writes on the volume the regimes run on.
+///
+/// Takes the directory the regimes write into. Returns the sentence the
+/// benchmark prints beside its numbers, so a small-files measurement always
+/// says which lane it came from rather than leaving the reader to guess.
+///
+/// # Errors
+///
+/// Fails when the volume cannot be probed.
+pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::error::Error>> {
+    use fetchloom_engine::capability::Scanner;
+    use fetchloom_engine::seam::platform::Platform;
+
+    fs::create_dir_all(directory).map_err(|reason| {
+        Box::new(fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::ResourceDisk,
+            format!("{}: {reason}", directory.display()),
+        ))
+    })?;
+    let platform = fetchloom_platform::NativePlatform::new();
+    let capabilities = platform.volume_capabilities(directory).map_err(Box::new)?;
+    Ok(match capabilities.scanner {
+        Scanner::Present { name, cost_ratio } => format!(
+            "measured with an on-access scanner enabled: {name}, small writes cost {cost_ratio:.2} times one large write"
+        ),
+        Scanner::Absent => {
+            "measured with no on-access scanner inspecting writes on this volume".to_owned()
+        }
+        Scanner::Unknown { cost_ratio } => format!(
+            "measured on a volume this platform cannot enumerate, where small writes cost {cost_ratio:.2} times one large write, so whether a scanner is present is unknown"
+        ),
+    })
+}
+
+/// How many files the many-small-files regime materializes.
+///
+/// Enough that per-entry cost dominates the bytes moved, and no more, because
+/// this regime runs under `cargo xtask verify` and a scanner-enabled run of it
+/// costs about a second per hundred files on the machine that measured it.
+const SMALL_FILES: usize = 1024;
+
+/// How many bytes each of those files holds.
+const SMALL_FILE_BYTES: usize = 1024;
+
+/// How many bytes the one-large-file regime materializes.
+const LARGE_FILE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Runs the many-small-files and one-large-file regimes.
+///
+/// The two regimes move the same kind of bytes through opposite shapes: one
+/// tree of many tiny files against one file of the same total size. The first
+/// is where per-entry cost dominates and where an on-access scanner is felt;
+/// the second is where the streaming path is felt. Both record the work
+/// counters, which are identical on identical inputs, alongside a wall clock
+/// that is not.
+///
+/// # Errors
+///
+/// Fails when the corpus cannot be written, when a run does not exit zero, and
+/// when a run's `--json` result cannot be read.
+pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
+    let mut small_times = Vec::with_capacity(iterations as usize);
+    let mut large_times = Vec::with_capacity(iterations as usize);
+    let mut small_work = Work::default();
+    let mut large_work = Work::default();
+
+    for round in 0..iterations {
+        let scratch = scratch_directory(round)?;
+
+        let many = scratch.join("many");
+        fs::create_dir_all(&many).map_err(BenchError::Process)?;
+        for index in 0..SMALL_FILES {
+            let seed = u8::try_from(index % 251).unwrap_or(1);
+            let bytes = non_repeating_bytes(seed, SMALL_FILE_BYTES);
+            fs::write(many.join(format!("file-{index}.bin")), bytes)
+                .map_err(BenchError::Process)?;
+        }
+        let (wall, work) = measure_get(
+            binary,
+            &many,
+            &scratch.join("many-out"),
+            &scratch.join("cache-many"),
+        )?;
+        small_times.push(wall);
+        small_work = work;
+
+        let one = scratch.join("one");
+        fs::create_dir_all(&one).map_err(BenchError::Process)?;
+        let bytes = non_repeating_bytes(3, LARGE_FILE_BYTES);
+        fs::write(one.join("large.bin"), bytes).map_err(BenchError::Process)?;
+        let (wall, work) = measure_get(
+            binary,
+            &one,
+            &scratch.join("one-out"),
+            &scratch.join("cache-one"),
+        )?;
+        large_times.push(wall);
+        large_work = work;
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    small_times.sort_by(f64::total_cmp);
+    large_times.sort_by(f64::total_cmp);
+
+    Ok(vec![
+        RegimeResult {
+            regime: "many-small-files".to_owned(),
+            iterations,
+            metrics: vec![Metric {
+                name: "wall".to_owned(),
+                value: small_times[small_times.len() / 2],
+                unit: "ms".to_owned(),
+                kind: MetricKind::Timing,
+            }]
+            .into_iter()
+            .chain(work_metrics(&small_work))
+            .collect(),
+        },
+        RegimeResult {
+            regime: "one-large-file".to_owned(),
+            iterations,
+            metrics: vec![Metric {
+                name: "wall".to_owned(),
+                value: large_times[large_times.len() / 2],
+                unit: "ms".to_owned(),
+                kind: MetricKind::Timing,
+            }]
+            .into_iter()
+            .chain(work_metrics(&large_work))
+            .collect(),
+        },
+    ])
+}
+
 /// How many files the cache regimes materialize.
 const CORPUS_FILES: usize = 64;
 
@@ -298,6 +434,8 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
     let mut warm_times = Vec::with_capacity(iterations as usize);
     let mut cold_growth = 0u64;
     let mut warm_growth = 0u64;
+    let mut cold_work = Work::default();
+    let mut warm_work = Work::default();
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
@@ -305,15 +443,17 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         let cache = scratch.join("cache");
         write_corpus(&source)?;
 
-        let cold = measure_get(binary, &source, &scratch.join("cold"), &cache)?;
+        let (cold, cold_run) = measure_get(binary, &source, &scratch.join("cold"), &cache)?;
         let after_cold = directory_bytes(&cache.join("objects"));
-        let warm = measure_get(binary, &source, &scratch.join("warm"), &cache)?;
+        let (warm, warm_run) = measure_get(binary, &source, &scratch.join("warm"), &cache)?;
         let after_warm = directory_bytes(&cache.join("objects"));
 
         cold_times.push(cold);
         warm_times.push(warm);
         cold_growth = after_cold;
         warm_growth = after_warm - after_cold;
+        cold_work = cold_run;
+        warm_work = warm_run;
         let _ = fs::remove_dir_all(&scratch);
     }
 
@@ -341,7 +481,10 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
                     unit: "bytes".to_owned(),
                     kind: MetricKind::Deterministic,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(work_metrics(&cold_work))
+            .collect(),
         },
         RegimeResult {
             regime: "warm-cache".to_owned(),
@@ -363,7 +506,10 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
                     unit: "bytes".to_owned(),
                     kind: MetricKind::Deterministic,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(work_metrics(&warm_work))
+            .collect(),
         },
     ])
 }
@@ -442,15 +588,17 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
     let object = non_repeating_bytes(1, TRANSFER_OBJECT_BYTES);
     let mut cold_times = Vec::with_capacity(iterations as usize);
     let mut cold_bytes = 0u64;
+    let mut cold_work = Work::default();
     let mut interrupted_times = Vec::with_capacity(iterations as usize);
     let mut interrupted_bytes = 0u64;
+    let mut interrupted_work = Work::default();
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
 
         let cold_server =
             TestServer::start(Script::serving(object.clone())).map_err(BenchError::Process)?;
-        let (wall, bytes) = measure_transfer(
+        let (wall, bytes, work) = measure_transfer(
             binary,
             &cold_server,
             &scratch.join("cold"),
@@ -459,6 +607,7 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
         drop(cold_server);
         cold_times.push(wall);
         cold_bytes = bytes;
+        cold_work = work;
 
         let replies = TRANSFER_INTERRUPTIONS
             .into_iter()
@@ -472,7 +621,7 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
                 .replying(replies),
         )
         .map_err(BenchError::Process)?;
-        let (wall, bytes) = measure_transfer(
+        let (wall, bytes, work) = measure_transfer(
             binary,
             &interrupted_server,
             &scratch.join("interrupted"),
@@ -481,6 +630,7 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
         drop(interrupted_server);
         interrupted_times.push(wall);
         interrupted_bytes = bytes;
+        interrupted_work = work;
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -509,7 +659,10 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
                     unit: "bytes".to_owned(),
                     kind: MetricKind::Deterministic,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(work_metrics(&cold_work))
+            .collect(),
         },
         RegimeResult {
             regime: "interrupted-transfer".to_owned(),
@@ -531,15 +684,51 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
                     unit: "bytes".to_owned(),
                     kind: MetricKind::Deterministic,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(work_metrics(&interrupted_work))
+            .collect(),
         },
     ])
 }
 
 /// What a run's `--json` result carries that a benchmark reads.
 #[derive(Deserialize)]
-struct TransferOutcome {
+struct RunOutcome {
     bytes: u64,
+    work: Work,
+}
+
+/// Turns the three work counters into the metrics that gate on them.
+///
+/// Takes what a run reported. Returns one deterministic metric per counter,
+/// because each is identical on identical inputs and none is a duration.
+fn work_metrics(work: &Work) -> Vec<Metric> {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count below two to the fifty-third is exact"
+    )]
+    let count = |value: u64| value as f64;
+    vec![
+        Metric {
+            name: "bytes-read".to_owned(),
+            value: count(work.bytes_read),
+            unit: "bytes".to_owned(),
+            kind: MetricKind::Deterministic,
+        },
+        Metric {
+            name: "bytes-written".to_owned(),
+            value: count(work.bytes_written),
+            unit: "bytes".to_owned(),
+            kind: MetricKind::Deterministic,
+        },
+        Metric {
+            name: "requests".to_owned(),
+            value: count(work.requests),
+            unit: "requests".to_owned(),
+            kind: MetricKind::Deterministic,
+        },
+    ]
 }
 
 fn measure_transfer(
@@ -547,7 +736,7 @@ fn measure_transfer(
     server: &TestServer,
     destination: &Path,
     cache: &Path,
-) -> Result<(f64, u64), BenchError> {
+) -> Result<(f64, u64, Work), BenchError> {
     let url = format!("{}/object", server.origin());
     let started = Instant::now();
     let output = Command::new(binary)
@@ -563,9 +752,9 @@ fn measure_transfer(
     if !output.status.success() {
         return Err(BenchError::NonZeroExit(output.status.code().unwrap_or(-1)));
     }
-    let outcome: TransferOutcome =
+    let outcome: RunOutcome =
         serde_json::from_slice(&output.stdout).map_err(BenchError::MalformedResult)?;
-    Ok((elapsed.as_secs_f64() * 1000.0, outcome.bytes))
+    Ok((elapsed.as_secs_f64() * 1000.0, outcome.bytes, outcome.work))
 }
 
 fn measure_get(
@@ -573,23 +762,25 @@ fn measure_get(
     source: &Path,
     destination: &Path,
     cache: &Path,
-) -> Result<f64, BenchError> {
+) -> Result<(f64, Work), BenchError> {
     let started = Instant::now();
-    let status = Command::new(binary)
+    let output = Command::new(binary)
         .arg("get")
         .arg(source)
         .arg("--output")
         .arg(destination)
+        .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
+        .output()
         .map_err(BenchError::Process)?;
     let elapsed = started.elapsed();
-    if !status.success() {
-        return Err(BenchError::NonZeroExit(status.code().unwrap_or(-1)));
+    if !output.status.success() {
+        return Err(BenchError::NonZeroExit(output.status.code().unwrap_or(-1)));
     }
-    Ok(elapsed.as_secs_f64() * 1000.0)
+    let outcome: RunOutcome =
+        serde_json::from_slice(&output.stdout).map_err(BenchError::MalformedResult)?;
+    Ok((elapsed.as_secs_f64() * 1000.0, outcome.work))
 }
 
 fn directory_bytes(directory: &Path) -> u64 {

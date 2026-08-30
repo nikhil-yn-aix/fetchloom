@@ -12,7 +12,9 @@
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_archive as _;
 use fetchloom_cli as _;
+use flate2 as _;
 use serde as _;
 use serde_json as _;
 use toml as _;
@@ -29,6 +31,7 @@ use fetchloom_engine::event::Sequence;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::outcome::ExitCode;
+use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::resume::ResumeRung;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::transfer::{Pause, Transfer};
@@ -74,17 +77,19 @@ struct Harness {
 impl Harness {
     fn with(limits: Limits) -> Self {
         let root = TempDir::new().unwrap();
+        let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
         let cache = Cache::open(
             root.path().join("cache"),
             NativePlatform::new(),
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
+            std::sync::Arc::clone(&work),
         )
         .unwrap();
         Self {
             _root: root,
             cache,
-            source: HttpSource::new(limits),
+            source: HttpSource::new(limits, work),
             pause: CountedPause::default(),
             limits,
             degradations: DegradeQueue::new(),
@@ -149,7 +154,7 @@ fn a_truncated_response_exits_thirty_and_leaves_bytes_to_resume_from() {
 
     let failure = harness
         .transfer()
-        .run(digest_of(&bytes), &at(&server))
+        .run(Some(digest_of(&bytes)), &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::IntegrityTruncated);
@@ -159,7 +164,7 @@ fn a_truncated_response_exits_thirty_and_leaves_bytes_to_resume_from() {
 
     let recorded = harness
         .cache
-        .recorded_source(digest_of(&bytes))
+        .recorded_source(PartialKey::of_content(digest_of(&bytes)))
         .unwrap()
         .expect("the partial recorded where its bytes came from");
     assert_eq!(
@@ -184,7 +189,7 @@ fn a_flipped_byte_exits_thirty_and_publishes_nothing() {
 
     let failure = harness
         .transfer()
-        .run(digest_of(&bytes), &at(&server))
+        .run(Some(digest_of(&bytes)), &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::IntegrityMismatch);
@@ -211,7 +216,7 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
 
     let failure = harness
         .transfer()
-        .run(digest_of(&bytes), &at(&server))
+        .run(Some(digest_of(&bytes)), &at(&server))
         .unwrap_err();
 
     assert_eq!(ExitCode::from(failure.layer()), ExitCode::Network);
@@ -219,7 +224,7 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
     assert!(
         harness
             .cache
-            .recorded_source(digest_of(&bytes))
+            .recorded_source(PartialKey::of_content(digest_of(&bytes)))
             .unwrap()
             .is_some_and(|recorded| recorded.written > 0),
         "a stalled transfer kept nothing to resume from"
@@ -233,7 +238,7 @@ fn a_name_that_does_not_resolve_exits_twenty() {
 
     let failure = harness
         .transfer()
-        .run(digest_of(b"anything"), &locations)
+        .run(Some(digest_of(b"anything")), &locations)
         .unwrap_err();
 
     assert_eq!(failure.layer(), Layer::Transfer);
@@ -277,7 +282,7 @@ fn a_rate_limit_storm_stops_at_the_attempt_limit_and_waits_within_the_ceiling() 
 
     let failure = harness
         .transfer()
-        .run(digest_of(b"anything"), &at(&server))
+        .run(Some(digest_of(b"anything")), &at(&server))
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
@@ -327,7 +332,7 @@ fn an_outboard_tree_puts_a_resumed_transfer_on_the_first_rung() {
         .write_outboard(digest, b"a stored tree")
         .unwrap();
 
-    let done = harness.transfer().run(digest, &at(&server)).unwrap();
+    let done = harness.transfer().run(Some(digest), &at(&server)).unwrap();
 
     assert_eq!(done.rung, ResumeRung::Outboard);
     assert_eq!(done.rung.number(), 1);
@@ -356,7 +361,7 @@ fn a_weak_validator_resumes_on_the_fourth_rung() {
 
     let done = harness
         .transfer()
-        .run(digest_of(&bytes), &at(&server))
+        .run(Some(digest_of(&bytes)), &at(&server))
         .unwrap();
 
     assert_eq!(done.rung, ResumeRung::WeakValidator);

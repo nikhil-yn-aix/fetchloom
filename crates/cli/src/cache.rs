@@ -2,6 +2,7 @@
 
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::Arc;
 
 use fetchloom_cache::Cache;
 use fetchloom_engine::digest::ContentDigest;
@@ -12,6 +13,7 @@ use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
+use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;
 
 use crate::surface::CacheCommand;
@@ -37,8 +39,13 @@ pub enum Opened {
 /// failure degrades to no-cache behavior, because the user often cannot act on
 /// it now and the cache is never required.
 #[must_use]
-pub fn open(root: &Path, tier: DurabilityTier, policy: VerificationPolicy) -> Opened {
-    match Cache::open(root, NativePlatform::new(), tier, policy) {
+pub fn open(
+    root: &Path,
+    tier: DurabilityTier,
+    policy: VerificationPolicy,
+    work: Arc<WorkCounter>,
+) -> Opened {
+    match Cache::open(root, NativePlatform::new(), tier, policy, work) {
         Ok(held) => Opened::Ready(Box::new(held)),
         Err(refused) if refused.kind() == ErrorKind::CacheFormatMismatch => {
             Opened::Refused(Box::new(refused))
@@ -54,12 +61,13 @@ pub fn open(root: &Path, tier: DurabilityTier, policy: VerificationPolicy) -> Op
 /// # Errors
 ///
 /// Fails when the cache cannot be opened for any reason.
-pub fn require(root: &Path) -> Result<Cache<NativePlatform>, Error> {
+pub fn require(root: &Path, work: Arc<WorkCounter>) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         root,
         NativePlatform::new(),
         DurabilityTier::Normal,
         VerificationPolicy::Fingerprint,
+        work,
     )
 }
 
@@ -82,7 +90,7 @@ pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path,
 /// exit code the run ends with.
 #[must_use]
 pub fn run(root: &Path, command: &CacheCommand, json: bool, yes: bool) -> ExitCode {
-    let held = match require(root) {
+    let held = match require(root, Arc::new(WorkCounter::new())) {
         Ok(held) => held,
         Err(refused) => return crate::report(&refused, json),
     };

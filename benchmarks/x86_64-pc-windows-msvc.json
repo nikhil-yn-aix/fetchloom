@@ -3,17 +3,11 @@
   "regimes": [
     {
       "regime": "no-op",
-      "iterations": 5,
+      "iterations": 1,
       "metrics": [
         {
-          "name": "startup",
-          "value": 9.7181,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
           "name": "binary-size",
-          "value": 3894784.0,
+          "value": 4635648.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -21,72 +15,168 @@
     },
     {
       "regime": "cold-cache",
-      "iterations": 3,
+      "iterations": 1,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 1015.6693000000001,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "cache-growth",
           "value": 16777216.0,
           "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 16777216.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 16777216.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0.0,
+          "unit": "requests",
           "kind": "deterministic"
         }
       ]
     },
     {
       "regime": "warm-cache",
-      "iterations": 3,
+      "iterations": 1,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 325.0104,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "cache-growth",
           "value": 0.0,
           "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 16777216.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 16777216.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0.0,
+          "unit": "requests",
           "kind": "deterministic"
         }
       ]
     },
     {
       "regime": "cold-transfer",
-      "iterations": 3,
+      "iterations": 1,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 53.4903,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
           "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 0.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 4194304.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 2.0,
+          "unit": "requests",
           "kind": "deterministic"
         }
       ]
     },
     {
       "regime": "interrupted-transfer",
-      "iterations": 3,
+      "iterations": 1,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 231.50109999999998,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
           "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 4194304.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 4194304.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 6.0,
+          "unit": "requests",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "many-small-files",
+      "iterations": 1,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 1048576.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 1048576.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0.0,
+          "unit": "requests",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "one-large-file",
+      "iterations": 1,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 268435456.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 268435456.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0.0,
+          "unit": "requests",
           "kind": "deterministic"
         }
       ]

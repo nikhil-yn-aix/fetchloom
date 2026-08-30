@@ -14,6 +14,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::hashing;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
+use fetchloom_engine::work::WorkCounter;
 
 /// One file found while walking a source tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +27,15 @@ pub struct SourceFile {
     pub mode: Mode,
 }
 
+/// One symbolic link found while walking a source tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceLink {
+    /// The entry path the tree digest records it under.
+    pub entry: EntryPath,
+    /// The target bytes, canonicalized to forward slashes.
+    pub target: Vec<u8>,
+}
+
 /// Everything a walk of a source tree found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Walked {
@@ -33,6 +43,8 @@ pub struct Walked {
     pub entries: Vec<TreeEntry>,
     /// The files whose bytes still have to be copied.
     pub files: Vec<SourceFile>,
+    /// The symbolic links, with the target bytes needed to recreate them.
+    pub links: Vec<SourceLink>,
     /// How many bytes those files hold.
     pub bytes: u64,
     /// The directory every relative path is taken from.
@@ -152,9 +164,13 @@ fn walk_one(
         let target = fs::read_link(path).map_err(|reason| read_failure(path, &reason))?;
         let bytes = target.to_string_lossy().replace('\\', "/").into_bytes();
         walked.entries.push(TreeEntry::Symlink {
-            path: entry_path,
+            path: entry_path.clone(),
             size: bytes.len() as u64,
             content: hashing::hash_bytes(&bytes),
+        });
+        walked.links.push(SourceLink {
+            entry: entry_path,
+            target: bytes,
         });
     } else if metadata.is_dir() {
         walked
@@ -183,6 +199,7 @@ fn walk_one(
 /// Fails when the source cannot be read or the destination cannot be written.
 pub fn copy_file(
     processor: &Processor,
+    work: &WorkCounter,
     from: &Path,
     to: &Path,
 ) -> Result<(u64, ContentDigest), Error> {
@@ -196,6 +213,7 @@ pub fn copy_file(
         source,
         target,
         path: to.to_path_buf(),
+        work,
     };
     let digests =
         hashing::hash_stream(processor, &mut tee).map_err(|reason| read_failure(from, &reason))?;
@@ -205,23 +223,26 @@ pub fn copy_file(
     Ok((length, digests.content))
 }
 
-struct Tee {
+struct Tee<'a> {
     source: fs::File,
     target: fs::File,
     path: PathBuf,
+    work: &'a WorkCounter,
 }
 
-impl Read for Tee {
+impl Read for Tee<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let read = self.source.read(buffer)?;
         if read > 0 {
             self.target.write_all(&buffer[..read])?;
+            self.work.read_bytes(read as u64);
+            self.work.wrote_bytes(read as u64);
         }
         Ok(read)
     }
 }
 
-impl std::fmt::Debug for Tee {
+impl std::fmt::Debug for Tee<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tee")
             .field("path", &self.path)

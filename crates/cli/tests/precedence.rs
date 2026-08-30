@@ -9,11 +9,13 @@ use std::path::PathBuf;
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_engine as _;
 use fetchloom_faults as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use flate2 as _;
 use serde as _;
 use serde_json as _;
 use toml as _;

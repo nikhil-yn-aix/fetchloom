@@ -11,11 +11,13 @@ use std::process::{Command, Output, Stdio};
 
 use clap as _;
 use clap_complete as _;
+use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use flate2 as _;
 use serde as _;
 use toml as _;
 
@@ -84,11 +86,12 @@ fn a_network_reference_while_offline_is_a_policy_failure_exiting_forty() {
 }
 
 #[test]
-fn a_destination_that_already_exists_exits_sixty() {
+fn a_destination_holding_a_foreign_entry_exits_sixty_and_names_it() {
     let temporary = corpus();
     let source = temporary.path().join("source");
     let destination = temporary.path().join("destination");
     std::fs::create_dir_all(&destination).unwrap();
+    std::fs::write(destination.join("nobody-asked-for-this.txt"), b"stray").unwrap();
 
     let output = run(&[
         "get",
@@ -101,6 +104,14 @@ fn a_destination_that_already_exists_exits_sixty() {
     assert!(
         stderr.contains("destination.foreign"),
         "stderr was {stderr}"
+    );
+    assert!(
+        stderr.contains("nobody-asked-for-this.txt"),
+        "the foreign path was not named: {stderr}"
+    );
+    assert!(
+        !destination.join("a.txt").is_file(),
+        "the run staged an entry even though it stopped before staging anything"
     );
 }
 
@@ -618,31 +629,66 @@ fn get_over_http_reports_a_terminal_status_as_a_network_failure() {
 }
 
 #[test]
-fn get_over_http_says_that_it_cannot_resume() {
-    let bytes = vec![7u8; 1024];
-    let server = TestServer::start(Script::serving(bytes)).unwrap();
+fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
+    let bytes = vec![7u8; 256 * 1024];
+    let script = Script::serving(bytes.clone())
+        .tagged(vec!["\"one\"".to_owned()])
+        .replying(vec![Reply::ClosedMidBody { after: 8 * 1024 }; 5]);
+    let server = TestServer::start(script).unwrap();
     let temporary = TempDir::new().unwrap();
     let destination = temporary.path().join("destination");
+    let cache = TempDir::new().unwrap();
+    let location = format!("{}/object.bin", server.origin());
 
-    let got = run(&[
-        "get",
-        &format!("{}/object.bin", server.origin()),
-        "--output",
-        destination.to_str().unwrap(),
-        "--events",
-        "-",
-    ]);
+    let first = Command::new(binary())
+        .args(["get", &location, "--output", destination.to_str().unwrap()])
+        .env("FETCHLOOM_CACHE_DIR", cache.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_ne!(
+        first.status.code(),
+        Some(0),
+        "the first run did not exit non-zero after its retries were spent"
+    );
+    assert!(
+        !destination.exists(),
+        "a destination appeared after a run that never finished a transfer"
+    );
 
-    assert_eq!(got.status.code(), Some(0));
-    let events = String::from_utf8_lossy(&got.stdout);
-    let said = events
+    let second = Command::new(binary())
+        .args([
+            "get",
+            &location,
+            "--output",
+            destination.to_str().unwrap(),
+            "--events",
+            "-",
+        ])
+        .env("FETCHLOOM_CACHE_DIR", cache.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0));
+
+    let events = String::from_utf8_lossy(&second.stdout);
+    let resume = events
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .any(|event| {
-            event["event"] == "degrade"
-                && event["requested"]
-                    .as_str()
-                    .is_some_and(|requested| requested.contains("resume"))
-        });
-    assert!(said, "the run did not say that it cannot resume: {events}");
+        .find(|event| event["event"] == "transfer.resume");
+    assert!(
+        resume.is_some(),
+        "the second run reported no transfer.resume event: {events}"
+    );
+    let resume = resume.unwrap();
+    assert_eq!(resume["rung"].as_str(), Some("strong_validator"));
+    assert!(
+        resume["bytes_kept"].as_u64().unwrap_or(0) > 0,
+        "the second run kept nothing from the first: {events}"
+    );
+
+    assert_eq!(
+        std::fs::read(destination.join("object.bin")).unwrap(),
+        bytes
+    );
 }
