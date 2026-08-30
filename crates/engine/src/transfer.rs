@@ -13,6 +13,7 @@ use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
 use crate::event::{Event, EventPayload, Sequence};
 use crate::limits::Limits;
+use crate::partial_key::PartialKey;
 use crate::redact::SafeUrl;
 use crate::resume::ResumeRung;
 use crate::seam::observer::Observer;
@@ -131,19 +132,26 @@ pub struct Transfer<'a, S, T, P> {
 impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     /// Moves one object from the first source that can serve it into the store.
     ///
-    /// Takes the digest expected and the locations in the order the manifest
-    /// gave them. Hashes the bytes as they are written. Resumes from what is
-    /// already on disk when the source still identifies the same bytes, and
-    /// starts from zero when it does not.
+    /// Takes the digest the run expects, when it states one, and the locations
+    /// in the order the manifest gave them. Hashes the bytes as they are
+    /// written. Resumes from what is already on disk when the source still
+    /// identifies the same bytes, and starts from zero when it does not. A run
+    /// that states no digest names its partial by the source identity a probe
+    /// learns, and publishes the object under whatever digest the bytes hash
+    /// to.
     ///
     /// # Errors
     ///
     /// Fails when every source is exhausted, when a source's bytes do not hash
     /// to the expected digest, and when the store cannot be written.
-    pub fn run(&self, digest: ContentDigest, locations: &[String]) -> Result<Transferred, Error> {
+    pub fn run(
+        &self,
+        expected: Option<ContentDigest>,
+        locations: &[String],
+    ) -> Result<Transferred, Error> {
         let mut last = None;
         for (index, location) in locations.iter().enumerate() {
-            match self.attempt_until_spent(digest, location) {
+            match self.attempt_until_spent(expected, location) {
                 Ok(done) => return Ok(done),
                 Err(error) => {
                     if let Some(next) = locations.get(index + 1) {
@@ -167,7 +175,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
     fn attempt_until_spent(
         &self,
-        digest: ContentDigest,
+        expected: Option<ContentDigest>,
         location: &str,
     ) -> Result<Transferred, Error> {
         let retry = Retry {
@@ -178,7 +186,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         };
         let mut buffer = vec![0u8; BUFFER];
         retry.until_spent(|attempt| {
-            self.attempt_once(digest, location, &mut buffer)
+            self.attempt_once(expected, location, &mut buffer)
                 .map(|mut done| {
                     done.attempts = attempt;
                     done
@@ -188,11 +196,13 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
     fn attempt_once(
         &self,
-        digest: ContentDigest,
+        expected: Option<ContentDigest>,
         location: &str,
         buffer: &mut [u8],
     ) -> Result<Transferred, Error> {
-        if self.store.contains(digest)? {
+        if let Some(digest) = expected
+            && self.store.contains(digest)?
+        {
             return Ok(Transferred {
                 digest,
                 bytes_transferred: 0,
@@ -203,9 +213,16 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         }
 
         let metadata = self.source.probe(location, None)?;
-        let recorded = self.store.recorded_source(digest)?;
+        let key = match expected {
+            Some(digest) => PartialKey::of_content(digest),
+            None => PartialKey::of_source(&metadata),
+        };
+        let recorded = self.store.recorded_source(key)?;
         let on_disk = recorded.as_ref().map_or(0, |record| record.written);
-        let outboard_known = self.store.has_outboard(digest)?;
+        let outboard_known = match expected {
+            Some(digest) => self.store.has_outboard(digest)?,
+            None => false,
+        };
         let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, outboard_known);
 
         if on_disk > keep {
@@ -214,10 +231,10 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
                 "a transfer from zero",
                 "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
             );
-            self.store.discard_partial(digest)?;
+            self.store.discard_partial(key)?;
         }
 
-        let lease = self.store.lease(digest)?;
+        let lease = self.store.lease(key)?;
         self.emit(EventPayload::TransferStart {
             source: metadata.location.clone(),
             expected_bytes: metadata.size,
@@ -235,7 +252,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         });
         let body = self.source.fetch(location, range, None)?;
         self.store
-            .record_source(digest, &record_of(&metadata, rung, keep))?;
+            .record_source(key, &record_of(&metadata, rung, keep))?;
 
         let length = metadata.size.unwrap_or(0);
         let mut writer = self.store.resume(&lease, length, keep)?;
@@ -244,7 +261,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         let mut moved = 0u64;
         let arrived = copy(body, &mut writer, location, &mut moved, buffer);
         self.store
-            .record_source(digest, &record_of(&metadata, rung, keep + moved))?;
+            .record_source(key, &record_of(&metadata, rung, keep + moved))?;
         let short = metadata
             .size
             .is_some_and(|expected| keep + moved < expected);
@@ -267,7 +284,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             }
             arrived?;
         }
-        self.store.commit(lease, writer)?;
+        let digest = self.store.commit(lease, writer)?;
         self.emit(EventPayload::TransferEnd {
             bytes: moved,
             duration_ms: duration_ms(started.elapsed()),

@@ -1,6 +1,11 @@
 //! Which members of an artifact a run takes, and where they land.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, ErrorKind};
+use crate::tree::EntryPath;
 
 /// A pattern matched against a canonical member path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -19,6 +24,61 @@ impl Glob {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Reports whether this pattern matches a canonical member path.
+    ///
+    /// Takes a path separated by forward slashes. A star matches any run of
+    /// bytes within one component, a whole component of two stars matches any
+    /// number of components including none, a question mark matches exactly one
+    /// byte within one component, and every other byte is literal. Matching is
+    /// on raw bytes and is case-sensitive.
+    #[must_use]
+    pub fn matches(&self, path: &str) -> bool {
+        let pattern: Vec<&str> = self.0.split('/').collect();
+        let components: Vec<&str> = path.split('/').collect();
+        matches_components(&pattern, &components)
+    }
+}
+
+fn matches_components(pattern: &[&str], path: &[&str]) -> bool {
+    let Some((first, rest)) = pattern.split_first() else {
+        return path.is_empty();
+    };
+    if *first == "**" {
+        return (0..=path.len()).any(|skipped| matches_components(rest, &path[skipped..]));
+    }
+    match path.split_first() {
+        Some((head, tail)) if matches_component(first, head) => matches_components(rest, tail),
+        _ => false,
+    }
+}
+
+fn matches_component(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let name = name.as_bytes();
+    let mut at_pattern = 0;
+    let mut at_name = 0;
+    let mut star = None;
+    let mut resumed = 0;
+    while at_name < name.len() {
+        let literal = at_pattern < pattern.len()
+            && (pattern[at_pattern] == b'?' || pattern[at_pattern] == name[at_name]);
+        if literal {
+            at_pattern += 1;
+            at_name += 1;
+        } else if at_pattern < pattern.len() && pattern[at_pattern] == b'*' {
+            star = Some(at_pattern);
+            resumed = at_name;
+            at_pattern += 1;
+        } else if let Some(last) = star {
+            at_pattern = last + 1;
+            resumed += 1;
+            at_name = resumed;
+        } else {
+            return false;
+        }
+    }
+    pattern[at_pattern..].iter().all(|byte| *byte == b'*')
 }
 
 /// How member paths are rewritten on the way to the destination.
@@ -34,6 +94,24 @@ pub enum Layout {
     Flatten(u32),
 }
 
+/// One member a selection took, and the path it lands under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedMember {
+    /// Where the member sits in the list the selection was applied to.
+    pub index: usize,
+    /// The path the member lands under after the layout rewrote it.
+    pub path: EntryPath,
+}
+
+/// What applying a selection to a list of members produced.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// The selected members, in the order they were given.
+    pub members: Vec<AppliedMember>,
+    /// Every directory the selected paths need that no selected member names.
+    pub directories: Vec<EntryPath>,
+}
+
 /// The include and exclude patterns that make selection part of identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
@@ -43,4 +121,113 @@ pub struct Selection {
     pub exclude: Vec<Glob>,
     /// How the selected paths are rewritten.
     pub layout: Layout,
+}
+
+impl Selection {
+    /// Reports whether one member path survives the include and exclude lists.
+    #[must_use]
+    pub fn takes(&self, path: &str) -> bool {
+        let included =
+            self.include.is_empty() || self.include.iter().any(|glob| glob.matches(path));
+        included && !self.exclude.iter().any(|glob| glob.matches(path))
+    }
+
+    /// Applies this selection to a list of canonical member paths.
+    ///
+    /// Takes the member paths in the order the archive holds them. Returns the
+    /// members that survive the include and exclude lists, each with the path
+    /// the layout leaves it under, and every directory those paths need that no
+    /// selected member already names.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `reference.unresolved` when nothing matches, and with
+    /// `destination.unrepresentable` when the layout leaves a member with no
+    /// path or a path the destination cannot hold.
+    pub fn apply(&self, members: &[&str]) -> Result<Applied, Error> {
+        let mut taken = Vec::new();
+        for (index, member) in members.iter().enumerate() {
+            if self.takes(member) {
+                taken.push((index, *member));
+            }
+        }
+        if taken.is_empty() {
+            return Err(Error::new(
+                ErrorKind::ReferenceUnresolved,
+                format!(
+                    "select a pattern that matches, because none of the {} members matched {}",
+                    members.len(),
+                    self.patterns()
+                ),
+            ));
+        }
+
+        let mut applied = Applied::default();
+        for (index, member) in taken {
+            applied.members.push(AppliedMember {
+                index,
+                path: self.rewrite(member)?,
+            });
+        }
+
+        let named: BTreeSet<&str> = applied
+            .members
+            .iter()
+            .map(|member| member.path.as_str())
+            .collect();
+        let mut ancestors = BTreeSet::new();
+        for member in &applied.members {
+            let path = member.path.as_str();
+            for (at, _) in path.match_indices('/') {
+                let ancestor = &path[..at];
+                if !named.contains(ancestor) {
+                    ancestors.insert(ancestor.to_owned());
+                }
+            }
+        }
+        for ancestor in ancestors {
+            let path = EntryPath::new(&ancestor)
+                .map_err(|reason| unrepresentable(&ancestor, &reason.to_string()))?;
+            applied.directories.push(path);
+        }
+        Ok(applied)
+    }
+
+    fn patterns(&self) -> String {
+        if self.include.is_empty() {
+            return "every member".to_owned();
+        }
+        self.include
+            .iter()
+            .map(Glob::as_str)
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
+
+    fn rewrite(&self, member: &str) -> Result<EntryPath, Error> {
+        let Layout::Flatten(depth) = self.layout else {
+            return EntryPath::new(member)
+                .map_err(|reason| unrepresentable(member, &reason.to_string()));
+        };
+        let dropped = depth as usize;
+        let components: Vec<&str> = member.split('/').collect();
+        if components.len() <= dropped {
+            return Err(Error::new(
+                ErrorKind::DestinationUnrepresentable,
+                format!(
+                    "flatten fewer than {dropped} components, because {member} has {} and would be left with no path",
+                    components.len()
+                ),
+            ));
+        }
+        let flattened = components[dropped..].join("/");
+        EntryPath::new(&flattened).map_err(|reason| unrepresentable(member, &reason.to_string()))
+    }
+}
+
+fn unrepresentable(member: &str, reason: &str) -> Error {
+    Error::new(
+        ErrorKind::DestinationUnrepresentable,
+        format!("rename {member} so that it {reason}"),
+    )
 }

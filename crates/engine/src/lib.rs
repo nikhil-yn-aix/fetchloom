@@ -17,6 +17,7 @@ pub mod lock;
 pub mod manifest;
 pub mod outboard;
 pub mod outcome;
+pub mod partial_key;
 pub mod plan;
 pub mod pool;
 pub mod receipt;
@@ -33,6 +34,7 @@ pub mod transfer;
 pub mod tree;
 pub mod trust;
 pub mod verification;
+pub mod work;
 
 #[cfg(test)]
 use serde_json as _;

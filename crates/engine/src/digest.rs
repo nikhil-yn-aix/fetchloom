@@ -13,6 +13,9 @@ pub const TREE_DIGEST_CONTEXT: &str = "fetchloom tree digest";
 /// The derived key context separating manifest digests from every other domain.
 pub const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
 
+/// The derived key context separating partial key names from every other domain.
+pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
+
 /// The hash algorithm a digest was produced by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Algorithm {

@@ -1,8 +1,12 @@
 //! The one model every accepted manifest syntax parses into.
 
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 use crate::digest::{ContentDigest, InteropDigest};
+use crate::error::{Error, ErrorKind};
 use crate::license::License;
 use crate::selection::{Glob, Layout};
 
@@ -19,21 +23,93 @@ pub struct DigestClaims {
 }
 
 /// The name of an archive format a manifest declares.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ArchiveFormat(String);
+///
+/// These are the only values `archive.format` takes and the only containers
+/// extraction recognizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ArchiveFormat {
+    /// A POSIX ustar stream.
+    #[serde(rename = "tar")]
+    Tar,
+    /// A tar wrapped in a gzip member.
+    #[serde(rename = "tar+gzip")]
+    TarGzip,
+    /// A tar wrapped in a zstd frame.
+    #[serde(rename = "tar+zstd")]
+    TarZstd,
+    /// A tar wrapped in an xz stream.
+    #[serde(rename = "tar+xz")]
+    TarXz,
+    /// A tar wrapped in a bzip2 stream.
+    #[serde(rename = "tar+bzip2")]
+    TarBzip2,
+    /// A zip container, store and deflate methods only.
+    #[serde(rename = "zip")]
+    Zip,
+    /// One gzip-compressed object, materialized as one file.
+    #[serde(rename = "gzip")]
+    Gzip,
+    /// One zstd-compressed object, materialized as one file.
+    #[serde(rename = "zstd")]
+    Zstd,
+    /// One xz-compressed object, materialized as one file.
+    #[serde(rename = "xz")]
+    Xz,
+    /// One bzip2-compressed object, materialized as one file.
+    #[serde(rename = "bzip2")]
+    Bzip2,
+}
 
 impl ArchiveFormat {
-    /// Keeps a format name exactly as the manifest wrote it.
+    /// Returns the name this format is written with.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tar => "tar",
+            Self::TarGzip => "tar+gzip",
+            Self::TarZstd => "tar+zstd",
+            Self::TarXz => "tar+xz",
+            Self::TarBzip2 => "tar+bzip2",
+            Self::Zip => "zip",
+            Self::Gzip => "gzip",
+            Self::Zstd => "zstd",
+            Self::Xz => "xz",
+            Self::Bzip2 => "bzip2",
+        }
     }
+}
 
-    /// Returns the format name.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
+impl fmt::Display for ArchiveFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl FromStr for ArchiveFormat {
+    type Err = Error;
+
+    /// Parses a format name into the one value it names.
+    ///
+    /// Takes the name exactly as a manifest or a location extension wrote it.
+    /// Fails with `archive.unsupported` naming the format that was asked for
+    /// when the name is not one of the ten this build carries.
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "tar" => Ok(Self::Tar),
+            "tar+gzip" => Ok(Self::TarGzip),
+            "tar+zstd" => Ok(Self::TarZstd),
+            "tar+xz" => Ok(Self::TarXz),
+            "tar+bzip2" => Ok(Self::TarBzip2),
+            "zip" => Ok(Self::Zip),
+            "gzip" => Ok(Self::Gzip),
+            "zstd" => Ok(Self::Zstd),
+            "xz" => Ok(Self::Xz),
+            "bzip2" => Ok(Self::Bzip2),
+            other => Err(Error::new(
+                ErrorKind::ArchiveUnsupported,
+                format!("archive format \"{other}\" is not one this build carries"),
+            )),
+        }
     }
 }
 

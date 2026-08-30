@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::digest::ContentDigest;
 use crate::error::Error;
 use crate::identity::CacheFormatFingerprint;
+use crate::partial_key::PartialKey;
 use crate::source_record::SourceRecord;
 
 /// What one prune run did.
@@ -50,7 +51,7 @@ pub trait Store {
     type Reader: Read;
     /// An in-progress object opened for writing.
     type Writer: Write;
-    /// A held single-writer claim on one digest. Releasing it is dropping it.
+    /// A held single-writer claim on one key. Releasing it is dropping it.
     type Lease: Send;
 
     /// Returns the fingerprint of the cache format on disk.
@@ -75,14 +76,14 @@ pub trait Store {
     /// and when the recorded fingerprint no longer matches the file on disk.
     fn open(&self, digest: ContentDigest) -> Result<Self::Reader, Error>;
 
-    /// Takes the single-writer claim on one digest, waiting for another writer
+    /// Takes the single-writer claim on one key, waiting for another writer
     /// and reusing its result rather than starting a second transfer.
     ///
     /// # Errors
     ///
     /// Fails when the volume cannot express advisory locking and when the wait
     /// ends without the claim.
-    fn lease(&self, digest: ContentDigest) -> Result<Self::Lease, Error>;
+    fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error>;
 
     /// Opens an in-progress object for writing, reserving its full length.
     ///
@@ -109,7 +110,7 @@ pub trait Store {
     /// # Errors
     ///
     /// Fails when the record cannot be written beside the partial.
-    fn record_source(&self, digest: ContentDigest, record: &SourceRecord) -> Result<(), Error>;
+    fn record_source(&self, key: PartialKey, record: &SourceRecord) -> Result<(), Error>;
 
     /// Reads what a partial recorded about where its bytes came from.
     ///
@@ -118,22 +119,26 @@ pub trait Store {
     /// # Errors
     ///
     /// Fails when a record exists and cannot be read.
-    fn recorded_source(&self, digest: ContentDigest) -> Result<Option<SourceRecord>, Error>;
+    fn recorded_source(&self, key: PartialKey) -> Result<Option<SourceRecord>, Error>;
 
     /// Discards an in-progress object and everything recorded beside it.
     ///
     /// # Errors
     ///
     /// Fails when the partial exists and cannot be removed.
-    fn discard_partial(&self, digest: ContentDigest) -> Result<(), Error>;
+    fn discard_partial(&self, key: PartialKey) -> Result<(), Error>;
 
     /// Publishes an in-progress object as a completed one.
     ///
+    /// Takes the claim and the writer. Returns the digest the written bytes
+    /// hash to, which is the object's name.
+    ///
     /// # Errors
     ///
-    /// Fails when the bytes do not match the digest, when the two directories
-    /// are on different volumes, and when the rename does not complete.
-    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<(), Error>;
+    /// Fails when the claim states a digest the bytes do not hash to, when
+    /// the two directories are on different volumes, and when the rename
+    /// does not complete.
+    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<ContentDigest, Error>;
 
     /// Reports whether an outboard tree is stored for an object.
     ///
