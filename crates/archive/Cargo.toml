@@ -1,0 +1,25 @@
+[package]
+name = "fetchloom-archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+bzip2 = { workspace = true }
+fetchloom-engine = { workspace = true }
+flate2 = { workspace = true }
+lzma-rust2 = { workspace = true }
+ruzstd = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+fetchloom-faults = { workspace = true }
+fetchloom-platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

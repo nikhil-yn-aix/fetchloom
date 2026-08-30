@@ -1,0 +1,195 @@
+//! Path validation the reader can decide from headers alone, with no
+//! knowledge of the destination volume.
+
+use fetchloom_engine::error::{Error, ErrorKind};
+
+fn unsafe_path(next_action: String) -> Error {
+    Error::new(ErrorKind::ArchiveUnsafePath, next_action)
+}
+
+/// Validates a raw member path and returns it as an owned string.
+///
+/// Takes the path exactly as the archive wrote it and the nesting depth
+/// limit. Returns the path unchanged when it is safe. Fails with
+/// `archive.unsafe_path` when the path holds a NUL byte, is not valid UTF-8,
+/// is absolute, holds a `..` component, holds a backslash or a drive letter,
+/// or nests deeper than the limit.
+pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
+    if raw.contains(&0) {
+        let lossy = String::from_utf8_lossy(raw).into_owned();
+        return Err(unsafe_path(format!(
+            "member path \"{lossy}\" holds a NUL byte"
+        )));
+    }
+    let Ok(text) = std::str::from_utf8(raw) else {
+        let lossy = String::from_utf8_lossy(raw).into_owned();
+        return Err(unsafe_path(format!(
+            "member path \"{lossy}\" is not valid UTF-8"
+        )));
+    };
+    let path = text.to_owned();
+    if path.starts_with('/') {
+        return Err(unsafe_path(format!(
+            "member path \"{path}\" is an absolute path"
+        )));
+    }
+    if is_drive_letter_prefixed(&path) {
+        return Err(unsafe_path(format!(
+            "member path \"{path}\" names a Windows drive location"
+        )));
+    }
+    if path.contains('\\') {
+        return Err(unsafe_path(format!(
+            "repack \"{path}\" with a writer that separates path components with a forward slash, because a backslash is a legal character in a member name and this archive gives no way to tell a separator from one"
+        )));
+    }
+    let components: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if components.contains(&"..") {
+        return Err(unsafe_path(format!(
+            "member path \"{path}\" holds a parent-directory component"
+        )));
+    }
+    let depth = u32::try_from(components.len()).unwrap_or(u32::MAX);
+    if depth > nesting_limit {
+        return Err(unsafe_path(format!(
+            "member path \"{path}\" nests {depth} components deep, past the limit of {nesting_limit}"
+        )));
+    }
+    Ok(path)
+}
+
+/// Records a member path and reports the second archive entry to claim it.
+///
+/// Takes the set of paths already listed and the path this member claims.
+/// Returns nothing when the path is new. Fails with `archive.collision`
+/// naming the path when a member already claimed it, which is the collision
+/// decidable from raw bytes alone; one that needs the target volume's own
+/// folding is decided in staging instead.
+///
+/// # Errors
+///
+/// Returns the collision when two members claim one path.
+pub fn claim_member_path(
+    claimed: &mut std::collections::BTreeSet<String>,
+    path: &str,
+) -> Result<(), Error> {
+    if claimed.insert(path.to_owned()) {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorKind::ArchiveCollision,
+        format!("member path \"{path}\" is claimed by two entries of this archive"),
+    ))
+}
+
+/// Checks the target of a link against the destination it would land in.
+///
+/// Takes the member's own validated path and the raw target bytes. Returns
+/// nothing when the target stays inside the destination. Fails with
+/// `archive.link_escape` naming the member and the target when the target is
+/// absolute, names a Windows drive location, or climbs above the destination
+/// root by walking `..` further than the member's own directory is deep.
+///
+/// # Errors
+///
+/// Returns the rule the target broke.
+pub fn validate_link_target(member: &str, raw: &[u8]) -> Result<(), Error> {
+    let target = String::from_utf8_lossy(raw).into_owned();
+    let escape = |reason: &str| {
+        Err(Error::new(
+            ErrorKind::ArchiveLinkEscape,
+            format!("link \"{member}\" points at \"{target}\", which {reason}"),
+        ))
+    };
+    if target.starts_with('/') {
+        return escape("is an absolute path");
+    }
+    if is_drive_letter_prefixed(&target) {
+        return escape("names a Windows drive location");
+    }
+    let mut depth = member.split('/').count().saturating_sub(1);
+    for component in target.split(['/', '\\']) {
+        match component {
+            ".." => {
+                let Some(above) = depth.checked_sub(1) else {
+                    return escape("climbs above the destination root");
+                };
+                depth = above;
+            }
+            "." | "" => {}
+            _ => depth += 1,
+        }
+    }
+    Ok(())
+}
+
+fn is_drive_letter_prefixed(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions, where a failed read is the failure being asserted"
+)]
+mod tests {
+    use super::validate_member_path;
+
+    #[test]
+    fn accepts_an_ordinary_path() {
+        assert_eq!(
+            validate_member_path(b"docs/readme.txt", 64).unwrap(),
+            "docs/readme.txt"
+        );
+    }
+
+    #[test]
+    fn rejects_an_absolute_path() {
+        let error = validate_member_path(b"/etc/passwd", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_a_dotdot_component() {
+        let error = validate_member_path(b"a/../b", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_a_backslash() {
+        let error = validate_member_path(b"a\\b", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_a_drive_letter() {
+        let error = validate_member_path(b"C:/a", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_invalid_utf8() {
+        let error = validate_member_path(b"bad\xFF\xFE.txt", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_an_embedded_nul() {
+        let error = validate_member_path(b"bad\0name.txt", 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn rejects_a_path_deeper_than_the_limit() {
+        let deep = "a/".repeat(65) + "file.txt";
+        let error = validate_member_path(deep.as_bytes(), 64).unwrap_err();
+        assert_eq!(error.kind().label(), "archive.unsafe_path");
+    }
+
+    #[test]
+    fn does_not_reject_a_windows_reserved_name() {
+        assert!(validate_member_path(b"CON", 64).is_ok());
+        assert!(validate_member_path(b"weird:name.txt", 64).is_ok());
+    }
+}

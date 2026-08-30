@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/platform", "crates/cache", "crates/sources", "crates/faults", "crates/cli", "xtask"]
+members = ["crates/archive", "crates/engine", "crates/platform", "crates/cache", "crates/sources", "crates/faults", "crates/cli", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,7 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+fetchloom-archive = { path = "crates/archive" }
 fetchloom-cache = { path = "crates/cache" }
 fetchloom-engine = { path = "crates/engine" }
 fetchloom-faults = { path = "crates/faults" }
@@ -18,20 +19,26 @@ fetchloom-sources = { path = "crates/sources" }
 anstream = "1.0.0"
 anstyle = "1.0.14"
 blake3 = { version = "1.8.7", features = ["std", "rayon"] }
+bzip2 = "0.6"
 clap = { version = "4.6.6", features = ["derive", "color"] }
 clap_complete = "4.6.9"
+flate2 = "1.1"
 libc = "0.2"
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "xz"] }
 mimalloc = "0.1.52"
+ruzstd = "0.9"
 rayon = "1.11"
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["fs", "termios", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27.0"
 ureq = { version = "3.4.0", default-features = false, features = ["rustls-no-provider", "platform-verifier", "win-system-proxy"] }
 toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
 windows-sys = "0.61.2"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

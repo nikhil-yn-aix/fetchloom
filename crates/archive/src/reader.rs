@@ -1,0 +1,182 @@
+//! The one reader type over a `Read + Seek` source that implements the
+//! engine's `Archive` seam.
+
+use std::io::{Read, Seek, SeekFrom};
+
+use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::limits::Limits;
+use fetchloom_engine::manifest::ArchiveFormat;
+use fetchloom_engine::seam::archive::{Archive, ArchiveMember};
+
+use crate::bare::{self, BareCompression};
+use crate::shared::SharedSource;
+use crate::tar_reader::{self, TarCompression, TarOffset};
+use crate::zip_reader::{self, ZipOffset};
+
+enum Offsets {
+    Tar(Vec<TarOffset>),
+    Zip(Vec<ZipOffset>),
+    Bare(u64),
+}
+
+/// Reads the container or compression formats phase 3 ships, over any
+/// `Read + Seek` source.
+///
+/// The caller always holds the archive as a cached object file, so this
+/// reader takes ownership of the source and clones cheap handles onto it
+/// rather than borrowing.
+pub struct ArchiveReader<R> {
+    source: SharedSource<R>,
+    format: ArchiveFormat,
+    name: String,
+    limits: Limits,
+    on_disk_bytes: u64,
+    cache: Option<(Vec<ArchiveMember>, Offsets)>,
+}
+
+impl<R: Read + Seek + 'static> ArchiveReader<R> {
+    /// Builds a reader over the given source.
+    ///
+    /// Takes the source, the format it holds, a name used only for error
+    /// messages, and the limits to enforce. Returns a reader that has not
+    /// yet read anything.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the source's length cannot be determined.
+    pub fn new(
+        source: R,
+        format: ArchiveFormat,
+        name: impl Into<String>,
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        let mut source = source;
+        let on_disk_bytes = source.seek(SeekFrom::End(0)).map_err(|error| {
+            Error::new(
+                ErrorKind::ArchiveUnsupported,
+                format!("could not measure the archive's length: {error}"),
+            )
+        })?;
+        Ok(Self {
+            source: SharedSource::new(source),
+            format,
+            name: name.into(),
+            limits,
+            on_disk_bytes,
+            cache: None,
+        })
+    }
+
+    fn tar_compression(&self) -> Option<TarCompression> {
+        match self.format {
+            ArchiveFormat::Tar => Some(TarCompression::None),
+            ArchiveFormat::TarGzip => Some(TarCompression::Gzip),
+            ArchiveFormat::TarZstd => Some(TarCompression::Zstd),
+            ArchiveFormat::TarXz => Some(TarCompression::Xz),
+            ArchiveFormat::TarBzip2 => Some(TarCompression::Bzip2),
+            _ => None,
+        }
+    }
+
+    fn bare_compression(&self) -> Option<BareCompression> {
+        match self.format {
+            ArchiveFormat::Gzip => Some(BareCompression::Gzip),
+            ArchiveFormat::Zstd => Some(BareCompression::Zstd),
+            ArchiveFormat::Xz => Some(BareCompression::Xz),
+            ArchiveFormat::Bzip2 => Some(BareCompression::Bzip2),
+            _ => None,
+        }
+    }
+
+    fn bare_extension(&self) -> &'static str {
+        match self.format {
+            ArchiveFormat::Gzip => ".gz",
+            ArchiveFormat::Zstd => ".zst",
+            ArchiveFormat::Xz => ".xz",
+            ArchiveFormat::Bzip2 => ".bz2",
+            _ => "",
+        }
+    }
+
+    fn populate(&mut self) -> Result<(Vec<ArchiveMember>, Offsets), Error> {
+        if let Some(compression) = self.tar_compression() {
+            let (members, offsets) = tar_reader::list_members(
+                &self.source,
+                compression,
+                &self.name,
+                self.on_disk_bytes,
+                self.limits,
+            )?;
+            return Ok((members, Offsets::Tar(offsets)));
+        }
+        if self.format == ArchiveFormat::Zip {
+            let (members, offsets) = zip_reader::list_members(
+                &self.source,
+                &self.name,
+                self.on_disk_bytes,
+                self.limits,
+            )?;
+            return Ok((members, Offsets::Zip(offsets)));
+        }
+        let compression = self.bare_compression().unwrap_or(BareCompression::Gzip);
+        let member_name = bare::member_name(&self.name, self.bare_extension());
+        let member = bare::list_member(
+            &self.source,
+            compression,
+            &member_name,
+            self.on_disk_bytes,
+            self.limits,
+        )?;
+        let size = member.size;
+        Ok((vec![member], Offsets::Bare(size)))
+    }
+}
+
+impl<R: Read + Seek + 'static> Archive for ArchiveReader<R> {
+    type Body = Box<dyn Read>;
+
+    fn format(&self) -> ArchiveFormat {
+        self.format
+    }
+
+    fn members(&mut self) -> Result<Vec<ArchiveMember>, Error> {
+        if self.cache.is_none() {
+            self.cache = Some(self.populate()?);
+        }
+        Ok(self
+            .cache
+            .as_ref()
+            .map(|(members, _)| members.clone())
+            .unwrap_or_default())
+    }
+
+    fn open(&mut self, member: &ArchiveMember) -> Result<Self::Body, Error> {
+        if self.cache.is_none() {
+            self.cache = Some(self.populate()?);
+        }
+        let Some((members, offsets)) = &self.cache else {
+            return Err(Error::new(
+                ErrorKind::ArchiveUnsupported,
+                format!("member \"{}\" is not in this archive", member.path),
+            ));
+        };
+        let Some(index) = members.iter().position(|candidate| candidate == member) else {
+            return Err(Error::new(
+                ErrorKind::ArchiveUnsupported,
+                format!("member \"{}\" is not in this archive", member.path),
+            ));
+        };
+        match offsets {
+            Offsets::Tar(entries) => {
+                let compression = self.tar_compression().unwrap_or(TarCompression::None);
+                tar_reader::open_member(&self.source, compression, &self.name, entries[index])
+            }
+            Offsets::Zip(entries) => zip_reader::open_member(&self.source, entries[index]),
+            Offsets::Bare(size) => {
+                let compression = self.bare_compression().unwrap_or(BareCompression::Gzip);
+                let member_name = bare::member_name(&self.name, self.bare_extension());
+                bare::open_member(&self.source, compression, &member_name, *size)
+            }
+        }
+    }
+}
