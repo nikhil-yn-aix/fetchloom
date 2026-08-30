@@ -124,18 +124,28 @@ fn dispatch(
     match &parsed.command {
         Command::Explain { key } => run_explain(resolved, discovered, key.as_deref()),
         Command::Completions { shell } => write_completions(*shell),
-        Command::Verify { target } => run_verify(target, parsed.global.json),
+        Command::Verify { target } => run_verify(target, parsed.global.json, observer, sequence),
         Command::Get {
             references,
             transfer,
         } => run_get(references, transfer, parsed, resolved, observer, sequence),
-        Command::Cache { command } => cache::run(
-            &resolved.cache_dir.value,
-            command,
-            parsed.global.json,
-            parsed.global.yes,
-        ),
+        Command::Cache { command } => {
+            run_cache(resolved, command, parsed.global.json, parsed.global.yes)
+        }
     }
+}
+
+fn run_cache(
+    resolved: &settings::Settings,
+    command: &surface::CacheCommand,
+    json: bool,
+    yes: bool,
+) -> ExitCode {
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
+    cache::run(&root, command, json, yes)
 }
 
 fn run_explain(
@@ -176,12 +186,13 @@ fn write_completions(shell: Shell) -> ExitCode {
     ExitCode::Success
 }
 
-fn run_verify(target: &str, json: bool) -> ExitCode {
+fn run_verify(target: &str, json: bool, observer: &dyn Observer, sequence: &Sequence) -> ExitCode {
     let path = match run::local_path(target) {
         Ok(path) => path,
         Err(error) => return report(&error, json),
     };
-    match run::verify_tree(&path) {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    match run::verify_tree(&path, &emit) {
         Ok((tree, entries)) => {
             if json {
                 let body = serde_json::json!({
@@ -231,10 +242,14 @@ fn run_get(
             Err(error) => return report(&error, json),
         }
     };
-    let destination = transfer
+    let requested_destination = transfer
         .output
         .clone()
         .unwrap_or_else(|| run::default_destination(&source));
+    let destination = match run::resolve_path(&requested_destination) {
+        Ok(destination) => destination,
+        Err(error) => return report(&error, json),
+    };
 
     let durability = durability_of(transfer);
     let Ok(processor) = Processor::new(thread_budget(parsed)) else {
@@ -242,7 +257,10 @@ fn run_get(
         return ExitCode::Resource;
     };
     let platform = NativePlatform::new();
-    let root = resolved.cache_dir.value.clone();
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return report(&error, json),
+    };
     let work = Arc::new(WorkCounter::new());
     let held = match open_cache(transfer, &root, durability, &work, observer, sequence) {
         Ok(held) => held,
@@ -263,6 +281,8 @@ fn run_get(
             &references[0],
             &destination,
             &selection_of(transfer),
+            transfer.force,
+            transfer.adopt,
             observer,
             sequence,
         )

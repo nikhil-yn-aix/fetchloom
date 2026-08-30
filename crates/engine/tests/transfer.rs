@@ -3,11 +3,6 @@
 //! These cover the decisions a transfer makes before it touches a socket: which
 //! rung of the resume ladder the bytes on disk earn, and what the backoff is.
 
-#![expect(
-    clippy::unwrap_used,
-    reason = "test setup, where a failure to build the input is the assertion"
-)]
-
 use blake3 as _;
 use rayon as _;
 use serde as _;

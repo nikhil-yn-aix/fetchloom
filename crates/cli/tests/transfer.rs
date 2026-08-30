@@ -422,6 +422,8 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         &location,
         &destination,
         &Selection::default(),
+        false,
+        false,
         &first_observer,
         &first_sequence,
     );
@@ -441,6 +443,8 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         &location,
         &destination,
         &Selection::default(),
+        false,
+        false,
         &second_observer,
         &second_sequence,
     )

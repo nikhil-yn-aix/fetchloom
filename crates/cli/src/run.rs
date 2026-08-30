@@ -106,8 +106,42 @@ pub fn default_destination(source: &Path) -> PathBuf {
     PathBuf::from(".").join(name)
 }
 
+/// Resolves a path the user named against the working directory, once, so it
+/// never travels through a join or a `parent` call still bearing a relative
+/// form.
+///
+/// Takes the path named by `--output` or `--cache-dir`. Returns it unchanged
+/// when it is already absolute, and joined onto the working directory
+/// otherwise. Never touches the filesystem, because the path named may not
+/// exist yet.
+///
+/// # Errors
+///
+/// Fails when the working directory cannot be read.
+pub fn resolve_path(path: &Path) -> Result<PathBuf, Error> {
+    std::path::absolute(path).map_err(|reason| {
+        Error::new(
+            ErrorKind::DestinationUnrepresentable,
+            format!("{}: {reason}", path.display()),
+        )
+    })
+}
+
 fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))
+}
+
+/// Returns the directory a path sits in, treating a single-component
+/// relative path as sitting in the working directory.
+///
+/// `Path::parent` returns `Some("")` for a path with one relative component,
+/// and an empty path passed to a filesystem call resolves to nothing rather
+/// than to the working directory it stands for.
+fn containing_directory(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 /// Everything a materialization runs against, so one call does not take a list
@@ -173,37 +207,22 @@ pub fn materialize_local(
     if let Some(ingested) = archive_to_unpack(with, source, &dataset)? {
         emit(EventPayload::ResolveEnd { duration_ms: 0 });
         emit(EventPayload::PlanReady);
-        if destination.exists() {
-            return Err(Error::new(
-                ErrorKind::DestinationForeign,
-                format!(
-                    "remove {} or choose another destination with --output",
-                    destination.display()
-                ),
-            ));
-        }
-        let (tree, entries) = publish_one_object(
+        return materialize_object(
             with,
             ingested.digest,
             ingested.size,
             &dataset,
             destination,
             selection,
-        )?;
-        emit(EventPayload::PublishCommit);
-        return Ok(RunResult {
-            status: "materialized",
-            dataset,
-            tree,
-            destination: destination.to_path_buf(),
-            entries,
-            bytes: ingested.size,
-            work: with.work.taken(),
-        });
+            force,
+            adopt,
+            &emit,
+        );
     }
 
     let walked = materialize::walk(source)?;
     let walked = apply_selection(walked, selection)?;
+    report_unread_modes(!walked.files.is_empty(), &emit);
     emit(EventPayload::ResolveEnd { duration_ms: 0 });
     emit(EventPayload::PlanReady);
 
@@ -247,9 +266,10 @@ fn materialize_fresh(
 
     let tree = canonical::tree_digest(&entries);
 
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
+    {
+        let parent = containing_directory(destination);
+        std::fs::create_dir_all(&parent)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
     }
     if let Err(error) = platform.publish_directory(&staging, destination, durability) {
         let _ = std::fs::remove_dir_all(&staging);
@@ -282,27 +302,86 @@ fn entry_size(entry: &TreeEntry) -> u64 {
     }
 }
 
-fn reconcile_existing(
+/// Returns a destination's entries with every mode taken from the resolved
+/// tree.
+///
+/// Takes the tree the run resolved and the entries a walk of the destination
+/// found. A walk states no mode, so an entry the resolved tree names carries
+/// the mode that tree states and a mode is never a reconcile signal. An entry
+/// the resolved tree does not name is foreign and keeps the mode the walk gave
+/// it, which is the same on every platform.
+fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
+    let modes: HashMap<&str, Mode> = resolved
+        .iter()
+        .filter_map(|entry| match entry {
+            TreeEntry::File { path, mode, .. } => Some((path.as_str(), *mode)),
+            TreeEntry::Directory { .. } | TreeEntry::Symlink { .. } => None,
+        })
+        .collect();
+    found
+        .into_iter()
+        .map(|entry| match entry {
+            TreeEntry::File {
+                path,
+                mode,
+                size,
+                content,
+            } => {
+                let mode = modes.get(path.as_str()).copied().unwrap_or(mode);
+                TreeEntry::File {
+                    path,
+                    mode,
+                    size,
+                    content,
+                }
+            }
+            other => other,
+        })
+        .collect()
+}
+
+/// Everything settling a run against an existing destination needs to know.
+struct Settlement<'a> {
+    /// The tree the run resolved, whatever the source was.
+    resolved: &'a [TreeEntry],
+    /// Whether the run may overwrite a modified entry and remove a foreign one.
+    force: bool,
+    /// Whether the run accepts the destination as it stands.
+    adopt: bool,
+    /// What the run calls the dataset.
+    dataset: &'a str,
+}
+
+/// Decides one run against an existing destination.
+///
+/// Takes what the run resolved, how to rebuild the destination whole when
+/// `--force` says to, and how to restore the entries reconcile found missing.
+/// Both are given because a directory source and an archive rebuild and
+/// restore differently while reaching the same four outcomes.
+///
+/// # Errors
+///
+/// Fails with `destination.modified` or `destination.foreign` naming every
+/// path when neither `--force` nor `--adopt` was given, and with whatever
+/// rebuilding or restoring fails with.
+fn settle(
     with: &Materialization<'_>,
     destination: &Path,
-    walked: &materialize::Walked,
-    force: bool,
-    adopt: bool,
-    dataset: &str,
+    settlement: &Settlement<'_>,
     emit: &dyn Fn(EventPayload),
+    rebuild: &dyn Fn() -> Result<RunResult, Error>,
+    restore: &dyn Fn(&[Reconciled]) -> Result<(), Error>,
 ) -> Result<RunResult, Error> {
-    let Materialization { processor, .. } = *with;
+    let Settlement {
+        resolved,
+        force,
+        adopt,
+        dataset,
+    } = *settlement;
 
-    let mut resolved: Vec<TreeEntry> = walked.entries.clone();
-    resolved.extend(hash_files(
-        &walked.root,
-        &walked.files,
-        processor,
-        with.work,
-    )?);
-
-    let destination_tree = destination_entries(destination, processor, with.work)?;
-    let outcomes = reconcile(&resolved, &destination_tree);
+    let found = destination_entries(destination, with.processor, with.work)?;
+    let destination_tree = with_resolved_modes(resolved, found);
+    let outcomes = reconcile(resolved, &destination_tree);
     for found in &outcomes {
         emit(EventPayload::ReconcileOutcomeReached {
             path: found.path.as_str().to_owned(),
@@ -317,7 +396,7 @@ fn reconcile_existing(
         return Ok(RunResult {
             status: "unchanged",
             dataset: dataset.to_owned(),
-            tree: canonical::tree_digest(&resolved),
+            tree: canonical::tree_digest(resolved),
             destination: destination.to_path_buf(),
             entries: resolved.len() as u64,
             bytes: resolved.iter().map(entry_size).sum(),
@@ -369,19 +448,51 @@ fn reconcile_existing(
     }
 
     if force {
-        return materialize_fresh(with, walked, destination, dataset, emit);
+        return rebuild();
     }
 
-    restore_missing(with, destination, &resolved, walked, &outcomes, emit)?;
+    restore(&outcomes)?;
     Ok(RunResult {
         status: "restored",
         dataset: dataset.to_owned(),
-        tree: canonical::tree_digest(&resolved),
+        tree: canonical::tree_digest(resolved),
         destination: destination.to_path_buf(),
         entries: resolved.len() as u64,
         bytes: resolved.iter().map(entry_size).sum(),
         work: with.work.taken(),
     })
+}
+
+fn reconcile_existing(
+    with: &Materialization<'_>,
+    destination: &Path,
+    walked: &materialize::Walked,
+    force: bool,
+    adopt: bool,
+    dataset: &str,
+    emit: &dyn Fn(EventPayload),
+) -> Result<RunResult, Error> {
+    let mut resolved: Vec<TreeEntry> = walked.entries.clone();
+    resolved.extend(hash_files(
+        &walked.root,
+        &walked.files,
+        with.processor,
+        with.work,
+    )?);
+
+    settle(
+        with,
+        destination,
+        &Settlement {
+            resolved: &resolved,
+            force,
+            adopt,
+            dataset,
+        },
+        emit,
+        &|| materialize_fresh(with, walked, destination, dataset, emit),
+        &|outcomes| restore_missing(with, destination, &resolved, walked, outcomes, emit),
+    )
 }
 
 fn temp_beside(to: &Path) -> PathBuf {
@@ -426,9 +537,10 @@ fn restore_missing(
             continue;
         }
         let to = destination.join(file.entry.as_str());
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
+        {
+            let parent = containing_directory(&to);
+            std::fs::create_dir_all(&parent)
+                .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
         }
         let from = walked.root.join(&file.relative);
         let temp = temp_beside(&to);
@@ -477,9 +589,10 @@ fn fill_staging(
     for file in &walked.files {
         let from = source.join(&file.relative);
         let to = staging.join(file.entry.as_str());
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
+        {
+            let parent = containing_directory(&to);
+            std::fs::create_dir_all(&parent)
+                .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
         }
         let (size, content) = place_file(with, &gave_up, &from, &to, emit)?;
         copied += size;
@@ -532,15 +645,12 @@ fn place_file(
     emit: &dyn Fn(EventPayload),
 ) -> Result<(u64, ContentDigest), Error> {
     let Materialization {
-        processor,
-        platform,
-        cache,
-        ..
+        processor, cache, ..
     } = *with;
     let usable = cache.filter(|_| !gave_up.get());
     match usable {
         None => materialize::copy_file(processor, with.work, from, to),
-        Some(held) => match through_cache(held, platform, from, to, emit) {
+        Some(held) => match through_cache(held, processor, with.work, from, to, emit) {
             Ok(measured) => Ok(measured),
             Err(refused)
                 if refused.layer() == Layer::Cache || refused.layer() == Layer::Resource =>
@@ -560,40 +670,33 @@ fn place_file(
     }
 }
 
-/// Puts one file through the cache and materializes it from there.
+/// Materializes one file and offers it to the cache.
 ///
-/// Reads the source once, hashing it as it is written into the cache, then
-/// places the object at its destination by sharing blocks where the volume can.
-/// A source the cache already holds is a hit, and nothing is written into the
-/// cache for it.
+/// Reads the source once, hashing it as it is written to its destination,
+/// which the run has to write regardless, and then hands the cache that file
+/// rather than the source. The cache shares blocks with it where the volume
+/// can. A source the cache already holds costs nothing more at all: no second
+/// read of the source to learn what it was, and no write into a cache that
+/// already has it.
 fn through_cache(
     cache: &Cache<NativePlatform>,
-    platform: &NativePlatform,
+    processor: &Processor,
+    work: &WorkCounter,
     from: &Path,
     to: &Path,
     emit: &dyn Fn(EventPayload),
 ) -> Result<(u64, ContentDigest), Error> {
-    let ingested = cache.ingest(from)?;
-    if ingested.waited_for.is_some() {
-        emit(EventPayload::CacheWait {
-            digest: ingested.digest,
-        });
+    let (size, digest) = materialize::copy_file(processor, work, from, to)?;
+    let adopted = cache.adopt(digest, size, to)?;
+    if adopted.waited_for.is_some() {
+        emit(EventPayload::CacheWait { digest });
     }
-    if ingested.was_present {
-        emit(EventPayload::CacheHit {
-            digest: ingested.digest,
-        });
+    if adopted.was_present {
+        emit(EventPayload::CacheHit { digest });
     } else {
-        emit(EventPayload::CacheMiss {
-            digest: ingested.digest,
-        });
+        emit(EventPayload::CacheMiss { digest });
     }
-
-    let lease = cache.read_lease(ingested.digest)?;
-    let object = cache.layout().object(ingested.digest);
-    platform.clone_or_copy(&object, to)?;
-    drop(lease);
-    Ok((ingested.size, ingested.digest))
+    Ok((size, digest))
 }
 
 fn staging_beside(destination: &Path) -> PathBuf {
@@ -614,7 +717,7 @@ fn staging_beside(destination: &Path) -> PathBuf {
 ///
 /// Fails when the directory cannot be read and when an entry cannot be
 /// represented on this platform.
-pub fn verify_tree(path: &Path) -> Result<(TreeDigest, u64), Error> {
+pub fn verify_tree(path: &Path, emit: &dyn Fn(EventPayload)) -> Result<(TreeDigest, u64), Error> {
     if !path.exists() {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
@@ -633,7 +736,33 @@ pub fn verify_tree(path: &Path) -> Result<(TreeDigest, u64), Error> {
     })?;
     let work = WorkCounter::new();
     let entries = destination_entries(path, &processor, &work)?;
+    report_unread_modes(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, TreeEntry::File { .. })),
+        emit,
+    );
     Ok((canonical::tree_digest(&entries), entries.len() as u64))
+}
+
+/// Reports that a tree's modes were not read from what was walked.
+///
+/// Takes whether the walk found any file at all and where to emit. A walk
+/// states no mode, so every file it found is recorded at `0644` on every
+/// platform. Nothing is emitted for a tree holding no file, because there was
+/// nothing to read.
+fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
+    if !found_a_file {
+        return;
+    }
+    emit(EventPayload::Degrade {
+        requested: "the mode each file carries".to_owned(),
+        used: format!("{:04o} for every file", u32::from(materialize::WALKED_MODE)),
+        reason:
+            "a filesystem tree states no mode, and reading one back from a volume that carries an \
+             executable bit would digest the same tree differently than a volume that does not"
+                .to_owned(),
+    });
 }
 
 /// Walks a directory and hashes every file it holds, without writing
@@ -881,26 +1010,22 @@ pub fn allowed_offline(reference: &str, offline: bool) -> Result<(), Error> {
 ///
 /// Fails when the source is unreachable or refuses the request, when the cache
 /// cannot be written, and when the destination already exists.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the selection, force, and adopt flags each name a contract behavior of their own"
+)]
 pub fn materialize_remote(
     with: &Materialization<'_>,
     location: &str,
     destination: &Path,
     selection: &Selection,
+    force: bool,
+    adopt: bool,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
     let name = object_name(location);
-
-    if destination.exists() {
-        return Err(Error::new(
-            ErrorKind::DestinationForeign,
-            format!(
-                "remove {} or choose another destination with --output",
-                destination.display()
-            ),
-        ));
-    }
 
     emit(EventPayload::ResolveStart);
     let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
@@ -943,25 +1068,220 @@ pub fn materialize_remote(
     }
 
     let size = transferred.bytes_kept + transferred.bytes_transferred;
-    let (tree, entries) = publish_one_object(
+    materialize_object(
         with,
         transferred.digest,
         size,
         &name,
         destination,
         selection,
-    )?;
-    emit(EventPayload::PublishCommit);
+        force,
+        adopt,
+        &emit,
+    )
+}
 
-    Ok(RunResult {
-        status: "materialized",
-        dataset: name,
-        tree,
-        destination: destination.to_path_buf(),
-        entries,
-        bytes: size,
-        work: with.work.taken(),
-    })
+/// Materializes one cached object into a destination, reconciling when the
+/// destination already exists.
+///
+/// Takes what the materialization runs against, the object the run resolved,
+/// the name it materializes under, and the flags reconcile answers to. An
+/// object that is a recognized archive resolves to the tree it holds; one that
+/// is not resolves to a destination holding that single file. Either way an
+/// existing destination is reconciled against that tree rather than refused.
+///
+/// # Errors
+///
+/// Fails when the object cannot be read, when the destination is modified or
+/// foreign and neither `--force` nor `--adopt` was given, and when staging
+/// cannot be published.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the selection, force, and adopt flags each name a contract behavior of their own"
+)]
+fn materialize_object(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    size: u64,
+    dataset: &str,
+    destination: &Path,
+    selection: &Selection,
+    force: bool,
+    adopt: bool,
+    emit: &dyn Fn(EventPayload),
+) -> Result<RunResult, Error> {
+    if !destination.exists() {
+        let (tree, entries) =
+            publish_one_object(with, digest, size, dataset, destination, selection, emit)?;
+        emit(EventPayload::PublishCommit);
+        return Ok(RunResult {
+            status: "materialized",
+            dataset: dataset.to_owned(),
+            tree,
+            destination: destination.to_path_buf(),
+            entries,
+            bytes: size,
+            work: with.work.taken(),
+        });
+    }
+
+    let resolved = object_tree(with, digest, size, dataset, selection, emit)?;
+    settle(
+        with,
+        destination,
+        &Settlement {
+            resolved: &resolved,
+            force,
+            adopt,
+            dataset,
+        },
+        emit,
+        &|| {
+            let (tree, entries) =
+                publish_one_object(with, digest, size, dataset, destination, selection, emit)?;
+            emit(EventPayload::PublishCommit);
+            Ok(RunResult {
+                status: "materialized",
+                dataset: dataset.to_owned(),
+                tree,
+                destination: destination.to_path_buf(),
+                entries,
+                bytes: size,
+                work: with.work.taken(),
+            })
+        },
+        &|outcomes| {
+            restore_object(
+                with,
+                digest,
+                dataset,
+                destination,
+                &resolved,
+                outcomes,
+                emit,
+            )
+        },
+    )
+}
+
+/// Returns the tree one cached object resolves to, having written nothing.
+fn object_tree(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    size: u64,
+    name: &str,
+    selection: &Selection,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<TreeEntry>, Error> {
+    let Some(format) = packed_format(with, digest, name)? else {
+        return Ok(vec![TreeEntry::File {
+            path: EntryPath::new(name)
+                .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+            size,
+            mode: Mode::ReadWrite,
+            content: digest,
+        }]);
+    };
+    let mut reader = open_archive(with, digest, format)?;
+    let result = fetchloom_archive::resolve(&mut reader, selection, Limits::default());
+    for entry in reader.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: entry.requested,
+            used: entry.used,
+            reason: entry.reason,
+        });
+    }
+    result
+}
+
+/// Restores the entries reconcile found missing from a cached object.
+///
+/// Builds the object's tree in a staging directory of its own and moves only
+/// the missing entries into the destination, one entry at a time, so a
+/// destination that is merely incomplete is completed rather than rebuilt.
+fn restore_object(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    dataset: &str,
+    destination: &Path,
+    resolved: &[TreeEntry],
+    outcomes: &[Reconciled],
+    emit: &dyn Fn(EventPayload),
+) -> Result<(), Error> {
+    let missing: HashSet<&str> = outcomes
+        .iter()
+        .filter(|found| found.outcome == ReconcileOutcome::Restored)
+        .map(|found| found.path.as_str())
+        .collect();
+
+    let staging = staging_beside(destination);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    }
+    std::fs::create_dir_all(&staging)
+        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+
+    let built = build_into_staging(with, digest, dataset, &staging, resolved, emit);
+    let outcome = built.and_then(|()| move_missing(&staging, destination, resolved, &missing));
+    let _ = std::fs::remove_dir_all(&staging);
+    outcome?;
+    emit(EventPayload::PublishCommit);
+    Ok(())
+}
+
+fn build_into_staging(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    dataset: &str,
+    staging: &Path,
+    resolved: &[TreeEntry],
+    emit: &dyn Fn(EventPayload),
+) -> Result<(), Error> {
+    let Some(format) = packed_format(with, digest, dataset)? else {
+        let Some(first) = resolved.first() else {
+            return Ok(());
+        };
+        return place_object(with, digest, &staging.join(entry_path_str(first)));
+    };
+    extract_into(with, digest, format, staging, &Selection::default(), emit).map(|_| ())
+}
+
+fn move_missing(
+    staging: &Path,
+    destination: &Path,
+    resolved: &[TreeEntry],
+    missing: &HashSet<&str>,
+) -> Result<(), Error> {
+    let mut ordered: Vec<&TreeEntry> = resolved
+        .iter()
+        .filter(|entry| missing.contains(entry_path_str(entry)))
+        .collect();
+    ordered.sort_by_key(|entry| entry_path_str(entry).matches('/').count());
+    for entry in ordered {
+        let path = entry_path_str(entry);
+        let from = staging.join(path);
+        let to = destination.join(path);
+        let parent = containing_directory(&to);
+        std::fs::create_dir_all(&parent)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+        if matches!(entry, TreeEntry::Directory { .. }) {
+            std::fs::create_dir_all(&to)
+                .map_err(|reason| failure(ErrorKind::DestinationForeign, &to, &reason))?;
+            continue;
+        }
+        std::fs::rename(&from, &to)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &to, &reason))?;
+    }
+    Ok(())
+}
+
+fn entry_path_str(entry: &TreeEntry) -> &str {
+    match entry {
+        TreeEntry::File { path, .. }
+        | TreeEntry::Directory { path }
+        | TreeEntry::Symlink { path, .. } => path.as_str(),
+    }
 }
 
 fn place_object(
@@ -1011,6 +1331,7 @@ fn publish_one_object(
     name: &str,
     destination: &Path,
     selection: &Selection,
+    emit: &dyn Fn(EventPayload),
 ) -> Result<(TreeDigest, u64), Error> {
     let staging = staging_beside(destination);
     if staging.exists() {
@@ -1021,7 +1342,7 @@ fn publish_one_object(
         .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
 
     let built = match packed_format(with, digest, name)? {
-        Some(format) => extract_into(with, digest, format, &staging, selection),
+        Some(format) => extract_into(with, digest, format, &staging, selection, emit),
         None => place_object(with, digest, &staging.join(name)).and_then(|()| {
             Ok(vec![TreeEntry::File {
                 path: EntryPath::new(name).map_err(|reason| {
@@ -1041,9 +1362,10 @@ fn publish_one_object(
         }
     };
 
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, parent, &reason))?;
+    {
+        let parent = containing_directory(destination);
+        std::fs::create_dir_all(&parent)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
     }
     if let Err(error) = with
         .platform
@@ -1106,11 +1428,43 @@ fn read_up_to(file: &mut std::fs::File, into: &mut [u8]) -> Result<usize, Error>
     Ok(filled)
 }
 
+/// Opens a reader over a cached archive object.
+///
+/// Takes what the materialization runs against, the digest of the archive, and
+/// the format it holds. Returns a reader over the object in the cache, which
+/// is where every archive this build reads lives.
+///
+/// # Errors
+///
+/// Fails when the run has no cache and when the object cannot be opened.
+fn open_archive(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    format: ArchiveFormat,
+) -> Result<fetchloom_archive::ArchiveReader<std::fs::File>, Error> {
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "run without --no-cache, because this build extracts an archive out of the cache",
+        ));
+    };
+    let object = cache.layout().object(digest);
+    let file = std::fs::File::open(&object)
+        .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
+    fetchloom_archive::ArchiveReader::new(
+        file,
+        format,
+        object.to_string_lossy().into_owned(),
+        Limits::default(),
+    )
+}
+
 /// Extracts a cached archive into a staging directory.
 ///
 /// Takes what the materialization runs against, the digest of the archive, the
-/// format it holds, the staging directory, and the selection deciding which
-/// members land. Returns the entries that were written.
+/// format it holds, the staging directory, the selection deciding which
+/// members land, and where to emit any degradation the reader recorded.
+/// Returns the entries that were written.
 ///
 /// # Errors
 ///
@@ -1122,29 +1476,24 @@ fn extract_into(
     format: ArchiveFormat,
     staging: &Path,
     selection: &Selection,
+    emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
-    let Some(cache) = with.cache else {
-        return Err(Error::new(
-            ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build extracts an archive out of the cache",
-        ));
-    };
-    let object = cache.layout().object(digest);
-    let file = std::fs::File::open(&object)
-        .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
-    let mut reader = fetchloom_archive::ArchiveReader::new(
-        file,
-        format,
-        object.to_string_lossy().into_owned(),
-        Limits::default(),
-    )?;
-    fetchloom_archive::extract(
+    let mut reader = open_archive(with, digest, format)?;
+    let result = fetchloom_archive::extract(
         &mut reader,
         selection,
         staging,
         Limits::default(),
         with.platform,
-    )
+    );
+    for entry in reader.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: entry.requested,
+            used: entry.used,
+            reason: entry.reason,
+        });
+    }
+    result
 }
 
 /// Puts a local archive into the cache so it can be extracted from there.

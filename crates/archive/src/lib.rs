@@ -10,6 +10,7 @@ mod extract;
 mod path;
 mod reader;
 mod recognize;
+mod resolve;
 mod shared;
 mod tar_reader;
 mod zip_reader;
@@ -17,6 +18,7 @@ mod zip_reader;
 pub use extract::extract;
 pub use reader::ArchiveReader;
 pub use recognize::{format_from_extension, recognize};
+pub use resolve::resolve;
 
 #[cfg(test)]
 use fetchloom_faults as _;

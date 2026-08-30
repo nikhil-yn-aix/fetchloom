@@ -2,8 +2,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
     reason = "test assertions, where the archive that failed is the message"
 )]
 

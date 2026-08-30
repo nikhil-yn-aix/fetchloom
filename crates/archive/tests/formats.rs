@@ -2,7 +2,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test assertions, where the format that failed is the message"
 )]
 

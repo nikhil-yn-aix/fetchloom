@@ -35,9 +35,13 @@ pub enum Opened {
 /// Opens the cache at a root, deciding what an unusable one means.
 ///
 /// A format mismatch stops the run, because it has exactly one fix and
-/// continuing would refetch everything the cache already held. Every other
-/// failure degrades to no-cache behavior, because the user often cannot act on
-/// it now and the cache is never required.
+/// continuing would refetch everything the cache already held. A volume that
+/// cannot express cross-user locking stops the run too, because contracts.md
+/// says such a cache is refused rather than used and because degrading leaves
+/// the run with no cache at all, which every remote fetch then fails on with a
+/// message about a flag the user never gave. Every other failure degrades to
+/// no-cache behavior, because the user often cannot act on it now and the
+/// cache is never required.
 #[must_use]
 pub fn open(
     root: &Path,
@@ -47,7 +51,10 @@ pub fn open(
 ) -> Opened {
     match Cache::open(root, NativePlatform::new(), tier, policy, work) {
         Ok(held) => Opened::Ready(Box::new(held)),
-        Err(refused) if refused.kind() == ErrorKind::CacheFormatMismatch => {
+        Err(refused)
+            if refused.kind() == ErrorKind::CacheFormatMismatch
+                || refused.kind() == ErrorKind::CacheLockingUnsupported =>
+        {
             Opened::Refused(Box::new(refused))
         }
         Err(refused) => Opened::Degraded {

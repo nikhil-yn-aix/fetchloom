@@ -420,9 +420,18 @@ fn a_run_that_degrades_nothing_reports_no_degradation() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|event| event["event"] == "degrade")
         .collect();
+    let unexpected: Vec<&serde_json::Value> = degradations
+        .iter()
+        .filter(|event| event["requested"] != "the mode each file carries")
+        .collect();
     assert!(
-        degradations.is_empty(),
-        "a run on a healthy volume claimed a degradation: {degradations:?}"
+        unexpected.is_empty(),
+        "a run on a healthy volume claimed a degradation it should not have: {unexpected:?}"
+    );
+    assert_eq!(
+        degradations.len(),
+        1,
+        "a walk of a filesystem tree reads no mode and must say so exactly once: {degradations:?}"
     );
 }
 

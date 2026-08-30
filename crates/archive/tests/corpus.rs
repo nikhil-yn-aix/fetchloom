@@ -1,7 +1,6 @@
 //! Every entry of the hostile archive corpus, driven through the reader.
 
 #![expect(
-    clippy::unwrap_used,
     clippy::panic,
     reason = "test assertions, where the corpus entry that failed is the message"
 )]

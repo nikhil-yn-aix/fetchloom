@@ -15,7 +15,7 @@ use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::selection::{Applied, AppliedMember, Selection};
 use fetchloom_engine::tree::{EntryPath, TreeEntry};
 
-const BUFFER_LEN: usize = 65_536;
+pub(crate) const BUFFER_LEN: usize = 65_536;
 
 struct Created {
     path: PathBuf,
@@ -115,7 +115,7 @@ where
 /// components a writer used to mean the archive root, because `./a` and `a`
 /// name one entry and a tree digest that told them apart would differ between
 /// two archives holding the same files.
-fn canonical_member_path(member: &ArchiveMember) -> String {
+pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
     let raw = if member.kind == MemberKind::Directory {
         member.path.trim_end_matches('/')
     } else {
@@ -147,13 +147,44 @@ fn cleanup(staging: &Path) {
     }
 }
 
-struct Plan<'a> {
-    directories: Vec<EntryPath>,
-    files: Vec<&'a AppliedMember>,
-    symlinks: Vec<&'a AppliedMember>,
+/// Applies a selection to an archive's members under their canonical paths.
+///
+/// Takes the members the archive listed and the selection. Returns the
+/// selection's answer with every index pointing back at the member list it
+/// was given, so a caller reads modes and targets from the archive's own
+/// entry rather than from the filtered one.
+pub(crate) fn select_members(
+    members: &[ArchiveMember],
+    selection: &Selection,
+) -> Result<Applied, Error> {
+    let mut canonical: Vec<String> = Vec::with_capacity(members.len());
+    let mut named: Vec<usize> = Vec::with_capacity(members.len());
+    for (index, member) in members.iter().enumerate() {
+        let path = canonical_member_path(member);
+        if path.is_empty() {
+            continue;
+        }
+        canonical.push(path);
+        named.push(index);
+    }
+    let paths: Vec<&str> = canonical.iter().map(String::as_str).collect();
+    let mut applied = selection.apply(&paths)?;
+    for member in &mut applied.members {
+        member.index = named[member.index];
+    }
+    Ok(applied)
 }
 
-fn build_plan<'a>(members: &[ArchiveMember], applied: &'a Applied) -> Result<Plan<'a>, Error> {
+pub(crate) struct Plan<'a> {
+    pub(crate) directories: Vec<EntryPath>,
+    pub(crate) files: Vec<&'a AppliedMember>,
+    pub(crate) symlinks: Vec<&'a AppliedMember>,
+}
+
+pub(crate) fn build_plan<'a>(
+    members: &[ArchiveMember],
+    applied: &'a Applied,
+) -> Result<Plan<'a>, Error> {
     let mut directory_set: std::collections::BTreeSet<String> = applied
         .directories
         .iter()
@@ -321,21 +352,7 @@ where
     P: Platform,
 {
     let members = archive.members()?;
-    let mut canonical: Vec<String> = Vec::with_capacity(members.len());
-    let mut named: Vec<usize> = Vec::with_capacity(members.len());
-    for (index, member) in members.iter().enumerate() {
-        let path = canonical_member_path(member);
-        if path.is_empty() {
-            continue;
-        }
-        canonical.push(path);
-        named.push(index);
-    }
-    let paths: Vec<&str> = canonical.iter().map(String::as_str).collect();
-    let mut applied = selection.apply(&paths)?;
-    for member in &mut applied.members {
-        member.index = named[member.index];
-    }
+    let applied = select_members(&members, selection)?;
     let by_path: HashMap<&str, usize> = members
         .iter()
         .enumerate()
@@ -569,7 +586,7 @@ struct StreamResult {
     digest: ContentDigest,
 }
 
-fn io_failure(member: &str, error: &std::io::Error) -> Error {
+pub(crate) fn io_failure(member: &str, error: &std::io::Error) -> Error {
     if error.kind() == std::io::ErrorKind::StorageFull {
         return Error::new(
             ErrorKind::ResourceDisk,

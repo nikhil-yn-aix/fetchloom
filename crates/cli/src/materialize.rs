@@ -16,6 +16,16 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
+/// The mode every file a filesystem walk finds is recorded under.
+///
+/// A bare filesystem tree is neither an archive nor a manifest, so it states
+/// no mode Materialization accepts. Reading one back from a stat answers
+/// differently on a volume that carries an executable bit and one that does
+/// not, and the same tree then digests differently on Windows and on Linux.
+/// Every walked file is `0644` on every platform instead, and the run reports
+/// that it read none.
+pub const WALKED_MODE: Mode = Mode::ReadWrite;
+
 /// One file found while walking a source tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceFile {
@@ -23,7 +33,7 @@ pub struct SourceFile {
     pub relative: PathBuf,
     /// The entry path the tree digest records it under.
     pub entry: EntryPath,
-    /// The reduced permission bits the source carried.
+    /// The mode the entry is recorded under, always [`WALKED_MODE`].
     pub mode: Mode,
 }
 
@@ -78,19 +88,6 @@ fn entry_path_of(relative: &Path) -> Result<EntryPath, Error> {
     }
     let joined = parts.join("/");
     EntryPath::new(&joined).map_err(|reason| unrepresentable(relative, &reason.to_string()))
-}
-
-fn mode_of(metadata: &fs::Metadata) -> Mode {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Mode::reduce(metadata.permissions().mode())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        Mode::ReadWrite
-    }
 }
 
 /// Walks a source tree and returns the entries and files it holds.
@@ -182,7 +179,7 @@ fn walk_one(
         walked.files.push(SourceFile {
             relative,
             entry: entry_path,
-            mode: mode_of(metadata),
+            mode: WALKED_MODE,
         });
     }
     Ok(())
