@@ -428,7 +428,7 @@ A run with no recorded validator for the reference cannot ask, and transfers. A 
   format      cache format fingerprint
 ```
 
-Default locations: `%LOCALAPPDATA%\Fetchloom\Cache`, `~/Library/Caches/fetchloom`, `$XDG_CACHE_HOME/fetchloom` or `~/.cache/fetchloom`.
+Default locations: `%LOCALAPPDATA%\Fetchloom\Cache` on Windows, and `$XDG_CACHE_HOME/fetchloom` or `~/.cache/fetchloom` on Linux.
 
 Invariants.
 
@@ -529,11 +529,11 @@ Fields are determined by type. A field that does not apply to a type is absent, 
 | Directory | path, type |
 | Symlink | path, type, target |
 
-Path is the entry path with `/` separators and no normalization applied. Paths must be valid UTF-8; an entry whose path is not is rejected, because a tree that cannot be named identically on all three platforms cannot be reproduced on them.
+Path is the entry path with `/` separators and no normalization applied. Paths must be valid UTF-8; an entry whose path is not is rejected, because a tree that cannot be named identically on both platforms cannot be reproduced on them.
 
 Mode is `0644` or `0755` only, taken from the source archive or manifest rather than from a destination stat, so a platform that cannot represent an executable bit still produces the same tree digest. On such a platform a mode change in the destination cannot be detected during reconcile, and that limit is reported.
 
-A bare filesystem tree is neither an archive nor a manifest and states no mode. Every file found by walking one is `0644` on every platform, whether the walk reads a source directory or a destination, and the run reports with `degrade` that it read no mode. Reconcile therefore takes every entry's mode from the tree the run resolved and never from what it found, so a mode is never a reconcile signal on any platform rather than only on the platforms that cannot carry one. `verify` on a path holds no receipt in this build, so it reports a tree whose files are all `0644`; that tree is identical on all three platforms and differs from the one `get` reports for an archive stating `0755`, and closing that gap is what a receipt does.
+A bare filesystem tree is neither an archive nor a manifest and states no mode. Every file found by walking one is `0644` on every platform, whether the walk reads a source directory or a destination, and the run reports with `degrade` that it read no mode. Reconcile therefore takes every entry's mode from the tree the run resolved and never from what it found, so a mode is never a reconcile signal on any platform rather than only on the platforms that cannot carry one. `verify` on a path holds no receipt in this build, so it reports a tree whose files are all `0644`; that tree is identical on both platforms and differs from the one `get` reports for an archive stating `0755`, and closing that gap is what a receipt does.
 
 Content is the BLAKE3 of the file bytes. Target is the symlink target bytes.
 
@@ -729,7 +729,7 @@ Configuration is TOML. Manifests accept three surface syntaxes because they are 
 
 Project configuration is `fetchloom.toml`, found by searching the working directory and then each parent until one is found or the filesystem root is reached. `explain` prints the path that was found, so the search is never a mystery.
 
-User configuration is `config.toml` in the platform's own configuration location: `%APPDATA%\Fetchloom` on Windows, `~/Library/Application Support/fetchloom` on macOS, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on Linux. This is the configuration location, not the cache location, and the two are never the same directory.
+User configuration is `config.toml` in the platform's own configuration location: `%APPDATA%\Fetchloom` on Windows and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on Linux. This is the configuration location, not the cache location, and the two are never the same directory.
 
 `--config` names one file and disables the search. `--no-config` disables both levels.
 

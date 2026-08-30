@@ -1,6 +1,6 @@
 # Roadmap
 
-Ten phases. Each one ships a working vertical slice on Windows, macOS, and Linux, with real tests against real behavior. No phase is a layer that waits for a later phase to become useful.
+Ten phases. Each one ships a working vertical slice on Windows and Linux, with real tests against real behavior. No phase is a layer that waits for a later phase to become useful.
 
 ## How phases work
 
@@ -44,11 +44,11 @@ Purpose. Everything later depends on identity, platform behavior, and observabil
 
 Decide. Chunk size and outboard threshold for the content hash. Exact canonical entry stream for the tree digest, including symlinks, empty directories, zero-byte files, and mode reduction. Filesystem capability detection method per platform. Atomic publication primitive per platform and how a cross-volume attempt fails. Async runtime and thread pool sizing policy, including how core count and user limits are read and honored. Error and event taxonomy, and the point at which redaction is applied.
 
-Build. Workspace and the six seams. Platform implementations for all three targets. Content digest, interop digest, outboard tree, tree digest. Error and event types with redaction at construction. Fault injection library. Local test source and hostile archive corpus scaffolding. Configuration precedence and `explain`. `get file:///path` and `verify`.
+Build. Workspace and the six seams. Platform implementations for both targets. Content digest, interop digest, outboard tree, tree digest. Error and event types with redaction at construction. Fault injection library. Local test source and hostile archive corpus scaffolding. Configuration precedence and `explain`. `get file:///path` and `verify`.
 
-Prove. Tree digest conformance in all six cross-platform directions. Capability detection against real filesystems: ext4, btrfs, XFS, tmpfs, APFS case-sensitive and case-insensitive, NTFS, ReFS, and a network share. Every error kind reachable by a test. Kill and restart during publication leaves no invalid state.
+Prove. Tree digest conformance in both cross-platform directions. Capability detection against real filesystems: ext4, btrfs, XFS, tmpfs, NTFS, ReFS, and a network share. Every error kind reachable by a test. Kill and restart during publication leaves no invalid state.
 
-Done when. A directory materialized on one platform reproduces an identical tree digest on the other two, or fails naming the exact entries, with no network code in the binary.
+Done when. A directory materialized on one platform reproduces an identical tree digest on the other, or fails naming the exact entries, with no network code in the binary.
 
 ## Phase 1. Store
 
@@ -94,7 +94,7 @@ Decide. Lock and receipt contents, and the exact separation between portable and
 
 Build. Lock writing and locked-run enforcement. Receipts. `plan` to a file and `apply` from one. `cache export` and `cache import`. Partial success semantics.
 
-Prove. A lock produced on one platform reproduces the tree on the others. A plan and bundle produced online execute correctly on a machine with no network. A source serving changed content fails apply with an integrity error and no fallback. Locks contain no machine-specific values.
+Prove. A lock produced on one platform reproduces the tree on the other. A plan and bundle produced online execute correctly on a machine with no network. A source serving changed content fails apply with an integrity error and no fallback. Locks contain no machine-specific values.
 
 Done when. Plan on a connected machine, carry the bundle on removable media, apply offline, and the tree digest matches.
 

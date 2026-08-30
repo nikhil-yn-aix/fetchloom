@@ -387,7 +387,6 @@ name = "fetchloom-platform"
 version = "0.1.0"
 dependencies = [
  "fetchloom-engine",
- "libc",
  "rustix",
  "tempfile",
  "windows-sys 0.61.2",

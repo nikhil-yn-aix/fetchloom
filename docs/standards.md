@@ -20,7 +20,7 @@ When a format changes, the old one stops existing. The cache format fingerprint 
 
 Two ways to do the same thing is a defect. Delete one.
 
-This rule is lifted only when version 1.0 is published. Version 1.0 requires frozen contracts, the cross-platform conformance suite green in all six directions, the adversarial suite green, and published benchmark regimes. Staying below 1.0 until then is deliberate.
+This rule is lifted only when version 1.0 is published. Version 1.0 requires frozen contracts, the cross-platform conformance suite green in both directions, the adversarial suite green, and published benchmark regimes. Staying below 1.0 until then is deliberate.
 
 ## Language
 
@@ -46,7 +46,7 @@ Contract tests drive the public surface and assert exact outputs: exit codes, JS
 
 Adversarial tests are first-class, not an afterthought: truncated responses, flipped bytes, changed validators mid-resume, rate-limit storms, stalled connections, DNS failure, full disks, killed processes, concurrent processes on the same digest, and the hostile archive corpus.
 
-Cross-platform conformance tests build a tree on one platform, transport it, materialize it on the others, and assert identical tree digests or the exact declared failure. All six directions run where a machine for each platform exists.
+Cross-platform conformance tests build a tree on one platform, transport it, materialize it on the other, and assert identical tree digests or the exact declared failure. Both directions run where a machine for each platform exists.
 
 Fault injection is a library in the repository, not a mock in a test file. It is part of the product.
 
@@ -246,7 +246,7 @@ The contract it changes is updated in contracts.md in the same change.
 
 Tests were written first and cover the contract, including its failure modes.
 
-It runs green on Windows, macOS, and Linux, including the adversarial and conformance suites.
+It runs green on Windows and Linux, including the adversarial and conformance suites.
 
 It introduces no version field, no compatibility path, and no second way of doing something that already exists.
 

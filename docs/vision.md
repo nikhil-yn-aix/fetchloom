@@ -84,4 +84,4 @@ Optimizations whose correctness depends on mutable cache files or undocumented f
 
 ## The one hard rule
 
-The same lock produces a byte-identical tree on Windows, macOS, and Linux, or Fetchloom fails and names the exact reason. It never produces a quietly different tree.
+The same lock produces a byte-identical tree on Windows and Linux, or Fetchloom fails and names the exact reason. It never produces a quietly different tree.

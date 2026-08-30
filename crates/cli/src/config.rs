@@ -192,13 +192,6 @@ pub fn user_config_directory() -> Option<PathBuf> {
     if cfg!(windows) {
         std::env::var_os("APPDATA")
             .map(|base| Path::new(&base).join(WINDOWS_CONFIGURATION_DIRECTORY))
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|home| {
-            Path::new(&home)
-                .join("Library")
-                .join("Application Support")
-                .join(CONFIGURATION_DIRECTORY)
-        })
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(|base| Path::new(&base).join(CONFIGURATION_DIRECTORY))

@@ -1,10 +1,9 @@
 //! The verification matrix, and everything it cannot reach.
 //!
 //! One command runs what used to run on six runners: the host natively, Linux
-//! inside a privileged container against real loopback filesystems, the same
-//! image under emulation behind a flag, and a compile for the one Apple target
-//! whose toolchain this machine has. Every target it does not execute is named
-//! in its own output, on every run.
+//! inside a privileged container against real loopback filesystems, and the same
+//! image under emulation behind a flag. Every target it does not execute is
+//! named in its own output, on every run.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,21 +16,6 @@ use std::time::{Duration, Instant};
 /// the cryptography the client performs its handshake with is C and this machine
 /// cross-compiles no C at all.
 const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
-
-/// The crates the Apple compile check covers.
-///
-/// Everything except the two that link the client, because the cryptography it
-/// performs its handshake with is C and this machine has no Apple software
-/// development kit to compile C against.
-const APPLE_CRATES: [&str; 4] = [
-    "fetchloom-engine",
-    "fetchloom-platform",
-    "fetchloom-cache",
-    "fetchloom-faults",
-];
-
-/// The Apple target this machine compiles and can never run.
-const APPLE_TARGET: &str = "aarch64-apple-darwin";
 
 /// The Linux targets the container lane builds and runs.
 const LINUX_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"];
@@ -181,7 +165,7 @@ pub fn run(workspace: &Path, arguments: &[String]) -> bool {
                 "the emulated lane runs only behind --arm, because it is slow",
             );
         }
-        apple(workspace, &mut report);
+        unreachable(&mut report);
     }
     summary(&report);
     !report.failed()
@@ -193,13 +177,10 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         cargo(workspace, &["fmt", "--all", "--", "--check"]),
     );
     for target in LINT_TARGETS {
-        let mut lint = cargo(
+        let lint = cargo(
             workspace,
             &["clippy", "--workspace", "--all-targets", "--target", target],
         );
-        if target == APPLE_TARGET {
-            lint.env("CARGO_FEATURE_NO_NEON", "1");
-        }
         report.step(&format!("lint {target}"), lint);
     }
     report.step(
@@ -383,30 +364,12 @@ fn offline(
     report.step(&format!("{lane} offline apply"), apply);
 }
 
-fn apple(workspace: &Path, report: &mut Report) {
-    let mut arguments = vec!["check", "--all-targets", "--target", APPLE_TARGET];
-    for crate_name in APPLE_CRATES {
-        arguments.push("--package");
-        arguments.push(crate_name);
-    }
-    let mut check = cargo(workspace, &arguments);
-    check.env("CARGO_FEATURE_NO_NEON", "1");
-    report.step(&format!("compile {APPLE_TARGET}"), check);
-    println!("macOS is compiled and never executed");
-    report.degrade(
-        "the vector implementation of the content digest compiled for Apple silicon",
-        "the portable implementation, so the compile check runs at all",
-        "the vector implementation is C, and this machine has no Apple software development kit for its headers",
-    );
-    report.degrade(
-        "every crate compiled for Apple silicon",
-        "every crate except the source adapter and the binary",
-        "both link the cryptography the client performs its handshake with, which is C, and this machine has no Apple software development kit to compile it against",
-    );
+/// Records the targets this matrix names and never runs.
+fn unreachable(report: &mut Report) {
     report.degrade(
         "the Linux targets linted on the host as well as in the container",
         "the container lane only",
-        "the same C cryptography cannot be cross-compiled from this machine either, so the host lints its own target and the container lints Linux",
+        "the cryptography the client performs its handshake with is C, which this machine cross-compiles none of, so the host lints its own target and the container lints Linux",
     );
     report.degrade(
         "aarch64-pc-windows-msvc compiled and run",
@@ -434,7 +397,6 @@ fn summary(report: &Report) {
             degrade.requested, degrade.used, degrade.reason
         );
     }
-    println!("macOS is compiled and never executed");
     let skipped = report.steps.iter().filter(|step| step.skipped).count();
     let failed = report
         .steps

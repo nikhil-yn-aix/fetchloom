@@ -1,4 +1,4 @@
-//! Detecting what a volume can do on Unix.
+//! Detecting what a volume can do on Linux.
 //!
 //! Every probe runs inside a directory Fetchloom owns and removes what it
 //! creates, so nothing is ever written into a user's destination.
@@ -18,8 +18,8 @@ use crate::probe_tag;
 
 /// The ratio above which writing many small files is called expensive.
 ///
-/// This is a cost threshold and never a detection threshold. Neither Linux nor
-/// macOS can enumerate what inspects a write, and a loopback ext4 image has
+/// This is a cost threshold and never a detection threshold. Linux cannot
+/// enumerate what inspects a write, and a loopback ext4 image has
 /// measured a ratio near a thousand with no scanner loaded, so exceeding this
 /// says the volume is slow at small writes and says nothing about why.
 const SMALL_WRITE_COST_RATIO: f64 = 2.0;
@@ -108,11 +108,7 @@ fn measure(
     })
 }
 
-#[cfg(target_os = "linux")]
 const MAX_PATH_LENGTH: u32 = 4096;
-
-#[cfg(target_vendor = "apple")]
-const MAX_PATH_LENGTH: u32 = 1024;
 
 fn fold_probe(
     directory: &Path,
@@ -195,7 +191,6 @@ fn hard_link_probe(directory: &Path) -> bool {
     created
 }
 
-#[cfg(target_os = "linux")]
 fn clone_probe(directory: &Path) -> bool {
     let tag = probe_tag();
     let from = directory.join(format!("fetchloom-probe-{tag}-clone-source"));
@@ -209,13 +204,6 @@ fn clone_probe(directory: &Path) -> bool {
     cloned
 }
 
-#[cfg(target_vendor = "apple")]
-fn clone_probe(directory: &Path) -> bool {
-    super::macos::volume_capability_bits(directory)
-        .is_ok_and(|bits| super::macos::has_interface(&bits, super::macos::VOL_CAP_INT_CLONE))
-}
-
-#[cfg(target_os = "linux")]
 fn sparse_probe(directory: &Path) -> bool {
     let tag = probe_tag();
     let path = directory.join(format!("fetchloom-probe-{tag}-sparse"));
@@ -238,33 +226,10 @@ fn sparse_probe(directory: &Path) -> bool {
     punched
 }
 
-#[cfg(target_vendor = "apple")]
-fn sparse_probe(directory: &Path) -> bool {
-    super::macos::volume_capability_bits(directory)
-        .is_ok_and(|bits| super::macos::has_format(&bits, super::macos::VOL_CAP_FMT_SPARSE_FILES))
-}
-
-#[cfg(target_os = "linux")]
 fn max_component_length(directory: &Path) -> u32 {
     rustix::fs::statfs(directory).map_or(255, |found| u32::try_from(found.f_namelen).unwrap_or(255))
 }
 
-#[cfg(target_vendor = "apple")]
-#[expect(
-    unsafe_code,
-    reason = "the longest component a volume accepts has no wrapper, and the block states its invariant"
-)]
-fn max_component_length(directory: &Path) -> u32 {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
-        return 255;
-    };
-    // SAFETY: the path is NUL-terminated and outlives the call.
-    let found = unsafe { libc::pathconf(path.as_ptr(), libc::_PC_NAME_MAX) };
-    u32::try_from(found).unwrap_or(255)
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn backing(directory: &Path) -> Backing {
     const NETWORK_KINDS: [i64; 7] = [
         0x6969,
@@ -285,31 +250,6 @@ pub(crate) fn backing(directory: &Path) -> Backing {
         Backing::Network
     } else if kind == FUSE {
         Backing::Unknown
-    } else {
-        Backing::Local
-    }
-}
-
-#[cfg(target_vendor = "apple")]
-#[expect(
-    unsafe_code,
-    reason = "the mount flags have no wrapper on this platform, and each block states its invariant"
-)]
-pub(crate) fn backing(directory: &Path) -> Backing {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
-        return Backing::Unknown;
-    };
-    let mut found = std::mem::MaybeUninit::<libc::statfs>::zeroed();
-    // SAFETY: the path is NUL-terminated and outlives the call, and the buffer is a whole record the call fills.
-    let outcome = unsafe { libc::statfs(path.as_ptr(), found.as_mut_ptr()) };
-    if outcome != 0 {
-        return Backing::Unknown;
-    }
-    // SAFETY: the call reported success, so the record is initialized.
-    let found = unsafe { found.assume_init() };
-    if found.f_flags & libc::MNT_LOCAL as u32 == 0 {
-        Backing::Network
     } else {
         Backing::Local
     }

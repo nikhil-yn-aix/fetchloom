@@ -208,13 +208,6 @@ pub fn default_cache_directory(environment: &dyn Environment) -> Option<PathBuf>
         environment
             .get("LOCALAPPDATA")
             .map(|base| Path::new(&base).join("Fetchloom").join("Cache"))
-    } else if cfg!(target_os = "macos") {
-        environment.get("HOME").map(|home| {
-            Path::new(&home)
-                .join("Library")
-                .join("Caches")
-                .join("fetchloom")
-        })
     } else {
         environment
             .get("XDG_CACHE_HOME")

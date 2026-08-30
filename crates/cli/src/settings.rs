@@ -48,16 +48,7 @@ pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
             return PathBuf::from(local).join("Fetchloom").join("Cache");
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = environment.get("HOME") {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Caches")
-                .join("fetchloom");
-        }
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     {
         if let Some(base) = environment.get("XDG_CACHE_HOME") {
             return PathBuf::from(base).join("fetchloom");

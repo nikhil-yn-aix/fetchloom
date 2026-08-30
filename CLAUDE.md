@@ -22,7 +22,7 @@ No comments. No version fields. No compatibility code. No second way of doing an
 
 Nothing degrades silently. Every fallback emits a `degrade` event naming what was requested, what was used, and why.
 
-Every change works on Windows, macOS, and Linux, or it is not done.
+Every change works on Windows and Linux, or it is not done.
 
 ## Verify, do not trust
 
@@ -40,7 +40,7 @@ Tests written first, passing, and asserting a stated contract rather than an imp
 
 Adversarial cases covered: failure, corruption, interruption, concurrency, and hostile input where relevant.
 
-Green on all three platforms.
+Green on both platforms.
 
 Benchmark numbers included for anything performance-relevant, with no regime regressed.
 

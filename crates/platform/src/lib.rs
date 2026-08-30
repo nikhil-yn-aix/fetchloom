@@ -1,10 +1,10 @@
-//! The Platform seam implemented for Windows, macOS, and Linux.
+//! The Platform seam implemented for Windows and Linux.
 //!
 //! Everything that decides behavior lives here and is written once: the volume
 //! comparison that refuses a cross-volume publish, the rename-aside sequence
 //! that publishes a tree, the fallback from cloning to copying, the advisory
 //! lock, and the liveness ladder. Each platform module supplies only the calls
-//! that differ between platforms, so there is one behavior and three sets of
+//! that differ between platforms, so there is one behavior and two sets of
 //! syscalls behind it.
 
 use std::fs::File;
@@ -36,13 +36,13 @@ pub(crate) enum ProcessState {
 #[cfg(test)]
 use tempfile as _;
 
-#[cfg(unix)]
-mod unix;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(unix)]
-use crate::unix as imp;
+#[cfg(target_os = "linux")]
+use crate::linux as imp;
 #[cfg(windows)]
 use crate::windows as imp;
 

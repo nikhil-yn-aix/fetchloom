@@ -1,19 +1,6 @@
-//! The calls that differ on Unix, split again where Linux and macOS differ.
-
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_vendor = "apple")]
-mod macos;
-
-#[cfg(target_os = "linux")]
-use crate::unix::linux as host;
-#[cfg(target_vendor = "apple")]
-use crate::unix::macos as host;
+//! The calls that are Linux's own.
 
 mod probe;
-
-#[cfg(target_os = "linux")]
-use libc as _;
 
 use std::fs::File;
 use std::num::NonZeroUsize;
@@ -28,6 +15,15 @@ use fetchloom_engine::degrade::DegradeQueue;
 
 use crate::ProcessState;
 
+/// Where the system records this machine's own identity.
+const MACHINE_FILE: &str = "/etc/machine-id";
+
+/// Where the kernel records the identity of this boot.
+const BOOT_FILE: &str = "/proc/sys/kernel/random/boot_id";
+
+/// The field of a process status line holding its start time.
+const START_TIME_FIELD: usize = 22;
+
 fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))
 }
@@ -36,13 +32,78 @@ fn from_errno(kind: ErrorKind, path: &Path, reason: rustix::io::Errno) -> Error 
     Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
+/// What one path's identity and times are.
+struct Identity {
+    /// The volume the file is on.
+    volume: u64,
+    /// The file within that volume.
+    file: u128,
+    /// The length of the file in bytes.
+    size: u64,
+    /// The modification time in nanoseconds since the epoch.
+    modified_nanos: i128,
+    /// The change time in nanoseconds since the epoch.
+    changed_nanos: i128,
+}
+
+fn identity_from(found: &rustix::fs::Statx) -> Identity {
+    let device = (u64::from(found.stx_dev_major) << 32) | u64::from(found.stx_dev_minor);
+    Identity {
+        volume: device,
+        file: (u128::from(device) << 64) | u128::from(found.stx_ino),
+        size: found.stx_size,
+        modified_nanos: i128::from(found.stx_mtime.tv_sec) * 1_000_000_000
+            + i128::from(found.stx_mtime.tv_nsec),
+        changed_nanos: i128::from(found.stx_ctime.tv_sec) * 1_000_000_000
+            + i128::from(found.stx_ctime.tv_nsec),
+    }
+}
+
+/// The fields every identity query asks for.
+const IDENTITY_FIELDS: rustix::fs::StatxFlags = rustix::fs::StatxFlags::INO
+    .union(rustix::fs::StatxFlags::SIZE)
+    .union(rustix::fs::StatxFlags::MTIME)
+    .union(rustix::fs::StatxFlags::CTIME);
+
+/// Reads a path's identity, length, and times.
+///
+/// # Errors
+///
+/// Fails when the path cannot be read.
+fn identity(path: &Path) -> Result<Identity, Error> {
+    let found = rustix::fs::statx(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::AtFlags::empty(),
+        IDENTITY_FIELDS,
+    )
+    .map_err(|reason| from_errno(ErrorKind::CacheCorrupt, path, reason))?;
+    Ok(identity_from(&found))
+}
+
+/// Reads the identity of an open file.
+///
+/// # Errors
+///
+/// Fails when the platform refuses the query.
+fn identity_of(file: &File) -> Result<Identity, Error> {
+    let found = rustix::fs::statx(file, c"", rustix::fs::AtFlags::EMPTY_PATH, IDENTITY_FIELDS)
+        .map_err(|reason| {
+            Error::new(
+                ErrorKind::CacheCorrupt,
+                format!("an open file does not report an identity: {reason}"),
+            )
+        })?;
+    Ok(identity_from(&found))
+}
+
 /// Returns the identifier of the volume a path is on.
 ///
 /// # Errors
 ///
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
-    host::identity(path).map(|found| VolumeId::new(found.volume))
+    identity(path).map(|found| VolumeId::new(found.volume))
 }
 
 /// Returns the identifier of the file at a path within its volume.
@@ -51,7 +112,16 @@ pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
 ///
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
-    host::identity(path).map(|found| FileId::new(found.file))
+    identity(path).map(|found| FileId::new(found.file))
+}
+
+/// Returns the identifier of an open file within its volume.
+///
+/// # Errors
+///
+/// Fails when the platform refuses the query.
+pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
+    identity_of(file).map(|found| FileId::new(found.file))
 }
 
 /// Returns the tuple recording that a file is probably unchanged.
@@ -60,7 +130,7 @@ pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
 ///
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn fingerprint(path: &Path) -> Result<Fingerprint, Error> {
-    let found = host::identity(path)?;
+    let found = identity(path)?;
     Ok(Fingerprint {
         volume: VolumeId::new(found.volume),
         file: FileId::new(found.file),
@@ -83,17 +153,11 @@ pub(crate) fn volume_capabilities(
 }
 
 /// Returns how many threads this process may actually run on.
-///
-/// The standard library already reads control group limits and the affinity
-/// mask on Linux and the online processor count on macOS, so nothing is added.
 pub(crate) fn detected_parallelism() -> NonZeroUsize {
     std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
 }
 
 /// Returns the vector instruction level selected for the content digest.
-///
-/// This is a vector width and never a dedicated instruction, because the
-/// content digest algorithm has none.
 pub(crate) fn vector_level() -> VectorLevel {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -146,6 +210,9 @@ pub(crate) fn interop_acceleration(degradations: &DegradeQueue) -> InteropAccele
 
 /// Reserves the full length of a file before anything is written to it.
 ///
+/// Reserves blocks where the filesystem can, and sets the length alone where it
+/// cannot, reporting that as a degradation rather than performing it silently.
+///
 /// # Errors
 ///
 /// Fails when the volume has no room.
@@ -154,7 +221,26 @@ pub(crate) fn preallocate(
     length: u64,
     degradations: &DegradeQueue,
 ) -> Result<(), Error> {
-    host::preallocate(file, length, degradations)
+    match rustix::fs::fallocate(file, rustix::fs::FallocateFlags::empty(), 0, length) {
+        Ok(()) => Ok(()),
+        Err(rustix::io::Errno::OPNOTSUPP) => {
+            degradations.record(
+                "reserving the whole length in blocks before writing",
+                "the length was set without reserving blocks",
+                "this filesystem does not support reserving blocks",
+            );
+            rustix::fs::ftruncate(file, length).map_err(|reason| {
+                Error::new(
+                    ErrorKind::ResourceDisk,
+                    format!("free {length} bytes on the volume: {reason}"),
+                )
+            })
+        }
+        Err(reason) => Err(Error::new(
+            ErrorKind::ResourceDisk,
+            format!("free {length} bytes on the volume: {reason}"),
+        )),
+    }
 }
 
 /// Pushes a file's bytes as far as a durability tier requires.
@@ -165,15 +251,17 @@ pub(crate) fn preallocate(
 pub(crate) fn flush(
     file: &File,
     tier: DurabilityTier,
-    degradations: &DegradeQueue,
+    _degradations: &DegradeQueue,
 ) -> Result<(), Error> {
-    host::flush(file, tier, degradations)
+    let outcome = match tier {
+        DurabilityTier::Strict => rustix::fs::fsync(file),
+        DurabilityTier::Normal => rustix::fs::fdatasync(file),
+        DurabilityTier::Fast => return Ok(()),
+    };
+    outcome.map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}")))
 }
 
 /// Makes a directory's own entries durable.
-///
-/// Opens the directory and flushes it, which is what makes a rename survive a
-/// power failure on Unix.
 ///
 /// # Errors
 ///
@@ -202,10 +290,21 @@ pub(crate) fn rename(from: &Path, to: &Path, _tier: DurabilityTier) -> Result<()
 ///
 /// # Errors
 ///
-/// Fails on every volume that does not share blocks, which the caller turns
-/// into a copy and reports.
+/// Fails on every filesystem that does not reference-count blocks.
 pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
-    host::clone_file(from, to)
+    let source = File::open(from)
+        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, from, &reason))?;
+    let target = File::options()
+        .write(true)
+        .create_new(true)
+        .open(to)
+        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))?;
+    rustix::fs::ioctl_ficlone(&target, &source).map_err(|reason| {
+        Error::new(
+            ErrorKind::DestinationUnrepresentable,
+            format!("this filesystem does not share blocks between files: {reason}"),
+        )
+    })
 }
 
 /// Creates a symbolic link with the given target bytes.
@@ -226,43 +325,41 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
 
 /// Returns this machine's own identity.
 pub(crate) fn machine_id() -> Option<MachineId> {
-    host::machine_id()
+    std::fs::read_to_string(MACHINE_FILE)
+        .ok()
+        .map(|text| MachineId::new(text.trim()))
 }
 
 /// Returns the identity of this boot of this machine.
 pub(crate) fn boot_id() -> Option<BootId> {
-    host::boot_id()
+    std::fs::read_to_string(BOOT_FILE)
+        .ok()
+        .map(|text| BootId::new(text.trim()))
 }
 
 /// Returns when a process started.
 ///
 /// Reports that no such process exists only when the platform says so, never
-/// when one exists and cannot be inspected.
+/// when one exists and cannot be inspected. The name field of a status line can
+/// itself hold spaces and brackets, so the fields are counted from the last
+/// closing bracket rather than from the start of the line.
 pub(crate) fn process_start(pid: u32) -> ProcessState {
-    host::process_start(pid)
-}
-
-/// What one path's identity and times are.
-pub(crate) struct Identity {
-    /// The volume the file is on.
-    pub(crate) volume: u64,
-    /// The file within that volume.
-    pub(crate) file: u128,
-    /// The length of the file in bytes.
-    pub(crate) size: u64,
-    /// The modification time in nanoseconds since the epoch.
-    pub(crate) modified_nanos: i128,
-    /// The change time in nanoseconds since the epoch.
-    pub(crate) changed_nanos: i128,
-}
-
-/// Returns the identifier of an open file within its volume.
-///
-/// # Errors
-///
-/// Fails when the platform refuses the query.
-pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
-    host::identity_of(file).map(|found| FileId::new(found.file))
+    let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(text) => text,
+        Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return ProcessState::Gone,
+        Err(_) => return ProcessState::Unreadable,
+    };
+    let Some(after_name) = text.rfind(')') else {
+        return ProcessState::Unreadable;
+    };
+    let fields: Vec<&str> = text[after_name + 1..].split_whitespace().collect();
+    match fields
+        .get(START_TIME_FIELD - 3)
+        .and_then(|f| f.parse().ok())
+    {
+        Some(start) => ProcessState::Started(start),
+        None => ProcessState::Unreadable,
+    }
 }
 
 /// Reports whether a file belongs to the user this process runs as.

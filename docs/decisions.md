@@ -5447,3 +5447,87 @@ xtask`; `cargo run -p xtask -- bench` before and after the write-path change;
 `crates/cli/tests/prove.rs`, `crates/engine/tests/damage.rs`,
 `crates/engine/tests/witness.rs`, `crates/cache/tests/witness.rs`,
 `crates/platform/tests/counting.rs`; the decision records above.
+
+## macOS is removed, and what it would cost to bring back
+
+Question: The project has promised Windows, macOS and Linux since phase 0. No
+Apple machine exists here and none is coming. Does the Apple code stay.
+
+Options: Keep it compiled and never run, on the chance a machine appears; keep
+it and stop compiling it; remove it end to end and correct every document that
+promises it.
+
+Chosen: Removed end to end.
+
+Because: for five phases the Apple code was compiled, linted, and never
+executed once. Since the client landed in phase 2 it has not even been fully
+compiled: `fetchloom-sources` and `fetchloom-cli` link `ring`, whose
+cryptography is C, and this machine has no Apple software development kit, so
+the compile check covered four crates of six. Every Apple constant in the
+deleted module was confirmed against the C library's own headers rather than
+against a running kernel, which the phase 0 record already said. Code in that
+state is not a supported platform; it is a claim, and standards.md calls a
+claim nothing verifies a defect.
+
+What was removed. `crates/platform/src/unix/macos.rs`, four hundred and two
+lines carrying the six calls `rustix` does not wrap: the volume capability
+query, preallocation, the two flush barriers, block cloning, machine and boot
+identity, and process start time. The five Apple branches in the volume probe:
+maximum path length, the clone and sparse answers read from capability bits,
+maximum component length through `pathconf`, and network backing through
+`statfs` `MNT_LOCAL`. The macOS cache and configuration paths in the binary.
+Both Apple targets from `deny.toml`'s graph and the four Apple crates
+`rustls-platform-verifier` pulled in behind them. `verify/volumes-macos.sh` and
+the three sparse disk images it built. The Apple compile lane in `cargo xtask
+verify` and the two degradations that only described it. Eight hundred and
+eighty-two lines left the tree against one hundred and ninety-nine added.
+
+`libc` left the workspace's own dependencies with it. Its stated reason in
+`deny.toml` was the six Apple calls, and no Fetchloom crate reaches it now: the
+probe's remaining `statfs` and `pathconf` answers both come from `rustix`. It
+is still in the dependency graph on the Linux targets, arriving through
+`filetime`, `getrandom` and `tempfile`, so its `deny.toml` entry stays and its
+reason now says that rather than naming code that no longer exists.
+
+`unix/` is renamed to `linux/`, and the module it dispatched to is merged into
+it. The directory was named for a family and held one member; the split between
+`unix/mod.rs` and `unix/linux.rs` existed only so a `host` alias could select
+between two Unixes, and with one Unix left the alias was an indirection that
+promised a portability the code no longer has. `#[cfg(unix)]` survives
+elsewhere in the tree, where it means what it says: the platform that is not
+Windows. `crates/platform/src/lib.rs` now selects on `target_os = "linux"`
+rather than on `unix`, so a build for another Unix fails at the module
+selection instead of compiling Linux syscalls for it.
+
+What the project gives up. macOS users, entirely. There is no partial support
+and no degraded mode: the binary does not build for an Apple target. The
+conformance statement narrows from six cross-platform directions to two, and
+the roadmap's phase 0 exit criterion narrows with it. One capability row loses
+its only witness: `normalization` answered `normalizing` on HFS+ alone, and no
+volume this matrix can build answers it now, so that row joins the
+network-backed volume as a property the test harness knows about and no
+filesystem here exercises. The Apple certificate verification path in
+`rustls-platform-verifier` is still in the dependency tree and is now
+unreachable on every target this project builds.
+
+What it would cost to bring back. The platform module is the whole of it, and
+it is one file: the six calls, the five probe branches, and `libc` back in the
+workspace, which is what was deleted here and is recoverable from this commit.
+The cache and configuration paths are four lines each. `deny.toml` needs both
+targets and the four Apple crates. The volume script needs writing again.
+None of that is the expensive part. The expensive part is the machine: without
+one, macOS returns to exactly the state this record ends -- compiled, linted,
+never executed, and constants confirmed against headers. A pure-Rust
+replacement for `ring` would let the whole workspace compile for Apple again,
+which closes the compile gap and closes none of the execution gap. Bringing
+macOS back is worth doing when there is a machine to run it on, and is worth
+nothing before that.
+
+Earlier records in this file describe macOS as a live target. They were true
+when they were written and are not amended. This record is what supersedes
+them.
+
+Sources: `cargo build --workspace`, `cargo clippy --workspace --all-targets`,
+and `cargo clippy --target x86_64-unknown-linux-musl` for the platform, engine,
+cache and archive crates, all on this machine; `cargo deny check`;
+`cargo test --workspace`.

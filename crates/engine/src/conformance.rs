@@ -44,7 +44,7 @@ fn symlink(text: &str, target: &str) -> TreeEntry {
 }
 
 /// The entries a conforming implementation must materialize identically,
-/// byte for byte, on Windows, macOS, and Linux.
+/// byte for byte, on Windows and Linux.
 ///
 /// Every directory an entry sits under is included as its own entry, as
 /// Materialization requires. The set exercises: a zero-byte file, an empty

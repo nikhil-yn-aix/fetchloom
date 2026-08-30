@@ -64,17 +64,15 @@ impl Property {
 
     fn promised_here(self) -> bool {
         let linux = cfg!(target_os = "linux");
-        let macos = cfg!(target_os = "macos");
         let windows = cfg!(windows);
         match self {
             Self::Clone | Self::Small | Self::Second => true,
-            Self::CaseSensitive => linux || macos,
-            Self::CaseInsensitive => macos || windows,
-            Self::Normalizing => macos,
+            Self::CaseSensitive => linux,
+            Self::CaseInsensitive => windows,
             Self::Memory | Self::NoOwnership | Self::NoSparse | Self::ReadOnly | Self::Fuse => {
                 linux
             }
-            Self::Network => false,
+            Self::Normalizing | Self::Network => false,
         }
     }
 }
