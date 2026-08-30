@@ -314,6 +314,8 @@ Path is the entry path with `/` separators and no normalization applied. Paths m
 
 Mode is `0644` or `0755` only, taken from the source archive or manifest rather than from a destination stat, so a platform that cannot represent an executable bit still produces the same tree digest. On such a platform a mode change in the destination cannot be detected during reconcile, and that limit is reported.
 
+A bare filesystem tree is neither an archive nor a manifest and states no mode. Every file found by walking one is `0644` on every platform, whether the walk reads a source directory or a destination, and the run reports with `degrade` that it read no mode. Reconcile therefore takes every entry's mode from the tree the run resolved and never from what it found, so a mode is never a reconcile signal on any platform rather than only on the platforms that cannot carry one. `verify` on a path holds no receipt in this build, so it reports a tree whose files are all `0644`; that tree is identical on all three platforms and differs from the one `get` reports for an archive stating `0755`, and closing that gap is what a receipt does.
+
 Content is the BLAKE3 of the file bytes. Target is the symlink target bytes.
 
 Every directory is an entry, including one that contains only other directories.
@@ -327,6 +329,7 @@ Rejected during extraction. Every rejection stops the run, emits `extract.reject
 | Absolute member path | `archive.unsafe_path` | the member |
 | A `..` component anywhere in the path | `archive.unsafe_path` | the member |
 | A backslash or drive letter in the path | `archive.unsafe_path` | the member |
+| A zip whose member paths hold both a forward slash and a backslash | `archive.unsafe_path` | the member |
 | A path that is not valid UTF-8 | `archive.unsafe_path` | the member, as bytes |
 | A path holding a NUL | `archive.unsafe_path` | the member |
 | A path longer than the volume's maximum | `archive.unsafe_path` | the member and both lengths |
@@ -349,6 +352,8 @@ Rejected during extraction. Every rejection stops the run, emits `extract.reject
 | A name the target volume refuses | `destination.unrepresentable` | the member and what the volume said |
 
 No member is ever skipped. An archive holding one rejected member cannot be fetched, and a selection excluding that member does not change that.
+
+Separators. A backslash is a legal byte in a member name and is never a separator, with one exception decided from the archive itself rather than from an assumption about its writer. When no member path in a zip holds a forward slash and at least one holds a backslash, that zip states its structure with backslashes and nothing else, and every backslash in it becomes a forward slash before any rejection above is applied, so `..\..\x` is refused as `../../x` rather than accepted as a name. The run emits `degrade` naming the archive and what was done. A zip whose member paths hold both is ambiguous and is refused. A tar is never translated.
 
 Formats. These are the only values `archive.format` takes and the only containers extraction recognizes.
 

@@ -3842,7 +3842,8 @@ number even though the probe is not permitted to name the scanner.
 Expansion ratio is enforced by the reader and not again by extraction, because
 extraction cannot see the archive's on-disk length through the Archive seam.
 
-What phase 4 inherits. The speculative ingest write. The four-files-per-object
+What phase 4 inherits, as this record first stated it, and see the amendment at
+the end of this file for what has since changed. The speculative ingest write. The four-files-per-object
 layout and the packing question. Rung two, still, because no source here publishes
 an immutable identity. Two Apple crates no machine compiles. A destination
 fingerprint store, which reconcile does without by hashing, and which phase 4's
@@ -3887,8 +3888,10 @@ build cannot reconstruct and quietly writing its holes as zeroes would be a
 different file. Anything else is refused by name rather than assumed harmless.
 
 `Compress-Archive`, the zip command that ships with Windows, writes member names
-separated by backslashes. Those are still refused, and that is the decision
-rather than an oversight. The zip specification says in 4.4.17 that all slashes
+separated by backslashes. Those were refused outright, which was the decision
+rather than an oversight and has since been narrowed by one case; the reasoning
+below is why the general rule stands and the amendment at the end of this file is
+why the one case does not fall under it. The zip specification says in 4.4.17 that all slashes
 in a stored name must be forward slashes, so such an archive is malformed;
 Microsoft's own .NET changed its writer to conform in 4.6.1 rather than teach
 readers to guess. A backslash is a legal byte in a member name on Unix, so a
@@ -3930,3 +3933,331 @@ Sources: GNU tar 1.35 output on this machine for the `./` and pax forms;
 `Compress-Archive` on this machine for the backslash form; the zip specification
 section 4.4.17; Microsoft's documentation of the .NET 4.6.1 separator change; the
 pax keyword list the `tar` crate defines; contracts.md Materialization.
+
+## Where a mode comes from, and where it cannot come from
+
+Fetching `hello-2.12.tar.gz` from ftp.gnu.org and immediately running `verify` on
+what it produced gave two different tree digests. That is the one hard rule in
+vision.md broken on the first real archive anyone fetched, and no test in this
+workspace saw it, because every test that walks a tree walks one this workspace
+wrote and no such tree carried an executable.
+
+The cause was one function. `walk` read a file's mode from a stat: the real bits
+on Unix, `0644` on Windows, which has no bit to read. `get` on an archive took
+`0755` from the archive header as contracts.md requires, and `verify` walked the
+destination and got `0644` back on Windows. The same walk also made Windows and
+Linux disagree about a plain source directory holding an executable, which nobody
+had noticed either.
+
+contracts.md was not silent about this. It says mode is taken from the source
+archive or manifest rather than from a destination stat. A stat was being read
+anyway.
+
+The decision is that a bare filesystem tree states no mode at all. It is neither
+an archive nor a manifest, so there is nothing there to take, and reading the bit
+where a volume happens to carry one produces a tree that digests differently on
+Windows and on Linux. Every file a walk finds is `0644` on every platform, and
+the run says with `degrade` that it read none. That fixes the source-directory
+disagreement outright: one directory holding an executable now digests the same
+on all three platforms, which it did not before.
+
+It does not make `get` and `verify` agree for an archive that states `0755`, and
+nothing in this phase can. `get` has the archive and must report what the archive
+said. `verify` has a path and, on Windows, has no way to learn that a file was
+meant to be executable, because the volume does not carry the fact. There are
+only three answers available. Read the stat where the platform has it, which is
+what was there and makes Windows and Linux disagree. Refuse to answer, which
+removes a command that has worked since phase 1. Or answer with the modes a walk
+can state and say so. The third is the only one that keeps one answer on all
+three platforms, and the gap it leaves is exactly the gap a receipt closes,
+because a receipt is the thing that remembers what the source said. `verify`
+compares against a receipt in phase 4. Until then it reports a tree with every
+file at `0644` and emits a `degrade` naming that it read no mode.
+
+Reconcile follows from the same rule rather than from a second one. It takes each
+entry's mode from the tree the run resolved and never from what it found, so a
+mode is not a reconcile signal on any platform. contracts.md already described
+that consequence for a platform that cannot represent the bit; it is now true
+everywhere, which is one behavior instead of two.
+
+Costs: a mode change in a destination is invisible to reconcile on Linux, where
+it previously would have been caught. That is the price of one answer on three
+platforms, and it is the price contracts.md already named. A `verify` digest and
+a `get` digest of the same archive tree are two different numbers until receipts
+land, and anyone comparing them by hand will be confused; the `degrade` is there
+to say why.
+
+Sources: contracts.md Materialization; `hello-2.12.tar.gz` fetched from
+ftp.gnu.org on this machine; vision.md on one tree digesting the same everywhere.
+
+## Running it twice against an archive
+
+The second run of `get` against a directory reported `unchanged` and wrote
+nothing. The second run against an archive did not reconcile at all: it found the
+destination present and failed with `destination.foreign` before looking at what
+the destination held. The phase 3 headline was true for half the sources it
+claimed.
+
+Reconcile needs the tree a request resolves to before it decides whether anything
+needs writing, and for an archive that tree was only obtainable by extracting,
+which writes. Contracts require that an unchanged run write nothing at all, no
+staging directory and no rename, so extracting first was not available.
+
+The archive crate now answers the question without writing. `resolve` walks the
+same selection and plan extraction walks and hashes each selected member's bytes
+as they stream past, producing the entries extraction would have written and
+creating nothing. The two paths share the member listing, the selection, the
+canonical path, and the plan, so there is one answer to what an archive holds and
+two things done with it rather than two answers.
+
+One thing `resolve` cannot find is a name the destination volume refuses, because
+only creating the name on that volume finds it, which is the whole point of the
+collision decision. That is not a gap: `resolve` answers what the request
+resolves to, and any outcome that needs writing goes through extraction, which
+answers what the volume accepts. A destination that already holds the tree was
+written by an extraction that already asked.
+
+Costs: an unchanged second run of an archive reads and decompresses the whole
+archive to learn it has nothing to do, and hashes the destination to compare. It
+writes nothing, which is what was promised, but it is not free, and a receipt is
+what makes it free later.
+
+## A lane that fetches something nobody here wrote
+
+Nothing in this project had ever fetched from a server it did not also run.
+Forty-five hostile archives, a local test source, and an adversarial server that
+agrees with the client by construction. The mode defect and the archive
+reconcile defect both survived every one of them and died to four commands
+against ftp.gnu.org.
+
+`cargo xtask verify` now carries a `network` lane that fetches three real
+archives and holds each to a tree digest recorded in the task. It asserts the
+fetched tree, the entry count, that a second run reports `unchanged` and writes
+zero bytes, and that `verify` reports its own recorded tree. The subjects are
+`hello-2.12.tar.gz` and `tar-1.34.tar.xz` from the GNU FTP archive, which keeps
+every release it has ever published, and `six-1.16.0.tar.gz` from PyPI, whose
+files are immutable once uploaded and whose `packages/source` form redirects, so
+the lane exercises a redirect against a server nobody here wrote.
+
+A host that cannot be reached skips the lane and says so, and a skipped step is
+counted as neither a pass nor a failure in the summary. A lane that passes when
+it ran nothing is worse than no lane.
+
+Costs: the gate now depends on two external hosts. When they are down the gate
+reports a skip and a degradation rather than green, which is the honest answer
+and is also a gate that can no longer be fully green offline. The recorded
+digests are values this build produced rather than values derived from the
+specification, so they lock a regression rather than prove a truth; what makes
+them worth recording is that the Linux lane must produce the same ones.
+
+## One decompression for the archive, not one per member
+
+The network lane found this the first time it fetched an xz archive. Fetching
+`gzip-1.12.tar.xz`, 825 KB holding 515 members, took two minutes and forty-five
+seconds. The same fetch of a gzip archive of similar size took seconds.
+
+The cause was not xz. `open_member` rewound the source and rebuilt the
+decompressor for every member, then read forward to that member's offset. For
+515 members that is 515 decompressions of the stream prefix, which is quadratic
+in the member count and hidden entirely behind gzip being cheap enough that a
+462-member `hello-2.12.tar.gz` still finished. Nothing in the corpus has more
+than a handful of members, so nothing in the corpus could show it.
+
+The reader now holds one decompressed stream open between members and moves
+forward through it. A member that sits behind where the stream has already
+reached rebuilds it, which happens only for a hard link naming an earlier member,
+and extraction otherwise reads members in the order the archive holds them. The
+member body advances the stream's position by exactly what it yielded, so a body
+dropped before it is exhausted leaves the stream describing itself correctly
+rather than silently desynchronized.
+
+Measured, same machine, same debug binary, same archive:
+
+  before  2 m 45.6 s
+  after         8.9 s
+
+That is 18.6 times, and the tree digest is byte-identical either way
+(`blake3:efed3329…`), which is the only thing that makes the number worth
+anything.
+
+Costs: the stream is now shared state between the reader and the body it handed
+out, held behind the same `Rc<RefCell<…>>` the source already used. Two bodies
+open at once would interleave; the seam already documents that a caller reads one
+body to completion before opening the next, and both callers in this workspace do.
+An archive read out of order pays the old cost for the members that go backwards.
+
+The archive is still decompressed twice overall, once to list members and once to
+read them, which the compressed-tar record already covers and which a member
+index would close.
+
+## Not writing what the cache already holds
+
+`get` of a local archive ran twice reported `unchanged` and still wrote the whole
+archive into the cache, because `ingest` wrote every byte to a scratch file and
+only then learned the digest, discovering the object was already there and
+deleting what it had written. That was recorded during phase 3 as a known cost and
+left alone, on the grounds that nothing here could measure whether a write per hit
+beat a read per miss.
+
+It is no longer a question of measurement. Contracts say a run with nothing to do
+writes nothing, and the deterministic counters are what the gate reads. A second
+run that reports `unchanged` while `bytes_written` equals the size of the source
+is not telling the truth about what it did.
+
+`ingest` now reads the file once to learn its digest, writing nothing, and only
+reads it a second time to store it when the cache does not already hold it. Cold
+costs one extra read of the source; warm costs no write at all.
+
+  cold   read 2x, write 1x
+  warm   read 1x, write 0x
+
+Before, both ran read 1x, write 1x. Anything fetched more than once is ahead;
+anything fetched exactly once pays one extra sequential read, which on every
+platform here comes back out of the page cache the write just filled.
+
+A remote object cannot do this, and the network lane says so rather than
+pretending: nothing yet tells this build that a location still holds the object it
+already has without downloading it again. That is rung two of the resume ladder
+and it needs a source that publishes an immutable identity. Until then, the lane
+asserts what the contract actually promises for a second run, which is that
+nothing under the destination moved, by comparing every path, length, and write
+time across the two runs.
+
+## Amendment to the phase 3 gate: what four real commands found
+
+The phase 3 gate above was recorded against a green matrix, four hundred and
+sixteen passing tests, and a clean tree. It was wrong about three things, and all
+three were found by pointing a release binary at ftp.gnu.org and typing four
+commands. This amends that record rather than replacing it, because what it got
+wrong is more useful than what it got right.
+
+**`get` and `verify` disagreed about the same directory.** Fetching
+`hello-2.12.tar.gz` and verifying what it produced, seconds apart, gave two
+different tree digests. `walk` read each file's mode from a stat, which
+contracts.md forbids in the sentence that defines the field. Windows and Linux
+also disagreed about a plain source directory holding an executable. The mode
+record above says what a mode may come from now and what `verify` cannot answer
+until a receipt exists. No test caught it because no tree this workspace writes
+carried an executable, and the conformance corpus that does hold one is never
+driven through a walk.
+
+**The headline was true for half its sources.** `get` run twice against a
+directory reported `unchanged` and wrote nothing. `get` run twice against an
+archive, local or remote, failed with `destination.foreign` without ever looking
+at what the destination held. Reconcile needed a tree, and for an archive the only
+way to get one was to extract, which writes. The archive crate now answers it
+without writing, and both paths reach the same four outcomes through one
+settlement.
+
+**A relative `--output` failed and lied about why.** `Path::parent` answers
+`Some("")` for a single-component relative path, and an empty path handed to a
+filesystem call is not the working directory it stands for. The failure surfaced
+as `cache.corrupt` with a next action that began with a bare colon and named
+nothing. `--output` and `--cache-dir` are now resolved against the working
+directory once, where the user names them, rather than travelling through joins
+and parents in relative form, and the seam no longer receives a path it cannot
+open. The kind was wrong because the platform seam labels every path it cannot
+open `cache.corrupt`, which is right for the cache paths that are most of its
+callers and wrong for a destination; the seam cannot tell them apart, so the fix
+is to never hand it an unresolvable path rather than to have it guess better.
+
+Two things the gate listed as inherited by phase 4 are done. The speculative
+ingest write is fixed and the reason it stopped being a measurement question is
+recorded above. Reading one archive member no longer costs one decompression of
+the whole prefix, which was quadratic and which nothing in a forty-five-archive
+corpus of small archives could show.
+
+One thing the gate stated is now narrower. A zip whose member paths hold a
+backslash and no forward slash anywhere is separator-written by evidence rather
+than by assumption, and its backslashes become forward slashes before any
+rejection is applied, so a traversal member is still refused as a traversal. A zip
+holding both is ambiguous and still refused, and a tar is never translated. The
+cost is real and accepted: a Unix member genuinely named `weird\name.txt`, alone
+in an archive with no directories, is reinterpreted as `weird/name.txt`, and the
+run says so.
+
+What phase 4 inherits after this amendment: `verify` against a receipt, which is
+the only thing that can make `get` and `verify` agree about an archive stating
+`0755`. The four-files-per-object layout and the packing question. Rung two, and
+with it a remote second fetch that does not download what the cache already holds.
+Two Apple crates no machine compiles. The archive is still decompressed twice,
+once to list and once to read, which a member index would close.
+
+The lesson, and it is the one the `./` and pax findings were already teaching: a
+corpus you wrote yourself tests your writer as much as your reader. The gate now
+carries a `network` lane that fetches three archives nobody here made and holds
+each to a recorded tree digest, and it skips rather than passes when no host can
+be reached.
+
+## The write the counter could not see
+
+Inverting the local cache path made the benchmark fail, which is the counters
+doing their job and is also the more interesting half of the story.
+
+The first attempt at not writing what the cache already holds was to hash the
+source, check, and only write on a miss. That works and the warm run writes
+nothing, but it costs a second read of every source on a cold run, and the gate
+said so: `cold-cache bytes-read` went 16 MiB to 32 MiB. Trading a read for a write
+is defensible and it was still the wrong shape.
+
+The right shape is that the run has to write the destination regardless. So the
+source is read once and written straight to its destination, hashed in the same
+pass, and the cache is then handed that file rather than the source. `adopt` takes
+a digest the caller just computed, shares blocks with the file where the volume
+can, and does nothing at all when the cache already holds the object.
+
+Real bytes moved, on a volume that cannot clone:
+
+  before   read source, write cache scratch, rename, copy object to destination
+  after    read source, write destination, copy destination to cache scratch, rename
+
+That is the same work, and on a volume that can clone the copy in the second line
+is a block share and the after column is strictly less. On a warm cache the after
+column stops after the second step: no cache write at all, where before there was
+a full one.
+
+The counter then reported `cold-cache bytes-written` rising 16 MiB to 32 MiB, and
+that is not more work. It is work that was always happening and that the counter
+could not see: `clone_or_copy` goes through the Platform seam, which holds no work
+counter, so the copy from the cache object to the destination was invisible. The
+old 16 MiB was an undercount of a 32 MiB operation. The baseline is re-recorded
+rather than the change reverted, because the number changed meaning and the new
+meaning is the honest one.
+
+`adopt` counts the length it adopted rather than what the volume physically wrote,
+so a cloning volume and a copying volume report the same figure. That is
+deliberate: a metric the gate compares across machines has to be a property of the
+inputs, not of the filesystem underneath.
+
+What this says about the metric, which the counters record above already began:
+`bytes_written` covers what the cache and the materializer write through their own
+paths and does not cover what the Platform seam moves on their behalf. It catches
+a change in how much this program writes; it does not catch a change in how much
+a clone falls back to a copy.
+
+Wall time is not gated and this is why: three consecutive runs of the unchanged
+binary on this machine measured one-large-file at 773 ms, 2364 ms, and 4165 ms.
+Five times, same code, same input.
+
+## A cache that cannot lock stops the run
+
+The container lane failed on its first network fetch with `cache.corrupt` and the
+advice to run without `--no-cache`, which the user had not given. The cache root
+was under the bind-mounted workspace, the platform correctly saw a network volume
+whose locks cannot be trusted across the machines that share it, and `cache::open`
+degraded to running without a cache. Every remote fetch then failed, because this
+build streams a remote object through the cache and there was none.
+
+contracts.md is not ambiguous here: a cache on a filesystem that cannot express
+cross-user locking is refused with `cache.locking_unsupported` rather than used.
+It is now refused, alongside the format mismatch that was already refused, and for
+the same reason: degrading produces a run that cannot do the thing it was asked
+to do and then blames a flag nobody typed.
+
+The lane itself also moved off the workspace and into the platform's temporary
+directory, which is where a test that writes hundreds of megabytes belonged
+anyway.
+
+Both halves matter. The refusal is the contract. The lane's location is why the
+contract was reachable at all: nothing before it had ever run this binary against
+a real server from inside the container.
