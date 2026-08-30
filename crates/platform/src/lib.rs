@@ -154,8 +154,10 @@ fn cross_volume(from: &Path, to: &Path) -> Error {
 }
 
 fn containing_directory(path: &Path) -> PathBuf {
-    path.parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 fn random_suffix() -> String {
