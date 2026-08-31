@@ -6009,3 +6009,39 @@ still read nowhere. What would clear it is one experiment nobody has run -- a
 million-member tar, and a cache with a million objects, measured -- and a
 resident set query behind the Platform seam to enforce the ceiling against.
 Both are work, not lines.
+
+## What packing does to per-user ownership
+
+contracts.md:518 says objects are writable only by their creator and that prune
+removes only objects the invoking user created. A pack belongs to the process
+and boot that writes it, so ownership of a small object is ownership of its
+pack. That is the same statement at a coarser grain and not a weaker one: two
+users on one machine have different process identifiers, so they write different
+packs, and every object in a pack was written by the user who owns it. There is
+no arrangement in which one pack holds two users' objects.
+
+The Linux volumes suite caught this, because its test published two objects as
+one user and then gave one of them away, which a pack makes impossible to
+express. The test now gives away the pack, which is what actually happens, and
+keeps a large object loose so that both placements are covered by one run.
+
+Sources: `cargo test -p fetchloom-cache --test volumes` under the Linux lane.
+
+## Two defects in the verification harness itself
+
+The cancellation tests waited for entries to appear in the destination. A
+directory publish creates the destination in one rename at the end, so under the
+load of a full verify the interrupt landed before there was anything to see, and
+both tests failed there while passing when run alone. They wait for the run to
+say `plan.ready` on its own event stream now, which is true whatever the run
+publishes and when, and they finish in three seconds rather than twenty.
+
+`verify/volumes-linux.sh` mounted six images with `mount -o loop`, which takes a
+loop device and never gives it back. The machine has eight and Docker holds two
+for its own images, so the first run of the day passed and every run after it
+failed on a mount, with a different image named each time. The script releases
+what a previous run left and asks loop-control for a device rather than taking
+whatever is there, so the count the machine happened to start with no longer
+decides whether the lane runs.
+
+Neither is a defect in the product, and both were making the gate lie about it.

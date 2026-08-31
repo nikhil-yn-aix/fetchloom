@@ -119,21 +119,27 @@ fn a_cache_split_across_volumes_is_refused_when_it_is_opened() {
 }
 
 #[test]
-fn prune_skips_an_object_another_user_created_and_reports_it() {
+fn prune_skips_a_pack_another_user_wrote_and_reports_it() {
     let Some(other) = support::another_owner() else {
         return;
     };
     let (_scratch, held) = support::cache();
-    let mine = support::publish(&held, &bytes_of(1024, 3));
+    let large = usize::try_from(fetchloom_engine::limits::PACK_THRESHOLD).unwrap() + 1;
+    let mine = support::publish(&held, &bytes_of(large, 3));
     let theirs = support::publish(&held, &bytes_of(1024, 4));
-    support::give_away(&held.layout().object(theirs), &other);
+    let pack = held
+        .placement(theirs)
+        .expect("the cache did not hold what it published")
+        .container()
+        .to_path_buf();
+    support::give_away(&pack, &other);
 
     held.prune(std::time::Duration::ZERO).unwrap();
     let report = held.prune(std::time::Duration::ZERO).unwrap();
 
     assert!(
         held.contains(theirs).unwrap(),
-        "prune removed an object another user created"
+        "prune removed an object out of a pack another user wrote"
     );
     assert!(
         !held.contains(mine).unwrap(),

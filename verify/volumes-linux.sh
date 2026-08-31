@@ -6,6 +6,16 @@ root=/mnt/fetchloom
 images=/var/tmp/fetchloom-images
 mkdir -p "$root" "$images"
 
+# A loop device outlives the container that attached it, and the machine has
+# eight. Release the ones a previous run left before asking for six more.
+for name in btrfs xfs fat small second readonly; do
+  umount "$root/$name" 2>/dev/null || true
+done
+umount "$root/fuse" 2>/dev/null || true
+losetup -a | awk -F: -v images="$images" '$0 ~ images {print $1}' | while read -r device; do
+  losetup -d "$device" 2>/dev/null || true
+done
+
 truncate -s 1G "$images/btrfs.img"
 mkfs.btrfs -q "$images/btrfs.img"
 truncate -s 1G "$images/xfs.img"
@@ -23,12 +33,20 @@ for name in btrfs xfs fat small second readonly; do
   mkdir -p "$root/$name"
 done
 
-mount -o loop "$images/btrfs.img" "$root/btrfs"
-mount -o loop "$images/xfs.img" "$root/xfs"
-mount -o loop,umask=000,uid=65534,gid=65534 "$images/fat.img" "$root/fat"
-mount -o loop "$images/small.img" "$root/small"
-mount -o loop "$images/second.img" "$root/second"
-mount -o loop,ro "$images/readonly.img" "$root/readonly"
+# `mount -o loop` takes whatever loop device is already there and fails when
+# every one of them is taken, which is what a previous run leaves behind.
+# Asking loop-control for a device creates one, so the lane does not depend on
+# how many the machine happened to start with.
+attach() {
+  losetup --find --show "$1"
+}
+
+mount "$(attach "$images/btrfs.img")" "$root/btrfs"
+mount "$(attach "$images/xfs.img")" "$root/xfs"
+mount -o umask=000,uid=65534,gid=65534 "$(attach "$images/fat.img")" "$root/fat"
+mount "$(attach "$images/small.img")" "$root/small"
+mount "$(attach "$images/second.img")" "$root/second"
+mount -o ro "$(attach "$images/readonly.img")" "$root/readonly"
 chmod 1777 "$root/btrfs" "$root/xfs" "$root/small" "$root/second"
 
 mkdir -p "$root/fuse-source" "$root/fuse"
