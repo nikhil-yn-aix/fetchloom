@@ -34,9 +34,6 @@ pub struct DamagedRange {
 }
 
 /// What was found when an object failed verification.
-///
-/// Enough for a person to understand the damage without running anything
-/// again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Diagnosis {
@@ -49,9 +46,6 @@ pub struct Diagnosis {
     /// The byte ranges that failed against the tree, ascending.
     pub damaged: Vec<DamagedRange>,
     /// Why `damaged` is empty, absent when it is not.
-    ///
-    /// An empty list means the damage could not be narrowed, never that there
-    /// was none.
     pub localized: Option<NotLocalized>,
     /// The redacted location the bytes came from, when the cache recorded one.
     pub source: Option<String>,
@@ -98,8 +92,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Reads the diagnosis beside a quarantined object.
-    ///
-    /// Returns nothing when none was written.
     ///
     /// # Errors
     ///

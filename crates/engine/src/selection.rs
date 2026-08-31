@@ -26,12 +26,6 @@ impl Glob {
     }
 
     /// Reports whether this pattern matches a canonical member path.
-    ///
-    /// Takes a path separated by forward slashes. A star matches any run of
-    /// bytes within one component, a whole component of two stars matches any
-    /// number of components including none, a question mark matches exactly one
-    /// byte within one component, and every other byte is literal. Matching is
-    /// on raw bytes and is case-sensitive.
     #[must_use]
     pub fn matches(&self, path: &str) -> bool {
         let pattern: Vec<&str> = self.0.split('/').collect();
@@ -82,8 +76,6 @@ fn matches_component(pattern: &str, name: &str) -> bool {
 }
 
 /// How member paths are rewritten on the way to the destination.
-///
-/// Written as the same text the flag takes.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -115,9 +107,6 @@ impl std::str::FromStr for Layout {
     type Err = String;
 
     /// Reads the text a layout is written as.
-    ///
-    /// Takes `keep` or `flatten:<n>`. Fails with the text that was given when
-    /// it is neither.
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         if text == "keep" {
             return Ok(Self::Keep);
@@ -209,13 +198,6 @@ impl Selection {
     }
 
     /// Applies this selection to a list of canonical member paths.
-    ///
-    /// Takes the members in the order the archive holds them. Returns the
-    /// members that survive the include and exclude lists, each with the path
-    /// the layout leaves it under, and every directory those paths need that no
-    /// selected member already names. A directory the layout leaves with no
-    /// path is the destination itself and is dropped; the directories the
-    /// surviving members need are synthesized either way.
     ///
     /// # Errors
     ///

@@ -1,5 +1,5 @@
-//! Reading an archive's tree without writing it answers exactly what writing
-//! it would have answered.
+//! Reading an archive's tree without writing it answers exactly what writing it
+//! would have answered.
 
 #![expect(
     clippy::unwrap_used,

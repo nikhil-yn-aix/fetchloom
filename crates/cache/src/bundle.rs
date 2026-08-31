@@ -32,8 +32,6 @@ pub struct BundleReport {
 impl<P: Platform> Cache<P> {
     /// Writes every object the cache holds into a bundle.
     ///
-    /// Takes where the bundle is written. Returns what it holds.
-    ///
     /// # Errors
     ///
     /// Fails when an object cannot be read and when the bundle cannot be
@@ -91,13 +89,8 @@ impl<P: Platform> Cache<P> {
         Ok(report)
     }
 
-    /// Reads a bundle into the cache, publishing nothing until all of it
-    /// checks out.
-    ///
-    /// Every member is staged, hashed as it is read, and held against the name
-    /// it arrived under. A member whose bytes hash to something else, a member
-    /// named anything but a digest, and a bundle that ends early all fail with
-    /// nothing published.
+    /// Reads a bundle into the cache, publishing nothing until all of it checks
+    /// out.
     ///
     /// # Errors
     ///
@@ -248,9 +241,6 @@ fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
 }
 
 /// Reads the members of a bundle in the order they were written.
-///
-/// Every member is found by walking the stream from the beginning, and every
-/// digest comes from the bytes that were read.
 pub struct BundleReader {
     file: std::fs::File,
     at: u64,

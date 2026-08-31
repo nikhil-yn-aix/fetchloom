@@ -312,10 +312,6 @@ fn measure_shapes(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeRes
 }
 
 /// Runs the network lane on its own.
-///
-/// Takes the workspace root and, optionally, the binary to run, which the
-/// Linux lane supplies. Returns success when the lane passed and when it
-/// skipped.
 pub(crate) fn run_network(workspace: &Path, arguments: &[String]) -> ExitCode {
     let binary = arguments.first().map(PathBuf::from);
     match network::run(workspace, binary.as_deref()) {

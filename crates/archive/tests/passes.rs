@@ -61,8 +61,8 @@ fn archive(count: usize) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
-/// Extracts an archive of `count` members and returns the compressed bytes
-/// that were read to do it.
+/// Extracts an archive of `count` members and returns the compressed bytes that
+/// were read to do it.
 fn compressed_bytes_read(count: usize) -> (u64, u64) {
     let bytes = archive(count);
     let length = bytes.len() as u64;

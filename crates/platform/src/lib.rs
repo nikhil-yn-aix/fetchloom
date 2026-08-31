@@ -40,8 +40,6 @@ use crate::linux as imp;
 use crate::windows as imp;
 
 /// A name fragment no other probe uses at the same moment.
-///
-/// Returns this process's identifier and a count that never repeats within it.
 pub(crate) fn probe_tag() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -74,8 +72,6 @@ pub struct NativePlatform {
 
 impl NativePlatform {
     /// Builds the platform for this machine.
-    ///
-    /// Takes where the run counts the file operations it performs.
     #[must_use]
     pub fn new(work: std::sync::Arc<fetchloom_engine::work::WorkCounter>) -> Self {
         Self {
@@ -92,8 +88,6 @@ impl NativePlatform {
     }
 
     /// Returns the volume a path is on, as far as its own text says.
-    ///
-    /// The key the clone answer for a volume is remembered under.
     fn volume_key(path: &Path) -> std::ffi::OsString {
         path.components()
             .next()
@@ -459,9 +453,6 @@ enum Waiting {
 const LOCK_ATTEMPTS: u32 = 16;
 
 /// Takes an advisory lock over the file a path currently names.
-///
-/// The identity of the locked handle is compared against the identity of the
-/// path afterwards, and the acquisition is retried when they differ.
 fn acquire(path: &Path, sharing: Sharing, waiting: Waiting) -> Result<Option<PlatformLock>, Error> {
     for _ in 0..LOCK_ATTEMPTS {
         let file = open_lock_file(path)?;

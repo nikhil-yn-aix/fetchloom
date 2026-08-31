@@ -46,9 +46,6 @@ pub struct Walked {
     /// How many bytes those files hold.
     pub bytes: u64,
     /// The directory every relative path is taken from.
-    ///
-    /// A reference naming a directory walks that directory. A reference naming
-    /// one object walks its parent and takes only that object.
     pub root: PathBuf,
 }
 
@@ -78,10 +75,6 @@ fn entry_path_of(relative: &Path) -> Result<EntryPath, Error> {
 }
 
 /// Walks a source tree and returns the entries and files it holds.
-///
-/// Takes the root of the tree. Returns every directory, file, and symbolic link
-/// under it as an entry, with files also listed for copying. The root itself is
-/// not an entry.
 ///
 /// # Errors
 ///
@@ -173,10 +166,6 @@ fn walk_one(
 }
 
 /// Copies one file and returns its length and both its digests.
-///
-/// Takes the run's digester, the processor pool, the source, and the
-/// destination, which must not already exist. Copies the bytes and digests them in the same pass, so the
-/// file is never read twice.
 ///
 /// # Errors
 ///

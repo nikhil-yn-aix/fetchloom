@@ -1,15 +1,11 @@
-//! A cheaply cloned handle onto one seekable source, so a member body can
-//! keep reading after the call that opened it returns.
+//! A cheaply cloned handle onto one seekable source, so a member body can keep
+//! reading after the call that opened it returns.
 
 use std::cell::RefCell;
 use std::io::{Read, Result, Seek, SeekFrom};
 use std::rc::Rc;
 
 /// A source shared between the archive reader and the bodies it hands out.
-///
-/// Every clone reads and seeks the same underlying source. Callers are
-/// expected to read one member body to completion before opening the next,
-/// as the seam contract requires; nothing here enforces that ordering.
 pub struct SharedSource<R> {
     inner: Rc<RefCell<R>>,
 }

@@ -11,8 +11,6 @@ use crate::Cache;
 use crate::record::{self, Mark};
 
 /// How long an object stays marked before a sweep may remove it.
-///
-/// A race window rather than a retention policy, and not configurable.
 pub const GRACE: Duration = Duration::from_secs(60);
 
 /// Marks what nothing refers to, then removes what has been marked longer than
@@ -83,8 +81,6 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
 }
 
 /// Removes the quarantined objects this user created.
-///
-/// A quarantined object takes no grace period and is removed under its lock.
 fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> Result<(), Error> {
     for digest in cache.quarantined()? {
         let path = cache.layout().quarantined(digest);

@@ -34,9 +34,6 @@ fn binary() -> &'static str {
 }
 
 /// Reports whether this machine lets this process create a symbolic link.
-///
-/// Windows grants the privilege only under developer mode or elevation, so a
-/// run without it proves nothing about materialization and says so.
 fn links_are_permitted(directory: &Path) -> bool {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
@@ -146,9 +143,6 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
 }
 
 /// The directory every command in this file runs in.
-///
-/// A run writes its lock beside the working directory, so each test binary is
-/// given one of its own rather than writing into the workspace.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

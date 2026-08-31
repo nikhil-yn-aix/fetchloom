@@ -55,8 +55,6 @@ pub struct Lock {
 impl LockedDataset {
     /// Checks what a run resolved against what the lock pins.
     ///
-    /// Takes what the lock holds for this dataset and what the run resolved.
-    ///
     /// # Errors
     ///
     /// Fails with `integrity.mismatch` naming the field, the value the lock
@@ -103,10 +101,6 @@ impl LockedDataset {
 
 impl LockedDataset {
     /// Checks the request a run is about to make against what the lock pins.
-    ///
-    /// Takes the digest of the manifest the run resolved from, the release it
-    /// names, and the selection the run was given. Everything compared here is
-    /// compared before a byte moves.
     ///
     /// # Errors
     ///
@@ -231,8 +225,6 @@ impl Lock {
     }
 
     /// Writes the lock at a path, in the one canonical form.
-    ///
-    /// Writes beside the lock and renames onto it.
     ///
     /// # Errors
     ///

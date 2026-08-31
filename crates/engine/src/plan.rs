@@ -109,9 +109,6 @@ impl Plan {
 
     /// Reads a plan from a document written in any accepted syntax.
     ///
-    /// Takes the bytes, the syntax to read them in, and the bounds a document
-    /// may not exceed.
-    ///
     /// # Errors
     ///
     /// Fails with `manifest.invalid` when the document does not parse or holds

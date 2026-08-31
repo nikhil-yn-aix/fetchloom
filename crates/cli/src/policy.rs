@@ -22,9 +22,6 @@ use crate::surface::{DurabilityChoice, TransferFlags, VerifyChoice};
 use crate::terminal::Streams;
 
 /// Builds the environment variable name a host's credential is read from.
-///
-/// Takes a host name. Returns the variable name with the host uppercased and
-/// every character that is not a letter or a digit replaced by an underscore.
 #[must_use]
 pub fn token_variable(host: &Host) -> String {
     let mut name = String::from("FETCHLOOM_TOKEN_");
@@ -63,10 +60,6 @@ impl std::fmt::Debug for CommandLinePolicy<'_> {
 
 impl<'a> CommandLinePolicy<'a> {
     /// Builds the policy for a run.
-    ///
-    /// Takes the resolved settings, what the streams are attached to, whether
-    /// terms were asserted on the command line, and where to read the
-    /// environment and emit events.
     #[must_use]
     pub fn new(
         settings: Settings,
@@ -207,9 +200,6 @@ impl Policy for CommandLinePolicy<'_> {
 }
 
 /// Returns the check a run applies to a cache hit and to a destination entry.
-///
-/// One policy governs both sides: whether a recorded fingerprint may stand in
-/// for reading the bytes.
 fn verification_of(transfer: &TransferFlags) -> VerificationPolicy {
     match transfer.verify {
         Some(VerifyChoice::Always) => VerificationPolicy::Always,

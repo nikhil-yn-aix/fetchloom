@@ -4,10 +4,6 @@
 )]
 
 //! The Windows calls the seam needs, each wrapped once.
-//!
-//! Every unsafe block here states the invariant it relies on. Opening a handle
-//! is done through the standard library rather than through `CreateFileW`, so
-//! the only unsafe surface is the queries and the operations themselves.
 
 use std::ffi::c_void;
 use std::fs::File;
@@ -52,9 +48,6 @@ use windows_sys::Win32::System::Threading::{
 const DRIVE_REMOTE: u32 = 4;
 
 /// The flag that permits an unprivileged process to create a symbolic link.
-///
-/// `windows-sys` types it as a symbolic link flag; the call takes the two flags
-/// combined.
 const ALLOW_UNPRIVILEGED_CREATE: u32 = 0x2;
 
 /// Encodes a path the way every wide-character Windows call expects it.
@@ -71,10 +64,6 @@ fn wide_text(text: &str) -> Vec<u16> {
 }
 
 /// Opens a handle to a file or a directory for querying.
-///
-/// Takes any existing path. Returns an open handle, which backup semantics
-/// makes legal for a directory as well as a file. Fails when the path cannot be
-/// opened.
 pub(crate) fn open_for_query(path: &Path) -> io::Result<File> {
     File::options()
         .read(true)
@@ -83,10 +72,6 @@ pub(crate) fn open_for_query(path: &Path) -> io::Result<File> {
 }
 
 /// Reads the identifier of a file and of the volume holding it.
-///
-/// Takes an open handle. Returns the volume serial number and the whole
-/// sixteen-byte file identifier, which is the one unique on `ReFS`. Fails when
-/// the platform refuses the query.
 pub(crate) fn id_info(file: &File) -> io::Result<(u64, u128)> {
     let mut info = FILE_ID_INFO {
         VolumeSerialNumber: 0,
@@ -114,10 +99,6 @@ pub(crate) fn id_info(file: &File) -> io::Result<(u64, u128)> {
 }
 
 /// Reads the times the filesystem records for a file.
-///
-/// Takes an open handle. Returns the last write time and the change time, both
-/// in the platform's own hundred-nanosecond units. Fails when the platform
-/// refuses the query.
 pub(crate) fn basic_info(file: &File) -> io::Result<(i64, i64)> {
     let mut info = FILE_BASIC_INFO {
         CreationTime: 0,
@@ -151,10 +132,6 @@ pub(crate) struct VolumeInformation {
 }
 
 /// Reads what a volume advertises about itself.
-///
-/// Takes a handle to any file or directory on the volume. Returns the longest
-/// component it accepts and its capability flags. Fails when the platform
-/// refuses the query.
 pub(crate) fn volume_information(file: &File) -> io::Result<VolumeInformation> {
     let mut serial = 0u32;
     let mut max_component_length = 0u32;
@@ -182,11 +159,6 @@ pub(crate) fn volume_information(file: &File) -> io::Result<VolumeInformation> {
 }
 
 /// Renames a file or a directory onto its final name.
-///
-/// Takes the two paths and whether the rename must reach the disk before it
-/// returns. Replaces an existing target. Never copies across volumes. Fails
-/// when the rename does
-/// not complete.
 pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<()> {
     let source = wide(from);
     let target = wide(to);
@@ -203,9 +175,6 @@ pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<
 }
 
 /// Pushes a file's buffered bytes to the device.
-///
-/// Takes an open handle. Fails when the platform reports the flush did not
-/// complete.
 pub(crate) fn flush_file_buffers(file: &File) -> io::Result<()> {
     // SAFETY: the handle is owned and open for the call.
     let ok = unsafe { FlushFileBuffers(file.as_raw_handle() as HANDLE) };
@@ -216,10 +185,6 @@ pub(crate) fn flush_file_buffers(file: &File) -> io::Result<()> {
 }
 
 /// Reserves clusters for a file and then sets its length.
-///
-/// Takes an open handle and the length to reserve. The allocation is set before
-/// the end of file.
-/// Fails when the volume has no room.
 pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
     let signed = i64::try_from(length).unwrap_or(i64::MAX);
     let allocation = FILE_ALLOCATION_INFO {
@@ -257,10 +222,6 @@ pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
 }
 
 /// Shares the blocks of one file with another rather than writing them again.
-///
-/// Takes the source and the already-created target, both open, and how many
-/// bytes to share. Fails on every volume that does not reference-count blocks,
-/// which is every volume except `ReFS` and a Dev Drive.
 pub(crate) fn duplicate_extents(source: &File, target: &File, length: u64) -> io::Result<()> {
     let request = DUPLICATE_EXTENTS_DATA {
         FileHandle: source.as_raw_handle() as HANDLE,
@@ -290,10 +251,6 @@ pub(crate) fn duplicate_extents(source: &File, target: &File, length: u64) -> io
 }
 
 /// Creates a symbolic link with the given target.
-///
-/// Takes the target text and where the link goes. Fails when this process may
-/// not create one, which covers a missing privilege, Developer Mode being off,
-/// and a volume without reparse points.
 pub(crate) fn create_symlink(target: &str, link: &Path, directory: bool) -> io::Result<()> {
     let target_wide = wide_text(target);
     let link_wide = wide(link);
@@ -310,9 +267,6 @@ pub(crate) fn create_symlink(target: &str, link: &Path, directory: bool) -> io::
 }
 
 /// Reports whether a path sits on a volume reached over a network.
-///
-/// Takes any path. Returns whether the drive it names is a remote one, and
-/// false when the drive cannot be determined.
 pub(crate) fn is_remote_drive(path: &Path) -> bool {
     let text = path.to_string_lossy();
     if text.starts_with("\\\\") {
@@ -330,9 +284,6 @@ pub(crate) fn is_remote_drive(path: &Path) -> bool {
 }
 
 /// Reads a string value from the local machine registry.
-///
-/// Takes the subkey and the value name. Returns the text, and nothing when the
-/// value cannot be read.
 pub(crate) fn registry_string(subkey: &str, value: &str) -> Option<String> {
     let subkey = wide_text(subkey);
     let value = wide_text(value);
@@ -358,9 +309,6 @@ pub(crate) fn registry_string(subkey: &str, value: &str) -> Option<String> {
 }
 
 /// Reads a numeric value from the local machine registry.
-///
-/// Takes the subkey and the value name. Returns the number, and nothing when
-/// the value cannot be read.
 pub(crate) fn registry_number(subkey: &str, value: &str) -> Option<u32> {
     let subkey = wide_text(subkey);
     let value = wide_text(value);
@@ -395,10 +343,6 @@ pub(crate) enum ProcessQuery {
 }
 
 /// Reads when a process started.
-///
-/// Takes a process identifier. Returns the creation time in the platform's own
-/// units, that no such process exists, or that one exists and cannot be
-/// inspected, which is never treated as the process being gone.
 pub(crate) fn process_start(pid: u32) -> ProcessQuery {
     // SAFETY: the call takes no pointer and returns a handle this function owns and closes.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -436,9 +380,6 @@ pub(crate) fn process_start(pid: u32) -> ProcessQuery {
 }
 
 /// Counts the processors this process may actually run on.
-///
-/// Returns the smallest of the process affinity mask, any job object rate
-/// limit, and the machine's own count across every processor group.
 pub(crate) fn usable_processors() -> Option<usize> {
     let mut process_mask = 0usize;
     let mut system_mask = 0usize;
@@ -500,11 +441,6 @@ pub(crate) struct LoadedFilter {
 }
 
 /// Lists the filter drivers inspecting file operations on this machine.
-///
-/// Returns each loaded filter's name and altitude, and an empty list when the
-/// filter manager reports that none are registered. Returns nothing at all when
-/// the filter manager cannot be asked, which is not the same answer as none
-/// being loaded and is never treated as proof that none are.
 pub(crate) fn loaded_minifilters() -> Option<Vec<LoadedFilter>> {
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS};
     use windows_sys::Win32::Storage::InstallableFileSystems::{
@@ -642,9 +578,6 @@ fn wide_at(buffer: &[u8], base: usize, offset: u16, length: u16) -> Option<Strin
 }
 
 /// Reads the user a file belongs to.
-///
-/// Takes an open handle. Returns the owner security identifier in its string
-/// form. Fails when the platform refuses the query.
 pub(crate) fn file_owner(file: &File) -> io::Result<String> {
     let mut sid: PSID = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -673,12 +606,6 @@ pub(crate) fn file_owner(file: &File) -> io::Result<String> {
 }
 
 /// Reads the users a file this process creates can be owned by.
-///
-/// Returns the token's user and the token's owner as security identifiers in
-/// their string form. The two differ when the process runs with an elevated
-/// token, where a file it creates is owned by the administrators group rather
-/// than by the user, and both of those are this process.
-/// Fails when the platform refuses the query.
 pub(crate) fn process_owners() -> io::Result<Vec<String>> {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: the pseudo handle for this process is always valid, and the out pointer addresses a local the call fills in.
@@ -707,9 +634,6 @@ pub(crate) fn process_owners() -> io::Result<Vec<String>> {
 }
 
 /// Reads one security identifier out of an access token.
-///
-/// Both classes this is asked for answer with a record whose first field is the
-/// identifier.
 fn token_sid(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String> {
     let mut needed = 0u32;
     // SAFETY: the token handle is open for the call, and a null buffer with a zero length is how the call is asked for the size it needs.

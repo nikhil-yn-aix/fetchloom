@@ -86,7 +86,7 @@ No comments. No commented-out code. No banners, no section dividers, no decorati
 
 Every public item has one. Private items have one only when the inputs and outputs are not obvious from the signature.
 
-A docstring states what goes in, what comes out, and what causes failure. Nothing else. No history, no rationale, no examples unless the usage is genuinely non-obvious.
+A docstring is one sentence saying what the item is, plus an `# Errors` section when the item can fail. Nothing else. It never restates the signature, and it never carries history, rationale, or an example. Rationale belongs in decisions.md, where it can be read once instead of once per call site. A docstring that wants a second paragraph is a function that wants a better name or a smaller body.
 
 ```rust
 /// Reads the object with the given digest from the cache.
@@ -132,7 +132,7 @@ Optimization is a design constraint, not a later pass. These rules apply from th
 
 ### Measure
 
-No optimization merges without a benchmark in the harness showing the gain on a named regime. Regimes are: no-op run, cold cache, warm cache, interrupted transfer, many small files, one large file, slow disk, and constrained network.
+No optimization merges without a benchmark in the harness showing the gain on a named regime. Regimes are: no-op run, cold cache, warm cache, cold transfer, interrupted transfer, many small files, and one large file. A slow disk and a constrained network are named nowhere in the harness, because neither can be produced on a machine in the verification lane without a fault injector this build does not have.
 
 The no-op regime is a locked run against an unchanged destination. It measures startup, configuration discovery, and reconciliation, and it bounds how much a dependency may cost simply by existing.
 

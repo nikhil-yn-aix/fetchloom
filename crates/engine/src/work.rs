@@ -21,8 +21,6 @@ pub struct Work {
 }
 
 /// Where every part of a run counts the work it did.
-///
-/// Shared by reference: one run has one set of numbers.
 #[derive(Debug, Default)]
 pub struct WorkCounter {
     bytes_read: AtomicU64,
@@ -54,11 +52,6 @@ impl WorkCounter {
     }
 
     /// Counts one file created, renamed, or flushed.
-    ///
-    /// A file operation is also the boundary between one unit of work and the
-    /// next, so it is where a run that has been asked to stop stops. It is
-    /// counted first, because the operation it counts has already happened and
-    /// a run that ends must still say what it did.
     pub fn touched_file(&self) {
         self.file_operations.fetch_add(1, Ordering::Relaxed);
         if crate::cancel::requested() {

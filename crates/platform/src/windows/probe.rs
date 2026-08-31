@@ -1,5 +1,5 @@
-//! Detecting what a volume can do, by query where Windows answers and by
-//! probe where it does not.
+//! Detecting what a volume can do, by query where Windows answers and by probe
+//! where it does not.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,10 +31,6 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
 }
 
 /// Detects everything about the volume behind a directory.
-///
-/// Takes a directory Fetchloom owns and somewhere to record a fallback.
-/// Returns the same answer every time it is asked about one volume, because the
-/// answer is kept for the life of the process.
 ///
 /// # Errors
 ///
@@ -216,9 +212,6 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
 }
 
 /// Reports whether an altitude is one the platform allocates to a scanner.
-///
-/// Anti-virus minifilters are allocated 320000 through 329998 and activity
-/// monitors, where endpoint detection products sit, 360000 through 389999.
 fn is_scanner_altitude(altitude: u32) -> bool {
     (320_000..=329_998).contains(&altitude) || (360_000..=389_999).contains(&altitude)
 }

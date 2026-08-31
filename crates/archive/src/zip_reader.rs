@@ -24,8 +24,8 @@ const END_RECORD_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x05, 0x06];
 /// The central directory file header signature.
 const CENTRAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
 
-/// How far back from the end of the file the end record is looked for, which
-/// is its fixed size plus the largest comment it may carry.
+/// How far back from the end of the file the end record is looked for, which is
+/// its fixed size plus the largest comment it may carry.
 const MAXIMUM_END_RECORD_SEARCH: u64 = 22 + 0xFFFF;
 
 /// Where one member's compressed bytes begin and how they are packed.
@@ -64,13 +64,6 @@ fn unsafe_path_member(member: &str, detail: &str) -> Error {
 
 /// Decides whether every backslash in this zip's member paths can safely be
 /// read as a path separator.
-///
-/// Takes the raw name of every central directory record. Returns true only
-/// when no name holds a forward slash anywhere and at least one name holds a
-/// backslash, which is the one condition under which a backslash cannot be a
-/// legal Unix filename character coexisting with the archive's own
-/// separator: Windows PowerShell's `Compress-Archive`, before .NET 4.6.1
-/// fixed it, wrote exactly such archives.
 fn is_backslash_separated(names: &[Vec<u8>]) -> bool {
     let holds_forward_slash = names.iter().any(|name| name.contains(&b'/'));
     let holds_backslash = names.iter().any(|name| name.contains(&b'\\'));
@@ -86,10 +79,6 @@ fn with_backslashes_as_separators(raw: &[u8]) -> Vec<u8> {
 
 /// Decides whether a zip's paths need normalizing and, when they do, records
 /// the one degradation this decision produces.
-///
-/// Takes every central directory member name and the archive's name for the
-/// degradation message. Returns whether every backslash in this archive
-/// should be read as a forward slash.
 fn decide_and_record_separator(
     central_names: &[Vec<u8>],
     archive_name: &str,
@@ -124,13 +113,8 @@ fn validate_central_directory_paths(
     Ok(())
 }
 
-/// Validates one raw member name, normalizing a backslash-separated zip's
-/// paths first.
-///
-/// Takes the raw name exactly as the archive wrote it, whether this archive
-/// was decided to be backslash-separated, and the nesting depth limit.
-/// Returns the validated path. This is the only place a raw zip member name
-/// reaches `validate_member_path`.
+/// Validates one raw member name, normalizing a backslash-separated zip's paths
+/// first.
 ///
 /// # Errors
 ///
@@ -209,14 +193,10 @@ fn read_local_header<R: Read + Seek>(
 
 /// Reads the member name of every central directory record, in order.
 ///
-/// Takes the source and the archive's name for error messages. Returns one
-/// name per record the container declares, including two records that name
-/// one path, which an index keyed by name cannot represent.
-///
 /// # Errors
 ///
-/// Fails when the end record cannot be found and when the central directory
-/// is truncated or malformed.
+/// Fails when the end record cannot be found and when the central directory is
+/// truncated or malformed.
 fn central_directory_names<R: Read + Seek>(
     mut source: R,
     archive_name: &str,
@@ -284,15 +264,10 @@ struct Central<'a> {
 
 /// Checks one member's local file header against its central directory entry.
 ///
-/// Takes the local header and what the central directory recorded. Returns
-/// nothing when the two agree. Fails with `archive.unsafe_path` naming both
-/// paths when they name different members, and with `archive.unsupported`
-/// naming both values when the method or either size disagrees.
-///
 /// # Errors
 ///
-/// Returns the disagreement, which is a member two headers describe
-/// differently and which must therefore never be extracted.
+/// Returns the disagreement, which is a member two headers describe differently
+/// and which must therefore never be extracted.
 fn agrees_with_central_directory(local: &LocalHeader, central: &Central<'_>) -> Result<(), Error> {
     if local.name != central.name {
         let local_lossy = String::from_utf8_lossy(&local.name);
@@ -348,24 +323,12 @@ fn open_body(
 
 /// Lists every member of a zip container.
 ///
-/// Takes the shared source, the archive's name for error messages, its
-/// on-disk size, the configured limits, and where to record a degradation
-/// when this archive's member paths had to be normalized. Returns the
-/// members alongside where each one's compressed data begins, in the same
-/// order.
-///
-/// When every member path in the whole archive holds no forward slash and at
-/// least one holds a backslash, every backslash is translated to a forward
-/// slash before any path is validated, and one degradation is recorded
-/// naming this archive. An archive mixing both separators anywhere is left
-/// exactly as written, so its backslash is refused as unsafe.
-///
 /// # Errors
 ///
-/// Fails when the container is truncated or malformed, when a member's path
-/// is rejected, when a local header disagrees with its central directory
-/// entry, when a member uses a compression method that is not store or
-/// deflate, and when the archive exceeds the entry, byte, or ratio limit.
+/// Fails when the container is truncated or malformed, when a member's path is
+/// rejected, when a local header disagrees with its central directory entry,
+/// when a member uses a compression method that is not store or deflate, and
+/// when the archive exceeds the entry, byte, or ratio limit.
 pub fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     archive_name: &str,
@@ -472,9 +435,6 @@ pub fn list_members<R: Read + Seek + 'static>(
 }
 
 /// Opens one member's bytes, at random access.
-///
-/// Takes the shared source and the offset `list_members` recorded for the
-/// member. Returns a reader over exactly the member's decompressed bytes.
 ///
 /// # Errors
 ///

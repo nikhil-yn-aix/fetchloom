@@ -77,9 +77,6 @@ pub enum IndexFormat {
 }
 
 /// A TLS alert record carrying a fatal handshake failure.
-///
-/// A content type of alert, a version of one point two, a two byte payload,
-/// and the fatal level and handshake failure description that payload holds.
 const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
 
 /// What a test told one server to do.
@@ -90,10 +87,6 @@ pub struct Script {
     /// The entity tag each request is answered with, in order.
     pub etags: Vec<String>,
     /// What each request for bytes is answered with, in order.
-    ///
-    /// A metadata request consumes no reply and is answered with the status or
-    /// the redirect the next reply carries, or with the object otherwise, so a
-    /// probe before a fetch does not shift the script.
     pub replies: Vec<Reply>,
     /// What every request after the script is answered with.
     pub then: Reply,
@@ -142,8 +135,6 @@ impl Script {
     }
 
     /// Returns the script with conditional requests answered or ignored.
-    ///
-    /// A source that ignores one answers with the whole object.
     #[must_use]
     pub fn conditional(mut self, honors: bool) -> Self {
         self.honors_conditionals = honors;
@@ -204,8 +195,6 @@ pub struct TestServer {
 
 impl TestServer {
     /// Starts a server on a port the platform chooses.
-    ///
-    /// Returns a running server. The server stops when it is dropped.
     ///
     /// # Errors
     ///
@@ -598,9 +587,6 @@ fn flush(writer: &mut impl Write) -> bool {
 }
 
 /// Reads the span a request asked for.
-///
-/// Returns the first byte and, when the request named one, the last. A request
-/// naming no last byte is asking for everything from the first.
 fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
     let span = value.trim().strip_prefix("bytes=")?;
     let (start, end) = span.split_once('-')?;

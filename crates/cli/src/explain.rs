@@ -15,9 +15,6 @@ pub struct Explained {
 }
 
 /// Renders one setting's value for reporting.
-///
-/// A value nothing supplied is shown as a question mark, never as an invented
-/// number and never as a language construct the reader has to know.
 trait Describe {
     fn describe(&self) -> String;
 }
@@ -58,11 +55,8 @@ impl<T: Describe> Describe for Option<T> {
 }
 
 /// Reports every effective setting with the level that supplied it.
-///
-/// Takes the resolved settings. Returns one row per setting, in a stable order,
-/// each naming the value and the precedence level it came from.
 #[must_use]
-pub fn rows(settings: &Settings) -> Vec<Explained> {
+pub fn rows(settings: &Settings, measured: u32) -> Vec<Explained> {
     macro_rules! row {
         ($name:literal, $field:ident) => {
             Explained {
@@ -74,16 +68,24 @@ pub fn rows(settings: &Settings) -> Vec<Explained> {
     }
     vec![
         row!("offline", offline),
-        row!("threads", threads),
+        match settings.threads.value {
+            Some(requested) => Explained {
+                key: "threads".to_owned(),
+                value: requested.to_string(),
+                origin: settings.threads.origin.to_string(),
+            },
+            None => Explained {
+                key: "threads".to_owned(),
+                value: measured.to_string(),
+                origin: "measured".to_owned(),
+            },
+        },
         row!("display", display),
         row!("cache.dir", cache_dir),
     ]
 }
 
 /// Describes where the configuration files came from.
-///
-/// Takes the files a run discovered. Returns one line per level, naming the
-/// path that was found, or that the level supplied nothing.
 #[must_use]
 pub fn file_lines(discovered: &Discovered) -> Vec<String> {
     let project = discovered.project.as_ref().map_or_else(
@@ -95,4 +97,43 @@ pub fn file_lines(discovered: &Discovered) -> Vec<String> {
         |loaded| format!("user config: {}", loaded.path.display()),
     );
     vec![project, user]
+}
+
+/// What one config level supplied.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigFile {
+    /// The level's name.
+    pub level: String,
+    /// The path that was found, when one was.
+    pub path: Option<String>,
+}
+
+/// Everything `explain` reports about a run's configuration.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Report {
+    /// Where the configuration files were found, or that none were.
+    pub files: Vec<ConfigFile>,
+    /// Every effective setting.
+    pub settings: Vec<Explained>,
+}
+
+/// Describes where the configuration files came from, as values.
+#[must_use]
+pub fn files(discovered: &Discovered) -> Vec<ConfigFile> {
+    vec![
+        ConfigFile {
+            level: "project".to_owned(),
+            path: discovered
+                .project
+                .as_ref()
+                .map(|loaded| loaded.path.display().to_string()),
+        },
+        ConfigFile {
+            level: "user".to_owned(),
+            path: discovered
+                .user
+                .as_ref()
+                .map(|loaded| loaded.path.display().to_string()),
+        },
+    ]
 }

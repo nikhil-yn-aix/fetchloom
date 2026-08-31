@@ -6,8 +6,6 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// The target linted on the host with the whole workspace.
-///
-/// Every other target is linted in the container lane.
 const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
 
 /// The Linux targets the container lane builds and runs.
@@ -90,10 +88,6 @@ impl Report {
     }
 
     /// Records a step whose work already ran, with the time it actually took.
-    ///
-    /// `step_here` times the closure it is given, which is nothing when the
-    /// work happened before the call and would report a lane that ran for
-    /// twenty seconds as taking none.
     fn already_ran(&mut self, name: &str, passed: bool, took: Duration) {
         println!("--- {name}");
         println!(
@@ -110,8 +104,6 @@ impl Report {
     }
 
     /// Records a step that declined to run, with the reason it declined.
-    ///
-    /// A skipped step is counted as neither a pass nor a failure.
     fn skipped(&mut self, name: &str, took: Duration, reason: &str) {
         println!("skip {name} in {:.1} s: {reason}", took.as_secs_f64());
         self.steps.push(Step {
@@ -128,11 +120,6 @@ impl Report {
 }
 
 /// Runs the verification matrix.
-///
-/// Takes the workspace root and the arguments after the task name. Returns
-/// success only when every step that ran passed. Recognizes `--install-hook`,
-/// which writes the pre-push hook and runs nothing, `--fast`, which runs the
-/// subset the hook runs, and `--arm`, which adds the emulated lane.
 pub fn run(workspace: &Path, arguments: &[String]) -> bool {
     if arguments
         .iter()
@@ -306,10 +293,6 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
 }
 
 /// Runs the plan, bundle and apply sequence with the network physically absent.
-///
-/// One container prepares a plan and a bundle from a real host and a second
-/// runs with no network device at all, so what proves the apply is offline is
-/// the absence of a network rather than the presence of a flag.
 fn offline(
     workspace: &Path,
     report: &mut Report,

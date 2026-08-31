@@ -21,10 +21,6 @@ pub struct VerifyReport {
 
 /// Rereads and rehashes every object, quarantining each mismatch.
 ///
-/// An object a writer holds is left alone and counted. Every mismatch
-/// is localized against its tree before it is moved, and the diagnosis is
-/// written beside it.
-///
 /// # Errors
 ///
 /// Fails when the cache cannot be read or an object cannot be moved.

@@ -63,8 +63,6 @@ pub trait Platform: Send + Sync {
 
     /// Returns the identifier of an open file within its volume.
     ///
-    /// Takes an open handle rather than a name.
-    ///
     /// # Errors
     ///
     /// Fails when the platform refuses the query.
@@ -88,8 +86,6 @@ pub trait Platform: Send + Sync {
 
     /// Reports what the volume behind a path sits on.
     ///
-    /// Answers with one query rather than the whole capability probe.
-    ///
     /// # Errors
     ///
     /// Fails when the path cannot be read or the platform refuses the query.
@@ -97,18 +93,12 @@ pub trait Platform: Send + Sync {
 
     /// Detects what the volume behind a directory can do.
     ///
-    /// Takes a directory Fetchloom owns, inside which the probe creates and
-    /// removes files. Returns everything detected about that volume.
-    ///
     /// # Errors
     ///
     /// Fails when the directory cannot be written to.
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error>;
 
     /// Detects what the processor can do and how many threads may be used.
-    ///
-    /// Takes the user's thread ceiling, when one was given. Returns the budget
-    /// after affinity, container, and job limits, clamped to the detected count.
     fn processor_capabilities(&self, requested: Option<NonZeroUsize>) -> ProcessorCapabilities;
 
     /// Creates a file, failing when the name already exists.
@@ -127,10 +117,6 @@ pub trait Platform: Send + Sync {
     fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error>;
 
     /// Creates a directory and every missing ancestor of it.
-    ///
-    /// Takes the directory to create. Succeeds when it already exists. Counts
-    /// one file operation per directory actually created, which is why a caller
-    /// goes through here rather than reaching around the seam.
     ///
     /// # Errors
     ///
@@ -155,23 +141,18 @@ pub trait Platform: Send + Sync {
 
     /// Publishes one file by renaming it onto its final name.
     ///
-    /// Takes a source and a target on the same volume.
-    ///
     /// # Errors
     ///
-    /// Fails when the two paths are on different volumes and when the rename
-    /// or the directory flush does not complete.
+    /// Fails when the two paths are on different volumes and when the rename or
+    /// the directory flush does not complete.
     fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error>;
 
     /// Publishes a staging tree onto a destination.
     ///
-    /// An existing destination is renamed aside first, leaving it briefly
-    /// absent and never partial.
-    ///
     /// # Errors
     ///
-    /// Fails when staging and the destination are on different volumes and
-    /// when either rename does not complete.
+    /// Fails when staging and the destination are on different volumes and when
+    /// either rename does not complete.
     fn publish_directory(
         &self,
         staging: &Path,
@@ -181,8 +162,6 @@ pub trait Platform: Send + Sync {
 
     /// Places a file's bytes at another path, sharing blocks when the volume
     /// can and writing them again when it cannot.
-    ///
-    /// Returns which of the two mechanisms was used.
     ///
     /// # Errors
     ///
@@ -206,14 +185,9 @@ pub trait Platform: Send + Sync {
     fn owner_token(&self) -> Result<OwnerToken, Error>;
 
     /// Decides whether a recorded lock holder is still running.
-    ///
-    /// Takes a token read from a lock's owner record. Returns what is known,
-    /// never deciding from a file modification time.
     fn liveness(&self, token: &OwnerToken) -> Liveness;
 
     /// Takes an advisory lock without waiting.
-    ///
-    /// Returns nothing when another holder has it.
     ///
     /// # Errors
     ///
@@ -230,8 +204,6 @@ pub trait Platform: Send + Sync {
 
     /// Takes an advisory lock that other readers may hold at the same time,
     /// without waiting.
-    ///
-    /// Returns nothing when a writer holds it.
     ///
     /// # Errors
     ///

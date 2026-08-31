@@ -23,8 +23,8 @@ pub struct Outboard {
 }
 
 impl Outboard {
-    /// Returns the encoded outboard bytes: an eight-byte little-endian
-    /// length followed by sixty-four-byte parent nodes in pre-order.
+    /// Returns the encoded outboard bytes: an eight-byte little-endian length
+    /// followed by sixty-four-byte parent nodes in pre-order.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -39,10 +39,6 @@ impl Outboard {
 
 /// Returns the content digest of an object and, when it is large enough, its
 /// outboard tree, from the chaining value of each of its leaf groups.
-///
-/// Takes the total object length and one chaining value per group implied by
-/// that length, in order. Returns the digest the whole object hashes to and the
-/// tree, which is absent at or below the outboard threshold.
 ///
 /// # Panics
 ///
@@ -200,10 +196,6 @@ enum Expectation {
 
 /// Fills the raw bytes of one leaf group into a buffer the walk owns and
 /// reuses.
-///
-/// Takes the zero-based group index and the buffer to fill, which the callee
-/// clears. A group past the end of what is readable is filled with what is
-/// there.
 type GroupBytes<'a> = &'a mut dyn FnMut(u64, &mut Vec<u8>) -> Result<(), Error>;
 
 /// Why a walk stopped before it finished.
@@ -227,21 +219,16 @@ fn tree_corrupt(range: &Range<u64>) -> Error {
     ))
 }
 
-/// Verifies that the bytes in `range` match the outboard tree, walking only
-/// the nodes needed to authenticate that range.
-///
-/// Takes an outboard opened for reading and seeking, the object's recorded
-/// length, its content digest, the half-open byte range to verify, and a
-/// callback filling the raw bytes of a leaf group by its zero-based index.
-/// Returns nothing on success.
+/// Verifies that the bytes in `range` match the outboard tree, walking only the
+/// nodes needed to authenticate that range.
 ///
 /// # Errors
 ///
-/// Returns `cache.corrupt` when the outboard's recorded length disagrees
-/// with `object_len` or when the outboard cannot be read; nothing has been
-/// authenticated yet in either case. Returns `integrity.range_mismatch`,
-/// naming the byte range of the node that failed, when a node or a leaf does
-/// not match the chaining value its parent named.
+/// Returns `cache.corrupt` when the outboard's recorded length disagrees with
+/// `object_len` or when the outboard cannot be read; nothing has been
+/// authenticated yet in either case. Returns `integrity.range_mismatch`, naming
+/// the byte range of the node that failed, when a node or a leaf does not match
+/// the chaining value its parent named.
 pub fn verify_range(
     outboard: &mut (impl Read + Seek),
     object_len: u64,
@@ -272,11 +259,6 @@ pub fn verify_range(
 
 /// Returns every byte range of an object whose bytes do not match the tree,
 /// ascending, with adjacent ranges merged.
-///
-/// Takes an outboard opened for reading and seeking, the object's recorded
-/// length, its content digest, and a callback filling the raw bytes of a leaf
-/// group by its zero-based index. Returns an empty list when nothing is
-/// damaged.
 ///
 /// # Errors
 ///
@@ -424,8 +406,6 @@ fn verify_subtree(
 }
 
 /// Checks one leaf group against the chaining value its parent stores for it.
-///
-/// A group that yielded no bytes is reported as damaged rather than hashed.
 fn check_leaf(
     group: u64,
     expectation: Expectation,

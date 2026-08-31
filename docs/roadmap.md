@@ -116,7 +116,7 @@ Purpose. Turning measurement into defaults, so users never tune anything, withou
 
 Decide. What is measured, how a decision is scored, and how it is stored per host. The increase and backoff policy for concurrency. How protocol choice is evaluated. When ranged splitting of a single object is worthwhile. How disk write rate applies backpressure to network concurrency. Which I/O mode is chosen per platform and volume. How user limits and core counts bound every decision.
 
-Build. Adaptive concurrency controller with politeness ceilings. Per-host measurement cache. Protocol selection. I/O mode selection. Backpressure from disk to network. `--deterministic-io`. The published benchmark suite covering all seven regimes.
+Build. Adaptive concurrency controller with politeness ceilings. Per-host measurement cache. Protocol selection. I/O mode selection. Backpressure from disk to network. `--deterministic-io`. The published benchmark suite covering all seven regimes the harness runs.
 
 Prove. Adaptation changes throughput and never changes bytes, digests, or tree digests. Rate-limit responses reduce concurrency immediately. Deterministic mode reproduces identical timing-independent results. Published numbers include the regimes where Fetchloom is slower.
 

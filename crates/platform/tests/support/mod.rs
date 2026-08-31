@@ -78,10 +78,6 @@ impl Property {
 }
 
 /// Every volume the environment offers with the given property.
-///
-/// Returns the paths named by the property's variable, which the volume script
-/// writes after it builds the filesystems. An empty answer in a verification run
-/// that promised the property fails rather than skipping.
 pub fn volumes(property: Property) -> Vec<PathBuf> {
     let named = std::env::var_os(property.variable()).unwrap_or_default();
     let found: Vec<PathBuf> = std::env::split_paths(&named)
@@ -96,8 +92,6 @@ pub fn volumes(property: Property) -> Vec<PathBuf> {
 }
 
 /// A directory inside each volume offering the given property.
-///
-/// Returns one owned directory per volume, removed when it is dropped.
 pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
     volumes(property)
         .iter()
@@ -109,9 +103,6 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
 }
 
 /// The user a test hands work to, when the environment names one.
-///
-/// A verification run that built the volumes promised this user on Linux, so an
-/// absent name there is a provisioning failure rather than a reason to skip.
 pub fn another_user() -> Option<String> {
     let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
     assert!(
@@ -132,9 +123,6 @@ pub fn scratch() -> tempfile::TempDir {
 }
 
 /// A directory on a volume other than the one the temporary directory is on.
-///
-/// Returns nothing when this machine has only one writable volume, which is
-/// what a caller reports as a named skip rather than a pass.
 pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
     if let Some(built) = scratch_on(Property::Second).into_iter().next() {
         return Some(built);
@@ -159,8 +147,6 @@ pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
 }
 
 /// Reports whether this build can create a symbolic link in a directory.
-///
-/// Answers by attempting one and removing it.
 pub fn symlink_works(directory: &Path) -> bool {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
@@ -195,11 +181,8 @@ pub fn names(directory: &Path) -> Vec<String> {
     found
 }
 
-/// A directory this test owns inside each volume offering a property, where
-/// the directory is the volume's own rather than one created inside it.
-///
-/// Windows carries case sensitivity on the directory itself and does not pass
-/// it to a directory created inside one.
+/// A directory this test owns inside each volume offering a property, where the
+/// directory is the volume's own rather than one created inside it.
 pub fn volume_directories(property: Property) -> Vec<PathBuf> {
     volumes(property)
 }

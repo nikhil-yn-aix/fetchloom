@@ -487,8 +487,8 @@ fn explain_reports_one_named_setting() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.starts_with("threads = ? (default)"),
-        "a value nothing supplied must be shown as a question mark: {stdout}"
+        stdout.starts_with("threads = ") && stdout.contains("(measured)"),
+        "a setting chosen by measurement must say the measurement chose it: {stdout}"
     );
 }
 
@@ -729,9 +729,6 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
 }
 
 /// The directory every command in this file runs in.
-///
-/// A run writes its lock beside the working directory, so each test binary is
-/// given one of its own rather than writing into the workspace.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

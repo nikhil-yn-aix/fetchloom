@@ -19,9 +19,6 @@ pub fn is_sensitive_header(name: &str) -> bool {
 }
 
 /// A value that is never written to any stream, file, or record.
-///
-/// Takes any value. Its debug, display, and serialized forms are the fixed
-/// redacted text. It leaves only through an explicit exposure.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Secret<T>(T);
 
@@ -58,10 +55,6 @@ impl<T> Serialize for Secret<T> {
 }
 
 /// A location string that carries no credential.
-///
-/// Takes any reference or location text. Returns text whose userinfo component
-/// and whose every query parameter value have been replaced with the fixed
-/// redacted text. It cannot be constructed any other way.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct SafeUrl(String);

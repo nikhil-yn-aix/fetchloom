@@ -1,6 +1,5 @@
-//! Byte-exact tar and zip writers, and the named corpus of hostile and
-//! benign archives built from them for the archive-reader adversarial
-//! suite.
+//! Byte-exact tar and zip writers, and the named corpus of hostile and benign
+//! archives built from them for the archive-reader adversarial suite.
 
 /// The container format an archive byte string is encoded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,8 +13,8 @@ pub enum Container {
 /// What a correct archive reader must do with a corpus entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expectation {
-    /// The archive must be refused with the named error kind, naming the
-    /// given member path.
+    /// The archive must be refused with the named error kind, naming the given
+    /// member path.
     Rejected {
         /// The error kind label from `contracts.md`, such as
         /// `archive.unsafe_path`.
@@ -27,8 +26,8 @@ pub enum Expectation {
     Benign,
 }
 
-/// One named archive in the corpus, with the bytes it is built from and
-/// what a correct reader must do with them.
+/// One named archive in the corpus, with the bytes it is built from and what a
+/// correct reader must do with them.
 #[derive(Clone, Debug)]
 pub struct CorpusEntry {
     name: &'static str,
@@ -70,16 +69,14 @@ impl CorpusEntry {
     }
 }
 
-/// The full set of named archives used by the archive-reader adversarial
-/// tests.
+/// The full set of named archives used by the archive-reader adversarial tests.
 #[derive(Clone, Debug)]
 pub struct Corpus {
     entries: Vec<CorpusEntry>,
 }
 
 impl Corpus {
-    /// Builds the corpus. Every call returns the same bytes for the same
-    /// name.
+    /// Builds the corpus. Every call returns the same bytes for the same name.
     #[must_use]
     pub fn build() -> Self {
         Self {
@@ -181,9 +178,9 @@ impl TarHeader {
         Self { raw: [0u8; 500] }
     }
 
-    /// Returns a header with the ordinary ustar fields filled in for a
-    /// member of the given name and type: mode `0644`, uid and gid `0`,
-    /// mtime `0`, magic `ustar`, version `00`, owner `user` and `group`.
+    /// Returns a header with the ordinary ustar fields filled in for a member
+    /// of the given name and type: mode `0644`, uid and gid `0`, mtime `0`,
+    /// magic `ustar`, version `00`, owner `user` and `group`.
     #[must_use]
     pub fn ustar(name: &[u8], typeflag: u8) -> Self {
         let mut header = Self::new();
@@ -228,30 +225,28 @@ impl TarHeader {
         self.set(MODE_OFFSET, MODE_LEN, bytes)
     }
 
-    /// Sets the uid field from a numeric id, encoded as null-terminated
-    /// octal.
+    /// Sets the uid field from a numeric id, encoded as null-terminated octal.
     pub fn set_uid(&mut self, uid: u32) -> &mut Self {
         let field = octal_field(u64::from(uid), UID_LEN);
         self.set(UID_OFFSET, UID_LEN, &field)
     }
 
-    /// Sets the gid field from a numeric id, encoded as null-terminated
-    /// octal.
+    /// Sets the gid field from a numeric id, encoded as null-terminated octal.
     pub fn set_gid(&mut self, gid: u32) -> &mut Self {
         let field = octal_field(u64::from(gid), GID_LEN);
         self.set(GID_OFFSET, GID_LEN, &field)
     }
 
     /// Sets the declared size field from a byte count, encoded as
-    /// null-terminated octal. This need not match the bytes actually
-    /// written after the header.
+    /// null-terminated octal. This need not match the bytes actually written
+    /// after the header.
     pub fn set_size(&mut self, size: u64) -> &mut Self {
         let field = octal_field(size, SIZE_LEN);
         self.set(SIZE_OFFSET, SIZE_LEN, &field)
     }
 
-    /// Sets the mtime field from a Unix timestamp, encoded as
-    /// null-terminated octal.
+    /// Sets the mtime field from a Unix timestamp, encoded as null-terminated
+    /// octal.
     pub fn set_mtime(&mut self, mtime: u64) -> &mut Self {
         let field = octal_field(mtime, MTIME_LEN);
         self.set(MTIME_OFFSET, MTIME_LEN, &field)
@@ -305,10 +300,9 @@ impl TarHeader {
         self.set(PREFIX_OFFSET, PREFIX_LEN, prefix)
     }
 
-    /// Renders this header as a 512-byte block, computing the checksum
-    /// field over the rest of the block as the ustar specification
-    /// requires: the checksum field itself is treated as eight spaces
-    /// while the sum is taken.
+    /// Renders this header as a 512-byte block, computing the checksum field
+    /// over the rest of the block as the ustar specification requires: the
+    /// checksum field itself is treated as eight spaces while the sum is taken.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 512] {
         let mut block = [0u8; 512];
@@ -380,8 +374,8 @@ pub fn pax_record(keyword: &str, value: &str) -> Vec<u8> {
     format!("{total} {keyword}={value}\n").into_bytes()
 }
 
-/// Concatenates pax records into the data block of a per-file extended
-/// header entry.
+/// Concatenates pax records into the data block of a per-file extended header
+/// entry.
 #[must_use]
 pub fn pax_block(records: &[Vec<u8>]) -> Vec<u8> {
     records
@@ -404,16 +398,16 @@ impl TarWriter {
         Self { bytes: Vec::new() }
     }
 
-    /// Appends one entry: the header block followed by its data, padded
-    /// with zero bytes to the next 512-byte boundary. The data length need
-    /// not match the header's declared size.
+    /// Appends one entry: the header block followed by its data, padded with
+    /// zero bytes to the next 512-byte boundary. The data length need not match
+    /// the header's declared size.
     pub fn push(&mut self, header: &TarHeader, data: &[u8]) -> &mut Self {
         self.bytes.extend_from_slice(&header.to_bytes());
         self.push_data(data)
     }
 
-    /// Appends one entry using an already-rendered 512-byte header block,
-    /// for cases that need direct control over the checksum bytes.
+    /// Appends one entry using an already-rendered 512-byte header block, for
+    /// cases that need direct control over the checksum bytes.
     pub fn push_block(&mut self, block: &[u8; 512], data: &[u8]) -> &mut Self {
         self.bytes.extend_from_slice(block);
         self.push_data(data)
@@ -448,8 +442,8 @@ pub const METHOD_STORE: u16 = 0;
 /// The deflate compression method.
 pub const METHOD_DEFLATE: u16 = 8;
 
-/// A zip local file header, with its own name and size fields independent
-/// of any central directory entry for the same member.
+/// A zip local file header, with its own name and size fields independent of
+/// any central directory entry for the same member.
 #[derive(Clone, Debug)]
 pub struct ZipLocalHeader {
     /// The minimum version a reader needs to extract this entry.
@@ -475,8 +469,8 @@ pub struct ZipLocalHeader {
 }
 
 impl ZipLocalHeader {
-    /// Returns a stored, uncompressed local header for the given name and
-    /// data, with the CRC-32 and sizes computed from the data.
+    /// Returns a stored, uncompressed local header for the given name and data,
+    /// with the CRC-32 and sizes computed from the data.
     #[must_use]
     pub fn store(name: &[u8], data: &[u8]) -> Self {
         Self {
@@ -560,8 +554,8 @@ pub struct ZipCentralHeader {
 }
 
 impl ZipCentralHeader {
-    /// Returns a central directory entry matching the given local header,
-    /// at the given local header offset.
+    /// Returns a central directory entry matching the given local header, at
+    /// the given local header offset.
     #[must_use]
     pub fn from_local(local: &ZipLocalHeader, local_header_offset: u32) -> Self {
         Self {
@@ -636,8 +630,8 @@ pub struct ZipMember {
 }
 
 /// Builds a zip archive byte by byte from local headers, central directory
-/// entries, and data supplied in full, with no sanitization of paths,
-/// links, or sizes.
+/// entries, and data supplied in full, with no sanitization of paths, links, or
+/// sizes.
 #[derive(Clone, Debug, Default)]
 pub struct ZipWriter {
     bytes: Vec<u8>,
@@ -654,17 +648,15 @@ impl ZipWriter {
         }
     }
 
-    /// Returns the byte offset the next member's local header would be
-    /// written at, for building a central directory entry that points at
-    /// it correctly.
+    /// Returns the byte offset the next member's local header would be written
+    /// at, for building a central directory entry that points at it correctly.
     #[must_use]
     pub fn offset(&self) -> u32 {
         u32::try_from(self.bytes.len()).unwrap_or(u32::MAX)
     }
 
     /// Appends one member: its local header, its data, and its central
-    /// directory entry, held for the central directory written at
-    /// `finish`.
+    /// directory entry, held for the central directory written at `finish`.
     pub fn push(&mut self, member: ZipMember) -> &mut Self {
         self.bytes.extend_from_slice(&member.local.to_bytes());
         self.bytes.extend_from_slice(&member.data);
@@ -679,9 +671,9 @@ impl ZipWriter {
         self.finish_inner(false)
     }
 
-    /// Finishes the archive as `finish` does, additionally writing a
-    /// Zip64 end-of-central-directory record and locator before the
-    /// ordinary end-of-central-directory record.
+    /// Finishes the archive as `finish` does, additionally writing a Zip64
+    /// end-of-central-directory record and locator before the ordinary
+    /// end-of-central-directory record.
     #[must_use]
     pub fn finish_zip64(self) -> Vec<u8> {
         self.finish_inner(true)
@@ -732,8 +724,8 @@ impl ZipWriter {
     }
 }
 
-/// Computes the CRC-32 (the zip and gzip variant, polynomial `0xEDB88320`)
-/// of the given bytes.
+/// Computes the CRC-32 (the zip and gzip variant, polynomial `0xEDB88320`) of
+/// the given bytes.
 #[must_use]
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
@@ -811,11 +803,11 @@ fn fixed_length_symbol_code(symbol: u32) -> (u32, u8) {
     }
 }
 
-/// Encodes `count` repeated copies of `byte` as a raw DEFLATE stream (RFC
-/// 1951, one fixed-Huffman block), using a length-258 distance-1
-/// back-reference for every run of 258 bytes after an initial literal, so a
-/// handful of compressed bytes legitimately decompresses to far more than
-/// the archive's own on-disk size.
+/// Encodes `count` repeated copies of `byte` as a raw DEFLATE stream (RFC 1951,
+/// one fixed-Huffman block), using a length-258 distance-1 back-reference for
+/// every run of 258 bytes after an initial literal, so a handful of compressed
+/// bytes legitimately decompresses to far more than the archive's own on-disk
+/// size.
 fn deflate_repeated_byte(byte: u8, count: u32) -> Vec<u8> {
     let mut writer = BitWriter::new();
     writer.push_value(1, 1);

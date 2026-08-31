@@ -32,9 +32,6 @@ pub enum Opened {
 }
 
 /// Opens the cache at a root, deciding what an unusable one means.
-///
-/// A format mismatch stops the run, and so does a volume that cannot express
-/// cross-user locking. Every other failure degrades to no-cache behavior.
 #[must_use]
 pub fn open(
     root: &Path,
@@ -92,10 +89,6 @@ pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path,
 }
 
 /// Runs one cache command.
-///
-/// Takes the cache root, what was asked for, whether the result is machine
-/// readable, and whether every confirmation is already answered. Returns the
-/// exit code the run ends with.
 #[must_use]
 pub fn run(
     root: &Path,

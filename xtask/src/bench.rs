@@ -154,11 +154,6 @@ pub fn build_binary(workspace: &Path) -> Result<PathBuf, BenchError> {
 
 /// Runs the no-op regime and returns what it measured.
 ///
-/// The regime runs the binary on an operation that moves no bytes, so it
-/// measures startup and configuration discovery, and it bounds what a
-/// dependency costs simply by existing. Reconciliation joins the regime when a
-/// locked run against an unchanged destination exists to measure.
-///
 /// # Errors
 ///
 /// Fails when the binary cannot be run, when a run does not exit zero, and when
@@ -233,13 +228,6 @@ pub fn load(path: &Path) -> Result<Baseline, BenchError> {
 
 /// Compares a run against a baseline.
 ///
-/// Takes the baseline, the current run, and whether timing metrics gate. Returns
-/// nothing when every gated metric is within the gate. Deterministic metrics
-/// gate on every machine. Timing metrics gate only when timing gating is on,
-/// which is only under `cargo xtask verify` against a baseline recorded on that
-/// same machine. Fails on the first gated metric that worsened by more than the
-/// gate allows, and on any regime present in one run and not the other.
-///
 /// # Errors
 ///
 /// Returns the regime and metric that regressed, with both numbers.
@@ -291,9 +279,6 @@ fn binary_name(stem: &str) -> String {
 
 /// Reports what is inspecting writes on the volume the regimes run on.
 ///
-/// Takes the directory the regimes write into. Returns the sentence the
-/// benchmark prints beside its numbers, naming which lane it came from.
-///
 /// # Errors
 ///
 /// Fails when the volume cannot be probed.
@@ -325,8 +310,6 @@ pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::er
 }
 
 /// How many files the many-small-files regime materializes.
-///
-/// Enough that per-entry cost dominates the bytes moved, and no more.
 const SMALL_FILES: usize = 1024;
 
 /// How many bytes each of those files holds.
@@ -336,13 +319,6 @@ const SMALL_FILE_BYTES: usize = 1024;
 const LARGE_FILE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Runs the many-small-files and one-large-file regimes.
-///
-/// The two regimes move the same kind of bytes through opposite shapes: one
-/// tree of many tiny files against one file of the same total size. The first
-/// is where per-entry cost dominates and where an on-access scanner is felt;
-/// the second is where the streaming path is felt. Both record the work
-/// counters, which are identical on identical inputs, alongside a wall clock
-/// that is not.
 ///
 /// # Errors
 ///
@@ -429,10 +405,6 @@ const CORPUS_FILES: usize = 64;
 const CORPUS_FILE_BYTES: usize = 256 * 1024;
 
 /// Runs the cold cache and warm cache regimes and returns what they measured.
-///
-/// A cold run starts with an empty cache and writes every object into it. A warm
-/// run uses the cache the cold run filled and writes nothing into it: the warm
-/// run's cache growth is zero. Both runs materialize the same tree.
 ///
 /// # Errors
 ///
@@ -524,9 +496,6 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
 }
 
 /// Reports whether the warm regime was faster than the cold one.
-///
-/// Takes the regimes a run measured. Returns nothing when the two are not both
-/// present.
 #[must_use]
 pub fn warm_beat_cold(regimes: &[RegimeResult]) -> Option<(f64, f64)> {
     let wall = |name: &str| {
@@ -558,10 +527,6 @@ fn write_corpus(into: &Path) -> Result<(), BenchError> {
 }
 
 /// Returns bytes no two indices share.
-///
-/// Takes the index of the file and its length. The pattern is non-repeating
-/// within one file and the index is written into the leading bytes, so a corpus
-/// of n files holds n distinct objects and the cache deduplicates none of it.
 fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
     let seed = u8::try_from(index % 251).unwrap_or(0);
     let mut bytes: Vec<u8> = (0..length)
@@ -581,26 +546,17 @@ fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
 /// How many bytes the transfer regimes' object holds.
 const TRANSFER_OBJECT_BYTES: usize = 4 * 1024 * 1024;
 
-/// Where the interrupted transfer regime's server closes the connection
-/// partway through the body, as percentages of the object, before serving it
-/// whole.
-///
-/// Fewer than the attempt limit allows.
+/// Where the interrupted transfer regime's server closes the connection partway
+/// through the body, as percentages of the object, before serving it whole.
 const TRANSFER_INTERRUPTIONS: [usize; 2] = [25, 50];
 
 /// Runs the cold transfer and interrupted transfer regimes and returns what
 /// they measured.
 ///
-/// A cold run fetches a 4 MiB object from a local test server that serves it
-/// whole. An interrupted run fetches the same object from a server that
-/// closes the connection four times partway through the body, at twenty,
-/// forty, sixty and eighty percent, before serving it whole. Both regimes
-/// materialize the same object and must report the same bytes transferred.
-///
 /// # Errors
 ///
-/// Fails when the test server cannot be started, when a run does not exit
-/// zero, and when a run's `--json` result cannot be read.
+/// Fails when the test server cannot be started, when a run does not exit zero,
+/// and when a run's `--json` result cannot be read.
 pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let object = non_repeating_bytes(1, TRANSFER_OBJECT_BYTES);
     let mut cold_times = Vec::with_capacity(iterations as usize);
@@ -717,8 +673,6 @@ struct RunOutcome {
 }
 
 /// Turns the four work counters into the metrics that gate on them.
-///
-/// Takes what a run reported. Returns one deterministic metric per counter.
 fn work_metrics(work: &Work) -> Vec<Metric> {
     #[expect(
         clippy::cast_precision_loss,

@@ -80,8 +80,6 @@ fn build_decompressor<R: Read + 'static>(
 }
 
 /// The pax records extraction reads or discards without complaint.
-///
-/// `path`, `linkpath` and `size` are read. The three timestamps are discarded.
 const IGNORED_PAX_KEYS: [&str; 8] = [
     "path", "linkpath", "size", "mtime", "atime", "ctime", "charset", "comment",
 ];
@@ -143,17 +141,12 @@ fn reject_disallowed_pax_extensions(
 
 /// Lists every member of a tar stream, bare or wrapped in one compression.
 ///
-/// Takes the shared source positioned anywhere (it is rewound), which
-/// compression wraps it, the archive's name for error messages, its on-disk
-/// size, and the configured limits. Returns the members alongside where each
-/// one's data begins in the decompressed stream, in the same order.
-///
 /// # Errors
 ///
 /// Fails when the stream is truncated or malformed, when a member's path or
-/// mode is rejected, when a member is a device, FIFO, or carries a pax
-/// extended attribute or ownership record, and when the archive exceeds the
-/// entry, byte, or ratio limit.
+/// mode is rejected, when a member is a device, FIFO, or carries a pax extended
+/// attribute or ownership record, and when the archive exceeds the entry, byte,
+/// or ratio limit.
 pub fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: TarCompression,
@@ -237,13 +230,6 @@ pub fn list_members<R: Read + Seek + 'static>(
 }
 
 /// A decompressed tar stream held open between members.
-///
-/// A member's bytes are reached by reading everything before them, so the
-/// stream is held open across members.
-/// and is what made a 515-member xz archive take minutes. Holding one stream
-/// open and moving forward through it costs one decompression for the whole
-/// archive, whenever the members are read in the order the archive holds
-/// them, which is the order extraction reads them in.
 pub struct TarStream {
     decoder: Rc<RefCell<Box<dyn Read>>>,
     position: Rc<Cell<u64>>,
@@ -259,9 +245,6 @@ impl Clone for TarStream {
 }
 
 /// One member's bytes, read out of the stream the archive holds open.
-///
-/// Reads at most the member's own length and advances the stream's position
-/// by exactly what it yielded.
 pub struct MemberBody {
     stream: TarStream,
     remaining: u64,
@@ -285,16 +268,10 @@ impl Read for MemberBody {
 
 /// Opens one member's bytes out of a stream held open across members.
 ///
-/// Takes the stream the reader is holding, which is replaced when there is
-/// none or when the member sits behind where the stream has already reached,
-/// the shared source, the compression that wraps it, the archive's name for
-/// error messages, and the offset `list_members` recorded for the member.
-/// Returns a reader bounded to exactly the member's size.
-///
 /// # Errors
 ///
-/// Fails when the stream cannot be rewound or is truncated or malformed
-/// before reaching the member's offset.
+/// Fails when the stream cannot be rewound or is truncated or malformed before
+/// reaching the member's offset.
 pub fn open_member<R: Read + Seek + 'static>(
     held: &mut Option<TarStream>,
     source: &SharedSource<R>,

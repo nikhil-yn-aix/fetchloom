@@ -27,9 +27,6 @@ impl Read for FileBody {
 }
 
 /// A source that is a path on this machine.
-///
-/// It states no validator, because a file's modification time is not evidence
-/// about its bytes, and it serves any span, because a seek costs nothing.
 #[derive(Debug)]
 pub struct FileSource {
     work: Arc<WorkCounter>,

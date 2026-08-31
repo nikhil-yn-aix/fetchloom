@@ -73,9 +73,6 @@ impl<T> Sourced<T> {
 }
 
 /// Everything a configuration file may set.
-///
-/// Only settings this build acts on are accepted. Unknown keys, and the `x-`
-/// prefix, are an error.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ConfigFile {
@@ -142,10 +139,6 @@ pub struct LoadedConfig {
 
 /// Reads one configuration file.
 ///
-/// Takes the path of a file that is expected to exist. Returns what it set.
-/// Fails when the file cannot be read and when it sets a key that is not
-/// defined, the reserved prefix among them.
-///
 /// # Errors
 ///
 /// Returns the path and the reason.
@@ -165,9 +158,6 @@ pub fn read(path: &Path) -> Result<LoadedConfig, ConfigError> {
 }
 
 /// Searches a directory and then each parent for a project configuration file.
-///
-/// Takes the directory to start from. Returns the first file found, and nothing
-/// when the filesystem root is reached without one.
 #[must_use]
 pub fn find_project_file(start: &Path) -> Option<PathBuf> {
     let mut directory = Some(start);
@@ -182,10 +172,6 @@ pub fn find_project_file(start: &Path) -> Option<PathBuf> {
 }
 
 /// Returns the platform's configuration location for Fetchloom.
-///
-/// This is the configuration location and never the cache location; the two are
-/// separate directories. Returns nothing when the platform's own variable is
-/// unset and no home directory is known.
 #[must_use]
 pub fn user_config_directory() -> Option<PathBuf> {
     if cfg!(windows) {
@@ -214,11 +200,6 @@ pub struct Discovered {
 }
 
 /// Finds and reads the configuration files a run should use.
-///
-/// Takes the directory to search from, an explicitly named file, and whether
-/// configuration files are disabled entirely. A named file disables the search
-/// and becomes the project level. Disabling configuration returns nothing at
-/// either level.
 ///
 /// # Errors
 ///

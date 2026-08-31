@@ -206,9 +206,6 @@ pub(crate) fn interop_acceleration(degradations: &DegradeQueue) -> InteropAccele
 
 /// Reserves the full length of a file before anything is written to it.
 ///
-/// Reserves blocks where the filesystem can, and sets the length alone where it
-/// cannot, reporting that as a degradation rather than performing it silently.
-///
 /// # Errors
 ///
 /// Fails when the volume has no room.
@@ -334,10 +331,6 @@ pub(crate) fn boot_id() -> Option<BootId> {
 }
 
 /// Returns when a process started.
-///
-/// Reports that no such process exists only when the platform says so, never
-/// when one exists and cannot be inspected. The fields are counted from the
-/// last closing bracket of the status line.
 pub(crate) fn process_start(pid: u32) -> ProcessState {
     let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(text) => text,

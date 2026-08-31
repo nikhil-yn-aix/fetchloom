@@ -1,5 +1,5 @@
-//! Contract tests over the canonical model, its three surface syntaxes, and
-//! the two canonical forms written back out.
+//! Contract tests over the canonical model, its three surface syntaxes, and the
+//! two canonical forms written back out.
 
 #![expect(
     clippy::unwrap_used,

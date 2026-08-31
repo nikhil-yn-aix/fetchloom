@@ -201,8 +201,6 @@ impl Layout {
 }
 
 /// Returns the file name a digest is stored under.
-///
-/// The name is the digest's hexadecimal alone, without its algorithm.
 #[must_use]
 pub fn name_of(digest: ContentDigest) -> String {
     hexadecimal(digest.bytes())
@@ -220,8 +218,6 @@ fn hexadecimal(bytes: &[u8]) -> String {
 }
 
 /// Returns the digest a file name stands for.
-///
-/// Returns nothing when the name is not the hexadecimal of a digest.
 #[must_use]
 pub fn digest_of(name: &str) -> Option<ContentDigest> {
     if name.len() != 64 {

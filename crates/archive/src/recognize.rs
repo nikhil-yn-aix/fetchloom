@@ -58,9 +58,6 @@ const EXTENSIONS: &[(&str, ArchiveFormat)] = &[
 ];
 
 /// Reads the archive format a location's final extensions name.
-///
-/// Takes the location as written. Returns the format the longest matching
-/// extension names, or nothing when no known extension matches.
 #[must_use]
 pub fn format_from_extension(location: &str) -> Option<ArchiveFormat> {
     EXTENSIONS
@@ -94,14 +91,6 @@ fn sniff(header: &[u8]) -> Option<Family> {
 }
 
 /// Decides what format an archive is, or that it is not an archive at all.
-///
-/// Takes the format a manifest declared, when one did; the location the
-/// reference names; and the archive's own leading bytes. Returns the format
-/// when the manifest or the location's extensions claim one and the bytes
-/// agree. Returns nothing when neither the manifest nor a known extension
-/// claims a format, meaning the reference is not an archive and materializes
-/// as one file. Fails with `archive.unsupported` naming what the name said
-/// and what the bytes said when a claimed format and the bytes disagree.
 ///
 /// # Errors
 ///

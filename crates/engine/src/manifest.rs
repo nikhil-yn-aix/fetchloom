@@ -23,9 +23,6 @@ pub struct DigestClaims {
 }
 
 /// The name of an archive format a manifest declares.
-///
-/// These are the only values `archive.format` takes and the only containers
-/// extraction recognizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ArchiveFormat {
     /// A POSIX ustar stream.
@@ -89,10 +86,6 @@ impl FromStr for ArchiveFormat {
     type Err = Error;
 
     /// Parses a format name into the one value it names.
-    ///
-    /// Takes the name exactly as a manifest or a location extension wrote it.
-    /// Fails with `archive.unsupported` naming the format that was asked for
-    /// when the name is not one of the ten this build carries.
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
             "tar" => Ok(Self::Tar),
@@ -168,10 +161,6 @@ pub struct Manifest {
 impl Manifest {
     /// Reads a manifest written in any of the three accepted syntaxes.
     ///
-    /// Takes the bytes exactly as they were read, the syntax to read them in,
-    /// and the bounds a document may not exceed. Returns the one model all
-    /// three syntaxes parse into.
-    ///
     /// # Errors
     ///
     /// Fails with `manifest.invalid` when the document does not parse, when it
@@ -198,10 +187,6 @@ impl Manifest {
     }
 
     /// Returns the digest of this manifest's canonical form.
-    ///
-    /// The digest covers the canonical JSON of the model, never the text a
-    /// manifest was written in, so reformatting a manifest or writing it in
-    /// another accepted syntax does not change what it identifies.
     ///
     /// # Errors
     ///

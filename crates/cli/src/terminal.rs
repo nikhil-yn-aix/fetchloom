@@ -28,9 +28,6 @@ impl Streams {
     }
 
     /// Reports whether a prompt may be shown.
-    ///
-    /// A prompt appears only when standard input and standard error are both
-    /// terminals. Otherwise a required prompt is a policy failure.
     #[must_use]
     pub fn can_prompt(self) -> bool {
         self.stdin && self.stderr
@@ -61,13 +58,6 @@ pub struct ForcedDisplay {
 }
 
 /// Decides which display mode a run actually uses.
-///
-/// Takes the mode that was asked for, whether progress was suppressed, what the
-/// streams are attached to, and somewhere to read the environment from. The
-/// mode is forced to plain or none when standard error is not a terminal, when
-/// the terminal cannot address the cursor, or when a continuous integration
-/// environment is detected. Returns the mode used and, when it differs from the
-/// one requested, the reason.
 #[must_use]
 pub fn resolve_display(
     requested: DisplayMode,

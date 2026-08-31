@@ -58,9 +58,6 @@ struct Rule {
 }
 
 /// The faults scheduled for a run.
-///
-/// A schedule is consulted before every operation it names and lets the
-/// operation through when no rule matches.
 #[derive(Debug, Default)]
 pub struct Faults {
     rules: Mutex<HashMap<Operation, Vec<Rule>>>,
@@ -76,9 +73,6 @@ impl Faults {
     }
 
     /// Schedules a failure for one operation.
-    ///
-    /// Takes how many calls succeed first, how many calls then fail, and the
-    /// error those calls fail with.
     pub fn fail(&self, operation: Operation, after: u64, times: u64, error: Error) {
         let mut rules = self.rules.lock().unwrap_or_else(PoisonError::into_inner);
         rules.entry(operation).or_default().push(Rule {
@@ -89,9 +83,6 @@ impl Faults {
     }
 
     /// Consults the schedule before an operation runs.
-    ///
-    /// Returns the error the call must fail with, and nothing when the call
-    /// may proceed.
     #[must_use]
     pub fn check(&self, operation: Operation) -> Option<Error> {
         let mut rules = self.rules.lock().unwrap_or_else(PoisonError::into_inner);

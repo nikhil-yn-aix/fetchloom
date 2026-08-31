@@ -75,8 +75,8 @@ pub trait Store {
     /// and when the recorded fingerprint no longer matches the file on disk.
     fn open(&self, digest: ContentDigest) -> Result<Self::Reader, Error>;
 
-    /// Takes the single-writer claim on one key, waiting for another writer
-    /// and reusing its result rather than starting a second transfer.
+    /// Takes the single-writer claim on one key, waiting for another writer and
+    /// reusing its result rather than starting a second transfer.
     ///
     /// # Errors
     ///
@@ -85,10 +85,6 @@ pub trait Store {
     fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error>;
 
     /// Reports whether this lease waited for another writer to finish.
-    ///
-    /// Takes a lease this store handed out. Returns true when the claim was
-    /// held by someone else and this one waited for it, which is the fact a
-    /// run reports with `cache.wait`.
     fn waited(&self, lease: &Self::Lease) -> bool;
 
     /// Opens an in-progress object for writing, reserving its full length.
@@ -100,9 +96,6 @@ pub trait Store {
 
     /// Opens an in-progress object for writing, keeping the first `valid` bytes
     /// and hashing them back into the digest as it goes.
-    ///
-    /// Takes the claim, the length the source stated, and how many bytes of the
-    /// partial are known to have arrived. Discards anything past `valid`.
     ///
     /// # Errors
     ///
@@ -119,8 +112,6 @@ pub trait Store {
 
     /// Reads what a partial recorded about where its bytes came from.
     ///
-    /// Returns nothing when no partial exists or none was recorded.
-    ///
     /// # Errors
     ///
     /// Fails when a record exists and cannot be read.
@@ -135,14 +126,11 @@ pub trait Store {
 
     /// Publishes an in-progress object as a completed one.
     ///
-    /// Takes the claim and the writer. Returns the digest the written bytes
-    /// hash to, which is the object's name.
-    ///
     /// # Errors
     ///
-    /// Fails when the claim states a digest the bytes do not hash to, when
-    /// the two directories are on different volumes, and when the rename
-    /// does not complete.
+    /// Fails when the claim states a digest the bytes do not hash to, when the
+    /// two directories are on different volumes, and when the rename does not
+    /// complete.
     fn commit(
         &self,
         lease: Self::Lease,
@@ -150,10 +138,6 @@ pub trait Store {
     ) -> Result<crate::hashing::Digests, Error>;
 
     /// Reports whether an outboard tree is stored for an object.
-    ///
-    /// Takes no lock, for the same reason asking whether an object is present
-    /// takes none: the answer is only ever a reason to open the tree, and
-    /// opening it takes the lease and looks again.
     ///
     /// # Errors
     ///
@@ -170,12 +154,6 @@ pub trait Store {
 
     /// Returns how many bytes at the start of a partial transfer match the
     /// object's outboard tree.
-    ///
-    /// Takes the key the partial is named by, the digest the run expects, and
-    /// how many bytes are recorded as having arrived. Returns the offset of the
-    /// first leaf group that is bad or missing, which is where a resume on the
-    /// first rung appends. The answer is never past the last group boundary at
-    /// or below what is on disk.
     ///
     /// # Errors
     ///
@@ -223,8 +201,8 @@ pub trait Store {
     /// Fails when the cache cannot be read.
     fn list(&self) -> Result<Vec<ContentDigest>, Error>;
 
-    /// Removes objects that are neither pinned, leased, nor referenced, after
-    /// a grace period.
+    /// Removes objects that are neither pinned, leased, nor referenced, after a
+    /// grace period.
     ///
     /// # Errors
     ///

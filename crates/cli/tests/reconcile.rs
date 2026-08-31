@@ -423,26 +423,24 @@ fn a_malformed_layout_value_is_a_usage_error() {
 
 #[test]
 fn every_status_a_run_reports_is_one_the_contract_names() {
-    let allowed = ["materialized", "unchanged", "restored", "adopted"];
-    let source = std::fs::read_to_string("src/run.rs").unwrap();
-    let mut seen = Vec::new();
-    for piece in source.split("status: \"").skip(1) {
-        let value = piece.split('"').next().unwrap_or_default().to_owned();
-        seen.push(value);
-    }
-    assert!(!seen.is_empty(), "no status is reported anywhere");
-    for status in &seen {
-        assert!(
-            allowed.contains(&status.as_str()),
-            "the run reports {status}, which contracts.md does not name"
+    use fetchloom_engine::outcome::RunStatus;
+
+    let named = [
+        (RunStatus::Materialized, "materialized"),
+        (RunStatus::Unchanged, "unchanged"),
+        (RunStatus::Restored, "restored"),
+        (RunStatus::Adopted, "adopted"),
+    ];
+    for (status, expected) in named {
+        assert_eq!(
+            serde_json::to_string(&status).unwrap(),
+            format!("\"{expected}\""),
+            "the type writes {status:?} as something contracts.md does not name"
         );
     }
 }
 
 /// The directory every command in this file runs in.
-///
-/// A run writes its lock beside the working directory, so each test binary is
-/// given one of its own rather than writing into the workspace.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

@@ -3,9 +3,6 @@
 use std::sync::{Mutex, PoisonError};
 
 /// One fallback a seam performed instead of what was requested.
-///
-/// A seam with no observer records a fallback here and the composition root
-/// turns each entry into the one `degrade` event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Degradation {
     /// What was requested.

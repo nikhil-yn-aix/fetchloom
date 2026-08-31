@@ -1091,3 +1091,72 @@ fn cache_clear_clears_a_cache_whose_format_does_not_match() {
     );
     assert_eq!(workspace.run(&["cache", "status"]).code(), 0);
 }
+
+#[test]
+fn explain_answers_in_json_when_it_is_asked_to() {
+    let workspace = Workspace::new();
+    let run = workspace.run(&["--json", "explain"]);
+    assert_eq!(run.code(), 0, "{}", run.err());
+
+    let reported: serde_json::Value =
+        serde_json::from_str(run.out().trim()).unwrap_or_else(|error| {
+            panic!(
+                "explain --json did not answer in JSON ({error}): {}",
+                run.out()
+            )
+        });
+    let settings = reported["settings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no settings array: {reported}"));
+    assert!(
+        settings.iter().any(|row| row["key"] == "cache.dir"),
+        "{reported}"
+    );
+}
+
+#[test]
+fn explain_reports_a_measured_setting_as_measured_rather_than_as_unknown() {
+    let workspace = Workspace::new();
+    let run = workspace.run(&["explain", "threads"]);
+    assert_eq!(run.code(), 0, "{}", run.err());
+    assert!(
+        !run.out().contains('?'),
+        "a thread budget this machine detects was reported as a value nothing supplied: {}",
+        run.out()
+    );
+    assert!(
+        run.out().contains("(measured)"),
+        "the measured budget did not say it was measured: {}",
+        run.out()
+    );
+}
+
+#[test]
+fn a_flag_a_command_cannot_act_on_is_refused_rather_than_accepted() {
+    let workspace = Workspace::new();
+    workspace.write("thing.txt", b"hello\n");
+    for flag in ["--force", "--adopt"] {
+        let run = workspace.run(&["plan", "./thing.txt", flag]);
+        assert_eq!(
+            run.code(),
+            2,
+            "plan {flag} was accepted: {} {}",
+            run.out(),
+            run.err()
+        );
+        assert!(
+            run.err().contains(flag),
+            "the refusal did not name the flag: {}",
+            run.err()
+        );
+    }
+}
+
+#[test]
+fn a_second_reference_is_a_usage_error_rather_than_a_declared_capability() {
+    let workspace = Workspace::new();
+    workspace.write("one.txt", b"one\n");
+    workspace.write("two.txt", b"two\n");
+    let run = workspace.run(&["get", "./one.txt", "./two.txt"]);
+    assert_eq!(run.code(), 2, "{} {}", run.out(), run.err());
+}

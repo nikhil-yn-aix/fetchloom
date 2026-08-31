@@ -41,8 +41,6 @@ impl FileId {
 }
 
 /// The tuple recording that a file is probably unchanged.
-///
-/// It is never evidence of content and never appears in a lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Fingerprint {
     /// The volume the file is on.
@@ -96,8 +94,6 @@ impl BootId {
 }
 
 /// The fingerprint of the cache format the running build writes.
-///
-/// It is compared for equality and nothing is ever branched on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct CacheFormatFingerprint(crate::digest::ContentDigest);

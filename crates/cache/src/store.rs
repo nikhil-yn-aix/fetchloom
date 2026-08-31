@@ -25,8 +25,8 @@ use crate::{Cache, owner_record_of, seal_object, source_record_of};
 /// How many bytes a resume reads back at a time to rebuild the digest.
 const RESUME_BUFFER_BYTES: usize = 1 << 20;
 
-/// A completed object held open, with the lease that keeps it from being
-/// pruned while it is being read.
+/// A completed object held open, with the lease that keeps it from being pruned
+/// while it is being read.
 #[derive(Debug)]
 pub struct ObjectReader<L> {
     file: std::fs::File,
@@ -53,10 +53,6 @@ impl<L> Seek for ObjectReader<L> {
 }
 
 /// An object being written, hashed as its bytes arrive.
-///
-/// Both digests are taken in the one pass the bytes make, on separate threads
-/// of the processor pool, so neither serializes the other and neither costs a
-/// second read.
 pub struct PartialWriter {
     file: std::fs::File,
     path: PathBuf,
@@ -126,18 +122,12 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Reports whether an object is present right now.
-    ///
-    /// Takes no lock. Opening the object takes the lease and looks again.
     fn present(&self, digest: ContentDigest) -> bool {
         self.layout.object(digest).is_file()
     }
 
     /// Checks an object already in the cache against the verification policy
     /// this cache was opened with.
-    ///
-    /// Every path that reuses an object goes through this, whether it opens the
-    /// object to read it or clones its blocks into a destination without
-    /// reading a byte.
     ///
     /// # Errors
     ///
@@ -182,10 +172,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Rereads every byte of an object and checks it.
-    ///
-    /// An object with a stored tree is walked group by group against that tree,
-    /// which reads the tree as well as the object and fails naming the byte
-    /// ranges that are wrong. An object with no tree is rehashed whole.
     fn check_bytes(&self, digest: ContentDigest) -> Result<(), Error> {
         if self.has_outboard(digest)? {
             let found = self.localize(digest)?;

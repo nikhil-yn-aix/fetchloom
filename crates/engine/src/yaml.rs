@@ -17,9 +17,6 @@ struct Line {
 
 /// Reads the restricted subset into the model.
 ///
-/// Takes the document text and the bounds a document may not exceed. Returns
-/// the model.
-///
 /// # Errors
 ///
 /// Fails with `manifest.invalid` naming the line and what it broke.
@@ -57,8 +54,8 @@ fn at(line: usize, action: &str) -> Error {
     invalid(format!("line {line}: {action}"))
 }
 
-/// Returns the lines that carry content, with indentation measured and
-/// comments removed.
+/// Returns the lines that carry content, with indentation measured and comments
+/// removed.
 fn significant(text: &str) -> Result<Vec<Line>, Error> {
     let mut lines = Vec::new();
     for (index, raw) in text.split('\n').enumerate() {
@@ -242,9 +239,6 @@ fn opens_block(rest: &str) -> bool {
 }
 
 /// Splits a line into its key and whatever follows the colon.
-///
-/// Returns nothing when the line holds no key separator outside a quote or a
-/// flow collection, which is how a scalar is told from a mapping entry.
 fn split_key(content: &str) -> Option<(String, String)> {
     let bytes = content.as_bytes();
     if bytes
@@ -297,8 +291,8 @@ fn unquote_key(key: &str) -> Option<String> {
     Some(key.to_owned())
 }
 
-/// Reads one scalar or one flow collection, which must be the whole of the
-/// text it is given.
+/// Reads one scalar or one flow collection, which must be the whole of the text
+/// it is given.
 fn scalar_or_flow(text: &str, number: usize) -> Result<Value, Error> {
     let (value, used) = read_node(text, 0, number)?;
     if text[used..].trim().is_empty() {
@@ -513,9 +507,6 @@ fn refuse_reserved(raw: &str, number: usize) -> Result<(), Error> {
 }
 
 /// Returns the value an unquoted scalar stands for.
-///
-/// Only `true`, `false`, and `null` are read as anything other than text, and
-/// only a run of digits with an optional sign is read as a number.
 fn plain_value(raw: &str) -> Value {
     match raw {
         "true" => return Value::Bool(true),

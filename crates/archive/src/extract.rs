@@ -67,30 +67,22 @@ impl WriteGuard {
     }
 }
 
-/// Extracts the selected members of an archive into an empty staging
-/// directory.
-///
-/// Takes an archive reader, the selection to apply, a staging directory that
-/// already exists and is empty, and the limits to enforce. Writes every
-/// selected file, directory, and symlink into staging: every name is created
-/// with the platform's exclusive-create, and every symlink is created after
-/// every other entry exists. Returns the tree entries written, in no
-/// particular order.
+/// Extracts the selected members of an archive into an empty staging directory.
 ///
 /// # Errors
 ///
 /// Fails with `archive.collision` naming both members when two staged names
 /// collide under the destination volume's own case folding or Unicode
 /// normalization. Fails with `destination.unrepresentable` naming the member
-/// and what the volume said when the volume refuses a name for another
-/// reason. Fails with `archive.unsafe_path` naming the member and both
-/// lengths when a staged path or one of its components is longer than the
-/// volume allows. Fails with `archive.link_escape` naming the member and the
-/// target when a hard link names a member this archive does not hold. Fails
-/// with `archive.bomb` when more entries are written than the entry limit,
-/// or more bytes are written than the expanded-bytes limit. Fails when the
-/// archive or the selection itself fails. Every failure removes everything
-/// this call staged, leaving the staging directory as it was given.
+/// and what the volume said when the volume refuses a name for another reason.
+/// Fails with `archive.unsafe_path` naming the member and both lengths when a
+/// staged path or one of its components is longer than the volume allows. Fails
+/// with `archive.link_escape` naming the member and the target when a hard link
+/// names a member this archive does not hold. Fails with `archive.bomb` when
+/// more entries are written than the entry limit, or more bytes are written
+/// than the expanded-bytes limit. Fails when the archive or the selection
+/// itself fails. Every failure removes everything this call staged, leaving the
+/// staging directory as it was given.
 pub fn extract<A, P>(
     archive: &mut A,
     selection: &Selection,
@@ -120,9 +112,6 @@ where
 }
 
 /// Returns the member path as an entry path names it.
-///
-/// Drops the trailing separator a directory member carries and the leading `.`
-/// components that name the archive root.
 pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
     let raw = if member.kind == MemberKind::Directory {
         member.path.trim_end_matches('/')
@@ -136,9 +125,6 @@ pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
 }
 
 /// Empties the staging directory this call was given.
-///
-/// Takes the staging directory, which was given empty. Removes everything
-/// inside it, not only the names this call recorded.
 fn cleanup(staging: &Path) {
     let Ok(entries) = std::fs::read_dir(staging) else {
         return;
@@ -154,10 +140,6 @@ fn cleanup(staging: &Path) {
 }
 
 /// Applies a selection to an archive's members under their canonical paths.
-///
-/// Takes the members the archive listed and the selection. Returns the
-/// selection's answer with every index pointing back at the member list it
-/// was given.
 pub(crate) fn select_members(
     members: &[ArchiveMember],
     selection: &Selection,
@@ -423,12 +405,6 @@ const WINDOWS_RESERVED_BASE_NAMES: [&str; 22] = [
 ];
 
 /// Reports whether a name is one this platform is known to store as another.
-///
-/// Takes one path component. Returns whether the name is worth confirming
-/// after it is created, which is never the verdict itself: a volume that
-/// stores the name exactly is allowed to, and only a volume that stores
-/// something else is refused. The list decides what to measure, never what
-/// the answer is.
 #[cfg(windows)]
 fn worth_confirming(component: &str) -> bool {
     if component.contains(':') || component.ends_with('.') || component.ends_with(' ') {
@@ -445,16 +421,10 @@ fn worth_confirming(_component: &str) -> bool {
 
 /// Confirms that the volume stored the name that was asked for.
 ///
-/// Takes the path just created. Reads the containing directory back and looks
-/// for that exact final component. A volume may accept a create and store
-/// something else: Windows strips a trailing dot or space, and a name
-/// holding a colon becomes an alternate data stream on a file of the shorter
-/// name.
-///
 /// # Errors
 ///
-/// Fails with `destination.unrepresentable` naming the member when the name
-/// the volume stored is not the name the archive holds.
+/// Fails with `destination.unrepresentable` naming the member when the name the
+/// volume stored is not the name the archive holds.
 fn confirm_stored_name(member: &str, full: &Path) -> Result<(), Error> {
     let Some(name) = full.file_name() else {
         return Ok(());

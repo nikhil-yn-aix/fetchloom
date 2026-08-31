@@ -133,11 +133,6 @@ fn at(server: &TestServer) -> Vec<String> {
 
 /// Limits that give up on a body that stops arriving without giving up on a
 /// machine that is busy.
-///
-/// The idle timeout is what makes a stall end quickly, and it is the only one
-/// that has to be short. A short response timeout would instead race the
-/// machine's own scheduler for the headers, which is not a contract and is not
-/// what any of these tests mean to assert.
 fn impatient() -> Limits {
     Limits {
         connect_timeout: Duration::from_millis(500),

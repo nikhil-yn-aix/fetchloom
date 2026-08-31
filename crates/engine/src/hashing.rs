@@ -12,8 +12,6 @@ use crate::pool::Processor;
 
 /// The number of bytes at which pairing the two digests across the processor
 /// pool starts to pay.
-///
-/// Below this, the two digests are paired on the calling thread.
 pub const POOL_THRESHOLD: usize = 1 << 20;
 
 /// Everything one streaming pass over an object's bytes produces.
@@ -31,9 +29,6 @@ pub struct Digests {
 
 /// The BLAKE3 side of one pass: the chaining value of each leaf group, and the
 /// group still filling.
-///
-/// A group's chaining value is the only hash taken of its bytes, and the root
-/// is merged from those values.
 #[derive(Clone, Debug)]
 struct Groups {
     /// The hasher covering the group currently filling.
@@ -59,9 +54,6 @@ impl Default for Groups {
 
 impl Groups {
     /// Takes bytes, closing a group only once the next group has a byte in it.
-    ///
-    /// A group is left open at a boundary.
-    /// until the next byte arrives or does not.
     fn update(&mut self, mut chunk: &[u8]) {
         while !chunk.is_empty() {
             if self.filled == GROUP_LEN {
@@ -95,9 +87,6 @@ fn usize_of(value: u64) -> usize {
 }
 
 /// The two digests of one object and its tree, updated together.
-///
-/// This is the only place the pairing is written down, so there is one answer
-/// to what the two digests cover and one rule for where they run.
 #[derive(Clone, Debug, Default)]
 pub struct Pair {
     content: Groups,
@@ -112,10 +101,6 @@ impl Pair {
     }
 
     /// Updates both digests with the same bytes.
-    ///
-    /// Takes the pool the two updates may run on and the chunk they both
-    /// cover. A chunk at or above the threshold runs on two threads of the
-    /// pool and a shorter one runs on this thread.
     pub fn update(&mut self, processor: &Processor, chunk: &[u8]) {
         if chunk.len() < POOL_THRESHOLD {
             self.content.update(chunk);
@@ -152,11 +137,6 @@ impl Pair {
 }
 
 /// The one buffer a run reads every stream it hashes through.
-///
-/// Held for as long as a run has streams to hash. A buffer the size of one
-/// chunk group costs about ten microseconds to allocate, which is three times
-/// what hashing a small file costs, so allocating one per file is most of the
-/// price of hashing a directory of them.
 #[derive(Debug)]
 pub struct Digester {
     buffer: Vec<u8>,
@@ -180,9 +160,6 @@ impl Digester {
     /// Reads `reader` once and returns the content and interop digest of its
     /// bytes.
     ///
-    /// Takes the pool the pairing may run on and the bytes to read. Nothing is
-    /// read twice and nothing is allocated per stream or per chunk.
-    ///
     /// # Errors
     ///
     /// Fails when `reader` fails.
@@ -204,9 +181,6 @@ impl Digester {
 }
 
 /// Fills `buffer` from `reader`, reading until it is full or the reader ends.
-///
-/// Returns the number of bytes filled, which is less than the buffer length
-/// only at the end of the reader.
 pub(crate) fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buffer.len() {
@@ -220,9 +194,6 @@ pub(crate) fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usiz
 }
 
 /// Returns the content digest of bytes already held in memory.
-///
-/// Takes a slice short enough to hold, such as a symbolic link target. Returns
-/// the same digest a stream of the same bytes would return.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> ContentDigest {
     ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes())

@@ -12,8 +12,6 @@ use crate::Cache;
 impl<P: Platform> Cache<P> {
     /// Writes the receipt for the destination it names.
     ///
-    /// Writes beside the receipt and renames onto it.
-    ///
     /// # Errors
     ///
     /// Fails when the receipt cannot be written.
@@ -35,10 +33,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Returns the receipt that describes a destination.
-    ///
-    /// Takes the destination as it was resolved against the working directory.
-    /// Returns nothing when no receipt is stored under that name and when the
-    /// receipt stored there describes another destination.
     ///
     /// # Errors
     ///

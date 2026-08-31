@@ -17,7 +17,8 @@ pub const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
 /// domain.
 pub const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
 
-/// The derived key context separating partial key names from every other domain.
+/// The derived key context separating partial key names from every other
+/// domain.
 pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
 
 /// The derived key context separating the name a witness record is filed under
@@ -111,7 +112,8 @@ pub enum ParseDigestError {
     MissingAlgorithm,
     /// The algorithm label named no algorithm Fetchloom produces.
     UnknownAlgorithm,
-    /// The hexadecimal part was not sixty-four lowercase hexadecimal characters.
+    /// The hexadecimal part was not sixty-four lowercase hexadecimal
+    /// characters.
     MalformedHex,
 }
 
@@ -233,9 +235,6 @@ macro_rules! domain_digest {
 
             /// Reads a digest written as its algorithm, a colon, and lowercase
             /// hexadecimal.
-            ///
-            /// Fails with what the text broke when it is not a digest of this
-            /// domain's algorithm.
             fn from_str(text: &str) -> Result<Self, Self::Err> {
                 let digest: Digest = text
                     .parse()

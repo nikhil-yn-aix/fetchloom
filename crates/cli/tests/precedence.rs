@@ -162,7 +162,7 @@ fn explain_names_the_origin_of_every_setting() {
         &discovered,
         &FakeEnvironment::default(),
     );
-    let rows = fetchloom_cli::explain::rows(&resolved);
+    let rows = fetchloom_cli::explain::rows(&resolved, 4);
 
     let threads = rows.iter().find(|row| row.key == "threads").unwrap();
     assert_eq!(threads.origin, "project config");
@@ -173,16 +173,17 @@ fn explain_names_the_origin_of_every_setting() {
 }
 
 #[test]
-fn a_value_no_level_supplied_is_shown_as_a_question_mark() {
+fn a_setting_no_level_supplied_reports_the_measurement_that_chose_it() {
     let (_temporary, discovered) = discovered_from(None, None);
     let resolved = settings::resolve_all(
         &GlobalFlags::default(),
         &discovered,
         &FakeEnvironment::default(),
     );
-    let rows = fetchloom_cli::explain::rows(&resolved);
+    let rows = fetchloom_cli::explain::rows(&resolved, 4);
     let threads = rows.iter().find(|row| row.key == "threads").unwrap();
-    assert_eq!(threads.value, "?");
+    assert_eq!(threads.value, "4");
+    assert_eq!(threads.origin, "measured");
 }
 
 #[test]

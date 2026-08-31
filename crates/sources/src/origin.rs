@@ -53,9 +53,6 @@ impl Origin {
 
     /// Resolves a redirect target against the location it came from.
     ///
-    /// Takes an absolute location or one beginning with a slash. Returns the
-    /// absolute location to request next.
-    ///
     /// # Errors
     ///
     /// Fails when the target is neither.

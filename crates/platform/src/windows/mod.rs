@@ -192,12 +192,6 @@ pub(crate) fn flush(
 
 /// Makes a directory's own entries durable.
 ///
-/// Windows has no documented way to do this: flushing needs a write access
-/// right a directory handle cannot be opened with, and the only documented
-/// whole-volume flush requires administrative privileges. The rename itself
-/// carries the write-through flag instead, which is what provides the same
-/// guarantee, so this succeeds without issuing a call.
-///
 /// # Errors
 ///
 /// Never fails.
@@ -277,27 +271,16 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
 }
 
 /// Returns this machine's own identity.
-///
-/// Returns nothing when the value cannot be read.
 pub(crate) fn machine_id() -> Option<MachineId> {
     ffi::registry_string(MACHINE_KEY, "MachineGuid").map(MachineId::new)
 }
 
 /// Returns the identity of this boot of this machine.
-///
-/// This is the counter the session manager raises on each boot, never a value
-/// derived from uptime.
-///
-/// Returns nothing when the value cannot be read.
 pub(crate) fn boot_id() -> Option<BootId> {
     ffi::registry_number(BOOT_KEY, "BootId").map(|value| BootId::new(value.to_string()))
 }
 
 /// Returns when a process started.
-///
-/// Returns that no such process exists only when the platform says so. A
-/// process that exists and cannot be inspected is reported as unreadable, never
-/// as gone.
 pub(crate) fn process_start(pid: u32) -> ProcessState {
     match ffi::process_start(pid) {
         ffi::ProcessQuery::Started(start) => ProcessState::Started(start),
@@ -323,9 +306,6 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
 
 /// Reports whether a file belongs to the user this process runs as.
 ///
-/// Compares the file's owner against both the token's user and the token's
-/// owner, either of which is this process.
-///
 /// # Errors
 ///
 /// Fails when the path cannot be opened and when the platform reports no owner.
@@ -343,9 +323,6 @@ pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     Ok(ours.contains(&found))
 }
 /// Reports what the volume behind a path sits on.
-///
-/// A path the platform cannot answer for is reported as a local volume rather
-/// than refused.
 pub(crate) fn volume_backing(path: &Path) -> Backing {
     if ffi::is_remote_drive(path) {
         Backing::Network

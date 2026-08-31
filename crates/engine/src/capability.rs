@@ -39,10 +39,6 @@ pub enum Backing {
 }
 
 /// Whether an on-access scanner inspects writes, and what it costs.
-///
-/// Presence and absence are only ever reported where the platform can
-/// enumerate what inspects a write. Where it cannot, the measured cost is
-/// reported with the answer left unknown.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scanner {

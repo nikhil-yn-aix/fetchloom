@@ -33,8 +33,8 @@ const GREETING_XZ: &[u8] = &[
     103, 0, 1, 56, 24, 134, 145, 117, 36, 31, 182, 243, 125, 1, 0, 0, 0, 0, 4, 89, 90,
 ];
 
-/// The bytes of `xz -9` over a ustar tar holding `hello.txt`, whose content
-/// is `hello\n`, embedded for the same reason.
+/// The bytes of `xz -9` over a ustar tar holding `hello.txt`, whose content is
+/// `hello\n`, embedded for the same reason.
 const TAR_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 126, 128, 80, 33, 1, 28, 0, 0, 0, 0,
     0, 0, 0, 0, 134, 159, 55, 227, 224, 39, 255, 0, 118, 93, 0, 52, 25, 73, 238, 141, 240, 186,

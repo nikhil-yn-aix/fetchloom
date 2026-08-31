@@ -417,12 +417,15 @@ A run with no recorded validator for the reference cannot ask, and transfers. A 
   staging/    extraction trees not yet published
   quarantine/ objects that failed verification, kept for diagnosis and repair
               <hex>.diagnosis is what was found, beside the object it describes
+  receipts/   one receipt per materialized destination
   meta/       resolution metadata, per-host measurements, witnesses
               object/<hex> is one record per object, holding its interop
               digest and the fingerprint it was published with
               resolution/<hex> is one record per reference, holding the
               digest it last resolved to and the validator the source gave
               witness/<hex> is the witnesses recorded for one artifact key
+              prune/ is what a prune marked before it removed anything
+              recovered names the boot this cache was last swept after
   locks/      advisory single-writer locks
   pins/       pin records
   format      cache format fingerprint
@@ -950,7 +953,6 @@ Defaults. All configurable. None may be raised past a hard ceiling that would al
 | Archive entries | 1,000,000 |
 | Expanded bytes | 1 TiB |
 | Expansion ratio | 200 |
-| Path length | platform maximum |
 | Nesting depth | 64 |
 | Resident memory | 1 GiB |
 | Redirects followed | 10 |

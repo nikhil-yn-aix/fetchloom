@@ -1,5 +1,5 @@
-//! Contract tests for the key a partial, its lease, and its records are
-//! named by.
+//! Contract tests for the key a partial, its lease, and its records are named
+//! by.
 
 use blake3 as _;
 use rayon as _;

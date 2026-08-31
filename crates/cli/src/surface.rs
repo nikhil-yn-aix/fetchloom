@@ -100,9 +100,6 @@ pub enum VerifyChoice {
 }
 
 /// The value `--layout` was given, parsed into what selection acts on.
-///
-/// Takes `keep` or `flatten:<n>`. Fails when the text is neither, which
-/// `clap` reports as a usage error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutArg(pub Layout);
 
@@ -206,8 +203,8 @@ pub enum Command {
     /// Resolve, transfer, verify, and materialize.
     Get {
         /// What to fetch.
-        #[arg(required = true, value_name = "ref")]
-        references: Vec<String>,
+        #[arg(value_name = "ref")]
+        reference: String,
         /// The flags that control materialization.
         #[command(flatten)]
         transfer: Box<TransferFlags>,
@@ -215,8 +212,8 @@ pub enum Command {
     /// Resolve and report what a run would do, moving no bytes.
     Plan {
         /// What to plan.
-        #[arg(required = true, value_name = "ref")]
-        references: Vec<String>,
+        #[arg(value_name = "ref")]
+        reference: String,
         /// The flags that control materialization.
         #[command(flatten)]
         transfer: Box<TransferFlags>,

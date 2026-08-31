@@ -44,11 +44,6 @@ pub struct Receipt {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executable: Vec<String>,
     /// The fingerprint each file entry carried when the run published it.
-    ///
-    /// Local, like everything else here, and the same cache of the phrase
-    /// probably unchanged that `--verify fingerprint` applies to a cache hit.
-    /// Never evidence of content, never compared against another machine's, and
-    /// never anything but a reason to skip reading bytes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fingerprints: BTreeMap<String, RecordedFingerprint>,
     /// Where the tree was materialized.
@@ -57,21 +52,12 @@ pub struct Receipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_terms: Option<Acceptance>,
     /// The release version of the build that produced this receipt.
-    ///
-    /// Provenance, saying which build produced a result. Nothing is ever
-    /// branched on it.
     pub fetchloom: String,
     /// When the run finished.
     pub completed_at: Timestamp,
 }
 
 /// The fingerprint tuple of one destination file, as a receipt records it.
-///
-/// Every field but the length is written as text. A volume identifier, a file
-/// identifier and an instant are opaque values this record only ever compares
-/// for equality, two of them are a hundred and twenty-eight bits wide, and the
-/// canonical form carries a number as a run of digits that fits sixty-four. A
-/// value that is not a quantity is not written as one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordedFingerprint {
@@ -109,8 +95,6 @@ impl RecordedFingerprint {
 
 impl Receipt {
     /// Returns the name a receipt for a destination is stored under.
-    ///
-    /// Takes the destination as it was resolved against the working directory.
     #[must_use]
     pub fn key(destination: &Path) -> ContentDigest {
         let mut hasher = blake3::Hasher::new_derive_key(RECEIPT_KEY_CONTEXT);
@@ -119,9 +103,6 @@ impl Receipt {
     }
 
     /// Returns the mode this receipt states for one entry path.
-    ///
-    /// Takes the path as the tree records it. Returns the executable mode when
-    /// the receipt listed the path and the read and write mode otherwise.
     #[must_use]
     pub fn mode_of(&self, path: &str) -> Mode {
         if self

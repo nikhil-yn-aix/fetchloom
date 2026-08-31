@@ -23,9 +23,6 @@ pub enum Syntax {
 impl Syntax {
     /// Returns the syntax a file name states, when it states one this build
     /// reads.
-    ///
-    /// Takes the path a document was read from. Returns nothing when the
-    /// extension is not `yaml`, `yml`, `toml`, or `json`.
     #[must_use]
     pub fn of_path(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
@@ -49,11 +46,6 @@ impl Syntax {
 }
 
 /// Reads a document in one of the three accepted syntaxes into the model.
-///
-/// Takes the bytes exactly as they were read, the syntax to read them in, and
-/// the bounds that cap how large and how deep a document may be. Returns the
-/// model, in which a mapping is ordered by its keys and an absent value is
-/// absent rather than null.
 ///
 /// # Errors
 ///
@@ -83,10 +75,6 @@ pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Err
 }
 
 /// Returns the canonical JSON bytes of a model.
-///
-/// Every mapping is ordered by the raw bytes of its keys, an absent value is
-/// omitted rather than written as null, there is no insignificant whitespace,
-/// and there is no line ending anywhere.
 #[must_use]
 pub fn canonical_json(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();
@@ -96,10 +84,6 @@ pub fn canonical_json(value: &Value) -> Vec<u8> {
 
 /// Renders a model as the canonical text this build writes a lock, a receipt,
 /// and a plan in.
-///
-/// Every mapping is ordered by the raw bytes of its keys, every scalar is
-/// written the one way it can be written, and every line ends with a single
-/// line feed on every platform.
 #[must_use]
 pub fn render(value: &Value) -> String {
     let mut out = String::new();
@@ -180,8 +164,6 @@ fn write_json(value: &Value, out: &mut Vec<u8>) {
 }
 
 /// Returns a mapping's entries ordered by the raw bytes of their keys.
-///
-/// The order is a property of the keys alone.
 fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut entries: Vec<(&String, &Value)> = fields.iter().collect();
     entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
@@ -189,11 +171,6 @@ fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
 }
 
 /// Returns the one double-quoted form of a string.
-///
-/// The quote and the backslash are escaped, the five short escapes are used
-/// where they apply, and every other control character is written as a
-/// lowercase four-digit escape. Every other character is written as itself, so
-/// text outside the basic Latin range stays readable.
 #[must_use]
 pub fn quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -288,9 +265,6 @@ fn render_key(key: &str) -> String {
 
 /// Reads a model from a document written in the syntax this build writes.
 ///
-/// Takes the bytes, what the document is called in a failure, and the bounds a
-/// document may not exceed.
-///
 /// # Errors
 ///
 /// Fails with `manifest.invalid` naming the line or the key that broke.
@@ -303,9 +277,6 @@ pub fn read_model<T: serde::de::DeserializeOwned>(
 }
 
 /// Reads a model from a document written in one of the accepted syntaxes.
-///
-/// Takes the bytes, the syntax, what the document is called in a failure, and
-/// the bounds a document may not exceed.
 ///
 /// # Errors
 ///
@@ -321,9 +292,6 @@ pub fn read_model_in<T: serde::de::DeserializeOwned>(
 
 /// Reads a parsed document into a model, refusing every key the model does not
 /// name.
-///
-/// Takes the document and what it is called in a failure. A key beginning with
-/// the reserved prefix is refused by name.
 ///
 /// # Errors
 ///

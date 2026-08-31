@@ -32,10 +32,6 @@ pub struct Ingested {
 impl<P: Platform> Cache<P> {
     /// Reads a file once, hashing it as it is written into the cache.
     ///
-    /// Returns the digest the bytes hash to, their length, and whether the
-    /// cache already held them. The bytes are written to a name of this
-    /// process's own and given the digest's name only once the digest is known.
-    ///
     /// # Errors
     ///
     /// Fails when the source cannot be read, when the cache cannot be written,
@@ -59,12 +55,6 @@ impl<P: Platform> Cache<P> {
 
     /// Reads a file and returns what it hashes to and how long it is, writing
     /// nothing.
-    ///
-    /// A file already in the cache must cost the cache no write at all, and
-    /// only its digest says whether it is. The cost is that a file the cache
-    /// does not hold is read twice, once to learn its name and once to store
-    /// it; the alternative was writing every byte of every file the cache
-    /// already held, on every run.
     fn digest_of(&self, source: &Path) -> Result<(Digests, u64), Error> {
         let mut reading = std::fs::File::open(source)
             .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
@@ -86,15 +76,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Puts a file whose digest is already known into the cache.
-    ///
-    /// Takes what the caller's own pass over the bytes produced, its length,
-    /// and where it sits. Returns what the cache did with it. The bytes are
-    /// cloned where the volume can share blocks and copied where it cannot. A
-    /// cache that already holds the object neither reads nor writes.
-    ///
-    /// The caller states the digest. This is for a file this process just wrote
-    /// and hashed in the same pass, not
-    /// for one whose digest was taken on trust.
     ///
     /// # Errors
     ///
@@ -149,8 +130,6 @@ impl<P: Platform> Cache<P> {
 
     /// Returns the interop digest recorded for an object.
     ///
-    /// Returns nothing when the cache holds no record for the object.
-    ///
     /// # Errors
     ///
     /// Fails when the record is present and cannot be read or does not parse.
@@ -160,11 +139,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Reads a stream once, hashing it as it is written into the cache.
-    ///
-    /// Takes the bytes, the length to reserve, which may be zero when the source
-    /// did not state one, and what a failure to read those bytes means, which
-    /// only the caller knows. Returns the digest the bytes hash to, their
-    /// length, and whether the cache already held them.
     ///
     /// # Errors
     ///
@@ -228,10 +202,6 @@ impl<P: Platform> Cache<P> {
 
     /// Records everything the cache knows about a published object that is not
     /// in its bytes.
-    ///
-    /// One record holds every fact but the tree, which is stored separately.
-    ///
-    /// Clears the prune mark.
     ///
     /// # Errors
     ///

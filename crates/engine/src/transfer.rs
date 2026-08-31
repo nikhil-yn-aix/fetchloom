@@ -54,10 +54,6 @@ pub trait Pause: Send + Sync {
 }
 
 /// How long to wait before an attempt, with full jitter.
-///
-/// Takes the limits, the attempt number counted from one, and a value between
-/// zero and one standing for the randomness. Returns a wait no longer than the
-/// ceiling.
 #[must_use]
 pub fn backoff(limits: &Limits, attempt: u32, fraction: f64) -> Duration {
     let exponent = attempt.saturating_sub(1).min(16);
@@ -66,17 +62,12 @@ pub fn backoff(limits: &Limits, attempt: u32, fraction: f64) -> Duration {
 }
 
 /// Reports whether a wait a source asked for is one this run may honor.
-///
-/// A wait longer than the retry ceiling is not honored.
 #[must_use]
 pub fn honors(limits: &Limits, retry_after: Duration) -> bool {
     retry_after <= limits.retry_ceiling
 }
 
 /// What a run already holds for a reference no digest pins.
-///
-/// A warm run of one asks in a conditional request whether the object it holds
-/// is still what the reference names.
 pub struct Prior {
     /// What the reference resolved to last time.
     pub digest: ContentDigest,
@@ -86,12 +77,6 @@ pub struct Prior {
 
 /// Decides where a transfer starts, given what is on disk and what the source
 /// says now.
-///
-/// Takes what the partial recorded, what the source reports now, how many bytes
-/// are on disk, and how many of those an outboard tree has already been shown
-/// to cover. Returns the rung and how many of those bytes may be kept.
-///
-/// A verified prefix is kept whatever the source now says identifies its bytes.
 #[must_use]
 pub fn rung_for(
     recorded: Option<&SourceRecord>,
@@ -145,14 +130,6 @@ pub struct Transfer<'a, S, T, P> {
 
 impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     /// Moves one object from the first source that can serve it into the store.
-    ///
-    /// Takes the digest the run expects, when it states one, and the locations
-    /// in the order the manifest gave them. Hashes the bytes as they are
-    /// written. Resumes from what is already on disk when the source still
-    /// identifies the same bytes, and starts from zero when it does not. A run
-    /// that states no digest names its partial by the source identity a probe
-    /// learns, and publishes the object under whatever digest the bytes hash
-    /// to.
     ///
     /// # Errors
     ///
@@ -331,8 +308,6 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
     }
 
     /// Returns the location that answered and the bytes it answered with.
-    ///
-    /// A conditional request that already carried the body answers with itself.
     fn body_from(
         &self,
         arrived: Option<(SourceMetadata, S::Body)>,
@@ -353,9 +328,6 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
     /// Asks a source in one request whether an object this run already holds is
     /// still what the reference names.
-    ///
-    /// Asks nothing when the run's digest is pinned and nothing when there is no
-    /// recorded validator to ask with.
     fn ask_whether_it_changed(
         &self,
         expected: Option<ContentDigest>,
@@ -502,10 +474,6 @@ pub struct Retry<'a, P> {
 impl<P: Pause> Retry<'_, P> {
     /// Runs an attempt until it succeeds, fails terminally, or runs out.
     ///
-    /// Takes the work, which receives the attempt number counted from one.
-    /// Waits between attempts with exponential backoff and full jitter, and
-    /// emits one retry event per wait.
-    ///
     /// # Errors
     ///
     /// Returns the last failure, carrying how many attempts were made.
@@ -554,10 +522,6 @@ impl Pause for SleepingPause {
 }
 
 /// Names why a body stopped arriving.
-///
-/// Takes where the bytes were coming from and what the read reported. Returns a
-/// timeout when the source went quiet and a refusal when it closed the
-/// connection. Every answer is retryable.
 #[must_use]
 pub fn body_failure(location: &str, reason: &std::io::Error) -> Error {
     let quiet = matches!(

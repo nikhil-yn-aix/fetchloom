@@ -48,9 +48,6 @@ pub struct HttpSource {
 
 impl HttpSource {
     /// Builds a source holding no connections yet.
-    ///
-    /// Takes the bounds every request obeys and where the run counts the
-    /// requests it issues.
     #[must_use]
     pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -482,10 +479,6 @@ fn classify(reason: &ureq::Error) -> (ErrorKind, bool, &'static str) {
 }
 
 /// Returns whether a socket failure was the handshake and not the socket.
-///
-/// A failed handshake reaches the caller as an io failure holding the rustls
-/// failure that caused it, so the question is asked of the value and never of
-/// the message it prints.
 fn unsecurable(reason: &std::io::Error) -> bool {
     reason
         .get_ref()
@@ -493,12 +486,6 @@ fn unsecurable(reason: &std::io::Error) -> bool {
 }
 
 /// Returns whether a name lookup failed in a way another attempt cannot fix.
-///
-/// A resolver that has not heard of a name and one that could not be reached
-/// are different answers, and only the first of them will be the same on the
-/// next attempt. Windows numbers the two apart. Unix folds every lookup failure
-/// into one io failure, so the test is the message the standard library itself
-/// writes around `getaddrinfo`, which keeps the two apart in its text.
 fn unresolvable(reason: &std::io::Error) -> bool {
     if matches!(reason.raw_os_error(), Some(11_001 | 11_004)) {
         return true;
@@ -509,9 +496,6 @@ fn unresolvable(reason: &std::io::Error) -> bool {
 }
 
 /// Reads the first byte offset a partial response says it is serving.
-///
-/// Takes the value of a `Content-Range` header. Returns nothing when the value
-/// names no satisfied span.
 fn first_byte_of(value: &str) -> Option<u64> {
     value
         .trim()

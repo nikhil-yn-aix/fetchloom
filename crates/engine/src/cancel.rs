@@ -8,8 +8,6 @@ use crate::outcome::ExitCode;
 static INTERRUPTS: AtomicU32 = AtomicU32::new(0);
 
 /// Records that the run was asked to stop.
-///
-/// Returns how many times it has now been asked, counted from one.
 pub fn interrupt() -> u32 {
     INTERRUPTS.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -21,9 +19,6 @@ pub fn requested() -> bool {
 }
 
 /// Ends the process because it was asked to stop.
-///
-/// Called only where the caller has already stopped taking new work, flushed
-/// what was in flight, and written down what a later run can resume from.
 pub fn stop() -> ! {
     std::process::exit(ExitCode::Cancelled.code());
 }

@@ -35,10 +35,6 @@ pub struct Settings {
 }
 
 /// Returns the cache directory this platform puts a cache in by default.
-///
-/// Takes somewhere to read environment variables from. Returns the location
-/// contracts.md names for this platform, and the working directory when the
-/// platform names no home, which is the only place always writable.
 #[must_use]
 pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
     #[cfg(windows)]
@@ -61,13 +57,17 @@ pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
 
 /// Resolves the cache directory a project file names, against the directory
 /// that file is in.
-///
-/// A project file names a cache beside itself, so its value is read against the
-/// file rather than against the working directory.
 fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
     let named = loaded.values.cache.as_ref()?.dir.as_ref()?;
     let beside = loaded.path.parent().unwrap_or(Path::new("."));
-    Some(beside.join(named))
+    Some(without_here(&beside.join(named)))
+}
+
+/// Returns a path with every `.` component dropped.
+fn without_here(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir))
+        .collect()
 }
 
 fn parse_bool(text: &str) -> Option<bool> {
@@ -130,11 +130,6 @@ where
 }
 
 /// Resolves every setting across the five precedence levels.
-///
-/// Takes the parsed global flags, the configuration files that were found, and
-/// somewhere to read environment variables from. Returns each setting with the
-/// level that supplied it, highest first: command line, environment, project
-/// configuration, user configuration, then the built-in default.
 #[must_use]
 pub fn resolve_all(
     flags: &GlobalFlags,

@@ -42,9 +42,6 @@ impl Shape {
 const CHUNK: usize = 1 << 20;
 
 /// Runs the profile and prints one line per measurement.
-///
-/// Takes the workspace root, which is unused, and the arguments after the task
-/// name. Returns success unless the pool cannot be built.
 pub fn run(arguments: &[String]) -> std::process::ExitCode {
     let rounds: u32 = crate::argument_value(arguments, "--rounds")
         .and_then(|value| value.parse().ok())

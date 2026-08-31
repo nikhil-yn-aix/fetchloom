@@ -61,12 +61,6 @@ fn is_decoration(character: char) -> bool {
 }
 
 /// Checks one Rust source file.
-///
-/// Takes the file's path and its text. Returns every rule the text breaks: a
-/// comment that is not a docstring, a block comment in any form, a safety line
-/// that does not precede an unsafe block, and any decorative symbol. Text
-/// inside a string, a character, or a raw string literal is not scanned for
-/// comments.
 #[must_use]
 pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -158,10 +152,6 @@ pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
 }
 
 /// Checks one Markdown file.
-///
-/// Takes the file's path and its text. Returns every decorative symbol and
-/// every banner or section divider, which is a line made only of four or more
-/// repeats of one decorative character.
 #[must_use]
 pub fn check_markdown(file: &Path, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();

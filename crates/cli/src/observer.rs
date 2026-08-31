@@ -14,8 +14,6 @@ use crate::surface::DisplayMode;
 pub const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 
 /// An observer that writes the event stream as newline-delimited JSON.
-///
-/// An observer that cannot write drops the event rather than failing a run.
 pub struct EventStream {
     sink: Mutex<Box<dyn Write + Send>>,
 }
@@ -64,9 +62,6 @@ struct Progress {
 }
 
 /// The one renderer for the whole run.
-///
-/// It consumes the event stream and has no other input. It paints the
-/// plain view and stays silent in the none view.
 #[derive(Debug)]
 pub struct Renderer {
     mode: DisplayMode,
@@ -76,8 +71,6 @@ pub struct Renderer {
 
 impl Renderer {
     /// Builds the renderer for a display mode.
-    ///
-    /// Takes the mode the run resolved to and whether redrawing is allowed.
     #[must_use]
     pub fn new(mode: DisplayMode, animate: bool) -> Self {
         Self {

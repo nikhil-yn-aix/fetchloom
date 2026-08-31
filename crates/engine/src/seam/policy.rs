@@ -45,16 +45,12 @@ pub trait Policy: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Fails when a credential is required and none was found, and when a
-    /// found credential is expired, revoked, or too narrowly scoped.
+    /// Fails when a credential is required and none was found, and when a found
+    /// credential is expired, revoked, or too narrowly scoped.
     fn credential(&self, host: &Host, necessity: Necessity) -> Result<Option<Credential>, Error>;
 
     /// Decides whether an optional credential is worth interrupting for, and
     /// asks when it is.
-    ///
-    /// Takes the provider's fixed help record and the projected difference the
-    /// credential would make. Returns the credential when the user supplied
-    /// one and nothing when the user declined or was not asked.
     ///
     /// # Errors
     ///

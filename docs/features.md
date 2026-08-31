@@ -112,7 +112,7 @@ Deterministic: permissions, executable bits, timestamps, and symlink handling fo
 
 Selection happens without extracting irrelevant archive members when the format allows it.
 
-Copy-on-write clones are used when the filesystem supports them, so materializing from a warm cache costs metadata rather than a second copy of the data. Otherwise it falls back to a copy and reports which happened. Hard links and symlinks are opt-in.
+Copy-on-write clones are used when the filesystem supports them, so materializing from a warm cache costs metadata rather than a second copy of the data. Otherwise it falls back to a copy and reports which happened. A symlink an archive names is an ordinary entry type and is created as one, after the same escape check every other member passes.
 
 Unrelated or user-modified destination files are never overwritten without explicit approval.
 

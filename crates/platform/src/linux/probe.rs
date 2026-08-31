@@ -14,11 +14,6 @@ use fetchloom_engine::degrade::DegradeQueue;
 use crate::probe_tag;
 
 /// The ratio above which writing many small files is called expensive.
-///
-/// This is a cost threshold and never a detection threshold. Linux cannot
-/// enumerate what inspects a write, and a loopback ext4 image has
-/// measured a ratio near a thousand with no scanner loaded, so exceeding this
-/// says the volume is slow at small writes and says nothing about why.
 const SMALL_WRITE_COST_RATIO: f64 = 2.0;
 
 /// How many small files the scanner measurement writes.
@@ -33,8 +28,6 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
 }
 
 /// Detects everything about the volume behind a directory.
-///
-/// The answer is kept for the life of the process and returned unchanged.
 ///
 /// # Errors
 ///

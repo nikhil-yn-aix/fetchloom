@@ -38,10 +38,6 @@ pub enum RepairPlan {
 }
 
 /// Decides what a repair fetches.
-///
-/// Takes the damaged byte spans, ascending and already merged, the object's
-/// length, whether the source can serve part of an object, and the bounds this
-/// run obeys. Returns what to fetch.
 #[must_use]
 pub fn plan_repair(
     damaged: &[Range<u64>],

@@ -336,9 +336,6 @@ impl Sequence {
 }
 
 /// How long an operation has been running.
-///
-/// Every `*.end` event carries a duration, and every one of them takes it from
-/// here, so there is one clock and one rounding.
 #[derive(Clone, Copy, Debug)]
 pub struct Span(std::time::Instant);
 

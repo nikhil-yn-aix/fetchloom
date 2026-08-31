@@ -12,17 +12,13 @@ use crate::digest::ContentDigest;
 pub enum Mode {
     /// Readable and writable by its owner, readable by everyone.
     ReadWrite,
-    /// Readable, writable, and executable by its owner, readable and
-    /// executable by everyone.
+    /// Readable, writable, and executable by its owner, readable and executable
+    /// by everyone.
     Executable,
 }
 
 impl Mode {
     /// Reduces a source mode to the only two modes a tree digest records.
-    ///
-    /// Takes the mode an archive or a source file carried. Returns the
-    /// executable mode when any execute bit is set and the read and write mode
-    /// otherwise.
     #[must_use]
     pub fn reduce(source_mode: u32) -> Self {
         if source_mode & 0o111 == 0 {
@@ -92,11 +88,6 @@ pub struct EntryPath(String);
 
 impl EntryPath {
     /// Checks a path and returns it as an entry path.
-    ///
-    /// Takes a path relative to the destination root. Returns it unchanged,
-    /// with no normalization applied. Fails when the path is empty, begins or
-    /// ends with a separator, has an empty or relative component, contains a
-    /// backslash, or contains a control character.
     ///
     /// # Errors
     ///

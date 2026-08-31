@@ -28,16 +28,7 @@ pub struct Reconciled {
     pub outcome: ReconcileOutcome,
 }
 
-/// Compares the tree a run resolved against what a destination currently
-/// holds.
-///
-/// Takes the entries the run resolved and the entries found by walking the
-/// destination, in any order. Returns one outcome per resolved entry --
-/// `unchanged` when the destination holds an identical entry at that path,
-/// `restored` when the path is absent from the destination, `modified` when
-/// the destination holds a different entry at that path -- plus one
-/// `foreign` outcome for every destination path the resolved tree does not
-/// name. Ordered by path.
+/// Compares the tree a run resolved against what a destination currently holds.
 #[must_use]
 pub fn reconcile(resolved: &[TreeEntry], destination: &[TreeEntry]) -> Vec<Reconciled> {
     let mut found: Vec<Reconciled> = Vec::with_capacity(resolved.len() + destination.len());

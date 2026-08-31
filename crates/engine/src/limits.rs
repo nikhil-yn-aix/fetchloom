@@ -37,8 +37,6 @@ pub struct Limits {
     /// Most entries one listing may return.
     pub listing_entries: u64,
     /// Largest directory index that will be read.
-    ///
-    /// An index is parsed as one document and is the one response held whole.
     pub listing_bytes: u64,
     /// Most candidate sources probed in parallel.
     pub probed_candidates: u32,

@@ -5,11 +5,6 @@ use crate::digest::{ContentDigest, PARTIAL_KEY_CONTEXT};
 use crate::seam::source::{SourceIdentity, SourceMetadata};
 
 /// The key a run's in-progress transfer is claimed and stored under.
-///
-/// A run that states a content digest is named by that digest, and the
-/// object it publishes must hash to it. A run that states none is named by
-/// the digest of the source identity, and the object it publishes is named
-/// by whatever digest the bytes hash to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartialKey {
     name: ContentDigest,
@@ -18,9 +13,6 @@ pub struct PartialKey {
 
 impl PartialKey {
     /// Names a partial by the content digest a run already states.
-    ///
-    /// Takes that digest. Returns a key whose name is the digest and whose
-    /// expectation is the same digest.
     #[must_use]
     pub fn of_content(digest: ContentDigest) -> Self {
         Self {
@@ -31,13 +23,6 @@ impl PartialKey {
 
     /// Names a partial by the identity a source published, for a run that
     /// states no digest.
-    ///
-    /// Takes what a bounded metadata request learned. Returns a key whose
-    /// name is the domain-separated BLAKE3 digest of the redacted location,
-    /// the host, and the identity the source published, each
-    /// length-prefixed in that order, and whose expectation is nothing, so
-    /// the object it publishes is named by whatever digest the bytes hash
-    /// to.
     #[must_use]
     pub fn of_source(metadata: &SourceMetadata) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(PARTIAL_KEY_CONTEXT);
@@ -50,15 +35,15 @@ impl PartialKey {
         }
     }
 
-    /// Returns the name a partial, its lease, its source record and its
-    /// owner record are stored under.
+    /// Returns the name a partial, its lease, its source record and its owner
+    /// record are stored under.
     #[must_use]
     pub fn name(&self) -> ContentDigest {
         self.name
     }
 
-    /// Returns the digest the object this key names must hash to, when the
-    /// run that named this key stated one.
+    /// Returns the digest the object this key names must hash to, when the run
+    /// that named this key stated one.
     #[must_use]
     pub fn expected(&self) -> Option<ContentDigest> {
         self.expected

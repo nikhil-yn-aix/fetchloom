@@ -19,8 +19,6 @@ pub struct Witnesses {
 impl<P: Platform> Cache<P> {
     /// Returns every witness recorded for an artifact.
     ///
-    /// Returns nothing recorded when the cache holds no record.
-    ///
     /// # Errors
     ///
     /// Fails when a record is present and does not parse.
@@ -30,8 +28,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Records one observation of an artifact, keeping every earlier one.
-    ///
-    /// An observation identical to one already recorded is not written again.
     ///
     /// # Errors
     ///
@@ -51,8 +47,6 @@ impl<P: Platform> Cache<P> {
 }
 
 /// Reports whether two records are the same observation.
-///
-/// The instant is not compared.
 fn same_observation(one: &Witness, other: &Witness) -> bool {
     one.digest == other.digest
         && one.machine == other.machine

@@ -1,6 +1,6 @@
 //! A relative `--output`, a relative `--cache-dir`, or a relative `verify`
-//! target resolve against the process working directory exactly as an
-//! absolute path resolves against itself.
+//! target resolve against the process working directory exactly as an absolute
+//! path resolves against itself.
 
 #![expect(
     clippy::unwrap_used,

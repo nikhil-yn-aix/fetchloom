@@ -1,5 +1,5 @@
-//! Path validation the reader can decide from headers alone, with no
-//! knowledge of the destination volume.
+//! Path validation the reader can decide from headers alone, with no knowledge
+//! of the destination volume.
 
 use fetchloom_engine::error::{Error, ErrorKind};
 
@@ -8,12 +8,6 @@ fn unsafe_path(member: &str, next_action: String) -> Error {
 }
 
 /// Validates a raw member path and returns it as an owned string.
-///
-/// Takes the path exactly as the archive wrote it and the nesting depth
-/// limit. Returns the path unchanged when it is safe. Fails with
-/// `archive.unsafe_path` when the path holds a NUL byte, is not valid UTF-8,
-/// is absolute, holds a `..` component, holds a backslash or a drive letter,
-/// or nests deeper than the limit.
 pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
     if raw.contains(&0) {
         let lossy = String::from_utf8_lossy(raw).into_owned();
@@ -71,12 +65,6 @@ pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Er
 
 /// Records a member path and reports the second archive entry to claim it.
 ///
-/// Takes the set of paths already listed and the path this member claims.
-/// Returns nothing when the path is new. Fails with `archive.collision`
-/// naming the path when a member already claimed it, which is the collision
-/// decidable from raw bytes alone; one that needs the target volume's own
-/// folding is decided in staging instead.
-///
 /// # Errors
 ///
 /// Returns the collision when two members claim one path.
@@ -94,12 +82,6 @@ pub fn claim_member_path(
 }
 
 /// Checks the target of a link against the destination it would land in.
-///
-/// Takes the member's own validated path and the raw target bytes. Returns
-/// nothing when the target stays inside the destination. Fails with
-/// `archive.link_escape` naming the member and the target when the target is
-/// absolute, names a Windows drive location, or climbs above the destination
-/// root by walking `..` further than the member's own directory is deep.
 ///
 /// # Errors
 ///

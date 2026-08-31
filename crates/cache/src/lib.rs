@@ -45,8 +45,6 @@ const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
 /// The name a probe writes to learn whether a volume locks.
-///
-/// The name carries this process's identity, so two probes never share one.
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
 /// A cache directory this process may read and write.
@@ -63,11 +61,6 @@ pub struct Cache<P: Platform> {
 
 impl<P: Platform> Cache<P> {
     /// Opens the cache at a root, creating it when it is absent.
-    ///
-    /// Checks the format fingerprint, refuses a root whose directories are on
-    /// different volumes, and refuses a volume that cannot express advisory
-    /// locking across users. Recovers orphaned entries from a previous boot the
-    /// first time it is opened in this boot.
     ///
     /// # Errors
     ///
@@ -146,10 +139,6 @@ impl<P: Platform> Cache<P> {
 
     /// Removes every entry a previous boot of this machine left behind.
     ///
-    /// Runs once per boot per cache. An entry recorded by another machine is
-    /// left alone, and an entry from this boot is left alone whether or not its
-    /// writer is still running.
-    ///
     /// # Errors
     ///
     /// Fails when an entry cannot be removed.
@@ -168,10 +157,6 @@ impl<P: Platform> Cache<P> {
 }
 
 /// Removes the whole cache at a root, whatever wrote it.
-///
-/// Takes the cache root. Removes the directory and everything under it. A
-/// format this build does not read is the failure this command exists to fix,
-/// so nothing about the format is read first and the cache is never opened.
 ///
 /// # Errors
 ///

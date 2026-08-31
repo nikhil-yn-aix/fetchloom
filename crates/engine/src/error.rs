@@ -231,9 +231,6 @@ impl fmt::Display for ErrorKind {
 }
 
 /// A failure, carrying every field the contract requires of one.
-///
-/// A location reaching an error is redacted as it is stored, so no error can
-/// hold a credential.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Error {
     kind: ErrorKind,
@@ -381,11 +378,6 @@ pub enum Surface {
 
 /// Turns a filesystem failure on one of the two surfaces into the kind that
 /// names it.
-///
-/// This is the only place that decides. A caller says which surface its path is
-/// on, which is a fact about the path, and never which kind the failure is,
-/// which is a judgement that was made differently at a hundred call sites and
-/// was wrong at most of them.
 #[must_use]
 pub fn filesystem_failure(
     surface: Surface,
@@ -407,9 +399,6 @@ pub fn filesystem_failure(
 }
 
 /// Turns a failure to take an advisory lock into the kind that names it.
-///
-/// A volume that cannot express the lock and a volume with no room left are
-/// different failures, and the second one is not the cache's fault.
 #[must_use]
 pub fn lock_failure(path: &std::path::Path, reason: &std::io::Error) -> Error {
     if matches!(

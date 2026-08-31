@@ -66,9 +66,6 @@ pub struct Mark {
 
 /// Writes a record where a reader finds it whole or not at all.
 ///
-/// Writes beside the record and renames onto it. Takes where the run counts
-/// file operations.
-///
 /// # Errors
 ///
 /// Fails when the record cannot be written.
@@ -100,8 +97,6 @@ pub fn write<T: Serialize>(
 }
 
 /// Reads a record.
-///
-/// Returns nothing when the record is absent.
 ///
 /// # Errors
 ///

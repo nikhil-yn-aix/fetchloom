@@ -17,6 +17,7 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::hashing;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
+use fetchloom_engine::outcome::RunStatus;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::receipt::{Receipt, RecordedFingerprint};
 use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
@@ -57,7 +58,7 @@ pub struct RecordedArtifact {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RunResult {
     /// What the run did.
-    pub status: &'static str,
+    pub status: RunStatus,
     /// The dataset the run materialized.
     pub dataset: String,
     /// The tree the run produced.
@@ -101,10 +102,6 @@ pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
 
 /// Turns a reference into the local path it names.
 ///
-/// Takes a reference. Returns the path a `file:` location or a plain local path
-/// names. Fails when the reference names something this build cannot resolve,
-/// which is every scheme that would need the network.
-///
 /// # Errors
 ///
 /// Returns a resolution failure naming what could not be resolved.
@@ -128,6 +125,15 @@ pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
             ),
         ));
     }
+    if let Some(form) = unbuilt_form(reference) {
+        return Err(Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!(
+                "this build resolves only a local path or a file: location, not {} which is {form}",
+                SafeUrl::new(reference)
+            ),
+        ));
+    }
     let path = PathBuf::from(reference);
     if path.exists() {
         Ok(path)
@@ -143,9 +149,6 @@ pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
 }
 
 /// Returns the default destination for a source path.
-///
-/// Takes the resolved source. Returns the current directory joined with the
-/// source's own last component.
 #[must_use]
 pub fn default_destination(source: &Path) -> PathBuf {
     let name = source
@@ -155,10 +158,6 @@ pub fn default_destination(source: &Path) -> PathBuf {
 }
 
 /// Resolves a path the user named against the working directory.
-///
-/// Takes the path named by `--output` or `--cache-dir`. Returns it unchanged
-/// when it is already absolute, and joined onto the working directory
-/// otherwise. Never touches the filesystem.
 ///
 /// # Errors
 ///
@@ -176,12 +175,8 @@ fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
-/// Returns the directory a path sits in, treating a single-component
-/// relative path as sitting in the working directory.
-///
-/// `Path::parent` returns `Some("")` for a path with one relative component,
-/// and an empty path passed to a filesystem call resolves to nothing rather
-/// than to the working directory it stands for.
+/// Returns the directory a path sits in, treating a single-component relative
+/// path as sitting in the working directory.
 fn containing_directory(path: &Path) -> PathBuf {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
@@ -213,23 +208,12 @@ pub struct Materialization<'a> {
 
 /// Materializes a local source tree into a destination.
 ///
-/// Takes what the materialization runs against, the source, the destination,
-/// the selection that decides which members land and under what path,
-/// whether a modified or foreign entry may be overwritten or removed, and
-/// whether the destination's own contents are accepted as correct instead.
-/// When the destination does not exist, every selected entry is staged and
-/// published as one atomic rename. When it does, each entry is reconciled
-/// against the tree this run resolved: an entry that already matches is left
-/// untouched, a missing entry is restored alone, and a modified or foreign
-/// entry stops the run unless `force` or `adopt` says otherwise. Returns what
-/// the run produced.
-///
 /// # Errors
 ///
-/// Fails when the source cannot be read, when the selection matches nothing
-/// or a layout leaves a member with no path or a collision, when a
-/// destination entry is modified or foreign and neither `force` nor `adopt`
-/// was given, and when staging cannot be published.
+/// Fails when the source cannot be read, when the selection matches nothing or
+/// a layout leaves a member with no path or a collision, when a destination
+/// entry is modified or foreign and neither `force` nor `adopt` was given, and
+/// when staging cannot be published.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
@@ -353,7 +337,7 @@ fn materialize_fresh(
     emit(EventPayload::PublishCommit);
 
     Ok(RunResult {
-        status: "materialized",
+        status: RunStatus::Materialized,
         dataset: dataset.to_owned(),
         tree,
         destination: destination.to_path_buf(),
@@ -375,10 +359,6 @@ fn entry_size(entry: &TreeEntry) -> u64 {
 
 /// Returns a destination's entries with every mode taken from the resolved
 /// tree.
-///
-/// Takes the tree the run resolved and the entries a walk of the destination
-/// found. An entry the resolved tree names carries the mode that tree states.
-/// An entry the resolved tree does not name keeps the mode the walk gave it.
 fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     let modes: HashMap<&str, Mode> = resolved
         .iter()
@@ -425,14 +405,11 @@ struct Settlement<'a> {
 
 /// Decides one run against an existing destination.
 ///
-/// Takes what the run resolved, how to rebuild the destination whole when
-/// `--force` says to, and how to restore the entries reconcile found missing.
-///
 /// # Errors
 ///
-/// Fails with `destination.modified` or `destination.foreign` naming every
-/// path when neither `--force` nor `--adopt` was given, and with whatever
-/// rebuilding or restoring fails with.
+/// Fails with `destination.modified` or `destination.foreign` naming every path
+/// when neither `--force` nor `--adopt` was given, and with whatever rebuilding
+/// or restoring fails with.
 fn settle(
     with: &Materialization<'_>,
     destination: &Path,
@@ -465,7 +442,7 @@ fn settle(
         .all(|found| found.outcome == ReconcileOutcome::Unchanged)
     {
         return Ok(RunResult {
-            status: "unchanged",
+            status: RunStatus::Unchanged,
             dataset: dataset.to_owned(),
             tree: canonical::tree_digest(resolved),
             destination: destination.to_path_buf(),
@@ -480,7 +457,7 @@ fn settle(
 
     if adopt {
         return Ok(RunResult {
-            status: "adopted",
+            status: RunStatus::Adopted,
             dataset: dataset.to_owned(),
             tree: canonical::tree_digest(&destination_tree),
             destination: destination.to_path_buf(),
@@ -530,7 +507,7 @@ fn settle(
 
     restore(&outcomes)?;
     Ok(RunResult {
-        status: "restored",
+        status: RunStatus::Restored,
         dataset: dataset.to_owned(),
         tree: canonical::tree_digest(resolved),
         destination: destination.to_path_buf(),
@@ -708,10 +685,6 @@ fn fill_staging(
 
 /// Places one file at its target, through the cache when one is open.
 ///
-/// Takes whether an earlier file in this run already gave up on the cache, in
-/// which case this one goes straight to a byte copy. Returns the length and
-/// content digest that were written.
-///
 /// # Errors
 ///
 /// Fails when the source cannot be read or the target cannot be written.
@@ -769,10 +742,6 @@ fn place_file(
 }
 
 /// Materializes one file and offers it to the cache.
-///
-/// Reads the source once, hashing it as it is written to its destination, and
-/// then hands the cache that file. A source the cache already holds is neither
-/// read again nor written.
 fn through_cache(
     digester: &mut hashing::Digester,
     cache: &Cache<NativePlatform>,
@@ -802,10 +771,6 @@ fn staging_beside(destination: &Path) -> PathBuf {
 }
 
 /// Recomputes the tree digest of a materialized directory.
-///
-/// Takes the directory to read and the receipt that describes it, when one
-/// describes it. A receipt supplies the mode of each file and never a digest.
-/// Returns the entries and their tree digest.
 ///
 /// # Errors
 ///
@@ -857,9 +822,6 @@ pub fn verify_tree(
 }
 
 /// Returns a walk's entries with every mode taken from the receipt.
-///
-/// An entry the receipt does not list as executable carries the read and write
-/// mode, which is the only other mode a tree digest records.
 fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     found
         .into_iter()
@@ -884,9 +846,6 @@ fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Vec<TreeEntry
 }
 
 /// Reports that a tree's modes were not read from what was walked.
-///
-/// Takes whether the walk found any file at all and where to emit. Nothing is
-/// emitted for a tree holding no file.
 fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
     if !found_a_file {
         return;
@@ -901,13 +860,8 @@ fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
     });
 }
 
-/// Walks a directory and hashes every file it holds, without writing
-/// anything anywhere.
-///
-/// Takes the root the files are relative to, the files a walk of it found,
-/// the processor pool the hashing runs on, and where the bytes read are
-/// counted. Returns one `TreeEntry::File` per file, carrying the digest of
-/// its bytes.
+/// Walks a directory and hashes every file it holds, without writing anything
+/// anywhere.
 ///
 /// # Errors
 ///
@@ -946,8 +900,8 @@ fn hash_files(
     Ok(entries)
 }
 
-/// A reader that counts every byte it yields as read work, and writes
-/// nothing anywhere.
+/// A reader that counts every byte it yields as read work, and writes nothing
+/// anywhere.
 struct CountedRead<'a, R> {
     inner: R,
     work: &'a WorkCounter,
@@ -964,9 +918,6 @@ impl<R: Read> Read for CountedRead<'_, R> {
 }
 
 /// Walks a destination directory and returns the entries it currently holds.
-///
-/// Takes the destination, the processor pool, and where bytes read are
-/// counted. Returns every directory, symlink, and hashed file found.
 ///
 /// # Errors
 ///
@@ -998,11 +949,6 @@ fn destination_entries(
 
 /// Returns the fingerprints the run that wrote this destination recorded, when
 /// they are a cached answer to the question this run is asking.
-///
-/// A recorded fingerprint says that a file still holds what the run that wrote
-/// the receipt published, so it answers only for the tree that receipt
-/// describes. A destination with no receipt, and one whose receipt describes a
-/// different tree, has none, and every file is hashed.
 fn recorded_fingerprints(
     with: &Materialization<'_>,
     destination: &Path,
@@ -1017,10 +963,6 @@ fn recorded_fingerprints(
 }
 
 /// Returns the entry a file can be reported as without reading its bytes.
-///
-/// Answers only when the policy allows a fingerprint to decide, when one was
-/// recorded for the path, when it still matches, and when the resolved tree
-/// names that path. Every other case reads the bytes.
 fn unchanged_by_fingerprint(
     with: &Materialization<'_>,
     root: &Path,
@@ -1070,16 +1012,11 @@ enum SelectionCandidate {
 
 /// Applies a selection to what a walk of a source found.
 ///
-/// Takes the walk and the selection. Returns a walk holding only the
-/// selected members, renamed under the selection's layout, with every
-/// ancestor directory a selected member needs.
-///
 /// # Errors
 ///
 /// Fails with `reference.unresolved` when the selection matches nothing, and
-/// with `destination.unrepresentable` when the layout leaves a member with
-/// no path, and with `archive.collision` when two members land on the same
-/// path.
+/// with `destination.unrepresentable` when the layout leaves a member with no
+/// path, and with `archive.collision` when two members land on the same path.
 /// Returns every member of a walked tree and what each one is, in the order a
 /// selection is applied to them.
 fn offer(walked: &materialize::Walked) -> (Vec<String>, Vec<SelectionCandidate>) {
@@ -1203,9 +1140,6 @@ fn apply_selection(
 /// Refuses a reference that would need the network while the network is
 /// forbidden.
 ///
-/// Takes the reference and whether the run is offline. Returns nothing when the
-/// reference names something reachable without the network.
-///
 /// # Errors
 ///
 /// Fails with a policy failure when the reference names a network location and
@@ -1228,10 +1162,6 @@ pub fn allowed_offline(reference: &str, offline: bool) -> Result<(), Error> {
 }
 
 /// Materializes one object named by an HTTP or HTTPS reference.
-///
-/// Takes what the materialization runs against, the location, and the
-/// destination. Streams the object into the cache, hashing it as it arrives,
-/// and publishes a destination holding that one entry.
 ///
 /// # Errors
 ///
@@ -1332,12 +1262,6 @@ pub fn materialize_remote(
 /// Materializes one cached object into a destination, reconciling when the
 /// destination already exists.
 ///
-/// Takes what the materialization runs against, the object the run resolved,
-/// the name it materializes under, and the flags reconcile answers to. An
-/// object that is a recognized archive resolves to the tree it holds; one that
-/// is not resolves to a destination holding that single file. Either way an
-/// existing destination is reconciled against that tree.
-///
 /// # Errors
 ///
 /// Fails when the object cannot be read, when the destination is modified or
@@ -1381,7 +1305,7 @@ fn materialize_object(
             publish_one_object(with, digest, size, dataset, destination, selection, emit)?;
         emit(EventPayload::PublishCommit);
         Ok(RunResult {
-            status: "materialized",
+            status: RunStatus::Materialized,
             dataset: dataset.to_owned(),
             tree: canonical::tree_digest(&entries),
             destination: destination.to_path_buf(),
@@ -1455,9 +1379,6 @@ fn object_tree(
 }
 
 /// Restores the entries reconcile found missing from a cached object.
-///
-/// Builds the object's tree in a staging directory of its own and moves only
-/// the missing entries into the destination, one entry at a time.
 fn restore_object(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -1644,11 +1565,6 @@ fn publish_one_object(
 /// Returns the archive format an object holds, when it holds one this build
 /// extracts.
 ///
-/// Takes what the materialization runs against, the digest of the object, and
-/// the name the location gave it. Returns nothing when the name states no
-/// archive extension, when the run asked for no extraction, and when there is
-/// no cache to read the object from.
-///
 /// # Errors
 ///
 /// Fails with `archive.unsupported` when the name and the object's own leading
@@ -1663,8 +1579,6 @@ fn packed_format(
 
 /// Returns the archive format an object holds, honoring a format a manifest
 /// declared.
-///
-/// A declared format is checked against the archive's own leading bytes.
 fn recognized_format(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -1707,10 +1621,6 @@ fn read_up_to(file: &mut std::fs::File, into: &mut [u8]) -> Result<usize, Error>
 
 /// Opens a reader over a cached archive object.
 ///
-/// Takes what the materialization runs against, the digest of the archive, and
-/// the format it holds. Returns a reader over the object in the cache, which
-/// is where every archive this build reads lives.
-///
 /// # Errors
 ///
 /// Fails when the run has no cache and when the object cannot be opened.
@@ -1733,11 +1643,6 @@ fn open_archive(
 }
 
 /// Extracts a cached archive into a staging directory.
-///
-/// Takes what the materialization runs against, the digest of the archive, the
-/// format it holds, the staging directory, the selection deciding which
-/// members land, and where to emit any degradation the reader recorded.
-/// Returns the entries that were written.
 ///
 /// # Errors
 ///
@@ -1788,11 +1693,6 @@ fn extract_into(
 
 /// Puts a local file into the cache, where the run resolves it as one object.
 ///
-/// Takes what the materialization runs against and the source. Returns nothing
-/// when the source is not one file and when there is no cache to hold it.
-/// Whether the object is then extracted is decided from its own bytes, not
-/// here.
-///
 /// # Errors
 ///
 /// Fails when the source cannot be read into the cache.
@@ -1807,10 +1707,6 @@ fn object_to_resolve(with: &Materialization<'_>, source: &Path) -> Result<Option
 }
 
 /// Returns the manifest a run that was given no manifest resolved from.
-///
-/// The synthesized manifest holds the dataset name and, for a reference that
-/// names a network location, that location. A local path is never recorded in
-/// it.
 #[must_use]
 pub fn synthesized_manifest(
     dataset: &str,
@@ -1839,11 +1735,6 @@ pub fn synthesized_manifest(
 }
 
 /// Writes the receipt that records what a run materialized.
-///
-/// Takes the cache the receipt is kept in, the manifest the run resolved from,
-/// every artifact it resolved, and what it produced. A receipt is local, so it
-/// holds the absolute destination and the sources that were used; it is never
-/// read as an authority for identity.
 ///
 /// # Errors
 ///
@@ -1917,8 +1808,6 @@ fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
 }
 
 /// Returns the fingerprint every file of a destination carries right now.
-///
-/// A file the platform will not fingerprint is left out.
 fn fingerprints_of(
     cache: &Cache<NativePlatform>,
     destination: &Path,
@@ -1940,10 +1829,6 @@ fn fingerprints_of(
 }
 
 /// Returns the name a reference's dataset is recorded under.
-///
-/// Takes the reference the user wrote and the local path it resolved to. A
-/// network location is named by its last path component and a local path by its
-/// own last component.
 #[must_use]
 pub fn dataset_name(reference: &str, source: &Path) -> String {
     if is_remote(reference) {
@@ -1957,15 +1842,11 @@ pub fn dataset_name(reference: &str, source: &Path) -> String {
 
 /// Materializes an object the cache already holds.
 ///
-/// Takes what the materialization runs against, the object a plan resolved,
-/// the name it materializes under, and the flags reconcile answers to. Nothing
-/// is fetched.
-///
 /// # Errors
 ///
-/// Fails when the object is absent, when the destination is modified or
-/// foreign and neither `--force` nor `--adopt` was given, and when staging
-/// cannot be published.
+/// Fails when the object is absent, when the destination is modified or foreign
+/// and neither `--force` nor `--adopt` was given, and when staging cannot be
+/// published.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
@@ -2044,8 +1925,6 @@ pub struct ResolvedArtifact {
     pub prior: Option<ContentDigest>,
     /// The origin that served the bytes, present only when this run transferred
     /// them in full and verified them as they arrived.
-    ///
-    /// A cache hit and a local file both leave it absent.
     pub observed: Option<String>,
 }
 
@@ -2053,18 +1932,12 @@ pub struct ResolvedArtifact {
 pub struct DatasetRun {
     /// Every artifact that resolved, in manifest order, whether or not the run
     /// went on to publish anything.
-    ///
-    /// A run that failed partway still lists the artifacts that resolved.
     pub resolved: Vec<ResolvedArtifact>,
     /// What the run did, or what stopped it.
     pub outcome: Result<RunResult, Error>,
 }
 
 /// Reads the manifest a local reference names, when it names one.
-///
-/// Takes the path the reference resolved to. Returns nothing when the path does
-/// not carry one of the extensions a manifest is written under, which is how a
-/// data file is told from a document describing one.
 ///
 /// # Errors
 ///
@@ -2088,12 +1961,6 @@ pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::M
 }
 
 /// Materializes every artifact a manifest names into one destination.
-///
-/// Takes what the materialization runs against, the manifest, the directory a
-/// relative source is resolved against, the destination, and what the lock
-/// pins. Artifacts are resolved in the order the manifest gives them and every
-/// one that verifies stays in the cache. The destination is all or nothing and
-/// is published once, after every artifact has resolved.
 #[expect(
     clippy::too_many_arguments,
     reason = "the manifest, the lock, and the reconcile flags each name a contract behavior of their own"
@@ -2279,8 +2146,6 @@ fn prior_from(
 }
 
 /// Records what a reference resolved to and the validator that came with it.
-///
-/// A transfer that learned no validator leaves whatever was recorded alone.
 fn remember(
     cache: &Cache<NativePlatform>,
     location: &str,
@@ -2383,11 +2248,6 @@ fn transfer_object(
 
 /// Returns the origin that served an artifact's bytes, when this run moved
 /// them.
-///
-/// A run that moved nothing observed nothing about what a source is serving: it
-/// read a file it already had. Only a run that carried every byte and hashed
-/// them as they arrived has evidence, so only one of those may become a
-/// witness.
 fn observation(transferred: &fetchloom_engine::transfer::Transferred) -> Option<String> {
     if transferred.bytes_transferred == 0 {
         return None;
@@ -2410,7 +2270,7 @@ fn publish_dataset(
         let entries = build_dataset_staging(with, resolved, destination, emit)?;
         emit(EventPayload::PublishCommit);
         Ok(RunResult {
-            status: "materialized",
+            status: RunStatus::Materialized,
             dataset: dataset.to_owned(),
             tree: canonical::tree_digest(&entries),
             destination: destination.to_path_buf(),
@@ -2559,9 +2419,6 @@ fn fill_dataset_staging(
 
 /// Returns what a run against a single object resolved, in the form the lock
 /// and the receipt record it.
-///
-/// Returns nothing when the run resolved no object, which is what a reference
-/// naming a directory does.
 #[must_use]
 pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<ResolvedArtifact> {
     let Some(artifact) = &result.artifact else {
@@ -2585,13 +2442,6 @@ pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<Resolve
 }
 
 /// Returns the trust class a run may claim before its own witness is recorded.
-///
-/// Takes what the materialization runs against and the object it resolved,
-/// when it resolved one. Returns `unverified` when the run was told to check
-/// nothing, `verified` when a digest the lock or the manifest supplied before
-/// the run matches what was produced, and `tofu` otherwise. A run that records
-/// a receipt replaces this with the class its witnesses support, which is the
-/// only way `corroborated` is reached.
 fn provisional_trust(
     with: &Materialization<'_>,
     artifact: Option<&RecordedArtifact>,
@@ -2603,4 +2453,28 @@ fn provisional_trust(
         Some(artifact) if artifact.prior == Some(artifact.digest) => TrustClass::Verified,
         _ => TrustClass::Tofu,
     }
+}
+
+/// Names the documented reference form a reference is in, when it is one this
+/// build does not resolve.
+fn unbuilt_form(reference: &str) -> Option<&'static str> {
+    if reference.starts_with("blake3:") || reference.starts_with("sha256:") {
+        return Some("a content address");
+    }
+    if let Some((scheme, rest)) = reference.split_once(':')
+        && !rest.is_empty()
+        && !scheme.is_empty()
+        && scheme.chars().all(|letter| letter.is_ascii_lowercase())
+        && !std::path::Path::new(reference).exists()
+    {
+        return Some("a provider identifier");
+    }
+    if !reference.contains('/')
+        && !reference.contains('\\')
+        && !reference.contains('.')
+        && !std::path::Path::new(reference).exists()
+    {
+        return Some("a dataset name");
+    }
+    None
 }

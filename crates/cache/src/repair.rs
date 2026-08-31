@@ -67,11 +67,6 @@ impl<P: Platform> Cache<P> {
     /// Finds which byte ranges of an object this cache holds do not match its
     /// tree.
     ///
-    /// Takes the digest the object is named by. Returns the ranges, or the
-    /// reason the damage could not be narrowed: no tree was stored, the stored
-    /// tree does not check out against the digest, or the object could not be
-    /// read.
-    ///
     /// # Errors
     ///
     /// Fails when the cache holds no such object.
@@ -120,9 +115,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Moves an object into quarantine and writes the diagnosis beside it.
-    ///
-    /// Takes the digest it is named by and what the cache recorded about where
-    /// its bytes came from. Localizes the damage before the move.
     ///
     /// # Errors
     ///
@@ -177,9 +169,6 @@ impl<P: Platform> Cache<P> {
 
     /// Opens a copy of a damaged object for patching.
     ///
-    /// Takes the lease on the digest. Returns the file the patched bytes are
-    /// written into, which is never the object itself.
-    ///
     /// # Errors
     ///
     /// Fails when the cache holds no such object and when the copy cannot be
@@ -208,9 +197,6 @@ impl<P: Platform> Cache<P> {
     }
 
     /// Writes one span of bytes into a repair at its own offset.
-    ///
-    /// Takes the writer, where the span starts, how long it is, and the bytes.
-    /// Returns how many arrived.
     ///
     /// # Errors
     ///
@@ -261,9 +247,6 @@ impl<P: Platform> Cache<P> {
 
     /// Rereads a repaired object whole, and publishes it when it hashes to the
     /// digest it is named by.
-    ///
-    /// Takes the writer. Returns the digests the whole object produced. The
-    /// object enters `objects/` only when they match.
     ///
     /// # Errors
     ///
@@ -399,9 +382,6 @@ fn read_group(
 }
 
 /// Returns the object length a stored tree records, when it can be read.
-///
-/// The walk runs against the length the tree records rather than the length of
-/// the file on disk.
 fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     let mut header = [0u8; 8];
     tree.seek(SeekFrom::Start(0)).ok()?;
@@ -410,12 +390,8 @@ fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     Some(u64::from_le_bytes(header))
 }
 
-/// Returns how many bytes at the start of a partial transfer match the
-/// object's outboard tree.
-///
-/// The answer is the offset of the first leaf group that is bad or missing and
-/// never a byte inside a group. A tree that does not check out against the
-/// digest keeps nothing.
+/// Returns how many bytes at the start of a partial transfer match the object's
+/// outboard tree.
 ///
 /// # Errors
 ///

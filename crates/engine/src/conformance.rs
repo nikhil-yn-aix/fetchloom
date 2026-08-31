@@ -39,16 +39,8 @@ fn symlink(text: &str, target: &str) -> TreeEntry {
     }
 }
 
-/// The entries a conforming implementation must materialize identically,
-/// byte for byte, on Windows and Linux.
-///
-/// Every directory an entry sits under is included as its own entry, as
-/// Materialization requires. The set exercises: a zero-byte file, an empty
-/// directory, nested directories, a directory containing only other
-/// directories, two entries with identical content at different paths, both
-/// permitted modes, a symlink, a non-ASCII UTF-8 name, and names whose raw
-/// byte order differs from locale collation, including one pair adjacent
-/// under case folding while remaining distinct in raw bytes.
+/// The entries a conforming implementation must materialize identically, byte
+/// for byte, on Windows and Linux.
 #[must_use]
 pub fn portable_core() -> Vec<TreeEntry> {
     vec![
@@ -103,11 +95,6 @@ pub struct DeclaredFailure {
 
 /// The entries a conforming implementation must reject, each with the exact
 /// kind and reason.
-///
-/// None of these appear in [`portable_core`]. The core must succeed
-/// everywhere. Covers a case-folding collision, a Unicode normalization
-/// collision, a symlink a platform forbids creating, and a path longer than
-/// a target's maximum.
 #[must_use]
 pub fn declared_failures() -> Vec<DeclaredFailure> {
     vec![

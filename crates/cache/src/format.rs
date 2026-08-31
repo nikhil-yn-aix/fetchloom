@@ -8,9 +8,6 @@ use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
 const FORMAT_CONTEXT: &str = "fetchloom cache format";
 
 /// Every statement that defines the on-disk format.
-///
-/// A statement is added or edited only when what is written to disk changes,
-/// and that change makes every existing cache fail with `cache.format_mismatch`.
 fn statements() -> Vec<String> {
     vec![
         "the cache root holds objects, outboard, partial, staging, quarantine, receipts, meta, locks, pins, and format"
@@ -41,8 +38,6 @@ fn statements() -> Vec<String> {
 }
 
 /// Returns the fingerprint of the format this build writes.
-///
-/// Combines the statements by exclusive or, which is unordered.
 #[must_use]
 pub fn fingerprint() -> CacheFormatFingerprint {
     let mut accumulator = [0u8; 32];

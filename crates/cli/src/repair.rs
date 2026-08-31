@@ -48,8 +48,6 @@ pub struct Repair<'a> {
 impl Repair<'_> {
     /// Repairs one object, fetching only the ranges that are wrong.
     ///
-    /// Takes the digest the object is named by. Returns what moved.
-    ///
     /// # Errors
     ///
     /// Fails with `integrity.mismatch` when the repaired bytes still do not
@@ -200,8 +198,6 @@ impl Repair<'_> {
 }
 
 /// Returns how long the whole object is.
-///
-/// The source is asked rather than the file on disk.
 fn whole_of(
     metadata: &fetchloom_engine::seam::source::SourceMetadata,
     localized: &fetchloom_cache::repair::Localized,
@@ -275,10 +271,6 @@ pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<
 }
 
 /// Returns what the bytes at a path hash to.
-///
-/// A local reference records no resolution, because there is no validator to
-/// record one against, so the answer comes from the file rather than from the
-/// cache's memory of it. The file is the source, and repair reads it anyway.
 fn digest_of_file(cache: &Cache<NativePlatform>, path: &str) -> Option<ContentDigest> {
     let handle = std::fs::File::open(path).ok()?;
     let mut digester = fetchloom_engine::hashing::Digester::new();

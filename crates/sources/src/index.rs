@@ -18,9 +18,6 @@ const GENERATED_HEADING: &str = "<h1>Index of ";
 
 /// Reads a listing out of a body whose format is recognized.
 ///
-/// Takes the location listed, the status the source answered with, and the
-/// whole body. Returns one entry per object at or below the prefix.
-///
 /// # Errors
 ///
 /// Fails with `reference.unresolved` when the body matches no recognized

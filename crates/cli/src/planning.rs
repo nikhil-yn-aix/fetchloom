@@ -19,13 +19,10 @@ const EXPANDED: &str = "expanded";
 
 /// Builds the plan a reference resolves to, moving no bytes.
 ///
-/// Takes what the lock pins for the dataset, the reference, the destination,
-/// and the cache the run would use. The selection and the digest of every
-/// artifact both come from the lock. Returns the plan.
-///
 /// # Errors
 ///
-/// Fails with `policy.trust_refused` when the lock pins nothing for the dataset.
+/// Fails with `policy.trust_refused` when the lock pins nothing for the
+/// dataset.
 pub fn build(
     pinned: Option<&LockedDataset>,
     dataset: &str,
@@ -154,8 +151,6 @@ fn conflicts(destination: &Path) -> Vec<String> {
 }
 
 /// Returns the name of the volume a path sits on.
-///
-/// The name is the path's own root.
 fn volume_of(path: &Path) -> String {
     let mut components = path.components();
     match components.next() {

@@ -57,9 +57,6 @@ fn build_decompressor<R: Read + 'static>(
 }
 
 /// Derives the member name for a bare compressed object.
-///
-/// Takes the location and the extension the format claimed. Returns the
-/// location's final path component with that extension removed.
 #[must_use]
 pub fn member_name(location: &str, extension: &str) -> String {
     let file_name = location.rsplit(['/', '\\']).next().unwrap_or(location);
@@ -72,14 +69,10 @@ pub fn member_name(location: &str, extension: &str) -> String {
 /// Decompresses a bare compressed object fully to learn its one member,
 /// checking the entry, byte, and ratio limits as bytes are produced.
 ///
-/// Takes the shared source, its compression, the member name, the archive's
-/// on-disk size, and the configured limits. Returns the single member this
-/// object materializes as.
-///
 /// # Errors
 ///
-/// Fails when the stream is truncated or malformed, and when the object
-/// exceeds the byte or ratio limit.
+/// Fails when the stream is truncated or malformed, and when the object exceeds
+/// the byte or ratio limit.
 pub fn list_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: BareCompression,
@@ -117,10 +110,6 @@ pub fn list_member<R: Read + Seek + 'static>(
 
 /// Opens the one member a bare compressed object holds, streaming from the
 /// start.
-///
-/// Takes the shared source, its compression, the archive's name for error
-/// messages, and the size `list_member` observed. Returns a reader bounded
-/// to that size.
 ///
 /// # Errors
 ///

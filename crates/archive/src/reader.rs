@@ -1,5 +1,5 @@
-//! The one reader type over a `Read + Seek` source that implements the
-//! engine's `Archive` seam.
+//! The one reader type over a `Read + Seek` source that implements the engine's
+//! `Archive` seam.
 
 use std::io::{Read, Seek, SeekFrom};
 
@@ -30,9 +30,6 @@ enum Located {
 }
 
 /// Everything one listing pass produced.
-///
-/// `at` maps a member's path to its position in `members`.
-/// the entry count.
 struct Listing {
     members: Vec<ArchiveMember>,
     offsets: Offsets,
@@ -41,10 +38,6 @@ struct Listing {
 
 /// Reads the container or compression formats this build carries, over any
 /// `Read + Seek` source.
-///
-/// The caller always holds the archive as a cached object file, so this
-/// reader takes ownership of the source and clones cheap handles onto it
-/// rather than borrowing.
 pub struct ArchiveReader<R> {
     source: SharedSource<R>,
     format: ArchiveFormat,
@@ -58,10 +51,6 @@ pub struct ArchiveReader<R> {
 
 impl<R: Read + Seek + 'static> ArchiveReader<R> {
     /// Builds a reader over the given source.
-    ///
-    /// Takes the source, the format it holds, a name used only for error
-    /// messages, and the limits to enforce. Returns a reader that has not
-    /// yet read anything.
     ///
     /// # Errors
     ///

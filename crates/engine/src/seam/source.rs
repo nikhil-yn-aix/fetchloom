@@ -80,9 +80,6 @@ pub struct ListingEntry {
 }
 
 /// What a run recorded that a conditional request can be built from.
-///
-/// A run with neither value cannot ask whether what it holds is still current
-/// and has to fetch to find out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Validator {
     /// The entity tag the source gave when the bytes were fetched.
@@ -126,8 +123,8 @@ pub trait Source {
     ///
     /// # Errors
     ///
-    /// Fails when the source is unreachable, refuses the request, or requires
-    /// a credential that was not supplied.
+    /// Fails when the source is unreachable, refuses the request, or requires a
+    /// credential that was not supplied.
     fn probe(
         &self,
         location: &str,
@@ -135,9 +132,6 @@ pub trait Source {
     ) -> Result<SourceMetadata, Error>;
 
     /// Opens the bytes of an object, or of one span of it.
-    ///
-    /// Takes no span to fetch the whole object. Takes a span only when the
-    /// source reported that it supports ranges.
     ///
     /// # Errors
     ///
@@ -152,10 +146,6 @@ pub trait Source {
 
     /// Asks whether an object a run already holds is still what a reference
     /// names, in one request.
-    ///
-    /// Takes the location, what the run recorded about the bytes it holds, and
-    /// the credential. Returns that nothing changed, or the new metadata and
-    /// the bytes.
     ///
     /// # Errors
     ///
@@ -172,8 +162,8 @@ pub trait Source {
     ///
     /// # Errors
     ///
-    /// Fails when the container is unreachable, when its index is one
-    /// Fetchloom does not recognize, and when the listing exceeds its limit.
+    /// Fails when the container is unreachable, when its index is one Fetchloom
+    /// does not recognize, and when the listing exceeds its limit.
     fn list(
         &self,
         location: &str,

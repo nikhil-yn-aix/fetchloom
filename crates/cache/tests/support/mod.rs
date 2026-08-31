@@ -147,9 +147,6 @@ pub fn entries_in(directory: &Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Rewrites every owner record in the cache as though a previous boot wrote it.
-///
-/// The generation the records name is what is changed, which is what recovery
-/// reads.
 pub fn pretend_a_previous_boot(layout: &fetchloom_cache::layout::Layout) {
     let _ = std::fs::remove_file(layout.recovered());
     for directory in [layout.partial(), layout.staging()] {
@@ -249,8 +246,6 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
 }
 
 /// Points a name at a directory on another volume.
-///
-/// Returns whether the platform allowed it.
 pub fn link_directory(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -263,11 +258,6 @@ pub fn link_directory(target: &Path, link: &Path) -> bool {
 }
 
 /// The user a test hands an object to, when the environment names one.
-///
-/// The volume script names a user this process can give a file to, which is
-/// what makes the ownership rule in contracts.md Cache testable at all. A
-/// verification run on Linux promised that user, so an absent name there is a
-/// provisioning failure rather than a reason to skip.
 pub fn another_owner() -> Option<String> {
     let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
     assert!(

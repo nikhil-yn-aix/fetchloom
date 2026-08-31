@@ -15,23 +15,27 @@ use crate::run::ResolvedArtifact;
 
 /// Returns what the lock pins for a dataset.
 ///
-/// Takes the lock file, the dataset a run is about to resolve, and whether the
-/// run may only do what the lock already states.
-///
 /// # Errors
 ///
 /// Fails with `policy.trust_refused` when the run is locked and the lock states
 /// nothing about this dataset. Fails when the lock cannot be read.
-pub fn pinned(path: &Path, dataset: &str, locked: bool) -> Result<Option<LockedDataset>, Error> {
+pub fn pinned(
+    path: &Path,
+    dataset: &str,
+    requires: Option<Requirement>,
+) -> Result<Option<LockedDataset>, Error> {
     let held = Lock::read(path, &Limits::default())?;
     let entry = held.datasets.get(dataset).cloned();
-    if locked && entry.is_none() {
+    if let Some(requirement) = requires
+        && entry.is_none()
+    {
         return Err(Error::new(
             ErrorKind::PolicyTrustRefused,
             format!(
-                "run once without --locked to record what {dataset} resolves to, because {} pins \
-                 nothing for it and a locked run never accepts a first use",
-                path.display()
+                "{}, because {} pins nothing for {dataset} and {}",
+                requirement.remedy(),
+                path.display(),
+                requirement.because()
             ),
         )
         .with_dataset(dataset.to_owned()));
@@ -39,12 +43,35 @@ pub fn pinned(path: &Path, dataset: &str, locked: bool) -> Result<Option<LockedD
     Ok(entry)
 }
 
+/// Why a run needs the lock to already pin a dataset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Requirement {
+    /// The run was given `--locked`.
+    LockedRun,
+    /// The run is a plan, which states resolved digests and moves no bytes to
+    /// learn one.
+    Plan,
+}
+
+impl Requirement {
+    /// Returns what the reader should do next.
+    fn remedy(self) -> &'static str {
+        match self {
+            Self::LockedRun => "run once without --locked to record what it resolves to",
+            Self::Plan => "run get once to record what it resolves to",
+        }
+    }
+
+    /// Returns why the lock had to pin it already.
+    fn because(self) -> &'static str {
+        match self {
+            Self::LockedRun => "a locked run never accepts a first use",
+            Self::Plan => "a plan states resolved digests and moves no bytes to learn one",
+        }
+    }
+}
+
 /// Returns what a run resolved, in the form a lock pins it.
-///
-/// Takes the manifest the run resolved from, every artifact that verified, and
-/// the tree the run materialized when it materialized one. Returns nothing when
-/// the run verified no object. A run that failed part way pins what it verified
-/// and no tree.
 ///
 /// # Errors
 ///
@@ -79,9 +106,6 @@ pub fn resolved(
 }
 
 /// Holds a locked run to the lock, or records what an unlocked run resolved.
-///
-/// Takes the lock file, the dataset name, what the lock pins, what the run
-/// resolved, and whether the run was locked. A locked run writes nothing.
 ///
 /// # Errors
 ///

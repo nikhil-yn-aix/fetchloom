@@ -17,11 +17,6 @@ struct Subject {
 }
 
 /// The archives this lane holds to a recorded answer.
-///
-/// Chosen for hosts that do not rewrite what they publish: the GNU FTP
-/// archive keeps every release forever, and a `PyPI` file is immutable once
-/// uploaded. The `PyPI` location is the redirecting form on purpose, so the
-/// lane exercises a redirect against a real server rather than a written one.
 const SUBJECTS: [Subject; 3] = [
     Subject {
         location: "https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz",
@@ -54,11 +49,6 @@ pub enum Outcome {
 }
 
 /// Fetches every recorded subject and checks it against its record.
-///
-/// Takes the workspace root and the binary to run, which defaults to the
-/// debug build under `target`. Writes under the platform's temporary
-/// directory, never under the workspace. Returns whether the lane passed, was
-/// skipped because no host could be reached, or failed.
 pub fn run(workspace: &Path, binary: Option<&Path>) -> Outcome {
     let binary = binary.map_or_else(
         || {
@@ -197,10 +187,6 @@ fn verify(binary: &Path, destination: &Path, cache: &Path) -> Result<String, Str
 }
 
 /// Reads one string field out of a result body without parsing JSON.
-///
-/// The lane checks a handful of scalar fields against recorded values, and a
-/// JSON parser in the task runner would be a dependency carried for that
-/// alone.
 fn field<'a>(body: &'a str, key: &str) -> &'a str {
     let needle = format!("\"{key}\":\"");
     let Some(at) = body.find(&needle) else {
@@ -218,13 +204,8 @@ fn number(body: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Describes every file under a destination well enough to tell whether a
-/// later run touched it.
-///
-/// Takes the destination root. Returns each path with its length and the time
-/// it was last written, sorted.
-/// object is the one it already holds without downloading it again. What the
-/// destination itself must show is that nothing under it moved.
+/// Describes every file under a destination well enough to tell whether a later
+/// run touched it.
 fn state_of(destination: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
     let mut found = Vec::new();
     collect(destination, destination, &mut found);

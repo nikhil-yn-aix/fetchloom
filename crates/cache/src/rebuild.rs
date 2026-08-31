@@ -35,10 +35,6 @@ pub struct RebuildReport {
 
 /// Rebuilds every piece of derived data this cache can produce from itself.
 ///
-/// Reads each object once. An object that still hashes to its name gets
-/// whichever of a tree and a record it is missing; one that does not is
-/// quarantined with a diagnosis and named in the report as needing a source.
-///
 /// # Errors
 ///
 /// Fails when the cache cannot be read or written.
@@ -98,8 +94,6 @@ fn missing_tree(digest: fetchloom_engine::digest::ContentDigest) -> Error {
 }
 
 /// Reports whether a stored tree fails against the digest it belongs to.
-///
-/// Reads only the tree's nodes, never the object's bytes.
 fn tree_does_not_check_out<P: Platform>(
     cache: &Cache<P>,
     digest: fetchloom_engine::digest::ContentDigest,
@@ -150,9 +144,6 @@ fn write_record<P: Platform>(
 }
 
 /// Removes every lock whose recorded holder is a process that no longer exists.
-///
-/// A holder on another machine is never treated as stale, and neither is one
-/// whose liveness could not be decided.
 fn release_dead_locks<P: Platform>(
     cache: &Cache<P>,
     report: &mut RebuildReport,
@@ -182,10 +173,6 @@ fn release_dead_locks<P: Platform>(
 }
 
 /// Removes every partial and staging entry with nothing behind it.
-///
-/// An entry whose writer is still running is left alone, and so is one whose
-/// writer cannot be inspected. An entry whose object is already published has
-/// nothing left to build.
 fn remove_orphans<P: Platform>(cache: &Cache<P>, report: &mut RebuildReport) -> Result<(), Error> {
     for directory in [cache.layout().partial(), cache.layout().staging()] {
         let entries = std::fs::read_dir(&directory)

@@ -51,10 +51,6 @@ fn main() -> std::process::ExitCode {
 }
 
 /// Arranges for an interrupt to stop the run and for a second one to end it.
-///
-/// The first interrupt only records that one arrived. Where the run stops,
-/// what it flushes, and what it writes down before it exits are decided by the
-/// work that notices, because only that work knows what is in flight.
 fn listen_for_interrupts() {
     let _ = ctrlc::set_handler(|| {
         if cancel::interrupt() > 1 {
@@ -145,19 +141,21 @@ fn dispatch(
     sequence: &Sequence,
 ) -> ExitCode {
     match &parsed.command {
-        Command::Explain { key } => run_explain(resolved, discovered, key.as_deref()),
+        Command::Explain { key } => {
+            run_explain(resolved, discovered, key.as_deref(), parsed.global.json)
+        }
         Command::Completions { shell } => write_completions(*shell),
         Command::Verify { target } => {
             run_verify(target, resolved, parsed.global.json, observer, sequence)
         }
         Command::Get {
-            references,
+            reference,
             transfer,
-        } => run_get(references, transfer, parsed, resolved, observer, sequence),
+        } => run_get(reference, transfer, parsed, resolved, observer, sequence),
         Command::Plan {
-            references,
+            reference,
             transfer,
-        } => run_plan(references, transfer, parsed, resolved, observer, sequence),
+        } => run_plan(reference, transfer, parsed, resolved, observer, sequence),
         Command::Apply { plan, transfer } => {
             run_apply(plan, transfer, parsed, resolved, observer, sequence)
         }
@@ -176,9 +174,6 @@ fn dispatch(
 }
 
 /// Refetches the damaged ranges of a cached object.
-///
-/// The digest comes from the lock when one pins it and from what the cache last
-/// resolved the reference to otherwise.
 fn run_repair(
     reference: &str,
     transfer: &surface::TransferFlags,
@@ -209,7 +204,7 @@ fn run_repair(
         Ok(path) => path,
         Err(error) => return reporter.report(&error),
     };
-    let pinned = match locked::pinned(&lock_path, &run::remote_name(reference), false) {
+    let pinned = match locked::pinned(&lock_path, &run::remote_name(reference), None) {
         Ok(found) => found.and_then(|dataset| {
             dataset
                 .artifacts
@@ -257,15 +252,25 @@ fn run_explain(
     resolved: &settings::Settings,
     discovered: &config::Discovered,
     key: Option<&str>,
+    json: bool,
 ) -> ExitCode {
-    let rows = explain::rows(resolved);
+    let rows = explain::rows(resolved, detected_threads());
     if let Some(key) = key {
         let Some(row) = rows.iter().find(|row| row.key == key) else {
             eprintln!("{key} is not a setting this build has");
             return ExitCode::Usage;
         };
+        if json {
+            return write_json(row);
+        }
         println!("{} = {} ({})", row.key, row.value, row.origin);
         return ExitCode::Success;
+    }
+    if json {
+        return write_json(&explain::Report {
+            files: explain::files(discovered),
+            settings: rows,
+        });
     }
     for line in explain::file_lines(discovered) {
         println!("{line}");
@@ -274,6 +279,26 @@ fn run_explain(
         println!("{} = {} ({})", row.key, row.value, row.origin);
     }
     ExitCode::Success
+}
+
+/// Writes one value as JSON, which is the whole result of the command.
+fn write_json(value: &impl serde::Serialize) -> ExitCode {
+    match serde_json::to_string(value) {
+        Ok(rendered) => {
+            println!("{rendered}");
+            ExitCode::Success
+        }
+        Err(reason) => {
+            eprintln!("the result could not be written: {reason}");
+            ExitCode::Usage
+        }
+    }
+}
+
+/// Returns the thread budget this machine detects.
+fn detected_threads() -> u32 {
+    u32::try_from(std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get))
+        .unwrap_or(1)
 }
 
 fn write_completions(shell: Shell) -> ExitCode {
@@ -378,7 +403,7 @@ fn run_verify(
 }
 
 fn run_get(
-    references: &[String],
+    reference: &str,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,
     resolved: &settings::Settings,
@@ -387,19 +412,15 @@ fn run_get(
 ) -> ExitCode {
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
-    if references.len() != 1 {
-        eprintln!("this build takes exactly one reference at a time");
-        return ExitCode::Usage;
-    }
-    let remote = run::is_remote(&references[0]);
-    let (source, named) = match resolve_places(&references[0], transfer, resolved) {
+    let remote = run::is_remote(reference);
+    let (source, named) = match resolve_places(reference, transfer, resolved) {
         Ok(places) => places,
         Err(error) => {
             return reporter.report(&error);
         }
     };
 
-    let (manifest, is_dataset) = match resolve_manifest(&references[0], &source, remote) {
+    let (manifest, is_dataset) = match resolve_manifest(reference, &source, remote) {
         Ok(found) => found,
         Err(error) => return reporter.report(&error),
     };
@@ -454,7 +475,7 @@ fn run_get(
     let produced = resolve_and_publish(
         &with,
         &Request {
-            reference: &references[0],
+            reference,
             remote,
             is_dataset,
             source: &source,
@@ -508,10 +529,6 @@ struct Request<'a> {
 }
 
 /// Resolves what a reference names and publishes it.
-///
-/// A reference that named a manifest resolves every artifact the manifest
-/// names into one destination. Every other reference resolves one object, which
-/// is the same shape with one artifact in it.
 fn resolve_and_publish(
     with: &run::Materialization<'_>,
     request: &Request<'_>,
@@ -575,9 +592,6 @@ struct Recording<'a> {
 }
 
 /// Records what a run resolved and reports what it did.
-///
-/// The lock is written whatever the outcome. The receipt is written only when
-/// something was materialized.
 fn record(
     produced: &run::DatasetRun,
     into: &Recording<'_>,
@@ -614,28 +628,35 @@ fn record(
 }
 
 /// Reports what a run would do, moving no bytes.
-///
-/// The plan goes to stdout, in the canonical form by default and as JSON under
-/// `--json`. Both parse back into the same plan.
+fn inert_on_plan(transfer: &surface::TransferFlags) -> Option<&'static str> {
+    if transfer.force {
+        return Some("--force");
+    }
+    if transfer.adopt {
+        return Some("--adopt");
+    }
+    None
+}
+
 fn run_plan(
-    references: &[String],
+    reference: &str,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,
     resolved: &settings::Settings,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
-    let reporter = Reporter::new(parsed.global.json, observer, sequence);
-    let json = parsed.global.json;
-    if references.len() != 1 {
-        eprintln!("this build takes exactly one reference at a time");
+    if let Some(flag) = inert_on_plan(transfer) {
+        eprintln!("{flag} changes what a run does to a destination, and plan writes to none");
         return ExitCode::Usage;
     }
-    let (source, named) = match resolve_places(&references[0], transfer, resolved) {
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
+    let json = parsed.global.json;
+    let (source, named) = match resolve_places(reference, transfer, resolved) {
         Ok(places) => places,
         Err(error) => return reporter.report(&error),
     };
-    let dataset = run::dataset_name(&references[0], &source);
+    let dataset = run::dataset_name(reference, &source);
     let destination = match named {
         Some(named) => named,
         None => match run::resolve_path(&PathBuf::from(".").join(&dataset)) {
@@ -647,7 +668,7 @@ fn run_plan(
         Ok(path) => path,
         Err(error) => return reporter.report(&error),
     };
-    let pinned = match locked::pinned(&lock_path, &dataset, true) {
+    let pinned = match locked::pinned(&lock_path, &dataset, Some(locked::Requirement::Plan)) {
         Ok(pinned) => pinned,
         Err(error) => return reporter.report(&error),
     };
@@ -685,7 +706,7 @@ fn run_plan(
     let plan = match planning::build(
         pinned.as_ref(),
         &dataset,
-        &references[0],
+        reference,
         &destination,
         held.as_deref(),
     ) {
@@ -711,10 +732,6 @@ fn run_plan(
 }
 
 /// Executes a plan.
-///
-/// The digests the plan records are re-resolved: an object the cache holds is
-/// materialized from it, and one it does not is fetched under the plan's own
-/// digest.
 fn run_apply(
     plan_path: &std::path::Path,
     transfer: &surface::TransferFlags,
@@ -836,10 +853,6 @@ fn lock_path_of(
 }
 
 /// Returns the manifest a reference resolves from, and whether it named one.
-///
-/// A local path carrying a manifest extension is a manifest, as the reference
-/// grammar states. Everything else resolves from a manifest synthesized to
-/// describe it.
 fn resolve_manifest(
     reference: &str,
     source: &std::path::Path,
@@ -858,9 +871,6 @@ fn resolve_manifest(
 }
 
 /// Returns the destination a run publishes to.
-///
-/// A destination the user named is used as it was named. One nobody named is
-/// the dataset's own name under the working directory.
 fn destination_for(
     named: Option<PathBuf>,
     dataset: &str,
@@ -872,8 +882,6 @@ fn destination_for(
 }
 
 /// Runs the materialization a reference names.
-///
-/// A locked run hands the transfer the digest the lock pins.
 #[expect(
     clippy::too_many_arguments,
     reason = "the flags, the lock, and the two observers each name a contract behavior of their own"
@@ -923,9 +931,6 @@ fn materialize(
 }
 
 /// Returns the source a reference names and the destination it materializes to.
-///
-/// Both are resolved against the working directory once, where the user named
-/// them, so no filesystem call ever receives a path it cannot open.
 fn resolve_places(
     reference: &str,
     transfer: &surface::TransferFlags,
@@ -946,8 +951,6 @@ fn resolve_places(
 
 /// Returns what the lock pins for this run, having refused a locked run the
 /// lock does not describe.
-///
-/// Everything compared here is compared before a byte moves.
 fn held_to_lock(
     lock_path: &std::path::Path,
     dataset: &str,
@@ -955,7 +958,11 @@ fn held_to_lock(
     selection: &fetchloom_engine::selection::Selection,
     is_locked: bool,
 ) -> Result<Option<fetchloom_engine::lock::LockedDataset>, fetchloom_engine::error::Error> {
-    let pinned = locked::pinned(lock_path, dataset, is_locked)?;
+    let pinned = locked::pinned(
+        lock_path,
+        dataset,
+        is_locked.then_some(locked::Requirement::LockedRun),
+    )?;
     if is_locked && let Some(pinned) = pinned.as_ref() {
         pinned.check_request(manifest.digest()?, manifest.release.as_deref(), selection)?;
     }
@@ -963,8 +970,6 @@ fn held_to_lock(
 }
 
 /// Records what a run produced and reports it.
-///
-/// The receipt is written before the result is printed.
 fn finish_get(
     result: &run::RunResult,
     cache: Option<&fetchloom_cache::Cache<NativePlatform>>,
@@ -1083,10 +1088,6 @@ struct Opened {
 }
 
 /// Opens the pool, the counter, the platform, and the cache one run needs.
-///
-/// Takes the command line, the flags that decide the cache, the policy the run
-/// obeys, and where events and failures go. Returns what the run holds, or the
-/// exit code the failure it already reported maps to.
 fn open_for(
     parsed: &CommandLine,
     transfer: &surface::TransferFlags,

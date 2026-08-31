@@ -352,9 +352,6 @@ fn a_directory_source_writes_no_lock_and_says_so() {
 }
 
 /// The directory every command in this file runs in.
-///
-/// A run writes its lock beside the working directory, so each test binary is
-/// given one of its own rather than writing into the workspace.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

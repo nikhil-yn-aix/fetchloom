@@ -60,7 +60,7 @@ pub trait Archive {
     ///
     /// # Errors
     ///
-    /// Fails when the member is absent, when the archive is truncated, and
-    /// when the member expands past a limit.
+    /// Fails when the member is absent, when the archive is truncated, and when
+    /// the member expands past a limit.
     fn open(&mut self, member: &ArchiveMember) -> Result<Self::Body, Error>;
 }

@@ -1,0 +1,10 @@
+datasets:
+  x.txt:
+    artifacts:
+      x.txt:
+        digest: "blake3:0b8b60248fad7ac6dfac221b7e01a8b91c772421a15b387dd1fb2d6a94aee438"
+        interop: "sha256:98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4"
+        layout: "keep"
+        size: 3
+    manifest: "blake3:89b7029be4c1d707ad2526f1c839044d92a1f99942be52d36167966a281084ce"
+    tree: "blake3:579c9683609777ee3ac9e35d26349d77caa3dd19a779c75cb41d98b4399ece2e"

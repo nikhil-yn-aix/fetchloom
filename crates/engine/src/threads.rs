@@ -27,9 +27,6 @@ pub struct ThreadBudget {
 impl ThreadBudget {
     /// Resolves a budget from what the platform detected and what the user
     /// asked for.
-    ///
-    /// Takes the detected count and an optional user ceiling. Returns the
-    /// smaller of the two, together with the origin of the value.
     #[must_use]
     pub fn resolve(detected: NonZeroUsize, requested: Option<NonZeroUsize>) -> Self {
         let (threads, origin) = match requested {

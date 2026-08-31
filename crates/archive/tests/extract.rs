@@ -1,5 +1,5 @@
-//! Bounded extraction driven over the hostile archive corpus and the
-//! properties the reader defers to it.
+//! Bounded extraction driven over the hostile archive corpus and the properties
+//! the reader defers to it.
 
 #![expect(
     clippy::unwrap_used,
@@ -46,12 +46,6 @@ const VOLUME_DEPENDENT_NAMES: &[&str] = &[
 ];
 
 /// Reports whether this volume stores a name exactly as it was asked to.
-///
-/// Takes the member name the archive holds. Creates it in a directory of its
-/// own and reads that directory back. A volume may accept the create and store
-/// something else: Windows strips a trailing dot, and a name holding
-/// a colon becomes an alternate data stream on a file of the shorter name.
-/// Returns whether the name that came back is the name that went in.
 fn volume_stores_this_name(name: &str) -> bool {
     let Ok(directory) = tempfile::tempdir() else {
         return false;

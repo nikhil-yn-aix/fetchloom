@@ -53,11 +53,6 @@ impl<'a> Reporter<'a> {
 
     /// Writes a failure where the caller asked for it, puts it on the event
     /// stream, and returns its exit code.
-    ///
-    /// Takes the failure. Emits `extract.reject` first when the failure is an
-    /// extraction rejection, then `error`, so a consumer of the stream alone
-    /// learns why a run stopped. Returns the code the layer of that failure
-    /// maps to.
     #[must_use]
     pub fn report(
         &self,
