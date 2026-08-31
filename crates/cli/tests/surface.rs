@@ -295,10 +295,6 @@ fn tree(workspace: &Workspace) -> PathBuf {
     root
 }
 
-// The Command surface table. Every command the binary carries performs what
-// contracts.md says it performs, and every command it does not carry is a usage
-// error rather than a stub.
-
 #[test]
 fn get_resolves_transfers_verifies_materializes_and_records() {
     let workspace = Workspace::new();
@@ -458,9 +454,6 @@ fn a_command_this_build_does_not_perform_is_a_usage_error() {
     }
 }
 
-// The Reference grammar table. Every form either resolves or fails saying what
-// this build resolves, and never fails saying something untrue.
-
 #[test]
 fn a_local_directory_resolves_to_every_entry_under_it() {
     let workspace = Workspace::new();
@@ -550,9 +543,6 @@ fn a_reference_naming_nothing_says_so_and_names_the_reference() {
     assert!(action.contains("exists"), "{action}");
 }
 
-// The Formats table. Every container extraction recognizes is extracted from
-// bytes that really hold it, through the command a person runs.
-
 #[test]
 fn every_shipped_container_is_extracted_by_the_command() {
     let tar = greeting_tar();
@@ -602,9 +592,6 @@ fn every_shipped_single_object_compression_is_materialized_as_one_file() {
         );
     }
 }
-
-// The Flags table. Every flag the binary carries changes what a run does, and
-// the change is the one the table names.
 
 #[test]
 fn select_and_exclude_choose_members_and_an_empty_selection_fails() {
@@ -1009,8 +996,6 @@ fn cache_dir_and_no_config_and_config_each_decide_where_settings_come_from() {
         refused.out()
     );
 }
-
-// The Exit codes table. Every code is produced by a run a person can make.
 
 #[test]
 fn every_exit_code_the_table_names_is_produced_by_a_run() {
