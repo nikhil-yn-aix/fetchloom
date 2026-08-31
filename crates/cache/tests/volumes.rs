@@ -127,11 +127,7 @@ fn prune_skips_a_pack_another_user_wrote_and_reports_it() {
     let large = usize::try_from(fetchloom_engine::limits::PACK_THRESHOLD).unwrap() + 1;
     let mine = support::publish(&held, &bytes_of(large, 3));
     let theirs = support::publish(&held, &bytes_of(1024, 4));
-    let pack = held
-        .placement(theirs)
-        .expect("the cache did not hold what it published")
-        .container()
-        .to_path_buf();
+    let pack = held.placement(theirs).unwrap().container().to_path_buf();
     support::give_away(&pack, &other);
 
     held.prune(std::time::Duration::ZERO).unwrap();
