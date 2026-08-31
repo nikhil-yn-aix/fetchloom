@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use fetchloom_engine::digest::ContentDigest;
 
 /// The directories a cache root holds.
-pub(crate) const DIRECTORIES: [&str; 9] = [
+pub(crate) const DIRECTORIES: [&str; 10] = [
     "objects",
+    "packs",
     "receipts",
     "outboard",
     "partial",
@@ -95,6 +96,12 @@ impl Layout {
     #[must_use]
     pub fn meta(&self) -> PathBuf {
         self.root.join("meta")
+    }
+
+    /// Returns the directory holding packed objects.
+    #[must_use]
+    pub fn packs(&self) -> PathBuf {
+        self.root.join("packs")
     }
 
     /// Returns the directory holding advisory locks.

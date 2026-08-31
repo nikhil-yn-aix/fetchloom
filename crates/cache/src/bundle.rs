@@ -188,7 +188,7 @@ impl<P: Platform> Cache<P> {
     }
 
     fn publish_imported(&self, scratch: &Path, digests: &hashing::Digests) -> Result<(), Error> {
-        self.publish_object(scratch, digests.content)?;
+        self.publish_object(scratch, digests)?;
         self.finish_publication(digests)
     }
 }

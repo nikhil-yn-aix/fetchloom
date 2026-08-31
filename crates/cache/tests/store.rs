@@ -279,10 +279,7 @@ fn status_counts_what_the_cache_holds() {
 fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
     let (scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(4096, 13));
-    let object = held.layout().object(digest);
-
-    support::make_writable(&object);
-    std::fs::write(&object, bytes_of(2048, 14)).unwrap();
+    support::damage(&held, digest, &bytes_of(2048, 14));
 
     let reopened = support::open_cache(scratch.path()).unwrap();
     let refused = reopened.open(digest).unwrap_err();
@@ -293,10 +290,7 @@ fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
 fn an_object_changed_within_one_tick_is_refused_only_by_rereading_it() {
     let (scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(4096, 13));
-    let object = held.layout().object(digest);
-
-    support::make_writable(&object);
-    std::fs::write(&object, bytes_of(4096, 14)).unwrap();
+    support::damage(&held, digest, &bytes_of(4096, 14));
 
     let rereading = support::open_cache_with(scratch.path(), VerificationPolicy::Always).unwrap();
     let refused = rereading.open(digest).unwrap_err();
@@ -317,10 +311,7 @@ fn an_object_changed_within_one_tick_is_refused_only_by_rereading_it() {
 fn verify_moves_a_damaged_object_to_quarantine_and_never_serves_it_again() {
     let (scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(4096, 19));
-    let object = held.layout().object(digest);
-
-    support::make_writable(&object);
-    std::fs::write(&object, bytes_of(4096, 20)).unwrap();
+    support::damage(&held, digest, &bytes_of(4096, 20));
 
     let reopened = support::open_cache(scratch.path()).unwrap();
     let report = fetchloom_cache::verify::run(&reopened).unwrap();
@@ -351,9 +342,7 @@ fn verify_reports_an_object_that_is_still_its_digest() {
 fn prune_removes_a_quarantined_object() {
     let (scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(4096, 23));
-    let object = held.layout().object(digest);
-    support::make_writable(&object);
-    std::fs::write(&object, bytes_of(4096, 24)).unwrap();
+    support::damage(&held, digest, &bytes_of(4096, 24));
 
     let reopened = support::open_cache(scratch.path()).unwrap();
     fetchloom_cache::verify::run(&reopened).unwrap();
@@ -367,7 +356,7 @@ fn prune_removes_a_quarantined_object() {
 }
 
 #[test]
-fn an_object_ingested_locally_costs_two_files_and_no_more() {
+fn a_small_object_ingested_locally_costs_no_file_of_its_own() {
     let (scratch, cache) = cache();
     let source = scratch.path().join("one.bin");
     std::fs::write(&source, b"hello\n").unwrap();
@@ -390,9 +379,12 @@ fn an_object_ingested_locally_costs_two_files_and_no_more() {
         .iter()
         .filter(|entry| entry.starts_with(&name))
         .collect();
-    assert_eq!(
-        per_object.len(),
-        2,
-        "bytes already on this machine are written with no lock and no partial, so an object          costs its own file and its record and nothing else: {per_object:?}"
+    assert!(
+        per_object.is_empty(),
+        "a small object was given files of its own rather than a place in a pack: {per_object:?}"
+    );
+    assert!(
+        cache.holds(ingested.digest),
+        "the object the cache reported ingesting is not one it holds"
     );
 }

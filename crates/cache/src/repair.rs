@@ -76,10 +76,12 @@ impl<P: Platform> Cache<P> {
                 format!("fetch {digest} again, because this cache holds no such object"),
             ));
         };
-        let path = held.path().to_path_buf();
-        let object_len = std::fs::metadata(&path)
-            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?
-            .len();
+        let object_len = match held {
+            Held::Published(_) => self.size_of(digest).unwrap_or_default(),
+            Held::Quarantined(ref at) => std::fs::metadata(at)
+                .map_err(|reason| filesystem_failure(Surface::Cache, at, &reason))?
+                .len(),
+        };
 
         if !self.has_outboard(digest)? {
             return Ok(Localized {
@@ -89,6 +91,7 @@ impl<P: Platform> Cache<P> {
             });
         }
 
+        let path = held.path().to_path_buf();
         let mut tree = std::fs::File::open(self.layout().outboard_of(digest))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let recorded_len = recorded_length(&mut tree).unwrap_or(object_len);
@@ -166,7 +169,12 @@ impl<P: Platform> Cache<P> {
         };
         let path = self.layout().partial_of(digest);
         let _ = std::fs::remove_file(&path);
-        self.platform().clone_or_copy(held.path(), &path)?;
+        match held {
+            Held::Published(_) => self.place_object(digest, &path)?,
+            Held::Quarantined(ref at) => {
+                self.platform().clone_or_copy(at, &path).map(|_| ())?;
+            }
+        }
         let file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(false)
@@ -278,7 +286,7 @@ impl<P: Platform> Cache<P> {
         }
 
         self.remove_object(digest)?;
-        self.publish_object(&path, digest)?;
+        self.publish_object(&path, &digests)?;
         self.finish_publication(&digests)?;
         let _ = std::fs::remove_file(self.layout().quarantined(digest));
         let _ = std::fs::remove_file(self.layout().diagnosis_of(digest));
@@ -294,8 +302,13 @@ impl<P: Platform> Cache<P> {
             ));
         };
         let path = held.path().to_path_buf();
-        let mut file = std::fs::File::open(&path)
-            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+        let mut file: Box<dyn Read> = match held {
+            Held::Published(_) => Box::new(self.read(digest)?),
+            Held::Quarantined(ref at) => Box::new(
+                std::fs::File::open(at)
+                    .map_err(|reason| filesystem_failure(Surface::Cache, at, &reason))?,
+            ),
+        };
         let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; BUFFER];
         loop {

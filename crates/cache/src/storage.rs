@@ -1,6 +1,6 @@
 //! The one lookup that answers where an object's bytes are.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fetchloom_engine::digest::ContentDigest;
@@ -9,12 +9,20 @@ use fetchloom_engine::identity::Fingerprint;
 use fetchloom_engine::seam::platform::Platform;
 
 use crate::Cache;
+use fetchloom_engine::hashing::Digests;
 
 /// Where one object's bytes are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Placement {
     /// A file of its own.
     Loose(PathBuf),
+    /// A span of a pack this cache holds beside other small objects.
+    Packed {
+        /// The pack the bytes are in.
+        pack: PathBuf,
+        /// Where they start and how many there are.
+        entry: crate::pack::Entry,
+    },
 }
 
 impl Placement {
@@ -23,6 +31,7 @@ impl Placement {
     pub fn container(&self) -> &Path {
         match self {
             Self::Loose(path) => path,
+            Self::Packed { pack, .. } => pack,
         }
     }
 
@@ -31,6 +40,16 @@ impl Placement {
     pub fn offset(&self) -> u64 {
         match self {
             Self::Loose(_) => 0,
+            Self::Packed { entry, .. } => entry.offset,
+        }
+    }
+
+    /// Returns how many bytes the object holds, when the placement states it.
+    #[must_use]
+    pub fn length(&self) -> Option<u64> {
+        match self {
+            Self::Loose(_) => None,
+            Self::Packed { entry, .. } => Some(entry.length),
         }
     }
 }
@@ -103,7 +122,11 @@ impl<P: Platform> Cache<P> {
     #[must_use]
     pub fn placement(&self, digest: ContentDigest) -> Option<Placement> {
         let loose = self.layout().object(digest);
-        loose.is_file().then_some(Placement::Loose(loose))
+        if loose.is_file() {
+            return Some(Placement::Loose(loose));
+        }
+        let (pack, entry) = self.packed_index().get(&digest).cloned()?;
+        Some(Placement::Packed { pack, entry })
     }
 
     /// Returns whether the cache holds an object.
@@ -118,6 +141,7 @@ impl<P: Platform> Cache<P> {
         let placed = self.placement(digest)?;
         match placed {
             Placement::Loose(path) => std::fs::metadata(path).ok().map(|found| found.len()),
+            Placement::Packed { entry, .. } => Some(entry.length),
         }
     }
 
@@ -142,7 +166,7 @@ impl<P: Platform> Cache<P> {
         Ok(Bytes {
             file,
             start,
-            length: length - start,
+            length: placed.length().unwrap_or(length - start),
             at: 0,
         })
     }
@@ -156,6 +180,12 @@ impl<P: Platform> Cache<P> {
     pub fn fingerprint_of(&self, digest: ContentDigest) -> Result<Fingerprint, Error> {
         let placed = self.placement(digest).ok_or_else(|| absent(digest))?;
         self.platform().fingerprint(placed.container())
+    }
+
+    /// Returns whether an object is packed beside others.
+    #[must_use]
+    pub fn is_packed(&self, digest: ContentDigest) -> bool {
+        matches!(self.placement(digest), Some(Placement::Packed { .. }))
     }
 }
 
@@ -172,10 +202,37 @@ impl<P: Platform> Cache<P> {
     /// # Errors
     ///
     /// Fails when the file cannot be placed under its final name.
-    pub fn publish_object(&self, from: &Path, digest: ContentDigest) -> Result<(), Error> {
+    pub fn publish_object(&self, from: &Path, digests: &Digests) -> Result<(), Error> {
+        let digest = digests.content;
+        let length = std::fs::metadata(from)
+            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?
+            .len();
+        if length <= fetchloom_engine::limits::PACK_THRESHOLD {
+            let bytes = std::fs::read(from)
+                .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
+            self.pack_bytes(digest, digests.interop, &bytes)?;
+            let _ = std::fs::remove_file(from);
+            return Ok(());
+        }
         let to = self.layout().object(digest);
         self.platform().publish_file(from, &to, self.tier())?;
         crate::seal_object(&to)
+    }
+
+    /// Packs an object this run already holds in memory.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the pack cannot be written.
+    pub fn pack_bytes(
+        &self,
+        digest: ContentDigest,
+        interop: fetchloom_engine::digest::InteropDigest,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        let entry = self.append_to_pack(digest, interop, bytes)?;
+        self.remember_packed(digest, self.own_pack(), entry);
+        Ok(())
     }
 
     /// Removes the object with the given digest.
@@ -184,6 +241,11 @@ impl<P: Platform> Cache<P> {
     ///
     /// Fails when the bytes are there and cannot be removed.
     pub fn remove_object(&self, digest: ContentDigest) -> Result<(), Error> {
+        if let Some(Placement::Packed { pack, .. }) = self.placement(digest) {
+            let mut only = std::collections::BTreeSet::new();
+            only.insert(digest);
+            return self.rewrite_pack(&pack, &only);
+        }
         let path = self.layout().object(digest);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -201,6 +263,12 @@ impl<P: Platform> Cache<P> {
         let Some(placed) = self.placement(digest) else {
             return Ok(());
         };
+        if matches!(placed, Placement::Packed { .. }) {
+            let aside = self.layout().quarantined(digest);
+            let _ = std::fs::remove_file(&aside);
+            self.place_object(digest, &aside)?;
+            return self.remove_object(digest);
+        }
         let from = placed.container().to_path_buf();
         let to = self.layout().quarantined(digest);
         self.platform()
@@ -244,6 +312,23 @@ impl<P: Platform> Cache<P> {
                 .platform()
                 .clone_or_copy(&from, at)
                 .map(|_mechanism| ()),
+            Placement::Packed { .. } => {
+                let mut reading = self.read(digest)?;
+                let mut file = self.platform().create_file_exclusive(at)?;
+                let mut buffer = vec![0_u8; 1 << 16];
+                loop {
+                    let filled = reading
+                        .read(&mut buffer)
+                        .map_err(|reason| filesystem_failure(Surface::Destination, at, &reason))?;
+                    if filled == 0 {
+                        break;
+                    }
+                    file.write_all(&buffer[..filled])
+                        .map_err(|reason| filesystem_failure(Surface::Destination, at, &reason))?;
+                    self.work().wrote_bytes(filled as u64);
+                }
+                self.platform().flush(&file, self.tier())
+            }
         }
     }
 }

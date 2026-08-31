@@ -165,7 +165,12 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
             support::digests_are_their_bytes(&layout),
             "a killed writer left an object that does not hash to its name after {killed} kills"
         );
-        if layout.objects().read_dir().unwrap().next().is_some() {
+        let published = layout.objects().read_dir().unwrap().next().is_some()
+            || layout
+                .packs()
+                .read_dir()
+                .is_ok_and(|mut entries| entries.next().is_some());
+        if published {
             reached_publication = true;
         }
     }

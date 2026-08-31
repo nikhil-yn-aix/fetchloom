@@ -329,12 +329,19 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
         ],
     );
 
-    let object = std::fs::read_dir(cache.join("objects"))
+    let pack = std::fs::read_dir(cache.join("packs"))
         .unwrap()
         .flatten()
         .next()
-        .expect("the cache holds no object")
+        .expect("the cache packed no object")
         .path();
+    let held = std::fs::read(&pack).unwrap();
+    let mut name = String::new();
+    for byte in &held[..32] {
+        use std::fmt::Write as _;
+        let _ = write!(name, "{byte:02x}");
+    }
+    let object = pack.clone();
     let mut permissions = std::fs::metadata(&object).unwrap().permissions();
     #[expect(
         clippy::permissions_set_readonly_false,
@@ -342,7 +349,15 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
     )]
     permissions.set_readonly(false);
     std::fs::set_permissions(&object, permissions).unwrap();
-    std::fs::write(&object, b"something else entirely").unwrap();
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&object)
+            .unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+        file.write_all(&[held[72] ^ 0xff]).unwrap();
+    }
 
     let verified = run(&cache, &["cache", "verify", "--json"]);
     assert_eq!(verified.status.code(), Some(80));
@@ -353,7 +368,6 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
-    let name = object.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
         quarantined.contains(&name),
         "the object was not quarantined: {quarantined:?}"

@@ -119,12 +119,12 @@ fn interrupt(child: &Child) {
 fn wait_until_working(scene: &Scene) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if entries_under(&scene.cache) > 4 {
+        if entries_under(&scene.destination) > 8 {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("the run wrote nothing into the cache within twenty seconds");
+    panic!("the run materialized nothing within twenty seconds");
 }
 
 fn entries_under(directory: &Path) -> usize {

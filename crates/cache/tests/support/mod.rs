@@ -128,6 +128,35 @@ pub fn digests_are_their_bytes(layout: &fetchloom_cache::layout::Layout) -> bool
             return false;
         }
     }
+    packed_digests_are_their_bytes(layout)
+}
+
+/// Reports whether every object a pack holds hashes to the name it is under.
+pub fn packed_digests_are_their_bytes(layout: &fetchloom_cache::layout::Layout) -> bool {
+    let Ok(packs) = std::fs::read_dir(layout.packs()) else {
+        return true;
+    };
+    for pack in packs.flatten() {
+        let Ok(bytes) = std::fs::read(pack.path()) else {
+            return false;
+        };
+        let mut at = 0usize;
+        while at + 72 <= bytes.len() {
+            let mut name = [0_u8; 32];
+            name.copy_from_slice(&bytes[at..at + 32]);
+            let mut length = [0_u8; 8];
+            length.copy_from_slice(&bytes[at + 64..at + 72]);
+            let length = usize::try_from(u64::from_le_bytes(length)).unwrap_or(usize::MAX);
+            let start = at + 72;
+            if start.saturating_add(length) > bytes.len() {
+                break;
+            }
+            if hash_bytes(&bytes[start..start + length]).bytes() != &name {
+                return false;
+            }
+            at = start + length;
+        }
+    }
     true
 }
 
@@ -326,4 +355,21 @@ pub fn processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
         None,
     );
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
+}
+
+/// Overwrites an object's bytes wherever the cache put them.
+pub fn damage(cache: &Cache<NativePlatform>, digest: ContentDigest, with: &[u8]) {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let Some(placed) = cache.placement(digest) else {
+        panic!("the cache holds no such object");
+    };
+    let container = placed.container().to_path_buf();
+    make_writable(&container);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&container)
+        .unwrap();
+    file.seek(SeekFrom::Start(placed.offset())).unwrap();
+    file.write_all(with).unwrap();
 }

@@ -92,6 +92,18 @@ impl<P: Platform> Cache<P> {
         if self.contains(digest)? {
             return Ok(present);
         }
+        if length <= fetchloom_engine::limits::PACK_THRESHOLD {
+            let bytes = std::fs::read(source)
+                .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
+            self.pack_bytes(digest, digests.interop, &bytes)?;
+            self.finish_publication(digests)?;
+            return Ok(Ingested {
+                digest,
+                interop: digests.interop,
+                size: length,
+                was_present: false,
+            });
+        }
         let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
         self.platform().clone_or_copy(source, &scratch)?;
@@ -121,7 +133,7 @@ impl<P: Platform> Cache<P> {
     }
 
     fn publish_scratch(&self, scratch: &Path, digests: &Digests) -> Result<(), Error> {
-        self.publish_object(scratch, digests.content)?;
+        self.publish_object(scratch, digests)?;
         self.finish_publication(digests)
     }
 
@@ -131,6 +143,9 @@ impl<P: Platform> Cache<P> {
     ///
     /// Fails when the record is present and cannot be read or does not parse.
     pub fn recorded_interop(&self, digest: ContentDigest) -> Result<Option<InteropDigest>, Error> {
+        if let Some(crate::storage::Placement::Packed { entry, .. }) = self.placement(digest) {
+            return Ok(Some(entry.interop));
+        }
         let record: Option<ObjectRecord> = record::read(&self.object_record(digest))?;
         Ok(record.map(|record| record.interop))
     }
@@ -206,6 +221,13 @@ impl<P: Platform> Cache<P> {
     /// written, and when the tree cannot be written.
     pub(crate) fn finish_publication(&self, digests: &Digests) -> Result<(), Error> {
         let digest = digests.content;
+        if self.is_packed(digest) {
+            if let Some(tree) = digests.outboard.as_ref() {
+                self.write_outboard(digest, tree.as_bytes())?;
+            }
+            let _ = std::fs::remove_file(self.layout().mark_of(digest));
+            return Ok(());
+        }
         let fingerprint = self.fingerprint_of(digest)?;
         let path = self.object_record(digest);
         if let Some(parent) = path.parent() {

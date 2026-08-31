@@ -49,7 +49,7 @@ pub fn run<P: Platform>(cache: &Cache<P>) -> Result<RebuildReport, Error> {
             continue;
         };
         let wants_tree = !cache.has_outboard(digest)? || tree_does_not_check_out(cache, digest)?;
-        let wants_record = !cache.object_record(digest).is_file();
+        let wants_record = !cache.is_packed(digest) && !cache.object_record(digest).is_file();
         if !wants_tree && !wants_record {
             drop(held);
             continue;

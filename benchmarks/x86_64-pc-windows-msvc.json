@@ -7,13 +7,13 @@
       "metrics": [
         {
           "name": "startup",
-          "value": 6.6908,
+          "value": 6.7567,
           "unit": "ms",
           "kind": "timing"
         },
         {
           "name": "binary-size",
-          "value": 5548032.0,
+          "value": 7110656.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -25,13 +25,13 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1668.2258000000002,
+          "value": 1545.6324000000002,
           "unit": "ms",
           "kind": "timing"
         },
         {
           "name": "cache-growth",
-          "value": 16777216.0,
+          "value": 16781824.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -43,7 +43,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 50331648.0,
+          "value": 33559040.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -55,7 +55,7 @@
         },
         {
           "name": "file-operations",
-          "value": 403.0,
+          "value": 212.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -67,7 +67,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 179.3081,
+          "value": 201.2738,
           "unit": "ms",
           "kind": "timing"
         },
@@ -109,7 +109,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 99.0627,
+          "value": 88.6069,
           "unit": "ms",
           "kind": "timing"
         },
@@ -139,7 +139,7 @@
         },
         {
           "name": "file-operations",
-          "value": 34.0,
+          "value": 35.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -151,7 +151,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 565.4565,
+          "value": 468.73150000000004,
           "unit": "ms",
           "kind": "timing"
         },
@@ -181,7 +181,7 @@
         },
         {
           "name": "file-operations",
-          "value": 54.0,
+          "value": 55.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -193,7 +193,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 21777.5759,
+          "value": 9734.428,
           "unit": "ms",
           "kind": "timing"
         },
@@ -205,7 +205,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 3145728.0,
+          "value": 2170880.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -217,7 +217,7 @@
         },
         {
           "name": "file-operations",
-          "value": 6163.0,
+          "value": 3092.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -229,7 +229,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 909.3362000000001,
+          "value": 1319.8635000000002,
           "unit": "ms",
           "kind": "timing"
         },
@@ -253,7 +253,7 @@
         },
         {
           "name": "file-operations",
-          "value": 28.0,
+          "value": 29.0,
           "unit": "operations",
           "kind": "deterministic"
         }

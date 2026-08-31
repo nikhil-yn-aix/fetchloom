@@ -147,6 +147,9 @@ impl<P: Platform> Cache<P> {
     }
 
     fn check_fingerprint(&self, digest: ContentDigest) -> Result<(), Error> {
+        if self.is_packed(digest) {
+            return self.check_bytes(digest);
+        }
         let recorded: ObjectRecord =
             record::read(&self.object_record(digest))?.ok_or_else(|| {
                 Error::new(
@@ -399,7 +402,7 @@ impl<P: Platform> Store for Cache<P> {
         self.platform.flush(&writer.file, self.tier)?;
         drop(writer.file);
 
-        self.publish_object(&writer.path, found)?;
+        self.publish_object(&writer.path, &digests)?;
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
 
         self.finish_publication(&digests)?;
@@ -491,7 +494,11 @@ impl<P: Platform> Store for Cache<P> {
     }
 
     fn list(&self) -> Result<Vec<ContentDigest>, Error> {
-        Self::digests_in(&self.layout.objects())
+        let mut found = Self::digests_in(&self.layout.objects())?;
+        found.extend(self.packed_index().keys().copied());
+        found.sort_unstable();
+        found.dedup();
+        Ok(found)
     }
 
     fn prune(&self, grace: Duration) -> Result<PruneReport, Error> {

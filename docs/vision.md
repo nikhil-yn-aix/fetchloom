@@ -40,7 +40,7 @@ Freedom from install. One static binary, no root, no runtime, no daemon, no acco
 
 Freedom from the network. Every operation declares its network need. Offline means no DNS, no probe, no credential call, no update check.
 
-Freedom from lock-in. The cache is plain directories. Locks and receipts are readable text. Manifests use open formats. Deleting Fetchloom leaves the data usable.
+Freedom from lock-in. Nothing Fetchloom writes needs Fetchloom to read. Locks, receipts and plans are readable text, manifests use open formats, and every byte in the cache is either a file of its own or a span of a pack that states, ahead of each object, the digest it is under and how long it is. Deleting Fetchloom leaves the data usable.
 
 Freedom from lies. Trust class is always named. Degradation is always announced.
 

@@ -15,7 +15,9 @@ mod support;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use fetchloom_cache::storage::Placement;
 use fetchloom_engine::hashing::hash_bytes;
+use fetchloom_engine::limits::PACK_THRESHOLD;
 
 use support::{bytes_of, cache, publish};
 
@@ -115,5 +117,105 @@ fn collect(directory: &Path, into: &mut Vec<PathBuf>) {
         } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("rs") {
             into.push(path);
         }
+    }
+}
+
+#[test]
+fn ingesting_a_small_file_costs_fewer_file_operations_than_giving_it_one() {
+    let (scratch, held) = cache();
+    let mut published = Vec::new();
+    let before = held.work().taken().file_operations;
+    for seed in 0..64u8 {
+        let path = scratch.path().join(format!("source-{seed}.bin"));
+        std::fs::write(&path, bytes_of(4096, seed)).unwrap();
+        published.push(held.ingest(&path).unwrap().digest);
+    }
+    let each = (held.work().taken().file_operations - before) / 64;
+
+    assert!(
+        each < 3,
+        "ingesting a small file still costs {each} file operations, which is what packing is for"
+    );
+    for digest in published {
+        assert!(held.holds(digest));
+    }
+}
+
+#[test]
+fn an_object_above_the_threshold_keeps_a_file_of_its_own() {
+    let (_scratch, held) = cache();
+    let bytes = bytes_of(usize::try_from(PACK_THRESHOLD).unwrap() + 1, 21);
+    let digest = publish(&held, &bytes);
+
+    assert!(
+        matches!(held.placement(digest), Some(Placement::Loose(_))),
+        "a large object was packed"
+    );
+}
+
+#[test]
+fn a_packed_object_and_a_loose_one_read_back_identically() {
+    let (_scratch, held) = cache();
+    let small = bytes_of(4096, 22);
+    let large = bytes_of(usize::try_from(PACK_THRESHOLD).unwrap() + 1, 23);
+    let packed = publish(&held, &small);
+    let loose = publish(&held, &large);
+
+    assert!(matches!(
+        held.placement(packed),
+        Some(Placement::Packed { .. })
+    ));
+    assert!(matches!(held.placement(loose), Some(Placement::Loose(_))));
+
+    let mut read = Vec::new();
+    held.read(packed).unwrap().read_to_end(&mut read).unwrap();
+    assert_eq!(read, small);
+    assert_eq!(held.size_of(packed), Some(small.len() as u64));
+
+    read.clear();
+    held.read(loose).unwrap().read_to_end(&mut read).unwrap();
+    assert_eq!(read, large);
+}
+
+#[test]
+fn several_packed_objects_in_one_container_each_read_back_as_their_own_bytes() {
+    let (_scratch, held) = cache();
+    let written: Vec<Vec<u8>> = (0..16u8).map(|seed| bytes_of(1024, seed + 40)).collect();
+    let digests: Vec<_> = written.iter().map(|bytes| publish(&held, bytes)).collect();
+
+    let containers: std::collections::BTreeSet<PathBuf> = digests
+        .iter()
+        .map(|digest| held.placement(*digest).unwrap().container().to_path_buf())
+        .collect();
+    assert_eq!(
+        containers.len(),
+        1,
+        "sixteen small objects went into {} containers",
+        containers.len()
+    );
+
+    for (digest, expected) in digests.iter().zip(&written) {
+        let mut read = Vec::new();
+        held.read(*digest).unwrap().read_to_end(&mut read).unwrap();
+        assert_eq!(&read, expected);
+    }
+}
+
+#[test]
+fn removing_a_packed_object_leaves_the_others_readable() {
+    let (_scratch, held) = cache();
+    let kept: Vec<Vec<u8>> = (0..8u8).map(|seed| bytes_of(2048, seed + 60)).collect();
+    let digests: Vec<_> = kept.iter().map(|bytes| publish(&held, bytes)).collect();
+
+    held.remove_object(digests[3]).unwrap();
+    assert!(!held.holds(digests[3]));
+
+    for (index, digest) in digests.iter().enumerate() {
+        if index == 3 {
+            continue;
+        }
+        let mut read = Vec::new();
+        held.read(*digest).unwrap().read_to_end(&mut read).unwrap();
+        assert_eq!(&read, &kept[index]);
     }
 }

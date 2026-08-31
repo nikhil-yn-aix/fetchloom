@@ -102,3 +102,7 @@ impl Bandwidth {
         self.0.get()
     }
 }
+
+/// The object size at or below which an object is packed beside others rather
+/// than given a file of its own.
+pub const PACK_THRESHOLD: u64 = OUTBOARD_CHUNK_GROUP;

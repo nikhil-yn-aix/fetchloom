@@ -411,7 +411,10 @@ A run with no recorded validator for the reference cannot ask, and transfers. A 
 
 ```
 <cache>/
-  objects/    completed immutable objects, addressed by content digest
+  objects/    completed immutable objects above the pack threshold, addressed
+              by content digest
+  packs/      objects at or below it, each preceded by its content digest, its
+              interop digest and its length, so a pack states what it holds
   outboard/   chunk trees for objects above the outboard threshold
   partial/    in-progress transfers with recorded source identity
   staging/    extraction trees not yet published
@@ -435,7 +438,11 @@ Default locations: `%LOCALAPPDATA%\Fetchloom\Cache` on Windows, and `$XDG_CACHE_
 
 Invariants.
 
-An entry in `objects/` has been fully verified. There is no other way for a file to appear there.
+Every object the cache holds has been fully verified. There is no other way for one to appear.
+
+An object lives in one of two placements, decided by its size alone: a file of its own under `objects/`, or a span of a pack under `packs/`. At or below the pack threshold it is packed, above it it is loose. Exactly one lookup answers where an object is, and every reader goes through it: a caller asks the cache for an object and is given its bytes, never a path it opens itself. A pack is self-describing, so it is the only authority on what it holds and no index beside it can disagree; the lookup builds its answer from the packs themselves.
+
+A pack belongs to the process and boot that writes it, and is only ever appended to by that writer, so two writers never contend for one pack. An entry is committed by the bytes reaching the pack; an entry whose length runs past the end of the pack was cut short by a crash and is not one the cache holds. Removing a packed object rewrites its pack without it, under a lock on the pack, because a tombstone would be a second authority on what a pack holds.
 
 Publication is write to `partial/`, flush according to the durability tier, then atomic rename into `objects/`. Renames are same-volume only; a cross-volume rename is an error, never a copy. Under `fast` no flush is issued, so an object can be lost to power failure before it is durable, but a torn or partial object still cannot appear.
 
@@ -447,7 +454,7 @@ A volume that cannot express advisory locking cannot host a shared cache. It is 
 
 A second process wanting an object being written waits and reuses the result. It never starts a second transfer of the same digest.
 
-The lock exists to deduplicate transfer, so it is taken when there is a transfer to deduplicate and not otherwise. Bytes that are already local -- a `file:` source, an archive being extracted, a member of an imported bundle -- are written to a name of this process's own and renamed into `objects/`, with no lock, no partial, and no owner record. A content-addressed write is idempotent and a rename already makes a torn object impossible, so coordinating two processes writing identical bytes costs more than the work it would save. This is a rule about whether bytes have to cross a network, never a rule about how many of them there are, and it never becomes a size threshold.
+The lock exists to deduplicate transfer, so it is taken when there is a transfer to deduplicate and not otherwise. Bytes that are already local -- a `file:` source, an archive being extracted, a member of an imported bundle -- are written to a name of this process's own and published with no lock, no partial, and no owner record. A content-addressed write is idempotent and a rename already makes a torn object impossible, so coordinating two processes writing identical bytes costs more than the work it would save. This is a rule about whether bytes have to cross a network, never a rule about how many of them there are, and it never becomes a size threshold.
 
 A partial is named by the key the run knows. A run that states a content digest names the partial by that digest, and the object it publishes must hash to it. A run that states no digest names the partial by the digest of the source identity, which is the redacted location, the host, and the identity the source published, each length-prefixed, and it publishes the object under the digest the bytes hash to. The lease, the partial, its source record and its owner record all carry one key, so there is one claim per key and never two.
 
@@ -962,6 +969,7 @@ Defaults. All configurable. None may be raised past a hard ceiling that would al
 | Retry ceiling | 60 s |
 | Outboard threshold | 64 MiB |
 | Outboard chunk group | 1 MiB |
+| Pack threshold | 1 MiB |
 | Repair spans | 64 |
 | Repair whole-refetch share | 50 percent |
 | Path length | the target platform's own maximum, queried per volume |

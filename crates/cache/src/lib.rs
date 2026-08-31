@@ -12,6 +12,7 @@ pub mod diagnosis;
 pub mod format;
 pub mod ingest;
 pub mod layout;
+pub mod pack;
 pub mod prune;
 pub mod rebuild;
 pub mod receipts;
@@ -58,6 +59,14 @@ pub struct Cache<P: Platform> {
     token: OwnerToken,
     work: Arc<WorkCounter>,
     processor: Arc<Processor>,
+    packed: std::sync::Mutex<
+        Option<
+            std::collections::BTreeMap<
+                fetchloom_engine::digest::ContentDigest,
+                (std::path::PathBuf, crate::pack::Entry),
+            >,
+        >,
+    >,
 }
 
 impl<P: Platform> Cache<P> {
@@ -91,6 +100,7 @@ impl<P: Platform> Cache<P> {
             token,
             work,
             processor,
+            packed: std::sync::Mutex::new(None),
         };
         cache.recover()?;
         Ok(cache)

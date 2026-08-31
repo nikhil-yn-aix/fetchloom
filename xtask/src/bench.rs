@@ -425,9 +425,9 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         write_corpus(&source)?;
 
         let (cold, cold_run) = measure_get(binary, &source, &scratch.join("cold"), &cache)?;
-        let after_cold = directory_bytes(&cache.join("objects"));
+        let after_cold = stored_bytes(&cache);
         let (warm, warm_run) = measure_get(binary, &source, &scratch.join("warm"), &cache)?;
-        let after_warm = directory_bytes(&cache.join("objects"));
+        let after_warm = stored_bytes(&cache);
 
         cold_times.push(cold);
         warm_times.push(warm);
@@ -771,4 +771,9 @@ fn directory_bytes(directory: &Path) -> u64 {
             .map(|found| found.len())
             .sum()
     })
+}
+
+/// Returns how many bytes the cache holds, in whichever placement holds them.
+fn stored_bytes(cache: &Path) -> u64 {
+    directory_bytes(&cache.join("objects")) + directory_bytes(&cache.join("packs"))
 }

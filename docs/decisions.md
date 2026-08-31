@@ -5889,3 +5889,84 @@ as unreachable rather than pursued.
 Sources: `cargo check --workspace --all-targets --target
 aarch64-pc-windows-msvc` on this machine, clean; `cargo xtask network`, every
 recorded subject matched; docs.rs for `rustls-graviola` 0.4.0 `suites` and `kx`.
+
+## Packing, and the one lookup that makes it one way
+
+decisions.md:3733 refused packing because a pack file is a second way for an
+object to exist. That objection is answered by placement, not waived. Loose and
+packed are one storage layer with size-determined placement, the way the 64 MiB
+outboard threshold already sends small and large objects down different paths,
+and it stays one way only under one discipline: exactly one lookup answers
+"where is this digest", and every reader goes through it.
+
+That discipline was the work. Twenty-two call sites across two crates turned a
+digest into a path and opened it, each deciding for itself what an object is.
+`Cache::placement` is the one lookup, and `read`, `size_of`, `holds`,
+`fingerprint_of`, `place_object`, `publish_object`, `remove_object`,
+`quarantine_object` and `owns_object` are what a caller asks instead. A reader
+is a bounded, seekable view rather than a whole file. A test walks both crates
+and fails on anything outside the lookup that turns a digest into a path, and it
+found the one site that mattered: `hash_object` opened the container and read it
+whole, which for a pack is every object it holds. That is the failure the
+original objection predicted, caught by the rule rather than by a user.
+
+The threshold is 1 MiB, which is `OUTBOARD_CHUNK_GROUP`. An object at or below
+one chunk group is smaller than the unit the verifier works in, so its damage
+can never be narrowed to a range and a repair of it is a whole refetch either
+way. Nothing is given up by moving it, and the threshold is a constant the
+project already reasons in rather than a new number.
+
+A pack is self-describing: each object is preceded by its content digest, its
+interop digest and its length. So the pack is the only authority on what it
+holds, the lookup builds its answer from the packs themselves, and a packed
+object needs no record file beside it -- which is where two of the file
+operations went. A pack belongs to the process and boot that writes it and is
+only ever appended to by that writer, so two writers never contend for one pack.
+An entry is committed by its bytes reaching the pack; an entry whose length runs
+past the end of the pack was cut short by a crash and is not one the cache
+holds. Removing a packed object rewrites its pack without it, under a lock on
+the pack, because a tombstone would be a second authority on what a pack holds.
+
+The concurrency the store already survives is unchanged. The thousand-kill loop
+and the eight racing writers pass without modification to what they do; what
+changed is what they check, because the invariant "everything in `objects/`
+hashes to its name" was only ever a statement about one placement. It now reads
+every pack as well, and it holds.
+
+Proven with file operations and bytes, never with a clock. The many-small-files
+regime against the fixed corpus:
+
+| metric | before packing | after | change |
+| --- | --- | --- | --- |
+| file-operations | 6163 | 3092 | -50 percent |
+| bytes-written | 3145728 | 2170880 | -31 percent |
+| bytes-read | 1048576 | 1048576 | none |
+
+An object ingested locally now costs two file operations where it cost seven,
+and no file of its own. cold-cache file-operations fell from 403 to 212 and its
+bytes-written from 50331648 to 33559040, because the 256 KiB corpus files it
+uses are below the threshold too.
+
+One measurement had to be fixed to stay honest, which is the same defect as F5.
+`cache-growth` measured `objects/` and called the answer the cache, so a cache
+whose objects were all packed reported growing by nothing. It measures both
+placements now, and cold-cache growth reads 16781824 against a 16777216-byte
+corpus, which is the corpus plus one header per object.
+
+The binary grew from 5548032 to 7110656 bytes. That is not this change. Measured
+by building at each commit: 5595136 before the cryptography provider swap,
+7023616 after it, 7110656 after the storage layer and the pack. Graviola costs
+1428480 bytes and the whole storage layer costs 87040.
+
+vision.md:43 said "The cache is plain directories" and ended "Deleting Fetchloom
+leaves the data usable". The last sentence is the promise and the first was a
+mechanism wrongly claimed for it. It now states the promise: nothing Fetchloom
+writes needs Fetchloom to read, and every byte in the cache is either a file of
+its own or a span of a pack that states, ahead of each object, the digest it is
+under and how long it is. That is a correction, not a softening: the pack format
+is forty bytes of header more than the old claim, and it is written down.
+
+Sources: `cargo test --workspace` on this machine, 627 passed and 4 ignored,
+against 613 before; `crates/cache/tests/storage.rs`;
+`cargo test -p fetchloom-cache --test concurrency`, 5 passed and 2 ignored in
+107 seconds; `cargo xtask bench --save-baseline` under `FETCHLOOM_VERIFY`.
