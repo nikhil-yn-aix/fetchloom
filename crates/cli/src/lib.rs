@@ -7,6 +7,8 @@ use clap_complete as _;
 use ctrlc as _;
 #[cfg(test)]
 use fetchloom_faults as _;
+#[cfg(all(test, unix))]
+use rustix as _;
 #[cfg(test)]
 use tempfile as _;
 #[cfg(all(test, windows))]

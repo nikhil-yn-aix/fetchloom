@@ -43,6 +43,7 @@ struct Scene {
     source: PathBuf,
     destination: PathBuf,
     cache: PathBuf,
+    events: PathBuf,
 }
 
 fn scene() -> Scene {
@@ -60,6 +61,7 @@ fn scene() -> Scene {
         source,
         destination: scratch.path().join("out"),
         cache: scratch.path().join("cache"),
+        events: scratch.path().join("events.ndjson"),
         _scratch: scratch,
     }
 }
@@ -73,6 +75,8 @@ fn start(scene: &Scene) -> Child {
         .arg(&scene.destination)
         .arg("--cache-dir")
         .arg(&scene.cache)
+        .arg("--events")
+        .arg(&scene.events)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -114,33 +118,21 @@ fn interrupt(child: &Child) {
     let _ = rustix::process::kill_process(pid, rustix::process::Signal::INT);
 }
 
-/// Waits until the run has written something, so the interrupt lands on a run
-/// that is working rather than on one that has not started.
+/// Waits until the run has said it is doing the work, so the interrupt lands on
+/// a run that is working rather than on one that has not started.
+///
+/// The event stream is the signal, because it says what the run is doing
+/// whatever the run decides to publish and when.
 fn wait_until_working(scene: &Scene) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if entries_under(&scene.destination) > 8 {
+        if std::fs::read_to_string(&scene.events).is_ok_and(|stream| stream.contains("plan.ready"))
+        {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("the run materialized nothing within twenty seconds");
-}
-
-fn entries_under(directory: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| {
-            if entry.path().is_dir() {
-                entries_under(&entry.path())
-            } else {
-                1
-            }
-        })
-        .sum()
+    panic!("the run said nothing about starting work within thirty seconds");
 }
 
 /// Returns whether every object in the cache hashes to the name it is under.
@@ -166,6 +158,36 @@ fn every_object_is_its_own_name(cache: &Path) -> bool {
             if !hashed.ends_with(&named) && !named.ends_with(&hashed) {
                 return false;
             }
+        }
+    }
+    every_packed_object_is_its_own_name(cache)
+}
+
+/// Returns whether every object a pack holds hashes to the name it is under.
+fn every_packed_object_is_its_own_name(cache: &Path) -> bool {
+    let Ok(packs) = std::fs::read_dir(cache.join("packs")) else {
+        return true;
+    };
+    for pack in packs.flatten() {
+        let Ok(bytes) = std::fs::read(pack.path()) else {
+            continue;
+        };
+        let mut at = 0usize;
+        while at + 72 <= bytes.len() {
+            let mut name = [0_u8; 32];
+            name.copy_from_slice(&bytes[at..at + 32]);
+            let mut stated = [0_u8; 8];
+            stated.copy_from_slice(&bytes[at + 64..at + 72]);
+            let length = usize::try_from(u64::from_le_bytes(stated)).unwrap_or(usize::MAX);
+            let start = at + 72;
+            if start.saturating_add(length) > bytes.len() {
+                break;
+            }
+            if fetchloom_engine::hashing::hash_bytes(&bytes[start..start + length]).bytes() != &name
+            {
+                return false;
+            }
+            at = start + length;
         }
     }
     true

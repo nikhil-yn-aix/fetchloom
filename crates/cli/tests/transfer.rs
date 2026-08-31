@@ -12,6 +12,8 @@ use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_platform as _;
 use flate2 as _;
+#[cfg(unix)]
+use rustix as _;
 use serde as _;
 use serde_json as _;
 use toml as _;

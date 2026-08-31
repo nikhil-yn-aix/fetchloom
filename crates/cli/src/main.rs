@@ -32,6 +32,8 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
 #[cfg(test)]
 use flate2 as _;
+#[cfg(all(test, unix))]
+use rustix as _;
 #[cfg(all(test, windows))]
 use windows_sys as _;
 
