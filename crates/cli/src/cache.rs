@@ -82,7 +82,7 @@ pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path,
         sequence,
         EventPayload::Degrade {
             requested: format!("the cache at {}", root.display()),
-            used: "no cache, so nothing is retained".to_owned(),
+            used: "a scratch store beside the destination, so nothing is retained".to_owned(),
             reason: reason.to_owned(),
         },
     ));

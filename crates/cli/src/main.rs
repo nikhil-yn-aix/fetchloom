@@ -353,15 +353,7 @@ fn run_verify(
         observer,
         sequence,
     );
-    let held = match open_cache(
-        &surface::TransferFlags::default(),
-        &root,
-        &policy,
-        &work,
-        &Arc::new(processor),
-        observer,
-        sequence,
-    ) {
+    let held = match open_cache(&root, &policy, &work, &Arc::new(processor), observer, sequence) {
         Ok(held) => held,
         Err(refused) => {
             cache::report_degrade(observer, sequence, &root, refused.next_action());
@@ -448,7 +440,16 @@ fn run_get(
         platform,
         held,
         durability,
-    } = match open_for(parsed, transfer, &policy, observer, sequence, &reporter) {
+        scratch,
+    } = match open_for(
+        parsed,
+        transfer,
+        &destination,
+        &policy,
+        observer,
+        sequence,
+        &reporter,
+    ) {
         Ok(opened) => opened,
         Err(code) => return code,
     };
@@ -491,7 +492,7 @@ fn run_get(
         sequence,
     );
 
-    record(
+    let code = record(
         &produced,
         &Recording {
             manifest: &manifest,
@@ -505,7 +506,10 @@ fn run_get(
         },
         observer,
         sequence,
-    )
+    );
+    drop(held);
+    drop(scratch);
+    code
 }
 
 /// Everything one materialization is asked for.
@@ -693,17 +697,13 @@ fn run_plan(
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
-    let held = match open_cache(
-        transfer,
-        &root,
-        &policy,
-        &work,
-        &Arc::new(processor),
-        observer,
-        sequence,
-    ) {
-        Ok(held) => held,
-        Err(refused) => return reporter.report(&refused),
+    let held = if transfer.no_cache {
+        None
+    } else {
+        match open_cache(&root, &policy, &work, &Arc::new(processor), observer, sequence) {
+            Ok(held) => held,
+            Err(refused) => return reporter.report(&refused),
+        }
     };
     let plan = match planning::build(
         pinned.as_ref(),
@@ -772,7 +772,16 @@ fn run_apply(
         platform,
         held,
         durability,
-    } = match open_for(parsed, transfer, &policy, observer, sequence, &reporter) {
+        scratch,
+    } = match open_for(
+        parsed,
+        transfer,
+        &destination,
+        &policy,
+        observer,
+        sequence,
+        &reporter,
+    ) {
         Ok(opened) => opened,
         Err(code) => return code,
     };
@@ -832,14 +841,17 @@ fn run_apply(
     };
     let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
     let resolved = run::resolved_object(&result, &selection);
-    finish_get(
+    let code = finish_get(
         &result,
         held.as_deref(),
         &manifest,
         &resolved,
         &policy,
         &reporter,
-    )
+    );
+    drop(held);
+    drop(scratch);
+    code
 }
 
 /// Returns the lock file this run reads and writes.
@@ -1046,7 +1058,6 @@ fn thread_budget(parsed: &CommandLine) -> ThreadBudget {
 }
 
 fn open_cache(
-    transfer: &surface::TransferFlags,
     root: &std::path::Path,
     policy: &dyn fetchloom_engine::seam::policy::Policy,
     work: &Arc<WorkCounter>,
@@ -1055,29 +1066,41 @@ fn open_cache(
     sequence: &Sequence,
 ) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
 {
-    let opened = if transfer.no_cache {
-        cache::Opened::Degraded {
-            reason: "this run asked for no cache".to_owned(),
-        }
-    } else {
-        cache::open(
-            root,
-            policy.durability(),
-            policy.verification(),
-            Arc::clone(work),
-            Arc::clone(processor),
-        )
-    };
-    match opened {
+    match cache::open(
+        root,
+        policy.durability(),
+        policy.verification(),
+        Arc::clone(work),
+        Arc::clone(processor),
+    ) {
         cache::Opened::Ready(held) => Ok(Some(held)),
         cache::Opened::Refused(refused) => Err(refused),
         cache::Opened::Degraded { reason } => {
-            if !transfer.no_cache {
-                cache::report_degrade(observer, sequence, root, &reason);
-            }
+            cache::report_degrade(observer, sequence, root, &reason);
             Ok(None)
         }
     }
+}
+
+/// A cache directory that lives only for one run and is removed with it.
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Returns the scratch cache directory a `--no-cache` run puts beside its
+/// destination.
+fn scratch_beside(destination: &Path) -> PathBuf {
+    let name = destination.file_name().map_or_else(
+        || "dataset".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    destination.with_file_name(format!(".{name}.fetchloom-scratch"))
 }
 
 /// What every materializing command opens before it moves a byte.
@@ -1087,12 +1110,14 @@ struct Opened {
     platform: NativePlatform,
     held: Option<Box<fetchloom_cache::Cache<NativePlatform>>>,
     durability: DurabilityTier,
+    scratch: Option<Scratch>,
 }
 
 /// Opens the pool, the counter, the platform, and the cache one run needs.
 fn open_for(
     parsed: &CommandLine,
     transfer: &surface::TransferFlags,
+    destination: &Path,
     policy: &dyn fetchloom_engine::seam::policy::Policy,
     observer: &dyn Observer,
     sequence: &Sequence,
@@ -1104,23 +1129,36 @@ fn open_for(
         return Err(ExitCode::Resource);
     };
     let processor = Arc::new(processor);
-    let root = match run::resolve_path(policy.cache_directory().unwrap_or(Path::new("."))) {
-        Ok(root) => root,
-        Err(error) => return Err(reporter.report(&error)),
-    };
     let work = Arc::new(WorkCounter::new());
     let platform = NativePlatform::new(Arc::clone(&work));
-    let held = match open_cache(
-        transfer, &root, policy, &work, &processor, observer, sequence,
-    ) {
-        Ok(held) => held,
-        Err(refused) => return Err(reporter.report(&refused)),
+    let mut scratch = None;
+    let mut held = if transfer.no_cache {
+        None
+    } else {
+        let root = match run::resolve_path(policy.cache_directory().unwrap_or(Path::new("."))) {
+            Ok(root) => root,
+            Err(error) => return Err(reporter.report(&error)),
+        };
+        match open_cache(&root, policy, &work, &processor, observer, sequence) {
+            Ok(held) => held,
+            Err(refused) => return Err(reporter.report(&refused)),
+        }
     };
+    if held.is_none() {
+        let root = scratch_beside(destination);
+        let _ = std::fs::remove_dir_all(&root);
+        held = match open_cache(&root, policy, &work, &processor, observer, sequence) {
+            Ok(held) => held,
+            Err(refused) => return Err(reporter.report(&refused)),
+        };
+        scratch = Some(Scratch { root });
+    }
     Ok(Opened {
         processor,
         work,
         platform,
         held,
         durability,
+        scratch,
     })
 }

@@ -521,7 +521,16 @@ The cache is an optimization and is never required. The destination is the real 
 | `--no-cache` | No object is retained. The partial transfer lives beside the destination and is discarded on success. Verification is unchanged. Resume works only within the run |
 | Project cache | Opt-in through a relative `cache.dir` in project config |
 
-A cache that is missing, read-only, or out of space does not stop a run. Fetchloom emits `degrade` naming the reason and continues in `--no-cache` behavior.
+`--no-cache` is where the retained objects go, never a second code path. The run
+opens a store of its own beside the destination, named `.<destination>.fetchloom-scratch`,
+uses it exactly as it uses the cache, and removes it when the run ends, whether
+the run succeeded or not. Every behavior that reads or writes a store is
+therefore unchanged: an archive is extracted, a partial resumes within the run,
+a cache hit is verified under the same policy, and the tree digest is the one the
+same request produces with the cache. What differs is only that nothing survives
+the run.
+
+A cache that is missing, read-only, or out of space does not stop a run. Fetchloom emits `degrade` naming the reason and continues in `--no-cache` behavior, which is the scratch store above rather than no store at all.
 
 A format mismatch stops it. The difference is whether the user can act: no disk and no permission are conditions they often cannot fix now, while a format mismatch always has one command that fixes it. Continuing would silently refetch everything the unusable cache already held, which on a large or metered source costs far more than stopping. Every command that would touch the cache fails with `cache.format_mismatch` and exit 80, naming `cache clear` as the fix. `cache clear` is that fix and is therefore the one command the check does not apply to: it removes the directory without reading a format, and its confirmation says what it could not count.
 

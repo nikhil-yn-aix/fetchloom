@@ -1198,7 +1198,7 @@ pub fn materialize_remote(
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build streams a remote object through the cache",
+            "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
 
@@ -1477,7 +1477,7 @@ fn place_object(
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build streams a remote object through the cache",
+            "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
     cache.place_object(digest, into)
@@ -1628,7 +1628,7 @@ fn open_archive(
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build extracts an archive out of the cache",
+            "make a directory Fetchloom can write to, because a run extracts an archive out of a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
     let file = cache.read(digest)?;
@@ -2059,7 +2059,7 @@ fn resolve_artifact(
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build resolves an artifact through the cache",
+            "make a directory Fetchloom can write to, because a run resolves an artifact through a store and neither the cache nor a scratch store beside the destination could be opened",
         )
         .with_artifact(artifact.id.clone()));
     };
@@ -2180,7 +2180,7 @@ fn transfer_object(
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
-            "run without --no-cache, because this build streams a remote object through the cache",
+            "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
     let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
