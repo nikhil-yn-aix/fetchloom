@@ -62,6 +62,8 @@ Small traits at real boundaries only: platform filesystem, source adapter, archi
 
 A trait exists to allow a second real implementation or a fault-injecting one. A trait with one implementation and no test double is deleted.
 
+The six seams roadmap.md names -- Platform, Store, Source, Archive, Policy, Observer -- are the exception, and are exempt from that rule for as long as they are the shape the phases are built against. They are an architectural commitment rather than dependency injection: their point is that the phase that adds the second implementation does not get to change the shape, which requires the shape to exist before that phase does. A seam that reaches 1.0 with one implementation and no reason to expect a second is a defect to be reported then, not a trait to be deleted now.
+
 Concrete types inside a crate. No generics that exist only to look flexible; they cost compile time and binary size.
 
 One reason to change per module. Transfer does not know about archives. Extraction does not know about HTTP. The cache does not know what a dataset is.

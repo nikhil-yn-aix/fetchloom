@@ -264,17 +264,27 @@ $ fetchloom explain
 project config: none found
 user config: none found
 offline = false (default)
-threads = ? (default)
+threads = 16 (measured)
 display = plain (default)
-cache.dir = C:/Users/you/flman/cache (environment)
+cache.dir = C:\Users\you\AppData\Local\Fetchloom\Cache (default)
 
 $ fetchloom --threads 3 explain threads
 threads = 3 (command line)
 ```
 
-This build reports those six settings and no others, and `--json` has no effect
-on it. `?` means no level named a value; for `threads` that means the pool is
-sized from the hardware at the moment it is built.
+Under `--json` the same answer is one object, with the config files it found and
+every setting:
+
+```
+$ fetchloom --json explain
+{"files":[{"level":"project","path":null},{"level":"user","path":null}],
+ "settings":[{"key":"offline","value":"false","origin":"default"},
+             {"key":"threads","value":"16","origin":"measured"}, ...]}
+```
+
+This build reports those four settings and no others. `measured` means no level
+named a value and the number was taken from this machine, which for `threads` is
+the parallelism the hardware reports.
 
 ## completions
 

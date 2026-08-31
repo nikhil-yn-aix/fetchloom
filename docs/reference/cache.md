@@ -32,6 +32,7 @@ cache/meta/resolution
 cache/meta/witness
 cache/objects
 cache/outboard
+cache/packs
 cache/partial
 cache/pins
 cache/quarantine
@@ -41,7 +42,8 @@ cache/staging
 
 | Directory | What is in it |
 |---|---|
-| `objects/` | Completed, fully verified objects, named by the hexadecimal of their content digest |
+| `objects/` | Completed, fully verified objects above 1 MiB, named by the hexadecimal of their content digest |
+| `packs/` | Objects at or below 1 MiB, several to a file, each preceded by its content digest, its interop digest and its length |
 | `outboard/` | The chunk tree for each object above 64 MiB, which is what makes localized repair possible |
 | `partial/` | Transfers in progress, each beside a record of where its bytes came from |
 | `staging/` | Extraction trees not yet published |
@@ -55,10 +57,17 @@ cache/staging
 | `pins/` | Pin records |
 | `format` | The fingerprint of the cache format this build writes |
 
-Nothing appears in `objects/` that has not been fully verified. There is no
-other way for a file to get there: a write goes to `partial/`, is flushed
-according to the durability tier, and is renamed into place. A rename is
-same-volume only, so a torn object cannot exist.
+Nothing the cache holds has been left unverified. There is no other way for an
+object to get there: a write goes to `partial/`, is flushed according to the
+durability tier, and is renamed into place, or, for an object at or below 1 MiB,
+appended to a pack. A rename is same-volume only, so a torn object cannot exist,
+and an entry whose length runs past the end of its pack was cut short by a crash
+and is not one the cache holds.
+
+Which of the two an object is in is decided by its size and nothing else, and
+you never need to know which: every command works the same either way. A pack
+states what it holds, so a pack file on its own is enough to recover every
+object in it without Fetchloom.
 
 The layout is not a public interface. Read it to understand what is going on;
 do not build on it.

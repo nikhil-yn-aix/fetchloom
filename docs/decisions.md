@@ -5970,3 +5970,42 @@ Sources: `cargo test --workspace` on this machine, 627 passed and 4 ignored,
 against 613 before; `crates/cache/tests/storage.rs`;
 `cargo test -p fetchloom-cache --test concurrency`, 5 passed and 2 ignored in
 107 seconds; `cargo xtask bench --save-baseline` under `FETCHLOOM_VERIFY`.
+
+## Three findings that get a disposition rather than a fix
+
+**Every cold local fetch writes the bytes twice.** Confirmed, and deferred with
+the reason the audit gave. `one-large-file` still writes 805322696 bytes for a
+268435456-byte source, which is the destination, the cache copy and the tree.
+The shape is right: the cache is handed the file the destination already holds,
+and on a volume that shares blocks the second write is metadata. This volume
+does not share blocks. What would clear it is a volume that clones, which is the
+phase 0 debt still open, and no machine in this matrix can measure what removing
+it would buy. Packing did not change this: the threshold is 1 MiB and the object
+is 256 MiB, so it stays loose and stays copied. What packing did change is the
+small end, where `cold-cache` bytes-written fell from 50331648 to 33559040
+because a packed object is written once into the pack rather than once into a
+scratch file and once into its own.
+
+**Four seams have one implementation, and three have no defense.** Resolved in
+standards.md, which is where the contradiction was. The Design rule said a trait
+with one implementation and no test double is deleted; roadmap.md said the six
+seams are defined in phase 0 and never change shape. Both cannot hold, and three
+seams sat in the gap. The six named seams are now exempt, with the reason: their
+point is that the phase adding the second implementation does not get to change
+the shape, which requires the shape to exist before that phase does. A seam that
+reaches 1.0 with one implementation and no reason to expect a second is a defect
+to report then. The Platform seam is no longer among them in any case, because
+`FaultyPlatform` now has a caller.
+
+**Three seams hold whole lists in memory.** Deferred, and the audit's own
+instruction is the reason: measure first, and the measurement has not been
+taken. `Archive::members` is justified in the phase 4 record -- selection is
+decided against the whole list before any member is read. `Store::list` and
+`Source::list` are justified nowhere, and `Store::list` just grew: it now
+concatenates the packed index, so a cache of a million small objects holds a
+million digests and their placements rather than a million paths. That is a
+larger number against the same unenforced ceiling, and `resident_memory` is
+still read nowhere. What would clear it is one experiment nobody has run -- a
+million-member tar, and a cache with a million objects, measured -- and a
+resident set query behind the Platform seam to enforce the ceiling against.
+Both are work, not lines.

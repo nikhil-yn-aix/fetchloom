@@ -3,11 +3,20 @@
 Written at `b7a3f5b`, against the tree phase 5 closed at `730372d`. Everything
 here was run on this machine unless it says otherwise.
 
-No finding in this document is fixed. Three changes were made alongside it and
-none of them touches behavior: macOS was removed end to end at `9dc18dd`,
-docstrings that had grown into commentary were cut back at `83a9714`, and
-`docs/reference/` was written at `b7a3f5b`. Line numbers below are as of
-`b7a3f5b` and every one was checked against the file after those changes.
+No finding in this document was fixed when it was written. Three changes were
+made alongside it and none of them touches behavior: macOS was removed end to
+end at `9dc18dd`, docstrings that had grown into commentary were cut back at
+`83a9714`, and `docs/reference/` was written at `b7a3f5b`. Line numbers below
+are as of `b7a3f5b` and every one was checked against the file after those
+changes.
+
+This document has since been amended in place rather than replaced, because it
+is the measurement the work was judged against. Every finding now carries a
+**Disposition** line saying whether it was fixed and in which commit, or
+deferred and what would clear it. The table of all twenty-eight is at the end,
+under Dispositions. Nothing above a disposition line has been edited: where a
+finding says something that is no longer true of the code, that is the point of
+keeping it.
 
 ## Verdict
 
@@ -63,6 +72,8 @@ Severity is what happens to a user, not how hard it is to fix.
 
 ### F1. A bare `.tar` cannot be fetched at all. HIGH
 
+**Disposition.** Fixed at `a5a8e1e`. Recognition reads the 262 bytes a tar needs, which the archive crate now states as `SNIFF_LENGTH` rather than the caller guessing.
+
 `crates/cli/src/run.rs:1638` reads a 16-byte header and hands it to
 `fetchloom_archive::recognize`. `crates/archive/src/recognize.rs:86` finds the
 tar magic at `header[257..262]`. `sniff` can therefore never answer `Tar`, and
@@ -101,6 +112,8 @@ If never fixed: one of the ten advertised formats does not work, and the failure
 message blames the archive.
 
 ### F2. `--layout flatten:n` fails on every archive that declares its directories. HIGH
+
+**Disposition.** Fixed at `a5a8e1e`, and it was the contract that was wrong. A directory left with no path names the destination and is dropped; a file left with no path is still fatal; an empty result fails. contracts.md:121 was amended in the same commit.
 
 Measured on a `tar.gz` holding `pkg-1.0/README` and `pkg-1.0/src/m.txt`:
 
@@ -143,6 +156,8 @@ surface forbids.
 
 ### F3. A plain local file writes no lock, and says something untrue about why. HIGH
 
+**Disposition.** Fixed at `a5a8e1e`. Whether a local file is an archive is decided from its own bytes, later, so the one-object path no longer gates on the extension. The degrade that called a file a directory is gone with it.
+
 `crates/cli/src/run.rs:254` takes the one-object path only when
 `archive_to_unpack` returns `Some`, which happens only for a recognized archive.
 A plain file falls through to `materialize::walk`, produces no artifact, so
@@ -174,6 +189,8 @@ references naming one file, and the event stream states a falsehood.
 
 ### F4. `cache clear` cannot clear a cache whose format does not match. HIGH
 
+**Disposition.** Fixed at `a5a8e1e`. `Cache::clear` was a method on an open cache, which is why it could not run; it is a free function taking a root, and contracts.md:516 now names it as the one command the format check does not apply to.
+
 Measured: write anything but the fingerprint into `<cache>/format`, then
 
 ```
@@ -197,6 +214,8 @@ If never fixed: the one failure mode the contract singles out as user-fixable is
 the one that traps the user.
 
 ### F5. `file_operations` differs by two orders of magnitude across paths that produce one tree digest. HIGH
+
+**Disposition.** Fixed at `ad5cd0b`. The CLI created directories with `std::fs::create_dir_all`, which the Platform seam never sees. It is `Platform::create_directories` now and both paths count. They still differ, and that difference is real work.
 
 Measured, 64 files of 256 KiB, tree digest `blake3:ca5502...` in every row:
 
@@ -240,6 +259,8 @@ created 1024 files.
 
 ### F6. `bytes_written` reads zero where a byte copy happened. HIGH
 
+**Disposition.** Fixed at `ad5cd0b`. Archive extraction and `NativePlatform::copy_bytes` both count their bytes now.
+
 `crates/platform/src/lib.rs:122` `copy_bytes` calls `std::fs::copy` and
 `work.touched_file()`, and never `work.wrote_bytes()`.
 
@@ -257,6 +278,8 @@ Cost to fix: one line.
 If never fixed: as F5.
 
 ### F7. The many-small-files corpus is three quarters duplicates. HIGH
+
+**Disposition.** Fixed at `ad5cd0b`. The generator writes each file's index into its leading bytes, so every file in a corpus is distinct. The baseline was re-recorded and each moved number attributed to the measurement or to the code.
 
 `xtask/src/bench.rs:363` builds the corpus from
 `non_repeating_bytes(index % 251)`, so 1024 files hold 251 distinct objects and
@@ -280,6 +303,8 @@ workload, and the deferred packing decision keeps being taken against a number
 four times too small.
 
 ### F8. Ten of the thirty-four contracted events are emitted by no production code. HIGH
+
+**Disposition.** Fixed at `ad5cd0b` for the four that were reachable: `extract.start`, `extract.end`, `cache.hit`, `cache.miss`, plus `cache.wait` through a new `Store::waited`. Six remain, each belonging to an unshipped phase: `resolve.alias` needs phase 7, and `listing.start`, `listing.skipped`, `listing.end`, `source.probe` and `source.selected` need phase 8.
 
 Constructed only in `crates/engine/tests/contracts.rs`: `resolve.alias`,
 `cache.wait`, `listing.start`, `listing.skipped`, `listing.end`, `source.probe`,
@@ -330,6 +355,8 @@ rejection, and cannot show a failure.
 
 ### F9. Every `*.end` event but one carries `duration_ms: 0`. HIGH
 
+**Disposition.** Fixed at `ad5cd0b`. Duration is a `Span` taken at the start of the operation, and every end event carries a real one.
+
 Only `crates/engine/src/transfer.rs:313` measures. Zeroed at
 `cli/src/main.rs:115` (`run.end`), `run.rs:255,276,1223,1930,2066`
 (`resolve.end`), `run.rs:686` (`transfer.end`) and `repair.rs:83,131`.
@@ -344,6 +371,8 @@ If never fixed: the event stream carries no timing at all, so the live view and
 `watch` can never show any, and nothing downstream can measure a phase of a run.
 
 ### F10. The Policy seam is never used by a run. HIGH
+
+**Disposition.** Deferred with a statement, at `ad5cd0b`. Policy is asked for the cache directory, the verification and durability settings, and whether it accepts a trust class, and all four are read. What it does not do is arbitrate between two candidates, which is what phase 7 needs it for. It is a settings carrier today, and phase 7 either widens it or admits it is one.
 
 `crates/cli/src/policy.rs:92` is the only implementation of
 `fetchloom_engine::seam::policy::Policy`. `CommandLinePolicy` is constructed
@@ -369,6 +398,8 @@ If never fixed: phase 7 discovers on its first provider that the seam it was
 going to implement against has never run.
 
 ### F11. `cache.corrupt` is the catch-all for every filesystem failure in two crates. MEDIUM
+
+**Disposition.** Fixed at `b7a8224`. One decider, `error::filesystem_failure`, plus `error::lock_failure` for the one operation whose kind comes from what was attempted. A test walks both crates and fails on any function that turns an `io::Error` into an `Error`.
 
 One hundred and five sites across `crates/cache/src` and `crates/platform/src`,
 including `platform/src/linux/mod.rs:80` (a `statx` of any path, destination
@@ -406,6 +437,8 @@ If never fixed: exit codes mislead, and `cache.corrupt` -- which should mean
 
 ### F12. A nonexistent host is retried five times and reported as refused. MEDIUM
 
+**Disposition.** Fixed at `b7a8224`. The classifier matches on `ureq::Error` rather than on substrings of its message, and keeps a name no resolver knows apart from a resolver that could not be reached.
+
 ```
 $ fetchloom get https://no-such-host.invalid/x.tar.gz --json
 {"kind":"network.refused", ... ,"attempts":5,"retryable":true,"next_action":"try the source again, because the request did not complete: io: No such host is known. (os error 11001)"}
@@ -422,6 +455,8 @@ Cost to fix: classify the resolver's own error separately.
 If never fixed: every typo in a hostname costs five backoffs.
 
 ### F13. Cancellation is contracted and implemented nowhere. MEDIUM
+
+**Disposition.** Fixed at `d383f09`. An interrupt records that it arrived; a run stops where it counts a file operation, which is the boundary between one unit of work and the next. A second interrupt ends the process. Both are tested, including that the cache invariants hold after the second.
 
 contracts.md Cancellation: "First interrupt: stop new work, finish flushing
 in-flight buffers, record resumable state, exit `130` within two seconds. Second
@@ -442,6 +477,8 @@ If never fixed: a contracted behavior with an exit code in the table never
 happens, and scripts branching on 130 never see it.
 
 ### F14. Disk accounting is contracted before the transfer and happens during it. MEDIUM
+
+**Disposition.** Deferred. `plan` states the requirement per volume from the size the lock pins, which is what contracts.md asks, and no sentence requires `get` to check free space first. What is wrong is smaller: the plan reports `staging` and `destination` as zero for an archive whose expanded size is unknown, while listing `expanded` under `unknown`, and contracts.md:265 says a field is never estimated into a number. Clearing it changes the shape of a portable artifact, which is additive-only, so it is a decision rather than an edit.
 
 contracts.md Disk accounting: "Four requirements are computed separately ...
 Requirements on a shared volume are summed and checked against that volume.
@@ -478,6 +515,8 @@ start, and a plan's disk block is decorative.
 
 ### F15. No result carries a trust class. MEDIUM
 
+**Disposition.** Fixed at `ad5cd0b`. `RunResult` carries the weakest trust class of any artifact in the receipt, and the policy is asked whether it accepts that class before the run reports success.
+
 `get --json` returns `status`, `dataset`, `tree`, `destination`, `entries`,
 `bytes` and `work`. `crates/cli/src/run.rs:58 RunResult` has no trust field.
 
@@ -496,6 +535,8 @@ Cost to fix: one field, and F3 for the empty-artifacts half.
 If never fixed: the product's stated headline promise is not in its output.
 
 ### F16. Four seams have one implementation, and three have no defense. MEDIUM
+
+**Disposition.** Fixed at `a9848c5`, in standards.md, which is where the contradiction was. The six named seams are exempt from the delete-a-lonely-trait rule, with the reason written down.
 
 | Seam | Implementations |
 |---|---|
@@ -522,6 +563,8 @@ If never fixed: a stated rule that three of six seams break.
 
 ### F17. The platform half of the fault library has no caller and no test. MEDIUM
 
+**Disposition.** Fixed at `b7a8224`. `FaultyPlatform` has its first caller, and the ENOLCK skip is closed by testing what it was asserting rather than by finding a filesystem.
+
 `crates/faults/src/platform.rs` (163 lines, `FaultyPlatform`) and
 `crates/faults/src/schedule.rs` (111 lines, `Faults`, `Operation`) are referenced
 by nothing outside `crates/faults/src`. `crates/faults/tests` holds `archives.rs`
@@ -540,6 +583,8 @@ not actually exist at runtime, and the one named skip stays permanent for want o
 a filesystem when a test double would do.
 
 ### F18. The Source seam cannot report the origin that served the bytes. MEDIUM
+
+**Disposition.** Fixed at `69b18a8`. `Source::fetch` returns `Served`, so the location that answered travels with the bytes, and the witness records it rather than the first location the manifest listed.
 
 `crates/sources/src/http.rs:211,248` set
 `SourceMetadata.location = SafeUrl::new(location)`, the location that was
@@ -562,6 +607,8 @@ which is the one thing the independence rule exists to prevent.
 
 ### F19. Four declared limits are read nowhere, one of them a memory ceiling. MEDIUM
 
+**Disposition.** Two fixed at `69b18a8`: the credential offer threshold and the listing entry limit are read. Two deferred with reasons. `Probed candidates` bounds a choice between sources and there is one source until phase 8. `Resident memory` needs a resident set query on both platforms behind the Platform seam, which is a seam widening and a piece of work rather than a line that reads a field.
+
 `crates/engine/src/limits.rs` declares `resident_memory`, `probed_candidates`,
 `credential_offer_threshold` and `listing_entries`. No file under `crates/*/src`
 reads any of them.
@@ -582,6 +629,8 @@ rather than a runtime one.
 If never fixed: a stated memory ceiling nothing enforces.
 
 ### F20. `repair` cannot reach an object a local reference cached. MEDIUM
+
+**Disposition.** Fixed at `69b18a8`. The digest comes from the file, which repair reads anyway, and `Repair` is generic over the Source seam with a `FileSource` behind it.
 
 `crates/cli/src/run.rs:1244,2279` call `remember()` only on the remote transfer
 path, so `meta/resolution/` is written for an `https:` reference and never for a
@@ -609,6 +658,8 @@ reference forms it supports.
 
 ### F21. Every cold local fetch writes the bytes twice. MEDIUM
 
+**Disposition.** Confirmed and deferred, with the audit's own reason: it needs a volume that clones, which is the phase 0 debt still open, and no machine in this matrix can measure what removing it would buy. The small end improved anyway at `a9848c5`, where a packed object is written once rather than twice.
+
 Measured: `one-large-file` writes 536,887,240 bytes for a 268,435,456-byte
 source, which is the destination, the cache copy, and the 16,328-byte chunk tree.
 `cold-cache` writes 33,554,432 for 16,777,216 read.
@@ -629,6 +680,8 @@ If never fixed: local fetches cost double the bytes on every filesystem without
 reflinks, and no benchmark regime names it.
 
 ### F22. Six error kinds are produced by no test, and six contract rows have none. MEDIUM
+
+**Disposition.** Fixed at `b7a8224`. Six of the seven kinds with no test have one, including `policy.credential_invalid`, which is now produced where contracts.md says it should be. `source.identity_changed` is still produced by nothing and needs a human: the seam is never given the identity it would compare against, and clearing it needs either a contract sentence or a widened seam.
 
 `crates/engine/tests/contracts.rs:102`,
 `every_error_kind_is_reachable_and_carries_the_required_fields`, constructs each
@@ -660,6 +713,8 @@ of its three answers.
 
 ### F23. `explain` reports six settings and ignores `--json`. LOW
 
+**Disposition.** Fixed at `1a59ff8`. `explain` honors `--json`, and reports the thread budget as measured rather than as a value nothing supplied.
+
 ```
 $ fetchloom explain
 project config: none found
@@ -686,6 +741,8 @@ a fifth of it.
 
 ### F24. Flags exist on commands that cannot act on them. LOW
 
+**Disposition.** Fixed at `1a59ff8`. `plan --force` and `plan --adopt` are refused naming the flag, and `get` and `plan` take the one reference they perform.
+
 `plan --force --adopt` is accepted and does nothing; measured, no error, exit 40
 for an unrelated reason. `completions --offline --yes` likewise. `get <ref> <ref>`
 declares a variadic argument and refuses a second reference with exit 2.
@@ -700,6 +757,8 @@ supported one.
 
 ### F25. Two functions compute the platform default cache directory. LOW
 
+**Disposition.** Fixed at `a5a8e1e`. `policy.rs`'s copy is deleted and the test points at the one in `settings.rs`.
+
 `crates/cli/src/policy.rs:206 default_cache_directory` and
 `crates/cli/src/settings.rs:43 default_cache_dir`. Only `settings.rs` has a
 production caller (`settings.rs:190`); `policy.rs`'s is reached only by
@@ -710,6 +769,8 @@ standards.md: "Two ways to do the same thing is a defect. Delete one."
 Cost to fix: delete one and point the test at the other.
 
 ### F26. The Archive, Store and Source seams hold whole lists in memory. LOW
+
+**Disposition.** Deferred, on the audit's own instruction to measure first, and the measurement has not been taken. `Store::list` just grew: it concatenates the packed index, so a cache of a million small objects holds a million digests and placements. Clearing it needs the million-member experiment and a resident set query to enforce the ceiling against.
 
 `seam/archive.rs members() -> Vec<ArchiveMember>` against a 1,000,000 entry
 limit; `seam/store.rs list() -> Vec<ContentDigest>`; `seam/source.rs
@@ -727,6 +788,8 @@ run.
 
 ### F27. Assorted user-facing text defects. LOW
 
+**Disposition.** Fixed at `ad5cd0b` and `1a59ff8`. The 26 literal spaces, the doubled sentence, the plan message advising a flag that was never given, the three reference forms that all said "names a path that exists", and the `<dir>/./local-cache` path.
+
 - `crates/cli/src/main.rs:346` carries 26 literal spaces inside a message, which
   reach the user: `"...the run that wrote it                          reported
   blake3:..."`. A rustfmt artifact that shipped.
@@ -741,6 +804,8 @@ run.
   `C:\Users\you\proj\./local-cache`.
 
 ### F28. Documentation that disagrees with the code. LOW
+
+**Disposition.** Fixed at `1a59ff8`, `80c5253` and `a9848c5`. contracts.md's cache tree, the duplicated Path length row, the regime names in standards.md and roadmap.md, the symlink claim in features.md, and the run status, which is a type with four values now. `docs/reference/` was corrected in the same pass it was found wrong in.
 
 - contracts.md Cache omits `receipts/` and `meta/recovered` and `meta/prune`,
   all of which a real cache holds. The code is right.
@@ -1234,3 +1299,95 @@ way to trigger from outside.
 **Whether the tree digest survives a physical move between two machines.** Still
 the phase 0 debt. Two machines would settle it, and the deterministic-counter
 agreement under Profiling is the closest this session could get.
+
+---
+
+## Dispositions
+
+Written at `a9848c5`, against the work done between `b7a3f5b` and it. Every
+finding above carries its own disposition line; this is the same information in
+one table, so that whether this was done or mostly done can be checked without
+reading twenty-eight sections.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| F1 bare `.tar` | fixed | `a5a8e1e` |
+| F2 `--layout flatten:n` | fixed, contract amended | `a5a8e1e` |
+| F3 local file writes no lock | fixed | `a5a8e1e` |
+| F4 `cache clear` on a mismatch | fixed, contract amended | `a5a8e1e` |
+| F5 `file_operations` across paths | fixed | `ad5cd0b` |
+| F6 `bytes_written` reads zero | fixed | `ad5cd0b` |
+| F7 many-small-files corpus | fixed, baseline re-recorded | `ad5cd0b` |
+| F8 ten unemitted events | four fixed, six deferred to phases 7 and 8 | `ad5cd0b` |
+| F9 `duration_ms: 0` | fixed | `ad5cd0b` |
+| F10 Policy seam unused | deferred with a statement for phase 7 | `ad5cd0b` |
+| F11 `cache.corrupt` catch-all | fixed, one decider, enforced by test | `b7a8224` |
+| F12 nonexistent host retried | fixed | `b7a8224` |
+| F13 cancellation | fixed, both interrupts tested | `d383f09` |
+| F14 disk accounting | deferred, needs a contract decision | |
+| F15 no trust class on a result | fixed | `ad5cd0b` |
+| F16 seams with one implementation | fixed in standards.md | `a9848c5` |
+| F17 fault library has no caller | fixed, ENOLCK skip closed | `b7a8224` |
+| F18 witness origin | fixed, seam widened | `69b18a8` |
+| F19 four unread limits | two fixed, two deferred with reasons | `69b18a8` |
+| F20 `repair` on a local reference | fixed | `69b18a8` |
+| F21 cold local fetch writes twice | confirmed, deferred, needs a cloning volume | |
+| F22 error kinds with no test | six fixed, `source.identity_changed` needs a human | `b7a8224` |
+| F23 `explain` | fixed | `1a59ff8` |
+| F24 inert flags | fixed | `1a59ff8` |
+| F25 two cache directory functions | fixed | `a5a8e1e` |
+| F26 seams hold whole lists | deferred, measure first | |
+| F27 user-facing text | fixed | `ad5cd0b`, `1a59ff8` |
+| F28 documentation disagreements | fixed | `1a59ff8`, `80c5253`, `a9848c5` |
+
+Twenty-two fixed, six deferred. Of the six, two need a human decision (F14's
+plan shape, F22's `source.identity_changed`), two need a later phase (F10's
+arbitration, part of F8 and F19), and two need a measurement or a machine this
+matrix does not have (F21, F26).
+
+Two things were done that no finding asked for. Packing, which the audit's
+closing section said the measurement had settled, is at `a9848c5` along with the
+one lookup that keeps it one way. Windows on ARM compiles at `80c5253`, which
+the audit named as the only unreachable target.
+
+## Found while fixing these
+
+The surface suite that F1 through F4 justified found more than the four it was
+written for, and the work that followed found the rest. None of these is in the
+findings above.
+
+**A run after `--adopt` reported a tree the destination did not hold.** `--adopt`
+records the adopted tree; the next run resolved a different tree, found every
+recorded fingerprint still matching, and wrote that different tree into the
+receipt as truth. `verify` disagreed with `get` on the same directory. Fixed at
+`a5a8e1e`: a recorded fingerprint answers only for the tree the receipt
+describes.
+
+**A bare `.gz` materialized its one file under a digest in hexadecimal.** The
+archive reader was given the cache object's path as the archive's name. Fixed at
+`a5a8e1e`.
+
+**`--no-cache` silently stops extracting archives.** `get ./p.tar.gz --no-cache`
+produces a different tree digest with no `degrade`. contracts.md:511 says
+`--no-cache` means the partial lives beside the destination and verification is
+unchanged, so the fix is a scratch store beside the destination. Not fixed. This
+is the most serious of the ones found here: it is a silent determinism failure
+under a documented flag, which is the thing this project exists to make
+impossible.
+
+**`--threads 0` is silently ignored and `--threads 99999` clamps without
+saying.** `NonZeroUsize::new(0)` returns `None`, which reads as "not requested"
+rather than as an error, and contracts.md says a ceiling above the detected
+budget is clamped and the clamp reported. Not fixed.
+
+**`resource.limit` was produced only where `Processor::new` fails,** which is
+effectively unreachable. Now produced by the redirect limit and the listing
+limit as well, at `b7a8224` and `69b18a8`.
+
+**`hash_object` opened an object's container and read it whole.** Harmless while
+every object had a file of its own, and wrong the moment one did not. Found by
+the one-lookup test rather than by a user, and fixed in the same commit that
+could have shipped it, `a9848c5`.
+
+**`cache-growth` measured `objects/` and called the answer the cache.** The same
+defect as F5, one placement reported as the whole. Fixed at `a9848c5`.
