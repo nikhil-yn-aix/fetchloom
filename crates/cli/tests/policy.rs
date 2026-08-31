@@ -300,3 +300,39 @@ fn settings_reach_the_policy() {
     assert!(policy.offline());
     assert_eq!(policy.limits().retry_attempts, 5);
 }
+
+#[test]
+fn a_gain_below_the_offer_threshold_produces_no_prompt_and_no_message() {
+    let environment = FakeEnvironment::default();
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let policy = CommandLinePolicy::new(
+        settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
+        INTERACTIVE,
+        false,
+        &environment,
+        &observer,
+        &sequence,
+    );
+
+    let help = ProviderHelp {
+        provider: "Example".to_owned(),
+        unlocks: "faster transfers".to_owned(),
+        necessity: Necessity::Optional,
+        steps: vec!["open the page".to_owned()],
+        placement: "FETCHLOOM_TOKEN_EXAMPLE".to_owned(),
+        verification: "fetchloom doctor".to_owned(),
+        scope: "read".to_owned(),
+    };
+    let offered = policy
+        .offer_credential(&help, std::time::Duration::from_secs(30))
+        .unwrap();
+
+    assert!(offered.is_none());
+    assert!(
+        observer.names().is_empty(),
+        "a gain below the threshold produced {:?}",
+        observer.names()
+    );
+}

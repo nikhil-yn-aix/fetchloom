@@ -1323,7 +1323,7 @@ pub fn materialize_remote(
         &SafeUrl::new(location),
         &Provenance {
             prior: pinned,
-            observed: observation(&transferred, std::slice::from_ref(&location.to_owned())),
+            observed: observation(&transferred),
         },
         &emit,
     )
@@ -2377,7 +2377,7 @@ fn transfer_object(
         digest: transferred.digest,
         interop,
         size,
-        observed: observation(&transferred, locations),
+        observed: observation(&transferred),
     })
 }
 
@@ -2388,16 +2388,11 @@ fn transfer_object(
 /// read a file it already had. Only a run that carried every byte and hashed
 /// them as they arrived has evidence, so only one of those may become a
 /// witness.
-fn observation(
-    transferred: &fetchloom_engine::transfer::Transferred,
-    locations: &[String],
-) -> Option<String> {
+fn observation(transferred: &fetchloom_engine::transfer::Transferred) -> Option<String> {
     if transferred.bytes_transferred == 0 {
         return None;
     }
-    locations
-        .first()
-        .map(|location| SafeUrl::new(location).to_string())
+    Some(transferred.served.to_string())
 }
 
 /// Publishes every resolved artifact into one destination.

@@ -97,7 +97,7 @@ fn fetching_the_whole_object_returns_every_byte() {
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap();
 
-    assert_eq!(read(body), object());
+    assert_eq!(read(body.body), object());
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn fetching_a_range_asks_for_it_and_returns_only_that_span() {
         )
         .unwrap();
 
-    assert_eq!(read(body), object()[512..]);
+    assert_eq!(read(body.body), object()[512..]);
     let asked = server.received();
     assert_eq!(
         asked.last().unwrap().header("range"),
@@ -275,7 +275,7 @@ fn a_redirect_is_followed_and_the_bytes_arrive() {
     let body = source
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap();
-    assert_eq!(read(body), object());
+    assert_eq!(read(body.body), object());
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn the_span_that_was_asked_for_is_accepted() {
         )
         .unwrap();
 
-    assert_eq!(read(body), object()[256..]);
+    assert_eq!(read(body.body), object()[256..]);
 }
 
 #[test]
@@ -400,7 +400,7 @@ fn a_source_that_goes_quiet_mid_body_runs_out_of_time() {
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap();
     let mut sink = Vec::new();
-    let mut body = body;
+    let mut body = body.body;
     let failure = body.read_to_end(&mut sink).unwrap_err();
 
     assert!(
@@ -489,4 +489,30 @@ fn a_status_a_run_carried_no_credential_for_stays_a_status() {
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
+}
+
+#[test]
+fn a_listing_with_more_entries_than_the_limit_allows_is_refused_as_a_limit() {
+    let server = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Listing {
+        format: IndexFormat::ObjectStore,
+    }]))
+    .unwrap();
+    let limits = Limits {
+        listing_entries: 1,
+        ..Limits::default()
+    };
+    let source = HttpSource::new(
+        limits,
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let failure = source
+        .list(&format!("{}/prefix/", server.origin()), None)
+        .unwrap_err();
+
+    assert_eq!(failure.kind(), ErrorKind::ResourceLimit);
+    assert!(
+        failure.next_action().contains('1'),
+        "the refusal did not say which limit was reached: {}",
+        failure.next_action()
+    );
 }

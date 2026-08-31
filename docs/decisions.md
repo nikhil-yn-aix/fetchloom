@@ -5798,3 +5798,57 @@ Sources: `cargo test --workspace` on this machine, 607 passed and 4 ignored,
 against 593 before; `crates/engine/tests/filesystem_failure.rs`,
 `crates/sources/tests/http.rs`, `crates/cache/tests/volumes.rs`,
 `crates/cli/tests/lock.rs`.
+
+## Contracted, and now built
+
+Four limits in the Limits table were read by nothing. Two are now read. An
+optional credential is offered only when the projected gain exceeds the offer
+threshold, which contracts.md:761 states and the code ignored: it prompted at
+any gain and, worse, emitted `credential.offer` and `credential.declined` below
+the threshold, where the same sentence says there is no prompt and no message.
+A listing with more entries than the limit allows is refused with
+`resource.limit` rather than read.
+
+The other two are deferred with their reasons. `Probed candidates` bounds a
+choice between sources, and there is one source and no probing across
+candidates until phase 8, which is also where `source.probe` and
+`source.selected` come from. `Resident memory` is a ceiling on what the process
+holds, and nothing here can read what the process holds: it needs a resident set
+query on both platforms behind the Platform seam, which is a seam widening and a
+piece of work in its own right rather than a line that reads a field.
+
+A witness named the origin that was asked rather than the origin that served.
+`observation` took the first of the locations the manifest listed, so a run that
+followed a redirect, or that failed over to a second source, recorded a witness
+against a host that served nothing. Since a witness is the evidence behind
+`corroborated`, and independence is decided partly by origin, that is evidence
+about the wrong thing. `Source::fetch` now returns `Served`, pairing the bytes
+with what the response said about them, so the location that answered travels
+with them; `Transferred` carries it, and the witness records it. This widens the
+Source seam by making one method return what its sibling already returned, which
+is the justification: the seam could not report the origin that served because
+it was never asked to.
+
+`repair` could not reach an object a local reference put in the cache, which is
+half the reference forms the command accepts. Two things were missing. The
+digest could not be found, because a local reference records no resolution --
+there is no validator to record one against -- so it is now taken from the file,
+which repair reads anyway. And there was no source that could serve a range of a
+local file, because `Repair` named `HttpSource` directly. It is now generic over
+the seam, and `FileSource` serves any span of a path, states no validator
+because a modification time is not evidence about bytes, and refuses to list
+because a path is walked rather than asked for an index.
+
+Deferred, with the reason. Disk accounting still happens where the write fails
+rather than before the transfer. `plan` states the requirement per volume from
+the size the lock pins, which is what contracts.md asks of it, and no sentence
+requires `get` to check free space before starting. What is wrong is smaller and
+sharper: the plan reports `staging` and `destination` as zero bytes for an
+archive whose expanded size is unknown, while listing `expanded` under
+`unknown`. contracts.md:265 says a field is never estimated into a number, and
+zero is a number. Fixing it changes the shape of a portable artifact, which is
+additive-only, so it is a decision rather than an edit.
+
+Sources: `cargo test --workspace` on this machine, 613 passed and 4 ignored,
+against 607 before; `crates/cli/tests/cancel.rs`, `crates/cli/tests/policy.rs`,
+`crates/cli/tests/prove.rs`, `crates/sources/tests/http.rs`.

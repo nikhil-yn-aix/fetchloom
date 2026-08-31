@@ -81,7 +81,7 @@ impl HttpSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
-    ) -> Result<ureq::http::Response<ureq::Body>, Error> {
+    ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
         self.send_conditional(method, location, range, credential, &Validator::default())
     }
 
@@ -92,7 +92,7 @@ impl HttpSource {
         range: Option<ByteRange>,
         credential: Option<&Credential>,
         asking: &Validator,
-    ) -> Result<ureq::http::Response<ureq::Body>, Error> {
+    ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
         let start = Origin::of(location)?;
         let mut current = location.to_owned();
         let mut carried = credential;
@@ -137,7 +137,7 @@ impl HttpSource {
 
             let status = answer.status().as_u16();
             let Some(next) = redirect_target(&answer, status) else {
-                return Ok(answer);
+                return Ok((answer, current));
             };
             current = Origin::join(&current, &next)?;
         }
@@ -196,7 +196,7 @@ impl Source for HttpSource {
         credential: Option<&Credential>,
     ) -> Result<SourceMetadata, Error> {
         let started = Instant::now();
-        let answer = self.send(Method::Head, location, None, credential)?;
+        let (answer, served) = self.send(Method::Head, location, None, credential)?;
         let time_to_first_byte = started.elapsed();
         let status = answer.status().as_u16();
         if !(200..300).contains(&status) {
@@ -209,8 +209,8 @@ impl Source for HttpSource {
         }
 
         Ok(SourceMetadata {
-            location: SafeUrl::new(location),
-            host: Host::new(Origin::of(location)?.host()),
+            location: SafeUrl::new(&served),
+            host: Host::new(Origin::of(&served)?.host()),
             size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
             content: None,
             interop: None,
@@ -232,7 +232,8 @@ impl Source for HttpSource {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error> {
         let started = Instant::now();
-        let answer = self.send_conditional(Method::Get, location, None, credential, validator)?;
+        let (answer, served) =
+            self.send_conditional(Method::Get, location, None, credential, validator)?;
         let time_to_first_byte = started.elapsed();
         let status = answer.status().as_u16();
         if status == 304 {
@@ -247,8 +248,8 @@ impl Source for HttpSource {
             ));
         }
         let metadata = SourceMetadata {
-            location: SafeUrl::new(location),
-            host: Host::new(Origin::of(location)?.host()),
+            location: SafeUrl::new(&served),
+            host: Host::new(Origin::of(&served)?.host()),
             size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
             content: None,
             interop: None,
@@ -274,8 +275,10 @@ impl Source for HttpSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
-    ) -> Result<Self::Body, Error> {
-        let answer = self.send(Method::Get, location, range, credential)?;
+    ) -> Result<Served<Self::Body>, Error> {
+        let started = Instant::now();
+        let (answer, served) = self.send(Method::Get, location, range, credential)?;
+        let time_to_first_byte = started.elapsed();
         let status = answer.status().as_u16();
 
         if status == 416 {
@@ -304,8 +307,8 @@ impl Source for HttpSource {
                 )
                 .with_source(location));
             }
-            let served = header(&answer, "content-range").and_then(|value| first_byte_of(&value));
-            if served != Some(range.start) {
+            let first = header(&answer, "content-range").and_then(|value| first_byte_of(&value));
+            if first != Some(range.start) {
                 return Err(Error::new(
                     ErrorKind::IntegrityRangeMismatch,
                     format!(
@@ -319,8 +322,25 @@ impl Source for HttpSource {
             }
         }
 
-        Ok(HttpBody {
-            reader: Box::new(answer.into_body().into_reader()),
+        Ok(Served {
+            metadata: SourceMetadata {
+                location: SafeUrl::new(&served),
+                host: Host::new(Origin::of(&served)?.host()),
+                size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
+                content: None,
+                interop: None,
+                identity: identity_of(header(&answer, "etag").as_deref()),
+                last_modified: header(&answer, "last-modified"),
+                supports_ranges: header(&answer, "accept-ranges")
+                    .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+                time_to_first_byte,
+                retry_after: header(&answer, "retry-after")
+                    .as_deref()
+                    .and_then(parse_retry_after),
+            },
+            body: HttpBody {
+                reader: Box::new(answer.into_body().into_reader()),
+            },
         })
     }
 
@@ -329,7 +349,7 @@ impl Source for HttpSource {
         location: &str,
         credential: Option<&Credential>,
     ) -> Result<Vec<ListingEntry>, Error> {
-        let answer = self.send(Method::Get, location, None, credential)?;
+        let (answer, _served) = self.send(Method::Get, location, None, credential)?;
         let status = answer.status().as_u16();
         if !(200..300).contains(&status) {
             return Err(status_failure(
@@ -345,7 +365,19 @@ impl Source for HttpSource {
             .limit(self.limits.listing_bytes)
             .read_to_string()
             .map_err(|reason| transport_failure(location, &reason))?;
-        index::parse(location, status, &body)
+        let listed = index::parse(location, status, &body)?;
+        let allowed = usize::try_from(self.limits.listing_entries).unwrap_or(usize::MAX);
+        if listed.len() > allowed {
+            return Err(Error::new(
+                ErrorKind::ResourceLimit,
+                format!(
+                    "ask for a narrower prefix, because the index at {location} lists more than the {} entries a run reads",
+                    self.limits.listing_entries
+                ),
+            )
+            .with_source(location));
+        }
+        Ok(listed)
     }
 }
 

@@ -39,6 +39,9 @@ pub struct Transferred {
     /// What the source said identifies these bytes. Empty when the run learned
     /// nothing.
     pub validator: Validator,
+    /// The location that answered with the bytes, which is where the chain of
+    /// redirects ended and not where it started.
+    pub served: SafeUrl,
 }
 
 /// The two impure things a retry needs: a random fraction and a wait.
@@ -275,15 +278,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             });
         }
 
-        let body = if let Some((_, body)) = arrived {
-            Either::Revalidated(body)
-        } else {
-            let range = (keep > 0).then(|| ByteRange {
-                start: keep,
-                end: metadata.size.unwrap_or(u64::MAX),
-            });
-            Either::Fetched(self.source.fetch(location, range, None)?)
-        };
+        let (served, body) = self.body_from(arrived, location, &metadata, keep)?;
         self.store
             .record_source(key, &record_of(&metadata, rung, keep))?;
 
@@ -331,7 +326,29 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             rung,
             attempts: 0,
             validator: validator_for(&metadata),
+            served,
         })
+    }
+
+    /// Returns the location that answered and the bytes it answered with.
+    ///
+    /// A conditional request that already carried the body answers with itself.
+    fn body_from(
+        &self,
+        arrived: Option<(SourceMetadata, S::Body)>,
+        location: &str,
+        metadata: &SourceMetadata,
+        keep: u64,
+    ) -> Result<(SafeUrl, Either<S::Body>), Error> {
+        if let Some((from, body)) = arrived {
+            return Ok((from.location, Either::Revalidated(body)));
+        }
+        let range = (keep > 0).then(|| ByteRange {
+            start: keep,
+            end: metadata.size.unwrap_or(u64::MAX),
+        });
+        let answered = self.source.fetch(location, range, None)?;
+        Ok((answered.metadata.location, Either::Fetched(answered.body)))
     }
 
     /// Asks a source in one request whether an object this run already holds is
@@ -408,6 +425,7 @@ fn held(digest: ContentDigest) -> Transferred {
         rung: ResumeRung::Outboard,
         attempts: 0,
         validator: Validator::default(),
+        served: SafeUrl::new(""),
     }
 }
 

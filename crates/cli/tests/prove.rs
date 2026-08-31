@@ -25,7 +25,7 @@ use toml as _;
 use windows_sys as _;
 
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
-use fetchloom_faults::{Script, TestServer};
+use fetchloom_faults::{Reply, Script, TestServer};
 use tempfile::TempDir;
 
 /// An object of sixty-five leaf groups plus a partial one, which is the
@@ -683,4 +683,112 @@ fn a_warm_run_of_an_unpinned_reference_issues_one_request_and_reads_no_body() {
         result["status"], "unchanged",
         "the warm run rewrote a destination that already held the tree"
     );
+}
+
+#[test]
+fn a_witness_names_the_origin_that_served_the_bytes_and_not_the_one_that_was_asked() {
+    let scratch = TempDir::new().unwrap();
+    let serving = TestServer::start(
+        Script::serving(large_object()).tagged(vec!["\"phase-five\"".to_owned()]),
+    )
+    .unwrap();
+    let mut script = Script::serving(Vec::new());
+    script.then = Reply::Redirect {
+        code: 307,
+        location: format!("{}/object", serving.origin()),
+    };
+    let redirecting = TestServer::start(script).unwrap();
+
+    let asked = format!("{}/object", redirecting.origin());
+    let output = Command::new(binary())
+        .current_dir(scratch.path())
+        .args([
+            "get",
+            &asked,
+            "--output",
+            scratch.path().join("out").to_str().unwrap(),
+        ])
+        .env("FETCHLOOM_CACHE_DIR", scratch.path().join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let recorded = every_witness(&scratch.path().join("cache").join("meta").join("witness"));
+    assert!(
+        recorded.contains(serving.origin().trim_start_matches("http://")),
+        "the witness named the source that redirected rather than the one that served: {recorded}"
+    );
+}
+
+/// Returns every witness under a directory, however it is sharded, as one text.
+fn every_witness(directory: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return String::new();
+    };
+    let mut found = String::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.push_str(&every_witness(&path));
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            found.push_str(&text);
+        }
+    }
+    found
+}
+
+#[test]
+fn a_local_reference_can_be_repaired_from_the_file_it_named() {
+    let scratch = TempDir::new().unwrap();
+    let object = large_object();
+    let source = scratch.path().join("object.bin");
+    std::fs::write(&source, &object).unwrap();
+    let cache = scratch.path().join("cache");
+
+    let run = |arguments: &[&str]| {
+        Command::new(binary())
+            .current_dir(scratch.path())
+            .args(arguments)
+            .env("FETCHLOOM_CACHE_DIR", &cache)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let fetched = run(&[
+        "get",
+        source.to_str().unwrap(),
+        "--output",
+        scratch.path().join("out").to_str().unwrap(),
+    ]);
+    assert_eq!(
+        fetched.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+
+    let group = OUTBOARD_CHUNK_GROUP;
+    damage_region(
+        &one_file_in(&cache.join("objects")),
+        group * 40,
+        usize::try_from(group).unwrap(),
+    );
+
+    let repaired = run(&["repair", source.to_str().unwrap(), "--json"]);
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "a local reference could not be repaired: {}",
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&repaired.stdout).unwrap();
+    assert_eq!(result["status"], "repaired");
+    assert_eq!(result["ranges"].as_u64(), Some(1));
+    assert_eq!(result["bytes"].as_u64(), Some(group));
 }

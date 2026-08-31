@@ -107,7 +107,9 @@ pub enum Revalidated<B> {
     Changed(Box<Served<B>>),
 }
 
-/// What a source answered with when the bytes it serves had changed.
+/// What a source answered with: the bytes, and what the response said about
+/// them, including the location that answered.
+#[derive(Debug)]
 pub struct Served<B> {
     /// What the response said about the object.
     pub metadata: SourceMetadata,
@@ -146,7 +148,7 @@ pub trait Source {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
-    ) -> Result<Self::Body, Error>;
+    ) -> Result<Served<Self::Body>, Error>;
 
     /// Asks whether an object a run already holds is still what a reference
     /// names, in one request.

@@ -13,7 +13,7 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::source::{ByteRange, Source};
 use fetchloom_engine::work::{Work, WorkCounter};
 use fetchloom_platform::NativePlatform;
-use fetchloom_sources::HttpSource;
+use fetchloom_sources::{FileSource, HttpSource};
 
 /// What one repair did.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -55,12 +55,39 @@ impl Repair<'_> {
     /// Fails with `integrity.mismatch` when the repaired bytes still do not
     /// hash to the digest, and with whatever the source failed with.
     pub fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
+        if FileSource::serves(self.location) {
+            let source = FileSource::new(Arc::clone(self.work));
+            return self.against(digest, &source);
+        }
+        let source = HttpSource::new(Limits::default(), Arc::clone(self.work));
+        let done = self.against(digest, &source);
+        let fallbacks = source.take_degradations();
+        if fallbacks.is_empty() {
+            return done;
+        }
+        let emit = |payload: EventPayload| self.observer.emit(&Event::new(self.sequence, payload));
+        for entry in fallbacks {
+            emit(EventPayload::Degrade {
+                requested: entry.requested,
+                used: entry.used,
+                reason: entry.reason,
+            });
+        }
+        done
+    }
+
+    /// Repairs one object against the source that can serve its bytes.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `integrity.mismatch` when the repaired bytes still do not
+    /// hash to the digest, and with whatever the source failed with.
+    fn against<S: Source>(&self, digest: ContentDigest, source: &S) -> Result<RepairResult, Error> {
         let emit = |payload: EventPayload| self.observer.emit(&Event::new(self.sequence, payload));
         let checking = Span::start();
         emit(EventPayload::VerifyStart);
 
         let localized = self.cache.localize(digest)?;
-        let source = HttpSource::new(Limits::default(), Arc::clone(self.work));
         let metadata = source.probe(self.location, None)?;
 
         let whole = whole_of(&metadata, &localized);
@@ -114,15 +141,8 @@ impl Repair<'_> {
                 end: span.end,
             });
             let range = (spans.len() > 1 || span.start > 0).then_some(*span);
-            let body = source.fetch(self.location, range, None)?;
+            let body = source.fetch(self.location, range, None)?.body;
             moved += self.cache.patch(&mut writer, span.start..span.end, body)?;
-        }
-        for entry in source.take_degradations() {
-            emit(EventPayload::Degrade {
-                requested: entry.requested,
-                used: entry.used,
-                reason: entry.reason,
-            });
         }
 
         match self.cache.finish_repair(writer, whole) {
@@ -211,6 +231,12 @@ pub fn digest_for(
     {
         return Ok(digest);
     }
+    if FileSource::serves(reference)
+        && let Some(digest) = digest_of_file(cache, reference)
+        && cache.locate(digest).is_some()
+    {
+        return Ok(digest);
+    }
     Err(Error::new(
         ErrorKind::ReferenceUnresolved,
         format!(
@@ -246,4 +272,16 @@ pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<
         }
         Err(refused) => reporter.report(refused),
     }
+}
+
+/// Returns what the bytes at a path hash to.
+///
+/// A local reference records no resolution, because there is no validator to
+/// record one against, so the answer comes from the file rather than from the
+/// cache's memory of it. The file is the source, and repair reads it anyway.
+fn digest_of_file(cache: &Cache<NativePlatform>, path: &str) -> Option<ContentDigest> {
+    let handle = std::fs::File::open(path).ok()?;
+    let mut digester = fetchloom_engine::hashing::Digester::new();
+    let digests = digester.hash(cache.processor(), handle).ok()?;
+    Some(digests.content)
 }

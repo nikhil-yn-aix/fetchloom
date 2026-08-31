@@ -169,8 +169,11 @@ impl Policy for CommandLinePolicy<'_> {
     fn offer_credential(
         &self,
         help: &ProviderHelp,
-        _projected_gain: Duration,
+        projected_gain: Duration,
     ) -> Result<Option<Credential>, Error> {
+        if projected_gain <= self.limits.credential_offer_threshold {
+            return Ok(None);
+        }
         if !self.streams.can_prompt() {
             self.emit(EventPayload::CredentialDeclined {
                 provider: help.provider.clone(),

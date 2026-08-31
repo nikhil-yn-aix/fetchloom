@@ -56,7 +56,7 @@ fn a_credential_is_sent_on_the_first_request() {
             Some(&credential),
         )
         .unwrap();
-    assert_eq!(read(body), object());
+    assert_eq!(read(body.body), object());
 
     let asked = server.received();
     assert_eq!(asked[0].header("authorization"), Some(SECRET));
@@ -84,7 +84,7 @@ fn a_credential_is_dropped_across_a_redirect_to_a_different_port() {
             Some(&credential),
         )
         .unwrap();
-    assert_eq!(read(body), object());
+    assert_eq!(read(body.body), object());
 
     let first_request = server.received();
     assert_eq!(first_request[0].header("authorization"), Some(SECRET));
@@ -114,7 +114,7 @@ fn a_credential_survives_a_same_origin_redirect() {
             Some(&credential),
         )
         .unwrap();
-    assert_eq!(read(body), object());
+    assert_eq!(read(body.body), object());
 
     let asked = server.received();
     assert_eq!(asked.len(), 2);
