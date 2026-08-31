@@ -1236,9 +1236,7 @@ pub fn materialize_remote(
     let size = if transferred.bytes_kept + transferred.bytes_transferred > 0 {
         transferred.bytes_kept + transferred.bytes_transferred
     } else {
-        std::fs::metadata(cache.layout().object(transferred.digest))
-            .map(|found| found.len())
-            .unwrap_or_default()
+        cache.size_of(transferred.digest).unwrap_or_default()
     };
     materialize_object(
         with,
@@ -1482,8 +1480,7 @@ fn place_object(
             "run without --no-cache, because this build streams a remote object through the cache",
         ));
     };
-    let object = cache.layout().object(digest);
-    with.platform.clone_or_copy(&object, into).map(|_| ())
+    cache.place_object(digest, into)
 }
 
 fn object_name(location: &str) -> String {
@@ -1594,15 +1591,13 @@ fn recognized_format(
     if declared.is_none() && fetchloom_archive::format_from_extension(name).is_none() {
         return Ok(None);
     }
-    let object = cache.layout().object(digest);
-    let mut file = std::fs::File::open(&object)
-        .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
+    let mut file = cache.read(digest)?;
     let mut header = [0_u8; fetchloom_archive::SNIFF_LENGTH];
     let filled = read_up_to(&mut file, &mut header)?;
     fetchloom_archive::recognize(declared, name, &header[..filled])
 }
 
-fn read_up_to(file: &mut std::fs::File, into: &mut [u8]) -> Result<usize, Error> {
+fn read_up_to(file: &mut impl Read, into: &mut [u8]) -> Result<usize, Error> {
     let mut filled = 0;
     while filled < into.len() {
         let taken = file.read(&mut into[filled..]).map_err(|reason| {
@@ -1629,16 +1624,14 @@ fn open_archive(
     digest: ContentDigest,
     format: ArchiveFormat,
     name: &str,
-) -> Result<fetchloom_archive::ArchiveReader<std::fs::File>, Error> {
+) -> Result<fetchloom_archive::ArchiveReader<fetchloom_cache::storage::Bytes>, Error> {
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,
             "run without --no-cache, because this build extracts an archive out of the cache",
         ));
     };
-    let object = cache.layout().object(digest);
-    let file = std::fs::File::open(&object)
-        .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
+    let file = cache.read(digest)?;
     fetchloom_archive::ArchiveReader::new(file, format, name.to_owned(), Limits::default())
 }
 
@@ -2234,9 +2227,7 @@ fn transfer_object(
     let size = if moved > 0 {
         moved
     } else {
-        std::fs::metadata(cache.layout().object(transferred.digest))
-            .map(|found| found.len())
-            .unwrap_or_default()
+        cache.size_of(transferred.digest).unwrap_or_default()
     };
     Ok(Moved {
         digest: transferred.digest,

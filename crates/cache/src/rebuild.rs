@@ -106,15 +106,13 @@ fn read_object<P: Platform>(
     cache: &Cache<P>,
     digest: fetchloom_engine::digest::ContentDigest,
 ) -> Result<hashing::Digests, Error> {
-    let path = cache.layout().object(digest);
-    let mut file = std::fs::File::open(&path)
-        .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+    let mut file = cache.read(digest)?;
     let mut pair = hashing::Pair::new();
     let mut buffer = vec![0u8; BUFFER];
     loop {
-        let filled = file
-            .read(&mut buffer)
-            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+        let filled = file.read(&mut buffer).map_err(|reason| {
+            filesystem_failure(Surface::Cache, &cache.layout().objects(), &reason)
+        })?;
         if filled == 0 {
             break;
         }
@@ -129,8 +127,7 @@ fn write_record<P: Platform>(
     digest: fetchloom_engine::digest::ContentDigest,
     interop: fetchloom_engine::digest::InteropDigest,
 ) -> Result<(), Error> {
-    let object = cache.layout().object(digest);
-    let fingerprint = cache.platform().fingerprint(&object)?;
+    let fingerprint = cache.fingerprint_of(digest)?;
     let path = cache.object_record(digest);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

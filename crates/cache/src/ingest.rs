@@ -10,8 +10,8 @@ use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
+use crate::Cache;
 use crate::record::{self, ObjectRecord};
-use crate::{Cache, seal_object};
 
 /// How large a buffer the ingest reads through.
 const BUFFER: usize = 1 << 20;
@@ -121,10 +121,7 @@ impl<P: Platform> Cache<P> {
     }
 
     fn publish_scratch(&self, scratch: &Path, digests: &Digests) -> Result<(), Error> {
-        let object = self.layout().object(digests.content);
-        self.platform()
-            .publish_file(scratch, &object, self.tier())?;
-        seal_object(&object)?;
+        self.publish_object(scratch, digests.content)?;
         self.finish_publication(digests)
     }
 
@@ -209,8 +206,7 @@ impl<P: Platform> Cache<P> {
     /// written, and when the tree cannot be written.
     pub(crate) fn finish_publication(&self, digests: &Digests) -> Result<(), Error> {
         let digest = digests.content;
-        let object = self.layout().object(digest);
-        let fingerprint = self.platform().fingerprint(&object)?;
+        let fingerprint = self.fingerprint_of(digest)?;
         let path = self.object_record(digest);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)

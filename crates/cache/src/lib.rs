@@ -18,6 +18,7 @@ pub mod receipts;
 pub mod record;
 pub mod repair;
 pub mod resolution;
+pub mod storage;
 pub mod store;
 pub mod verify;
 pub mod witness;

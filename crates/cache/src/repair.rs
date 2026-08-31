@@ -12,8 +12,8 @@ use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::timestamp::Timestamp;
 
+use crate::Cache;
 use crate::diagnosis::{Diagnosis, NotLocalized, spans_of};
-use crate::{Cache, seal_object};
 
 /// How large a buffer a repair reads and writes through.
 const BUFFER: usize = 1 << 20;
@@ -53,9 +53,8 @@ impl<P: Platform> Cache<P> {
     /// Returns where the bytes of an object are, when this cache holds them.
     #[must_use]
     pub fn locate(&self, digest: ContentDigest) -> Option<Held> {
-        let published = self.layout().object(digest);
-        if published.is_file() {
-            return Some(Held::Published(published));
+        if let Some(placed) = self.placement(digest) {
+            return Some(Held::Published(placed.container().to_path_buf()));
         }
         let quarantined = self.layout().quarantined(digest);
         if quarantined.is_file() {
@@ -133,22 +132,7 @@ impl<P: Platform> Cache<P> {
         let found = self.hash_object(digest).ok();
 
         let held = self.platform().lock(&self.layout().lock_of(digest))?;
-        let from = self.layout().object(digest);
-        let to = self.layout().quarantined(digest);
-        if from.is_file() {
-            self.platform()
-                .publish_file(&from, &to, self.tier())
-                .map_err(|reason| {
-                    Error::new(
-                        ErrorKind::CacheCorrupt,
-                        format!(
-                            "remove {} by hand, because it failed verification and could not be quarantined: {}",
-                            from.display(),
-                            reason.next_action()
-                        ),
-                    )
-                })?;
-        }
+        self.quarantine_object(digest)?;
         let _ = std::fs::remove_file(self.object_record(digest));
         drop(held);
 
@@ -293,10 +277,8 @@ impl<P: Platform> Cache<P> {
             ));
         }
 
-        let object = self.layout().object(digest);
-        let _ = std::fs::remove_file(&object);
-        self.platform().publish_file(&path, &object, self.tier())?;
-        seal_object(&object)?;
+        self.remove_object(digest)?;
+        self.publish_object(&path, digest)?;
         self.finish_publication(&digests)?;
         let _ = std::fs::remove_file(self.layout().quarantined(digest));
         let _ = std::fs::remove_file(self.layout().diagnosis_of(digest));

@@ -49,19 +49,14 @@ impl<P: Platform> Cache<P> {
             already_held: 0,
         };
         for digest in digests {
-            let path = self.layout().object(digest);
-            let mut reading = std::fs::File::open(&path)
-                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
-            let length = reading
-                .metadata()
-                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?
-                .len();
+            let mut reading = self.read(digest)?;
+            let length = reading.length();
             write_all(&mut writing, &header(&name_of(digest), length), to)?;
             let mut moved = 0u64;
             loop {
-                let filled = reading
-                    .read(&mut buffer)
-                    .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+                let filled = reading.read(&mut buffer).map_err(|reason| {
+                    filesystem_failure(Surface::Cache, &self.layout().objects(), &reason)
+                })?;
                 if filled == 0 {
                     break;
                 }
@@ -73,8 +68,7 @@ impl<P: Platform> Cache<P> {
                 return Err(Error::new(
                     ErrorKind::IntegrityTruncated,
                     format!(
-                        "run cache verify, because {} is {moved} bytes where it was {length}",
-                        path.display()
+                        "run cache verify, because {digest} is {moved} bytes where it was {length}"
                     ),
                 ));
             }
@@ -194,10 +188,7 @@ impl<P: Platform> Cache<P> {
     }
 
     fn publish_imported(&self, scratch: &Path, digests: &hashing::Digests) -> Result<(), Error> {
-        let object = self.layout().object(digests.content);
-        self.platform()
-            .publish_file(scratch, &object, self.tier())?;
-        crate::seal_object(&object)?;
+        self.publish_object(scratch, digests.content)?;
         self.finish_publication(digests)
     }
 }

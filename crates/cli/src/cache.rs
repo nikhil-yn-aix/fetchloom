@@ -156,8 +156,7 @@ fn report_list(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> 
                 print_json(&rendered);
             } else {
                 for digest in found {
-                    let size = std::fs::metadata(held.layout().object(digest))
-                        .map_or(0, |found| found.len());
+                    let size = held.size_of(digest).unwrap_or_default();
                     let pinned = if held.layout().pin_of(digest).exists() {
                         "pinned"
                     } else {

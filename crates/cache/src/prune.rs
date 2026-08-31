@@ -24,15 +24,13 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
     let now = nanos_now();
 
     for digest in cache.list()? {
-        let object = cache.layout().object(digest);
-
         if cache.layout().pin_of(digest).exists() {
             report.kept += 1;
             clear_mark(cache, digest)?;
             continue;
         }
 
-        if !cache.platform().owns(&object)? {
+        if !cache.owns_object(digest)? {
             report.skipped_other_owner += 1;
             continue;
         }
@@ -63,8 +61,8 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
             continue;
         }
 
-        let size = std::fs::metadata(&object).map_or(0, |found| found.len());
-        remove(&object)?;
+        let size = cache.size_of(digest).unwrap_or_default();
+        cache.remove_object(digest)?;
         remove(&cache.layout().outboard_of(digest))?;
         remove(&cache.object_record(digest))?;
         remove(&cache.layout().mark_of(digest))?;

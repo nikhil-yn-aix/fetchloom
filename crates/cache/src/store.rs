@@ -20,7 +20,7 @@ use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{digest_of, name_of};
 use crate::record::{self, ObjectRecord};
-use crate::{Cache, owner_record_of, seal_object, source_record_of};
+use crate::{Cache, owner_record_of, source_record_of};
 
 /// How many bytes a resume reads back at a time to rebuild the digest.
 const RESUME_BUFFER_BYTES: usize = 1 << 20;
@@ -29,7 +29,7 @@ const RESUME_BUFFER_BYTES: usize = 1 << 20;
 /// while it is being read.
 #[derive(Debug)]
 pub struct ObjectReader<L> {
-    file: std::fs::File,
+    bytes: crate::storage::Bytes,
     lease: L,
 }
 
@@ -42,13 +42,13 @@ impl<L> ObjectReader<L> {
 
 impl<L> Read for ObjectReader<L> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buffer)
+        self.bytes.read(buffer)
     }
 }
 
 impl<L> Seek for ObjectReader<L> {
     fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.file.seek(to)
+        self.bytes.seek(to)
     }
 }
 
@@ -123,7 +123,7 @@ impl<P: Platform> Cache<P> {
 
     /// Reports whether an object is present right now.
     fn present(&self, digest: ContentDigest) -> bool {
-        self.layout.object(digest).is_file()
+        self.holds(digest)
     }
 
     /// Checks an object already in the cache against the verification policy
@@ -147,27 +147,20 @@ impl<P: Platform> Cache<P> {
     }
 
     fn check_fingerprint(&self, digest: ContentDigest) -> Result<(), Error> {
-        let path = self.layout.object(digest);
         let recorded: ObjectRecord =
             record::read(&self.object_record(digest))?.ok_or_else(|| {
                 Error::new(
                     ErrorKind::CacheCorrupt,
-                    format!(
-                        "run cache verify, because {} has no recorded fingerprint",
-                        path.display()
-                    ),
+                    format!("run cache verify, because {digest} has no recorded fingerprint"),
                 )
             })?;
-        let now = self.platform.fingerprint(&path)?;
+        let now = self.fingerprint_of(digest)?;
         if recorded.matches(now) {
             return Ok(());
         }
         Err(Error::new(
             ErrorKind::CacheCorrupt,
-            format!(
-                "run cache verify, because {} changed since it was published",
-                path.display()
-            ),
+            format!("run cache verify, because {digest} changed since it was published"),
         ))
     }
 
@@ -202,7 +195,7 @@ impl<P: Platform> Cache<P> {
             ErrorKind::CacheCorrupt,
             format!(
                 "run cache verify, because {} holds {found} rather than {digest}",
-                self.layout.object(digest).display()
+                self.layout.objects().display()
             ),
         ))
     }
@@ -261,20 +254,9 @@ impl<P: Platform> Store for Cache<P> {
 
     fn open(&self, digest: ContentDigest) -> Result<Self::Reader, Error> {
         let lease = self.read_lease(digest)?;
-        let path = self.layout.object(digest);
-        if !path.is_file() {
-            return Err(Error::new(
-                ErrorKind::CacheCorrupt,
-                format!(
-                    "fetch it again, because {} holds no such object",
-                    path.display()
-                ),
-            ));
-        }
         self.check(digest)?;
-        let file = std::fs::File::open(&path)
-            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
-        Ok(ObjectReader { file, lease })
+        let bytes = self.read(digest)?;
+        Ok(ObjectReader { bytes, lease })
     }
 
     fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error> {
@@ -417,11 +399,8 @@ impl<P: Platform> Store for Cache<P> {
         self.platform.flush(&writer.file, self.tier)?;
         drop(writer.file);
 
-        let object = self.layout.object(found);
-        self.platform
-            .publish_file(&writer.path, &object, self.tier)?;
+        self.publish_object(&writer.path, found)?;
         let _ = std::fs::remove_file(owner_record_of(&writer.path));
-        seal_object(&object)?;
 
         self.finish_publication(&digests)?;
         drop(lease);
@@ -437,7 +416,8 @@ impl<P: Platform> Store for Cache<P> {
         let path = self.layout.outboard_of(digest);
         let file = std::fs::File::open(&path)
             .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
-        Ok(ObjectReader { file, lease })
+        let bytes = crate::storage::Bytes::whole(file, &path)?;
+        Ok(ObjectReader { bytes, lease })
     }
 
     fn verified_prefix(
@@ -522,9 +502,7 @@ impl<P: Platform> Store for Cache<P> {
         let objects = self.list()?;
         let mut bytes = 0;
         for digest in &objects {
-            if let Ok(found) = std::fs::metadata(self.layout.object(*digest)) {
-                bytes += found.len();
-            }
+            bytes += self.size_of(*digest).unwrap_or_default();
         }
         Ok(CacheStatus {
             root: self.layout.root().to_path_buf(),
