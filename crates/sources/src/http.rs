@@ -143,9 +143,9 @@ impl HttpSource {
         }
 
         Err(Error::new(
-            ErrorKind::NetworkStatus,
+            ErrorKind::ResourceLimit,
             format!(
-                "ask for a location that settles, because the source redirected more than {} times without answering",
+                "ask for a location that settles, because the source redirected more than the {} times a run follows",
                 self.limits.redirects
             ),
         )
@@ -204,6 +204,7 @@ impl Source for HttpSource {
                 location,
                 status,
                 header(&answer, "retry-after"),
+                credential,
             ));
         }
 
@@ -242,6 +243,7 @@ impl Source for HttpSource {
                 location,
                 status,
                 header(&answer, "retry-after"),
+                credential,
             ));
         }
         let metadata = SourceMetadata {
@@ -291,6 +293,7 @@ impl Source for HttpSource {
                 location,
                 status,
                 header(&answer, "retry-after"),
+                credential,
             ));
         }
         if let Some(range) = range {
@@ -333,6 +336,7 @@ impl Source for HttpSource {
                 location,
                 status,
                 header(&answer, "retry-after"),
+                credential,
             ));
         }
         let body = answer
@@ -365,7 +369,24 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse().ok().map(Duration::from_secs)
 }
 
-fn status_failure(location: &str, status: u16, retry_after: Option<String>) -> Error {
+fn status_failure(
+    location: &str,
+    status: u16,
+    retry_after: Option<String>,
+    presented: Option<&Credential>,
+) -> Error {
+    if let Some(credential) = presented
+        && matches!(status, 401 | 403)
+    {
+        return Error::new(
+            ErrorKind::PolicyCredentialInvalid,
+            format!(
+                "renew the credential for {} or widen its scope, because the source answered {status} to the one it was given",
+                credential.host
+            ),
+        )
+        .with_source(location);
+    }
     let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504);
     let action = match retry_after {
         Some(wait) => format!(
@@ -385,23 +406,74 @@ fn status_failure(location: &str, status: u16, retry_after: Option<String>) -> E
         .with_retryable(retryable)
 }
 
-fn transport_failure(location: &str, reason: &dyn std::fmt::Display) -> Error {
+fn transport_failure(location: &str, reason: &ureq::Error) -> Error {
+    let (kind, retryable, action) = classify(reason);
+    Error::new(kind, format!("{action}: {reason}"))
+        .with_source(location)
+        .with_retryable(retryable)
+}
+
+/// What to tell someone whose host name went nowhere.
+const UNRESOLVED: &str =
+    "check the host name, because nothing on this machine can resolve it to an address";
+
+/// What to tell someone whose request ran out of time.
+const RAN_OUT: &str = "try the source again, because the request ran out of time";
+
+/// Decides what a transport failure is and whether another attempt could work.
+fn classify(reason: &ureq::Error) -> (ErrorKind, bool, &'static str) {
+    match reason {
+        ureq::Error::Timeout(_) => (ErrorKind::NetworkTimeout, true, RAN_OUT),
+        ureq::Error::Tls(_) | ureq::Error::Pem(_) | ureq::Error::Rustls(_) => (
+            ErrorKind::NetworkTls,
+            false,
+            "trust the source or name one you already trust, because the connection could not be secured",
+        ),
+        ureq::Error::HostNotFound => (ErrorKind::NetworkRefused, false, UNRESOLVED),
+        ureq::Error::Io(socket) if unsecurable(socket) => (
+            ErrorKind::NetworkTls,
+            false,
+            "trust the source or name one you already trust, because the connection could not be secured",
+        ),
+        ureq::Error::Io(socket) if unresolvable(socket) => {
+            (ErrorKind::NetworkRefused, false, UNRESOLVED)
+        }
+        ureq::Error::Io(socket) if socket.kind() == std::io::ErrorKind::TimedOut => {
+            (ErrorKind::NetworkTimeout, true, RAN_OUT)
+        }
+        _ => (
+            ErrorKind::NetworkRefused,
+            true,
+            "try the source again, because the request did not complete",
+        ),
+    }
+}
+
+/// Returns whether a socket failure was the handshake and not the socket.
+///
+/// A failed handshake reaches the caller as an io failure holding the rustls
+/// failure that caused it, so the question is asked of the value and never of
+/// the message it prints.
+fn unsecurable(reason: &std::io::Error) -> bool {
+    reason
+        .get_ref()
+        .is_some_and(|held| held.downcast_ref::<rustls::Error>().is_some())
+}
+
+/// Returns whether a name lookup failed in a way another attempt cannot fix.
+///
+/// A resolver that has not heard of a name and one that could not be reached
+/// are different answers, and only the first of them will be the same on the
+/// next attempt. Windows numbers the two apart. Unix folds every lookup failure
+/// into one io failure, so the test is the message the standard library itself
+/// writes around `getaddrinfo`, which keeps the two apart in its text.
+fn unresolvable(reason: &std::io::Error) -> bool {
+    if matches!(reason.raw_os_error(), Some(11_001 | 11_004)) {
+        return true;
+    }
     let text = reason.to_string();
-    let lowered = text.to_lowercase();
-    let kind = if lowered.contains("timed out") || lowered.contains("timeout") {
-        ErrorKind::NetworkTimeout
-    } else if lowered.contains("tls") || lowered.contains("certificate") {
-        ErrorKind::NetworkTls
-    } else {
-        ErrorKind::NetworkRefused
-    };
-    let retryable = kind != ErrorKind::NetworkTls;
-    Error::new(
-        kind,
-        format!("try the source again, because the request did not complete: {text}"),
-    )
-    .with_source(location)
-    .with_retryable(retryable)
+    text.contains("failed to lookup address information")
+        && !text.contains("Temporary failure in name resolution")
 }
 
 /// Reads the first byte offset a partial response says it is serving.

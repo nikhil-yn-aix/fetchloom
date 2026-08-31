@@ -10,8 +10,11 @@ use ureq as _;
 
 use std::io::Read;
 
+use fetchloom_engine::credential::{Credential, CredentialOrigin};
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::limits::Limits;
+use fetchloom_engine::redact::Secret;
+use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{ByteRange, Source, SourceIdentity};
 use fetchloom_faults::{IndexFormat, Reply, Script, TestServer};
 use fetchloom_sources::HttpSource;
@@ -292,7 +295,12 @@ fn a_redirect_loop_ends_rather_than_running_forever() {
         .fetch(&format!("{}/loop", looping.origin()), None, None)
         .unwrap_err();
 
-    assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
+    assert_eq!(failure.kind(), ErrorKind::ResourceLimit);
+    assert!(
+        failure.next_action().contains("10"),
+        "the failure did not say which limit was reached: {}",
+        failure.next_action()
+    );
     assert!(
         looping.received().len() <= 11,
         "more than ten redirects were followed: {}",
@@ -350,4 +358,135 @@ fn the_span_that_was_asked_for_is_accepted() {
         .unwrap();
 
     assert_eq!(read(body), object()[256..]);
+}
+
+#[test]
+fn a_name_that_does_not_resolve_is_refused_once_and_never_retried() {
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let failure = source
+        .fetch("http://fetchloom.invalid/object", None, None)
+        .unwrap_err();
+
+    assert_eq!(failure.kind(), ErrorKind::NetworkRefused);
+    assert!(
+        !failure.retryable(),
+        "a name the resolver does not know will not be known on the next attempt: {failure}"
+    );
+    assert!(
+        failure.next_action().contains("resolve"),
+        "the failure did not say the name is what failed: {}",
+        failure.next_action()
+    );
+}
+
+#[test]
+fn a_source_that_goes_quiet_mid_body_runs_out_of_time() {
+    let server =
+        TestServer::start(Script::serving(object()).replying(vec![Reply::Stalled { after: 16 }]))
+            .unwrap();
+    let limits = Limits {
+        idle_timeout: std::time::Duration::from_millis(200),
+        response_timeout: std::time::Duration::from_millis(200),
+        ..Limits::default()
+    };
+    let source = HttpSource::new(
+        limits,
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let body = source
+        .fetch(&format!("{}/object", server.origin()), None, None)
+        .unwrap();
+    let mut sink = Vec::new();
+    let mut body = body;
+    let failure = body.read_to_end(&mut sink).unwrap_err();
+
+    assert!(
+        matches!(
+            failure.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ) || failure.to_string().to_lowercase().contains("timeout"),
+        "a stalled body was not reported as running out of time: {failure}"
+    );
+}
+
+#[test]
+fn a_server_that_refuses_the_handshake_fails_on_the_connection() {
+    let server = TestServer::start(Script::serving(object()).refusing_tls()).unwrap();
+    let secured = server.secured_origin();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let failure = source
+        .fetch(&format!("{secured}/object"), None, None)
+        .unwrap_err();
+
+    assert_eq!(
+        failure.kind(),
+        ErrorKind::NetworkTls,
+        "a failed handshake was reported as something else: {failure}"
+    );
+    assert!(
+        !failure.retryable(),
+        "a connection that could not be secured will not secure itself on a retry"
+    );
+}
+
+#[test]
+fn a_credential_the_source_rejects_is_reported_as_the_credential_and_not_the_status() {
+    for code in [401, 403] {
+        let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Status {
+            code,
+            retry_after: None,
+        }]))
+        .unwrap();
+        let source = HttpSource::new(
+            Limits::default(),
+            std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+        );
+        let credential = Credential {
+            host: Host::new("127.0.0.1".to_owned()),
+            origin: CredentialOrigin::Environment,
+            value: Secret::new("token".to_owned()),
+        };
+        let failure = source
+            .fetch(
+                &format!("{}/object", server.origin()),
+                None,
+                Some(&credential),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            failure.kind(),
+            ErrorKind::PolicyCredentialInvalid,
+            "a {code} answered to a credential was surfaced as a raw status"
+        );
+        assert!(
+            failure.next_action().contains("127.0.0.1"),
+            "the refusal did not name the provider: {}",
+            failure.next_action()
+        );
+    }
+}
+
+#[test]
+fn a_status_a_run_carried_no_credential_for_stays_a_status() {
+    let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Status {
+        code: 401,
+        retry_after: None,
+    }]))
+    .unwrap();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let failure = source
+        .fetch(&format!("{}/object", server.origin()), None, None)
+        .unwrap_err();
+
+    assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
 }

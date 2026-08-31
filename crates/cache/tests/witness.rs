@@ -7,6 +7,7 @@
 )]
 
 use fetchloom_engine as _;
+use fetchloom_faults as _;
 use fetchloom_platform as _;
 use serde as _;
 use serde_json as _;

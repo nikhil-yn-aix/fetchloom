@@ -4,13 +4,13 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 
+use crate::Cache;
 use crate::layout::{digest_of, name_of};
-use crate::{Cache, failure};
 
 /// The size of one tar block.
 const BLOCK: usize = 512;
@@ -43,7 +43,7 @@ impl<P: Platform> Cache<P> {
         digests.sort_by(|left, right| left.bytes().cmp(right.bytes()));
 
         let mut writing = std::fs::File::create(to)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, to, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))?;
         let mut buffer = vec![0u8; BUFFER];
         let mut report = BundleReport {
             objects: 0,
@@ -53,17 +53,17 @@ impl<P: Platform> Cache<P> {
         for digest in digests {
             let path = self.layout().object(digest);
             let mut reading = std::fs::File::open(&path)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
             let length = reading
                 .metadata()
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?
+                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?
                 .len();
             write_all(&mut writing, &header(&name_of(digest), length), to)?;
             let mut moved = 0u64;
             loop {
                 let filled = reading
                     .read(&mut buffer)
-                    .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+                    .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
                 if filled == 0 {
                     break;
                 }
@@ -87,7 +87,7 @@ impl<P: Platform> Cache<P> {
         write_all(&mut writing, &[0u8; BLOCK * 2], to)?;
         writing
             .flush()
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, to, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))?;
         Ok(report)
     }
 
@@ -188,7 +188,7 @@ impl<P: Platform> Cache<P> {
             }
             writing
                 .write_all(&buffer[..filled])
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, scratch, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, scratch, &reason))?;
             pair.update(self.processor(), &buffer[..filled]);
             left -= filled as u64;
             self.work().read_bytes(filled as u64);
@@ -264,14 +264,14 @@ impl BundleReader {
     /// Fails when the bundle cannot be opened.
     pub fn open(path: &Path) -> Result<Self, Error> {
         let file = std::fs::File::open(path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
         Ok(Self { file, at: 0 })
     }
 
     fn next_member(&mut self, from: &Path) -> Result<Option<BundleMember>, Error> {
         let mut block = [0u8; BLOCK];
         let filled = fill(&mut self.file, &mut block)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, from, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
         if filled == 0 {
             return Err(truncated(from));
         }
@@ -436,5 +436,5 @@ fn padding(size: u64) -> Vec<u8> {
 fn write_all(writing: &mut std::fs::File, bytes: &[u8], to: &Path) -> Result<(), Error> {
     writing
         .write_all(bytes)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, to, &reason))
+        .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use fetchloom_engine::capability::{Backing, InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
 use fetchloom_engine::degrade::DegradeQueue;
@@ -23,10 +23,6 @@ const BOOT_FILE: &str = "/proc/sys/kernel/random/boot_id";
 
 /// The field of a process status line holding its start time.
 const START_TIME_FIELD: usize = 22;
-
-fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
-    Error::new(kind, format!("{}: {reason}", path.display()))
-}
 
 fn from_errno(kind: ErrorKind, path: &Path, reason: rustix::io::Errno) -> Error {
     Error::new(kind, format!("{}: {reason}", path.display()))
@@ -271,7 +267,7 @@ pub(crate) fn flush_directory(directory: &Path, tier: DurabilityTier) -> Result<
         return Ok(());
     }
     let handle = File::open(directory)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
     rustix::fs::fsync(&handle)
         .map_err(|reason| from_errno(ErrorKind::CacheCorrupt, directory, reason))
 }
@@ -293,12 +289,12 @@ pub(crate) fn rename(from: &Path, to: &Path, _tier: DurabilityTier) -> Result<()
 /// Fails on every filesystem that does not reference-count blocks.
 pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
     let source = File::open(from)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, from, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, from, &reason))?;
     let target = File::options()
         .write(true)
         .create_new(true)
         .open(to)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     rustix::fs::ioctl_ficlone(&target, &source).map_err(|reason| {
         Error::new(
             ErrorKind::DestinationUnrepresentable,

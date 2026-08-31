@@ -9,7 +9,7 @@ use std::path::Path;
 
 use fetchloom_engine::capability::{Backing, InteropAcceleration, VectorLevel, VolumeCapabilities};
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::{BootId, FileId, Fingerprint, MachineId, VolumeId};
 
 use fetchloom_engine::degrade::DegradeQueue;
@@ -29,10 +29,6 @@ const MACHINE_KEY: &str = "SOFTWARE\\Microsoft\\Cryptography";
 const BOOT_KEY: &str =
     "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters";
 
-fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
-    Error::new(kind, format!("{}: {reason}", path.display()))
-}
-
 fn nanos_from_windows(value: i64) -> i128 {
     i128::from(value - WINDOWS_TO_UNIX_INTERVALS) * 100
 }
@@ -44,9 +40,9 @@ fn nanos_from_windows(value: i64) -> i128 {
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
     let file = ffi::open_for_query(path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let (serial, _) =
-        ffi::id_info(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        ffi::id_info(&file).map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     Ok(VolumeId::new(serial))
 }
 
@@ -57,9 +53,9 @@ pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
     let file = ffi::open_for_query(path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let (_, id) =
-        ffi::id_info(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        ffi::id_info(&file).map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     Ok(FileId::new(id))
 }
 
@@ -70,14 +66,14 @@ pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
 /// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn fingerprint(path: &Path) -> Result<Fingerprint, Error> {
     let file = ffi::open_for_query(path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let (serial, id) =
-        ffi::id_info(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
-    let (written, changed) =
-        ffi::basic_info(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        ffi::id_info(&file).map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
+    let (written, changed) = ffi::basic_info(&file)
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let size = file
         .metadata()
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?
         .len();
     Ok(Fingerprint {
         volume: VolumeId::new(serial),
@@ -221,7 +217,7 @@ pub(crate) fn flush_directory(_directory: &Path, _tier: DurabilityTier) -> Resul
 pub(crate) fn rename(from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
     let write_through = matches!(tier, DurabilityTier::Strict | DurabilityTier::Normal);
     ffi::rename(from, to, write_through)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))
 }
 
 /// Shares the blocks of one file with another rather than writing them again.
@@ -232,15 +228,15 @@ pub(crate) fn rename(from: &Path, to: &Path, tier: DurabilityTier) -> Result<(),
 /// turns into a copy and reports.
 pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
     let source = File::open(from)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, from, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, from, &reason))?;
     let length = source
         .metadata()
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, from, &reason))?
+        .map_err(|reason| filesystem_failure(Surface::Destination, from, &reason))?
         .len();
 
     let information = ffi::open_for_query(from)
         .and_then(|handle| ffi::volume_information(&handle))
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, from, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, from, &reason))?;
     if information.flags
         & windows_sys::Win32::System::SystemServices::FILE_SUPPORTS_BLOCK_REFCOUNTING
         == 0
@@ -256,11 +252,11 @@ pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
         .write(true)
         .create_new(true)
         .open(to)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     ffi::preallocate(&target, length)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     ffi::duplicate_extents(&source, &target, length)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, to, &reason))
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))
 }
 
 /// Creates a symbolic link with the given target bytes.
@@ -277,7 +273,7 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
         )
     })?;
     ffi::create_symlink(text, link, false)
-        .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, link, &reason))
+        .map_err(|reason| filesystem_failure(Surface::Destination, link, &reason))
 }
 
 /// Returns this machine's own identity.
@@ -335,9 +331,9 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
 /// Fails when the path cannot be opened and when the platform reports no owner.
 pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     let file = ffi::open_for_query(path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
-    let found =
-        ffi::file_owner(&file).map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
+    let found = ffi::file_owner(&file)
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let ours = ffi::process_owners().map_err(|reason| {
         Error::new(
             ErrorKind::CacheCorrupt,

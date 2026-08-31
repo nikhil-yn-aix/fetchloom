@@ -4,14 +4,14 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::hashing::{self, Digests};
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
 use crate::record::{self, ObjectRecord};
-use crate::{Cache, failure, seal_object};
+use crate::{Cache, seal_object};
 
 /// How large a buffer the ingest reads through.
 const BUFFER: usize = 1 << 20;
@@ -51,9 +51,9 @@ impl<P: Platform> Cache<P> {
             });
         }
         let reading = std::fs::File::open(source)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
         self.ingest_from(reading, length, &|reason| {
-            failure(ErrorKind::CacheCorrupt, source, reason)
+            filesystem_failure(Surface::Cache, source, reason)
         })
     }
 
@@ -67,14 +67,14 @@ impl<P: Platform> Cache<P> {
     /// already held, on every run.
     fn digest_of(&self, source: &Path) -> Result<(Digests, u64), Error> {
         let mut reading = std::fs::File::open(source)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
         let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; BUFFER];
         let mut length = 0u64;
         loop {
             let filled = reading
                 .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, source, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
             if filled == 0 {
                 break;
             }
@@ -118,7 +118,7 @@ impl<P: Platform> Cache<P> {
         let written = std::fs::OpenOptions::new()
             .write(true)
             .open(&scratch)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &scratch, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &scratch, &reason))?;
         self.platform().flush(&written, self.tier())?;
         drop(written);
         self.publish_scratch(&scratch, digests)?;
@@ -194,7 +194,7 @@ impl<P: Platform> Cache<P> {
             }
             writing
                 .write_all(&buffer[..filled])
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &scratch, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &scratch, &reason))?;
             pair.update(self.processor(), &buffer[..filled]);
             written += filled as u64;
             self.work().read_bytes(filled as u64);
@@ -244,7 +244,7 @@ impl<P: Platform> Cache<P> {
         let path = self.object_record(digest);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, parent, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, parent, &reason))?;
         }
         record::write(
             &path,

@@ -2,11 +2,10 @@
 
 use std::path::Path;
 
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::{Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::OwnerToken;
 
-use crate::failure;
 use serde::{Deserialize, Serialize};
 
 /// Everything the cache knows about a published object that is not in its
@@ -90,11 +89,11 @@ pub fn write<T: Serialize>(
     let beside = std::path::PathBuf::from(beside);
 
     std::fs::write(&beside, rendered)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &beside, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
     work.touched_file();
     std::fs::rename(&beside, path).map_err(|reason| {
         let _ = std::fs::remove_file(&beside);
-        failure(ErrorKind::CacheCorrupt, path, &reason)
+        filesystem_failure(Surface::Cache, path, &reason)
     })?;
     work.touched_file();
     Ok(())
@@ -112,7 +111,7 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
         Ok(bytes) => bytes,
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(reason) => {
-            return Err(failure(ErrorKind::CacheCorrupt, path, &reason));
+            return Err(filesystem_failure(Surface::Cache, path, &reason));
         }
     };
     serde_json::from_slice(&bytes).map(Some).map_err(|reason| {

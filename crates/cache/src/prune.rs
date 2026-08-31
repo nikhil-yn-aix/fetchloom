@@ -3,12 +3,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::store::{PruneReport, Store};
 
 use crate::Cache;
-use crate::failure;
 use crate::record::{self, Mark};
 
 /// How long an object stays marked before a sweep may remove it.
@@ -115,7 +114,7 @@ fn remove(path: &std::path::Path) -> Result<(), Error> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, path, &reason)),
+        Err(reason) => Err(filesystem_failure(Surface::Cache, path, &reason)),
     }
 }
 

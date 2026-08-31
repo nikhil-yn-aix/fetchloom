@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::identity::CacheFormatFingerprint;
 use fetchloom_engine::partial_key::PartialKey;
@@ -20,7 +20,7 @@ use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{digest_of, name_of};
 use crate::record::{self, ObjectRecord};
-use crate::{Cache, failure, owner_record_of, seal_object, source_record_of};
+use crate::{Cache, owner_record_of, seal_object, source_record_of};
 
 /// How many bytes a resume reads back at a time to rebuild the digest.
 const RESUME_BUFFER_BYTES: usize = 1 << 20;
@@ -246,7 +246,7 @@ impl<P: Platform> Cache<P> {
     /// Lists the digests a directory of the cache names.
     pub(crate) fn digests_in(directory: &std::path::Path) -> Result<Vec<ContentDigest>, Error> {
         let entries = std::fs::read_dir(directory)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
         let mut found = Vec::new();
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str()
@@ -287,7 +287,7 @@ impl<P: Platform> Store for Cache<P> {
         }
         self.check(digest)?;
         let file = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         Ok(ObjectReader { file, lease })
     }
 
@@ -319,7 +319,7 @@ impl<P: Platform> Store for Cache<P> {
         let path = self.layout.partial_of(lease.key.name());
         if path.exists() {
             std::fs::remove_file(&path)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         }
         let file = self.platform.create_file_exclusive(&path)?;
         self.platform.preallocate(&file, length)?;
@@ -342,21 +342,21 @@ impl<P: Platform> Store for Cache<P> {
         let shortened = std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         shortened
             .set_len(valid)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         drop(shortened);
 
         let mut existing = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; RESUME_BUFFER_BYTES];
         let mut written = 0u64;
         loop {
             let taken = existing
                 .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
             if taken == 0 {
                 break;
             }
@@ -369,7 +369,7 @@ impl<P: Platform> Store for Cache<P> {
         let file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         record::write(&owner_record_of(&path), &self.token, &self.work)?;
         Ok(PartialWriter {
             file,
@@ -404,7 +404,11 @@ impl<P: Platform> Store for Cache<P> {
         match std::fs::remove_file(&partial) {
             Ok(()) => Ok(()),
             Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(reason) => Err(failure(ErrorKind::CacheCorrupt, partial.as_path(), &reason)),
+            Err(reason) => Err(filesystem_failure(
+                Surface::Cache,
+                partial.as_path(),
+                &reason,
+            )),
         }
     }
 
@@ -446,7 +450,7 @@ impl<P: Platform> Store for Cache<P> {
         let lease = self.read_lease(digest)?;
         let path = self.layout.outboard_of(digest);
         let file = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason))?;
         Ok(ObjectReader { file, lease })
     }
 
@@ -466,7 +470,7 @@ impl<P: Platform> Store for Cache<P> {
         let mut writing = self.platform.create_file_exclusive(&beside)?;
         writing
             .write_all(tree)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, beside.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, beside.as_path(), &reason))?;
         self.work.wrote_bytes(tree.len() as u64);
         self.platform.flush(&writing, self.tier)?;
         drop(writing);
@@ -502,7 +506,7 @@ impl<P: Platform> Store for Cache<P> {
         }
         let path = self.layout.pin_of(digest);
         let written = std::fs::write(&path, [])
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, path.as_path(), &reason));
+            .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason));
         if written.is_ok() {
             self.work.touched_file();
         }

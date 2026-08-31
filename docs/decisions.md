@@ -5710,3 +5710,91 @@ Phase 7 either widens it or admits it is one.
 Sources: `cargo test --workspace` on this machine, 593 passed and 5 ignored;
 `crates/cli/tests/stream.rs`, `crates/cli/tests/work.rs`;
 `cargo xtask bench --save-baseline` under `FETCHLOOM_VERIFY`.
+
+## Errors that named something else
+
+`cache.corrupt` was the catch-all for every filesystem failure in two crates,
+which made it the third kind to stand in for something it is not. The cause was
+not a hundred bad judgements at a hundred call sites; it was that eight
+different functions, six of them byte-identical, each took an `io::Error` and a
+kind the caller had picked, and only ever changed the kind for a full volume.
+Every other condition kept whatever the site had guessed.
+
+There is now one decider, `error::filesystem_failure`, and a call site says
+which of the two surfaces its path is on -- the cache or a destination -- which
+is a fact about the path rather than a judgement about the failure. A full
+volume or an exceeded quota is `resource.disk` on either surface, a crossed
+volume boundary is `cache.cross_volume` or `destination.cross_volume` by
+surface, and everything else falls to the surface it happened on. Its sibling
+`error::lock_failure` decides the one operation whose kind comes from what was
+attempted rather than from what the filesystem said, because a volume that
+cannot express an advisory lock and a volume with no room left are different
+failures and only one of them is the cache's fault. A test walks the sources of
+both crates and fails on any function that turns an `io::Error` into an `Error`,
+so a ninth decider cannot be added quietly.
+
+Two failures were being told the wrong way round by that change. Opening the
+lock file failed with `cache.locked`, which says another writer holds it, when
+what happened was that the file could not be opened at all. Probing a cache
+volume reports `destination.unrepresentable`, which is wrong for a cache and is
+left wrong: the probe takes a directory and the Platform seam does not tell it
+whose, and widening a seam costs more than the imprecision does.
+
+A host name nothing can resolve was retried five times and reported as refused.
+The transport classifier was matching lowercased substrings of whatever the
+client printed, so it could not tell a name that does not exist from a socket
+that closed. It now matches on `ureq::Error` itself. A failed handshake is found
+by asking the io failure for the `rustls::Error` it carries rather than by
+looking for the word in its message. A name lookup is the one answer the
+standard library does not type on Unix, so it is read from the text
+`getaddrinfo` failures carry, and a resolver that has not heard of a name is
+kept apart from a resolver that could not be reached: only the first is
+terminal. An existing test asserted the opposite, that a name that does not
+resolve today may resolve later. It was right about the transient case and
+wrong about the authoritative one, and it now says which.
+
+Redirecting past the limit was reported as `network.status`. The redirect count
+is in the Limits table, `resource.limit` is defined as a run exceeding a
+configured limit, and a source that redirects forever has not answered with a
+status at all.
+
+Seven kinds in the Errors table were produced by no test, and two of those by no
+production code. `policy.credential_invalid` is now produced where contracts.md
+says it should be: a source answering 401 or 403 to a credential the run
+presented is reported as the credential rather than as a raw status, which the
+same sentence forbids surfacing on its own. A status no credential was carried
+for stays a status. `alias.unstable`, `network.timeout`, `network.tls`,
+`cache.locking_unsupported` and `resource.limit` now each have a test that
+produces them, one of which needed the fault server to answer a secured
+connection with a fatal handshake alert, seven bytes and no certificate.
+
+`source.identity_changed` remains produced by nothing, and clearing it needs a
+human. It is in the Errors table, and the Source seam's own documentation
+promises `fetch` fails when a source "serves an object whose identity has
+changed", but `fetch` is given the location, a range and a credential and never
+the identity a previous response stated, so it cannot detect it. The only
+situation that could name it is a resume whose recorded identity differs, and
+contracts.md:368 settles that one by restarting from zero rather than by
+failing, which the code does. Clearing this needs either a contract sentence
+saying when the kind fires or the Source seam carrying the recorded identity
+into `fetch`. Both are decisions, not implementations.
+
+The ENOLCK skip is closed. Five gate records said it needed a filesystem that
+answers ENOLCK, which no volume in the lane does, and the test it was blocking
+was an empty function behind an `#[ignore]`. What it was actually asserting
+splits in two, and neither half needs a filesystem: that a lock refused by the
+volume is called `cache.locking_unsupported`, which is `lock_failure` and is now
+tested directly against the errno family a FUSE filesystem without lock support
+answers, and that opening a cache propagates a refused probe lock rather than
+swallowing it, which is now tested through `FaultyPlatform` -- the first caller
+that library's platform half has ever had.
+
+Dependency added: `fetchloom-faults` as a dev-dependency of `fetchloom-cache`,
+so the cache can be opened over a platform that refuses an operation. It is a
+workspace crate that already depends only on the engine, so there is no cycle
+and nothing new enters the build of the binary.
+
+Sources: `cargo test --workspace` on this machine, 607 passed and 4 ignored,
+against 593 before; `crates/engine/tests/filesystem_failure.rs`,
+`crates/sources/tests/http.rs`, `crates/cache/tests/volumes.rs`,
+`crates/cli/tests/lock.rs`.

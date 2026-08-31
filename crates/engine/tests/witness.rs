@@ -1,10 +1,5 @@
 //! Contract tests over witnesses and the trust class they can raise.
 
-#![expect(
-    clippy::unwrap_used,
-    reason = "test setup, where a failure to build the input is the assertion"
-)]
-
 use blake3 as _;
 use rayon as _;
 use serde as _;

@@ -337,6 +337,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "fetchloom-engine",
+ "fetchloom-faults",
  "fetchloom-platform",
  "serde",
  "serde_json",

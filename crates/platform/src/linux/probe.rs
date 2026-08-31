@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use fetchloom_engine::capability::{
     Backing, CaseFolding, Normalization, Scanner, VolumeCapabilities,
 };
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 
 use fetchloom_engine::degrade::DegradeQueue;
 
@@ -30,13 +30,6 @@ const SCANNER_FILE_BYTES: usize = 4096;
 fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
     static CACHE: OnceLock<Mutex<HashMap<u64, VolumeCapabilities>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn failure(path: &Path, reason: &std::io::Error) -> Error {
-    Error::new(
-        ErrorKind::DestinationUnrepresentable,
-        format!("{}: {reason}", path.display()),
-    )
 }
 
 /// Detects everything about the volume behind a directory.
@@ -113,7 +106,8 @@ fn fold_probe(
     let tag = probe_tag();
     let upper = directory.join(format!("fetchloom-probe-{tag}-A"));
     let lower = directory.join(format!("fetchloom-probe-{tag}-a"));
-    std::fs::File::create_new(&upper).map_err(|reason| failure(&upper, &reason))?;
+    std::fs::File::create_new(&upper)
+        .map_err(|reason| filesystem_failure(Surface::Destination, &upper, &reason))?;
     let folds_case = std::fs::File::create_new(&lower).is_err();
     let _ = std::fs::remove_file(&lower);
     let _ = std::fs::remove_file(&upper);
@@ -256,11 +250,13 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
     let bytes = vec![0u8; SCANNER_FILE_BYTES];
 
     let many = directory.join(format!("fetchloom-probe-{tag}-many"));
-    std::fs::create_dir(&many).map_err(|reason| failure(&many, &reason))?;
+    std::fs::create_dir(&many)
+        .map_err(|reason| filesystem_failure(Surface::Destination, &many, &reason))?;
     let started = std::time::Instant::now();
     for index in 0..SCANNER_FILES {
         let path = many.join(format!("{index}"));
-        std::fs::write(&path, &bytes).map_err(|reason| failure(&path, &reason))?;
+        std::fs::write(&path, &bytes)
+            .map_err(|reason| filesystem_failure(Surface::Destination, &path, &reason))?;
     }
     let small = started.elapsed();
     let _ = std::fs::remove_dir_all(&many);
@@ -268,7 +264,8 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
     let one = directory.join(format!("fetchloom-probe-{tag}-one"));
     let whole = vec![0u8; SCANNER_FILE_BYTES * SCANNER_FILES];
     let started = std::time::Instant::now();
-    std::fs::write(&one, &whole).map_err(|reason| failure(&one, &reason))?;
+    std::fs::write(&one, &whole)
+        .map_err(|reason| filesystem_failure(Surface::Destination, &one, &reason))?;
     let large = started.elapsed();
     let _ = std::fs::remove_file(&one);
 

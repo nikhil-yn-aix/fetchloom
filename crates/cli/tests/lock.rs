@@ -22,7 +22,7 @@ use toml as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use fetchloom_faults::{Reply, Script, TestServer};
+use fetchloom_faults::{Reply, Script, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer};
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
@@ -52,6 +52,10 @@ impl Run {
 
     fn code(&self) -> i32 {
         self.output.status.code().unwrap_or(-1)
+    }
+
+    fn stdout(&self) -> String {
+        String::from_utf8_lossy(&self.output.stdout).into_owned()
     }
 
     fn stderr(&self) -> String {
@@ -414,3 +418,50 @@ const RECORDED_LOCK: &str = concat!(
     "    tree: \"blake3:29ab1d09d9a21492d3cad40ca3adb1204739e6fa9fe2f51b1ac0776d836a8cc8\"
 ",
 );
+
+#[test]
+fn a_locked_run_asking_for_a_different_layout_says_the_alias_moved() {
+    let server = TestServer::start(Script::serving(one_member_tar())).unwrap();
+    let scene = scene();
+    let location = format!("{}/object.tar", server.origin());
+    assert_eq!(
+        get(
+            &location,
+            &scene.destination,
+            &scene.cache,
+            &scene.lock,
+            &[]
+        )
+        .code(),
+        0
+    );
+    let run = get(
+        &location,
+        &scene.destination,
+        &scene.cache,
+        &scene.lock,
+        &["--locked", "--layout", "flatten:1"],
+    );
+
+    assert_eq!(
+        run.code(),
+        10,
+        "a locked run under a different layout did not fail on resolution: {}",
+        run.stderr()
+    );
+    assert!(
+        run.stderr().contains("alias.unstable") || run.stdout().contains("alias.unstable"),
+        "the refusal did not name the kind: {} {}",
+        run.stdout(),
+        run.stderr()
+    );
+}
+
+fn one_member_tar() -> Vec<u8> {
+    let body = object(512);
+    let mut header = TarHeader::ustar(b"pkg-1.0/data.bin", TYPEFLAG_REGULAR);
+    header.set_size(body.len() as u64);
+    let mut writer = TarWriter::new();
+    writer.push(&header, &body);
+    writer.finish()
+}

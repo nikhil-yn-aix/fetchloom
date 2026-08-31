@@ -2,10 +2,10 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::outboard::{GROUP_LEN, find_damage};
 use fetchloom_engine::seam::platform::Platform;
@@ -13,7 +13,7 @@ use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::timestamp::Timestamp;
 
 use crate::diagnosis::{Diagnosis, NotLocalized, spans_of};
-use crate::{Cache, failure, seal_object};
+use crate::{Cache, seal_object};
 
 /// How large a buffer a repair reads and writes through.
 const BUFFER: usize = 1 << 20;
@@ -84,7 +84,7 @@ impl<P: Platform> Cache<P> {
         };
         let path = held.path().to_path_buf();
         let object_len = std::fs::metadata(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?
             .len();
 
         if !self.has_outboard(digest)? {
@@ -96,13 +96,13 @@ impl<P: Platform> Cache<P> {
         }
 
         let mut tree = std::fs::File::open(self.layout().outboard_of(digest))
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let recorded_len = recorded_length(&mut tree).unwrap_or(object_len);
         let mut object = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let work = self.work();
         let found = find_damage(&mut tree, recorded_len, digest, &mut |group, into| {
-            read_group(&mut object, group, object_len, into, work)
+            read_group(&mut object, &path, group, object_len, into, work)
         });
         match found {
             Ok(damaged) => Ok(Localized {
@@ -198,7 +198,7 @@ impl<P: Platform> Cache<P> {
             .write(true)
             .truncate(false)
             .open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         Ok(RepairWriter {
             file,
             path,
@@ -226,7 +226,7 @@ impl<P: Platform> Cache<P> {
         writer
             .file
             .seek(SeekFrom::Start(span.start))
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &writer.path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &writer.path, &reason))?;
         let mut buffer = vec![0u8; BUFFER];
         let mut left = span.end.saturating_sub(span.start);
         let mut moved = 0u64;
@@ -234,14 +234,14 @@ impl<P: Platform> Cache<P> {
             let want = usize::try_from(left.min(BUFFER as u64)).unwrap_or(BUFFER);
             let filled = bytes
                 .read(&mut buffer[..want])
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &writer.path, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &writer.path, &reason))?;
             if filled == 0 {
                 break;
             }
             writer
                 .file
                 .write_all(&buffer[..filled])
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &writer.path, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &writer.path, &reason))?;
             self.work().wrote_bytes(filled as u64);
             left -= filled as u64;
             moved += filled as u64;
@@ -278,18 +278,18 @@ impl<P: Platform> Cache<P> {
             file, path, digest, ..
         } = writer;
         file.set_len(length)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         self.platform().flush(&file, self.tier())?;
         drop(file);
 
         let mut reading = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; BUFFER];
         loop {
             let filled = reading
                 .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
             if filled == 0 {
                 break;
             }
@@ -330,13 +330,13 @@ impl<P: Platform> Cache<P> {
         };
         let path = held.path().to_path_buf();
         let mut file = std::fs::File::open(&path)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let mut pair = hashing::Pair::new();
         let mut buffer = vec![0u8; BUFFER];
         loop {
             let filled = file
                 .read(&mut buffer)
-                .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
             if filled == 0 {
                 break;
             }
@@ -366,6 +366,7 @@ impl RepairWriter {
 /// Reads one leaf group of an object into a buffer the walk reuses.
 fn read_group(
     object: &mut std::fs::File,
+    path: &Path,
     group: u64,
     object_len: u64,
     into: &mut Vec<u8>,
@@ -379,14 +380,14 @@ fn read_group(
     }
     object
         .seek(SeekFrom::Start(start))
-        .map_err(|reason| read_failure(&reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
     let want = usize::try_from(end - start).unwrap_or(usize::MAX);
     into.resize(want, 0);
     let mut filled = 0;
     while filled < want {
         let read = object
             .read(&mut into[filled..])
-            .map_err(|reason| read_failure(&reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
         if read == 0 {
             break;
         }
@@ -407,13 +408,6 @@ fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     tree.read_exact(&mut header).ok()?;
     tree.seek(SeekFrom::Start(0)).ok()?;
     Some(u64::from_le_bytes(header))
-}
-
-fn read_failure(reason: &std::io::Error) -> Error {
-    Error::new(
-        ErrorKind::CacheCorrupt,
-        format!("the object could not be read: {reason}"),
-    )
 }
 
 /// Returns how many bytes at the start of a partial transfer match the
@@ -438,21 +432,21 @@ pub fn verified_prefix<P: Platform>(
     }
     let whole_groups = on_disk / GROUP_LEN;
     let mut tree = std::fs::File::open(cache.layout().outboard_of(digest))
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
     let mut header = [0u8; 8];
     tree.read_exact(&mut header)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
     let object_len = u64::from_le_bytes(header);
 
     let mut partial = std::fs::File::open(&path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
     let work = cache.work();
     let found = find_damage(&mut tree, object_len, digest, &mut |group, into| {
         if group >= whole_groups {
             into.clear();
             return Ok(());
         }
-        read_group(&mut partial, group, on_disk, into, work)
+        read_group(&mut partial, &path, group, on_disk, into, work)
     });
     match found {
         Ok(damaged) => Ok(damaged

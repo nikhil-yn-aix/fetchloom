@@ -1,6 +1,8 @@
 //! The content-addressed store behind the Store seam.
 
 #[cfg(test)]
+use fetchloom_faults as _;
+#[cfg(test)]
 use fetchloom_platform as _;
 #[cfg(test)]
 use tempfile as _;
@@ -25,7 +27,7 @@ use std::sync::Arc;
 
 use fetchloom_engine::capability::Backing;
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::BootId;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
@@ -158,7 +160,7 @@ impl<P: Platform> Cache<P> {
         sweep_previous_boot(&self.layout.partial(), &self.token)?;
         sweep_previous_boot(&self.layout.staging(), &self.token)?;
         std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes()).map_err(
-            |reason| failure(ErrorKind::CacheCorrupt, &self.layout.recovered(), &reason),
+            |reason| filesystem_failure(Surface::Cache, &self.layout.recovered(), &reason),
         )?;
         self.work.touched_file();
         Ok(())
@@ -179,7 +181,7 @@ pub fn clear(root: &Path) -> Result<(), Error> {
     match std::fs::remove_dir_all(root) {
         Ok(()) => Ok(()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, root, &reason)),
+        Err(reason) => Err(filesystem_failure(Surface::Cache, root, &reason)),
     }
 }
 
@@ -200,8 +202,8 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
     match std::fs::read(layout.recovered()) {
         Ok(bytes) => Ok(bytes == boot.as_str().as_bytes()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(reason) => Err(failure(
-            ErrorKind::CacheCorrupt,
+        Err(reason) => Err(filesystem_failure(
+            Surface::Cache,
             &layout.recovered(),
             &reason,
         )),
@@ -212,7 +214,7 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
 /// boot, along with their owner records.
 fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error> {
     let entries = std::fs::read_dir(directory)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path
@@ -235,19 +237,6 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
     Ok(())
 }
 
-/// Turns a filesystem failure into the error kind it deserves.
-///
-/// A volume with no room left is a resource failure and not a corruption, and
-/// the caller decides what to do about the two differently.
-pub(crate) fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
-    let kind = if reason.kind() == std::io::ErrorKind::StorageFull {
-        ErrorKind::ResourceDisk
-    } else {
-        kind
-    };
-    Error::new(kind, format!("{}: {reason}", path.display()))
-}
-
 /// Removes a file or a directory, whichever the path is.
 fn remove(path: &Path) -> Result<(), Error> {
     let outcome = if path.is_dir() {
@@ -258,7 +247,7 @@ fn remove(path: &Path) -> Result<(), Error> {
     match outcome {
         Ok(()) => Ok(()),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, path, &reason)),
+        Err(reason) => Err(filesystem_failure(Surface::Cache, path, &reason)),
     }
 }
 
@@ -275,7 +264,7 @@ fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> 
     for directory in wanted {
         let absent = !directory.is_dir();
         std::fs::create_dir_all(&directory)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory.as_path(), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, directory.as_path(), &reason))?;
         if absent {
             work.touched_file();
         }
@@ -293,7 +282,7 @@ fn share_directory(directory: &Path) -> Result<(), Error> {
         directory,
         std::fs::Permissions::from_mode(SHARED_DIRECTORY_MODE),
     )
-    .map_err(|reason| failure(ErrorKind::CacheCorrupt, directory, &reason))
+    .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))
 }
 
 /// Leaves a cache directory with the entries it inherited.
@@ -312,7 +301,7 @@ pub(crate) fn seal_object(path: &Path) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(PUBLISHED_OBJECT_MODE))
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, path, &reason))
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }
 
 /// Leaves a published object with the entries it inherited.
@@ -347,7 +336,11 @@ fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
             work.touched_file();
             Ok(())
         }
-        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, &layout.format(), &reason)),
+        Err(reason) => Err(filesystem_failure(
+            Surface::Cache,
+            &layout.format(),
+            &reason,
+        )),
     }
 }
 

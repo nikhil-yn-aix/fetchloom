@@ -9,7 +9,7 @@ use fetchloom_engine::capability::{
 };
 use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure, lock_failure};
 use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
@@ -121,7 +121,7 @@ impl NativePlatform {
     /// Copies the bytes of one file into a path that does not exist.
     fn copy_bytes(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
         let copied = std::fs::copy(from, to)
-            .map_err(|error| failure(ErrorKind::DestinationUnrepresentable, to, &error))?;
+            .map_err(|error| filesystem_failure(Surface::Destination, to, &error))?;
         self.work.wrote_bytes(copied);
         self.work.touched_file();
         Ok(CopyMechanism::Copy)
@@ -149,15 +149,6 @@ impl NativePlatform {
     pub fn take_degradations(&self) -> Vec<Degradation> {
         self.degradations.take()
     }
-}
-
-fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
-    let kind = if reason.kind() == std::io::ErrorKind::StorageFull {
-        ErrorKind::ResourceDisk
-    } else {
-        kind
-    };
-    Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
 fn cross_volume(from: &Path, to: &Path) -> Error {
@@ -226,14 +217,14 @@ impl Platform for NativePlatform {
 
     fn create_file_exclusive(&self, path: &Path) -> Result<File, Error> {
         let made = File::create_new(path)
-            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, path, &reason))?;
         self.work.touched_file();
         Ok(made)
     }
 
     fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error> {
         std::fs::create_dir(path)
-            .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, path, &reason))?;
         self.work.touched_file();
         Ok(())
     }
@@ -255,11 +246,7 @@ impl Platform for NativePlatform {
             Err(reason) if reason.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
                 Ok(())
             }
-            Err(reason) => Err(failure(
-                ErrorKind::DestinationUnrepresentable,
-                path,
-                &reason,
-            )),
+            Err(reason) => Err(filesystem_failure(Surface::Destination, path, &reason)),
         }
     }
 
@@ -320,7 +307,7 @@ impl Platform for NativePlatform {
             }
         }
         std::fs::remove_dir_all(&aside)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &aside, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &aside, &reason))?;
         self.flush_directory(&containing_directory(destination), tier)
     }
 
@@ -482,11 +469,11 @@ fn acquire(path: &Path, sharing: Sharing, waiting: Waiting) -> Result<Option<Pla
             (Sharing::Exclusive, Waiting::No) => immediate(file.try_lock(), path)?,
             (Sharing::Shared, Waiting::No) => immediate(file.try_lock_shared(), path)?,
             (Sharing::Exclusive, Waiting::Yes) => {
-                file.lock().map_err(|why| unsupported(path, &why))?;
+                file.lock().map_err(|why| lock_failure(path, &why))?;
                 true
             }
             (Sharing::Shared, Waiting::Yes) => {
-                file.lock_shared().map_err(|why| unsupported(path, &why))?;
+                file.lock_shared().map_err(|why| lock_failure(path, &why))?;
                 true
             }
         };
@@ -513,7 +500,7 @@ fn immediate(outcome: Result<(), std::fs::TryLockError>, path: &Path) -> Result<
     match outcome {
         Ok(()) => Ok(true),
         Err(std::fs::TryLockError::WouldBlock) => Ok(false),
-        Err(std::fs::TryLockError::Error(reason)) => Err(unsupported(path, &reason)),
+        Err(std::fs::TryLockError::Error(reason)) => Err(lock_failure(path, &reason)),
     }
 }
 
@@ -533,15 +520,5 @@ fn open_lock_file(path: &Path) -> Result<File, Error> {
         .create(true)
         .truncate(false)
         .open(path)
-        .map_err(|reason| failure(ErrorKind::CacheLocked, path, &reason))
-}
-
-fn unsupported(path: &Path, reason: &std::io::Error) -> Error {
-    Error::new(
-        ErrorKind::CacheLockingUnsupported,
-        format!(
-            "put the cache on a volume that supports advisory locking, because {} cannot express one: {reason}",
-            path.display()
-        ),
-    )
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }

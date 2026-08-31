@@ -1,6 +1,6 @@
 //! A server that answers exactly what a test told it to answer.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -76,6 +76,12 @@ pub enum IndexFormat {
     Unrecognized,
 }
 
+/// A TLS alert record carrying a fatal handshake failure.
+///
+/// A content type of alert, a version of one point two, a two byte payload,
+/// and the fatal level and handshake failure description that payload holds.
+const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
+
 /// What a test told one server to do.
 #[derive(Clone, Debug)]
 pub struct Script {
@@ -99,6 +105,9 @@ pub struct Script {
     /// Whether the server answers a conditional request whose validator still
     /// matches with a three hundred and four.
     pub honors_conditionals: bool,
+    /// Whether the server answers a secured connection with a refusal instead
+    /// of a handshake.
+    pub refuses_tls: bool,
 }
 
 impl Script {
@@ -113,7 +122,16 @@ impl Script {
             accepts_ranges: true,
             last_modified: None,
             honors_conditionals: true,
+            refuses_tls: false,
         }
+    }
+
+    /// Returns the script with every secured connection refused at the
+    /// handshake.
+    #[must_use]
+    pub fn refusing_tls(mut self) -> Self {
+        self.refuses_tls = true;
+        self
     }
 
     /// Returns the script with a last modified value on every response.
@@ -233,6 +251,12 @@ impl TestServer {
         format!("http://{}", self.address)
     }
 
+    /// Returns the base a test that means to speak TLS points a client at.
+    #[must_use]
+    pub fn secured_origin(&self) -> String {
+        format!("https://{}", self.address)
+    }
+
     /// Returns every request the server has received, in order.
     #[must_use]
     pub fn received(&self) -> Vec<Received> {
@@ -257,6 +281,16 @@ fn serve(
     seen: &Mutex<Vec<Received>>,
     ending: &AtomicBool,
 ) {
+    if script.refuses_tls {
+        let mut hello = [0_u8; 1024];
+        let mut reading = connection;
+        let _ = reading.read(&mut hello);
+        let mut writing = connection;
+        let _ = writing.write_all(&HANDSHAKE_FAILURE);
+        let _ = writing.flush();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        return;
+    }
     let mut reader = BufReader::new(connection);
     loop {
         let Some(request) = read_request(&mut reader) else {

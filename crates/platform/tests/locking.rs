@@ -311,10 +311,6 @@ fn shared_by_everyone(directory: &std::path::Path) {
 }
 
 #[test]
-#[ignore = "no filesystem reachable inside the verification container refuses a lock: a bindfs mount in user space, tmpfs through /dev/shm and a procfs file each granted both an fcntl write lock and a flock, and the one filesystem known to answer ENOLCK is an NFS mount without a lock daemon, which needs a server the container lane does not run"]
-fn a_volume_that_cannot_lock_is_refused_with_locking_unsupported() {}
-
-#[test]
 fn two_shared_holders_take_one_lock_at_once() {
     let scratch = support::scratch();
     let platform = NativePlatform::new(std::sync::Arc::new(

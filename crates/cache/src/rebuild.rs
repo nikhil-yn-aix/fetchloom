@@ -2,7 +2,7 @@
 
 use std::io::Read;
 
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::limits::OUTBOARD_THRESHOLD;
 use fetchloom_engine::seam::platform::{Liveness, Platform};
@@ -10,7 +10,7 @@ use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
 use crate::record::{self, ObjectRecord};
-use crate::{Cache, failure, owner_record_of, source_record_of};
+use crate::{Cache, owner_record_of, source_record_of};
 
 /// How large a buffer a rebuild reads through.
 const BUFFER: usize = 1 << 20;
@@ -114,13 +114,13 @@ fn read_object<P: Platform>(
 ) -> Result<hashing::Digests, Error> {
     let path = cache.layout().object(digest);
     let mut file = std::fs::File::open(&path)
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
     let mut pair = hashing::Pair::new();
     let mut buffer = vec![0u8; BUFFER];
     loop {
         let filled = file
             .read(&mut buffer)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &path, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         if filled == 0 {
             break;
         }
@@ -140,7 +140,7 @@ fn write_record<P: Platform>(
     let path = cache.object_record(digest);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, parent, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, parent, &reason))?;
     }
     record::write(
         &path,
@@ -158,7 +158,7 @@ fn release_dead_locks<P: Platform>(
     report: &mut RebuildReport,
 ) -> Result<(), Error> {
     let entries = std::fs::read_dir(cache.layout().locks())
-        .map_err(|reason| failure(ErrorKind::CacheCorrupt, &cache.layout().locks(), &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Cache, &cache.layout().locks(), &reason))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|kind| kind != "owner") {
@@ -189,7 +189,7 @@ fn release_dead_locks<P: Platform>(
 fn remove_orphans<P: Platform>(cache: &Cache<P>, report: &mut RebuildReport) -> Result<(), Error> {
     for directory in [cache.layout().partial(), cache.layout().staging()] {
         let entries = std::fs::read_dir(&directory)
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &directory, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &directory, &reason))?;
         for entry in entries.flatten() {
             let path = entry.path();
             if path
@@ -209,7 +209,7 @@ fn remove_orphans<P: Platform>(cache: &Cache<P>, report: &mut RebuildReport) -> 
             match removed {
                 Ok(()) => {}
                 Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(reason) => return Err(failure(ErrorKind::CacheCorrupt, &path, &reason)),
+                Err(reason) => return Err(filesystem_failure(Surface::Cache, &path, &reason)),
             }
             let _ = std::fs::remove_file(owner_record_of(&path));
             let _ = std::fs::remove_file(source_record_of(&path));

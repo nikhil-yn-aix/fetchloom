@@ -13,10 +13,15 @@ mod support;
 
 use std::io::Write;
 
-use fetchloom_engine::error::ErrorKind;
+use fetchloom_cache::Cache;
+use fetchloom_engine::durability::DurabilityTier;
+use fetchloom_engine::error::{ErrorKind, lock_failure};
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::store::Store;
+use fetchloom_engine::verification::VerificationPolicy;
+use fetchloom_faults::{FaultyPlatform, Operation};
+use fetchloom_platform::NativePlatform;
 
 use support::{Property, bytes_of, scratch_on, volumes};
 
@@ -139,3 +144,45 @@ fn prune_skips_an_object_another_user_created_and_reports_it() {
         "prune did not report what it skipped"
     );
 }
+
+#[test]
+fn a_volume_whose_locks_are_refused_is_refused_as_a_cache() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    let platform = FaultyPlatform::new(NativePlatform::new(std::sync::Arc::clone(&work)));
+    platform.faults().fail(
+        Operation::TryLock,
+        0,
+        1,
+        lock_failure(scratch.path(), &std::io::Error::from_raw_os_error(ENOLCK)),
+    );
+    let refused = Cache::open(
+        scratch.path().join("cache"),
+        platform,
+        DurabilityTier::Fast,
+        VerificationPolicy::Fingerprint,
+        std::sync::Arc::clone(&work),
+        std::sync::Arc::new(
+            fetchloom_engine::pool::Processor::new(
+                fetchloom_engine::threads::ThreadBudget::resolve(std::num::NonZeroUsize::MIN, None),
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        refused.kind(),
+        ErrorKind::CacheLockingUnsupported,
+        "a volume that refused the probe lock was accepted as a cache: {refused}"
+    );
+}
+
+/// What a filesystem with no lock manager answers, which is the one condition
+/// no volume in the verification lane can be made to produce.
+#[cfg(unix)]
+const ENOLCK: i32 = 37;
+
+/// What a Windows volume answers when the function is not implemented for it.
+#[cfg(windows)]
+const ENOLCK: i32 = 1;

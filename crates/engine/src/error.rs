@@ -369,3 +369,60 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Which of the two surfaces a run writes a path belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    /// A path under the cache root.
+    Cache,
+    /// A path under a destination the run materializes.
+    Destination,
+}
+
+/// Turns a filesystem failure on one of the two surfaces into the kind that
+/// names it.
+///
+/// This is the only place that decides. A caller says which surface its path is
+/// on, which is a fact about the path, and never which kind the failure is,
+/// which is a judgement that was made differently at a hundred call sites and
+/// was wrong at most of them.
+#[must_use]
+pub fn filesystem_failure(
+    surface: Surface,
+    path: &std::path::Path,
+    reason: &std::io::Error,
+) -> Error {
+    let kind = match (reason.kind(), surface) {
+        (std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded, _) => {
+            ErrorKind::ResourceDisk
+        }
+        (std::io::ErrorKind::CrossesDevices, Surface::Cache) => ErrorKind::CacheCrossVolume,
+        (std::io::ErrorKind::CrossesDevices, Surface::Destination) => {
+            ErrorKind::DestinationCrossVolume
+        }
+        (_, Surface::Cache) => ErrorKind::CacheCorrupt,
+        (_, Surface::Destination) => ErrorKind::DestinationUnrepresentable,
+    };
+    Error::new(kind, format!("{}: {reason}", path.display()))
+}
+
+/// Turns a failure to take an advisory lock into the kind that names it.
+///
+/// A volume that cannot express the lock and a volume with no room left are
+/// different failures, and the second one is not the cache's fault.
+#[must_use]
+pub fn lock_failure(path: &std::path::Path, reason: &std::io::Error) -> Error {
+    if matches!(
+        reason.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    ) {
+        return filesystem_failure(Surface::Cache, path, reason);
+    }
+    Error::new(
+        ErrorKind::CacheLockingUnsupported,
+        format!(
+            "put the cache on a volume that supports advisory locking, because {} cannot express one: {reason}",
+            path.display()
+        ),
+    )
+}

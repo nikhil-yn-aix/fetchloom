@@ -242,7 +242,7 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
 }
 
 #[test]
-fn a_name_that_does_not_resolve_exits_twenty() {
+fn a_name_no_resolver_knows_exits_twenty_and_is_not_retried() {
     let harness = Harness::with(impatient());
     let locations = vec!["http://fetchloom-no-such-host.invalid/object".to_owned()];
 
@@ -254,8 +254,8 @@ fn a_name_that_does_not_resolve_exits_twenty() {
     assert_eq!(failure.layer(), Layer::Transfer);
     assert_eq!(ExitCode::from(failure.layer()), ExitCode::Network);
     assert!(
-        failure.retryable(),
-        "a name that does not resolve today may resolve later"
+        !failure.retryable(),
+        "a name no resolver has heard of will not be heard of on the next attempt"
     );
 }
 

@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::receipt::Receipt;
 use fetchloom_engine::seam::platform::Platform;
 
-use crate::{Cache, failure};
+use crate::Cache;
 
 impl<P: Platform> Cache<P> {
     /// Writes the receipt for the destination it names.
@@ -24,11 +24,11 @@ impl<P: Platform> Cache<P> {
         beside.push(format!(".{}.writing", std::process::id()));
         let beside = std::path::PathBuf::from(beside);
         std::fs::write(&beside, rendered.as_bytes())
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, &beside, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
         self.work().touched_file();
         std::fs::rename(&beside, &path).map_err(|reason| {
             let _ = std::fs::remove_file(&beside);
-            failure(ErrorKind::CacheCorrupt, &path, &reason)
+            filesystem_failure(Surface::Cache, &path, &reason)
         })?;
         self.work().touched_file();
         Ok(())
@@ -48,7 +48,7 @@ impl<P: Platform> Cache<P> {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(reason) => return Err(failure(ErrorKind::CacheCorrupt, &path, &reason)),
+            Err(reason) => return Err(filesystem_failure(Surface::Cache, &path, &reason)),
         };
         let receipt = Receipt::parse(&bytes, &Limits::default())?;
         if receipt.destination == destination {
