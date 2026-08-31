@@ -14,8 +14,17 @@ use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_platform::NativePlatform;
 
-/// The field a plan reports as unknown when no source states it.
+/// The field a plan reports as unknown when no source states the length an
+/// artifact expands to.
 const EXPANDED: &str = "expanded";
+
+/// The staging requirement, which is the expanded length and is unknown with
+/// it.
+const STAGING: &str = "staging";
+
+/// The destination requirement, which is the expanded length and is unknown
+/// with it.
+const DESTINATION: &str = "destination";
 
 /// Builds the plan a reference resolves to, moving no bytes.
 ///
@@ -84,24 +93,28 @@ pub fn build(
         disk: PlanDisk {
             partial: VolumeRequirement {
                 volume: cache_volume.clone(),
-                bytes,
+                bytes: Some(bytes),
             },
             cache: VolumeRequirement {
                 volume: cache_volume.clone(),
-                bytes,
+                bytes: Some(bytes),
             },
             staging: VolumeRequirement {
                 volume: cache_volume,
-                bytes: 0,
+                bytes: None,
             },
             destination: VolumeRequirement {
                 volume: volume_of(destination),
-                bytes: 0,
+                bytes: None,
             },
         },
         destination: destination.to_path_buf(),
         conflicts: conflicts(destination),
-        unknown: vec![EXPANDED.to_owned()],
+        unknown: vec![
+            EXPANDED.to_owned(),
+            STAGING.to_owned(),
+            DESTINATION.to_owned(),
+        ],
     })
 }
 

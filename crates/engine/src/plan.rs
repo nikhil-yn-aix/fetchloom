@@ -50,8 +50,10 @@ pub struct PlanArtifact {
 pub struct VolumeRequirement {
     /// The volume the requirement lands on.
     pub volume: String,
-    /// The bytes required on that volume.
-    pub bytes: u64,
+    /// The bytes required on that volume, absent when no source stated what
+    /// the requirement depends on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// The four space requirements, each attributed to its volume.

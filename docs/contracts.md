@@ -243,11 +243,11 @@ terms: []
 disk:
   partial: {volume: D, bytes: 68132864}
   cache: {volume: C, bytes: 68132864}
-  staging: {volume: C, bytes: 211938583}
-  destination: {volume: D, bytes: 211938583}
+  staging: {volume: C}
+  destination: {volume: D}
 destination: ./silesia
 conflicts: []
-unknown: [expanded]
+unknown: [expanded, staging, destination]
 ```
 
 An artifact also carries `select` and `layout`, because selection is part of
@@ -267,7 +267,7 @@ destination when the plan's own is not this machine's.
 
 Volumes are reported separately. Requirements on the same volume are summed.
 
-`unknown` lists every field the source could not supply. A field is never estimated into a number.
+`unknown` lists every field the source could not supply. A field is never estimated into a number, and zero is a number: a requirement whose size is unknown omits its `bytes` and is named in `unknown` beside what it depends on. An archive whose expanded length no source stated therefore lists `expanded`, `staging` and `destination`, because the last two are that length and nothing else. `partial` and `cache` are the size the lock pins and are always stated.
 
 `fetchloom apply` re-resolves the recorded digests. If a source now serves different content, it fails with an integrity error and does not fall back.
 

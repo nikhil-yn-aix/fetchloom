@@ -460,3 +460,60 @@ fn recorded_concurrency(workspace: &Workspace) -> u64 {
     assert_eq!(found.len(), 1, "expected one host, found {found:?}");
     found[0]
 }
+
+#[test]
+fn a_plan_lists_every_field_no_source_stated_and_reports_none_of_them_as_zero() {
+    let workspace = Workspace::new();
+    let archive = workspace.write("sample.tar.gz", &gzip(&greeting_tar()));
+    let fetched = workspace.run(&[
+        "get",
+        archive.to_str().unwrap(),
+        "--output",
+        "out",
+        "--json",
+    ]);
+    assert_eq!(fetched.code(), 0, "{}", fetched.err());
+
+    let planned = workspace.run(&[
+        "plan",
+        archive.to_str().unwrap(),
+        "--output",
+        "out",
+        "--json",
+    ]);
+    assert_eq!(planned.code(), 0, "{}", planned.err());
+    let plan = planned.json();
+
+    let unknown: Vec<&str> = plan["unknown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(
+        unknown.contains(&"expanded"),
+        "expanded is not listed as unknown: {unknown:?}"
+    );
+    for beside in ["staging", "destination"] {
+        assert!(
+            unknown.contains(&beside),
+            "{beside} depends on the expanded size, which is unknown, so it must be listed \
+             beside it rather than reported as a number: {unknown:?}"
+        );
+        assert!(
+            plan["disk"][beside]["bytes"].is_null(),
+            "{beside} was estimated into {}",
+            plan["disk"][beside]["bytes"]
+        );
+    }
+    for known in ["partial", "cache"] {
+        assert!(
+            !unknown.contains(&known),
+            "{known} comes from the size the lock pins and is not unknown: {unknown:?}"
+        );
+        assert!(
+            plan["disk"][known]["bytes"].is_number(),
+            "{known} was not stated"
+        );
+    }
+}
