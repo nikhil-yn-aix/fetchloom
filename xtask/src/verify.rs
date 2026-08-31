@@ -6,7 +6,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// The target linted on the host with the whole workspace.
-const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
+const LINT_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"];
 
 /// The targets the host compiles and cannot run.
 const COMPILE_ONLY_TARGETS: [&str; 1] = ["aarch64-pc-windows-msvc"];
@@ -350,11 +350,6 @@ fn offline(
 
 /// Records the targets this matrix names and never runs.
 fn unreachable(report: &mut Report) {
-    report.degrade(
-        "the Linux targets linted on the host as well as in the container",
-        "the container lane only",
-        "the cryptography the client performs its handshake with is C, which this machine cross-compiles none of, so the host lints its own target and the container lints Linux",
-    );
     report.degrade(
         "aarch64-pc-windows-msvc compiled and run",
         "compiled only",

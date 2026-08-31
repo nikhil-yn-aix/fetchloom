@@ -6045,3 +6045,14 @@ whatever is there, so the count the machine happened to start with no longer
 decides whether the lane runs.
 
 Neither is a defect in the product, and both were making the gate lie about it.
+
+## A degradation the crypto swap closed
+
+The verify matrix carried a degradation saying the Linux targets are linted in
+the container only, because "the cryptography the client performs its handshake
+with is C, which this machine cross-compiles none of". Removing `ring` removed
+that reason. `cargo clippy --workspace --all-targets --target
+x86_64-unknown-linux-musl` runs clean on this Windows host now, so the host
+lints Linux as well as its own target and the degradation is gone rather than
+reworded. Four remain, and each names a machine or a privilege this matrix does
+not have rather than a decision anyone made.
