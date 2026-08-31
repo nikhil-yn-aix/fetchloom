@@ -450,6 +450,9 @@ fn copy(
     buffer: &mut [u8],
 ) -> Result<(), Error> {
     loop {
+        if crate::cancel::requested() {
+            return Ok(());
+        }
         let filled = body
             .read(buffer)
             .map_err(|reason| body_failure(location, &reason))?;

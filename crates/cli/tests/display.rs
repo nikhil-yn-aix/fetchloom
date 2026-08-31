@@ -2,6 +2,7 @@
 
 use clap as _;
 use clap_complete as _;
+use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_engine as _;
@@ -13,6 +14,8 @@ use serde as _;
 use serde_json as _;
 use tempfile as _;
 use toml as _;
+#[cfg(windows)]
+use windows_sys as _;
 
 use fetchloom_cli::surface::DisplayMode;
 use fetchloom_cli::terminal::{Streams, resolve_display};

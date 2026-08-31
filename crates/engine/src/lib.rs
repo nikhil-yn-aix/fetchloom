@@ -1,5 +1,6 @@
 //! Seam traits, domain types, errors, and events for Fetchloom.
 
+pub mod cancel;
 pub mod canonical;
 pub mod capability;
 pub mod conformance;

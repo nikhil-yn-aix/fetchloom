@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser};
 use fetchloom_archive as _;
+use fetchloom_engine::cancel;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::outcome::ExitCode;
@@ -31,6 +32,8 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
 #[cfg(test)]
 use flate2 as _;
+#[cfg(all(test, windows))]
+use windows_sys as _;
 
 use fetchloom_cli::observer::{EventStream, Fanout, Renderer};
 use fetchloom_cli::settings::{Environment, ProcessEnvironment};
@@ -42,8 +45,22 @@ use fetchloom_cli::terminal::Streams;
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> std::process::ExitCode {
+    listen_for_interrupts();
     let code = execute();
     std::process::ExitCode::from(u8::try_from(code.code()).unwrap_or(1))
+}
+
+/// Arranges for an interrupt to stop the run and for a second one to end it.
+///
+/// The first interrupt only records that one arrived. Where the run stops,
+/// what it flushes, and what it writes down before it exits are decided by the
+/// work that notices, because only that work knows what is in flight.
+fn listen_for_interrupts() {
+    let _ = ctrlc::set_handler(|| {
+        if cancel::interrupt() > 1 {
+            cancel::stop();
+        }
+    });
 }
 
 fn execute() -> ExitCode {

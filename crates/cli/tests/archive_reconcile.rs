@@ -12,6 +12,7 @@ use std::process::{Command, Output, Stdio};
 
 use clap as _;
 use clap_complete as _;
+use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
@@ -20,6 +21,8 @@ use fetchloom_platform as _;
 use fetchloom_sources as _;
 use serde as _;
 use toml as _;
+#[cfg(windows)]
+use windows_sys as _;
 
 use fetchloom_faults::{TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression;

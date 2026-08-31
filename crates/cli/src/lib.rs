@@ -4,10 +4,13 @@ pub mod cache;
 pub mod config;
 
 use clap_complete as _;
+use ctrlc as _;
 #[cfg(test)]
 use fetchloom_faults as _;
 #[cfg(test)]
 use tempfile as _;
+#[cfg(all(test, windows))]
+use windows_sys as _;
 pub mod explain;
 pub mod locked;
 pub mod materialize;
