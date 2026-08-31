@@ -7,6 +7,7 @@
 )]
 
 use rustls as _;
+use rustls_graviola as _;
 use ureq as _;
 
 use std::io::Read;

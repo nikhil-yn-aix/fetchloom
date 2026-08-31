@@ -18,3 +18,6 @@ toml = { workspace = true }
 [lints]
 workspace = true
 
+
+[target.'cfg(all(target_arch = "aarch64", target_os = "windows"))'.dependencies]
+blake3 = { workspace = true, features = ["no_neon"] }

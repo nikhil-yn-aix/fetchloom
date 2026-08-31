@@ -10,6 +10,7 @@ publish.workspace = true
 fetchloom-engine = { workspace = true }
 ureq = { workspace = true }
 rustls = { workspace = true }
+rustls-graviola = { workspace = true }
 
 [dev-dependencies]
 fetchloom-faults = { workspace = true }

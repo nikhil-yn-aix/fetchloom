@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 /// The target linted on the host with the whole workspace.
 const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
 
+/// The targets the host compiles and cannot run.
+const COMPILE_ONLY_TARGETS: [&str; 1] = ["aarch64-pc-windows-msvc"];
+
 /// The Linux targets the container lane builds and runs.
 const LINUX_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"];
 
@@ -165,6 +168,13 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         "build",
         cargo(workspace, &["build", "--workspace", "--exclude", "xtask"]),
     );
+    for target in COMPILE_ONLY_TARGETS {
+        let check = cargo(
+            workspace,
+            &["check", "--workspace", "--all-targets", "--target", target],
+        );
+        report.step(&format!("compile {target}"), check);
+    }
 
     let volumes = host_volumes(workspace, report);
     let mut test = cargo(workspace, &["test", "--workspace", "--exclude", "xtask"]);
@@ -347,8 +357,13 @@ fn unreachable(report: &mut Report) {
     );
     report.degrade(
         "aarch64-pc-windows-msvc compiled and run",
+        "compiled only",
+        "this machine is not a Windows on ARM machine, and compiling is not running",
+    );
+    report.degrade(
+        "arm64ec-pc-windows-msvc compiled",
         "nothing",
-        "this machine is not a Windows on ARM machine",
+        "the cryptography provider refuses the arm64ec architecture, and the emulation ABI it exists for is for mixing with x64 code rather than for a standalone binary",
     );
 }
 

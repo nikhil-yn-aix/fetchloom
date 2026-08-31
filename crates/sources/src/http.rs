@@ -160,7 +160,7 @@ enum Method {
 }
 
 fn build_agent(limits: &Limits) -> ureq::Agent {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls_graviola::default_provider().install_default();
     ureq::Agent::config_builder()
         .max_redirects(0)
         .http_status_as_error(false)

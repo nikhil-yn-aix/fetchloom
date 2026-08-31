@@ -5852,3 +5852,40 @@ additive-only, so it is a decision rather than an edit.
 Sources: `cargo test --workspace` on this machine, 613 passed and 4 ignored,
 against 607 before; `crates/cli/tests/cancel.rs`, `crates/cli/tests/policy.rs`,
 `crates/cli/tests/prove.rs`, `crates/sources/tests/http.rs`.
+
+## Windows on ARM compiles, and compiling is not running
+
+`ring` was the reason this machine could cross-compile nothing: its
+cryptography is C and assembly, and there is no C compiler here for another
+target. `rustls-graviola` replaces it. Two corrections to what the audit
+recorded: the crate is at 0.4.0, and 0.4.1 is `graviola`, the library under it;
+and it is pure Rust with no build script that shells out.
+
+The swap costs no cipher suite. Graviola offers the same three TLS 1.3 suites
+and the same six TLS 1.2 ECDHE suites the ring provider offers, and its key
+exchange list is a superset: X25519, P256 and P384 as before, plus the hybrid
+X25519MLKEM768 that ring has no equivalent for. `cargo xtask network` performs
+real handshakes against real hosts and every recorded subject still matched.
+What it does cost is a maintenance question worth stating: graviola is a
+younger library with a smaller deployment than ring, and it is now the only
+thing standing between this binary and every remote source it reads.
+
+`ring` was not the last C. blake3 compiles a NEON intrinsics file on aarch64,
+so the target still needed a compiler. Its `no_neon` feature is now set for
+`aarch64` on `windows` only, which drops blake3 to its portable Rust
+implementation there. That is a real performance difference on Windows on ARM
+and it is measured nowhere, because nothing here runs on that machine. Every
+other target keeps the assembly.
+
+`aarch64-pc-windows-msvc` is now a step in the host lane: `cargo check
+--workspace --all-targets` against it. It compiles. Nothing runs it, and a
+target that compiles has been shown to typecheck and link and nothing else --
+no test has executed there, no volume has been probed there, and no benchmark
+has been taken there. `arm64ec-pc-windows-msvc` does not compile: graviola
+refuses the architecture outright, and the ABI exists for mixing ARM and x64
+code inside one process rather than for a standalone binary, so it is recorded
+as unreachable rather than pursued.
+
+Sources: `cargo check --workspace --all-targets --target
+aarch64-pc-windows-msvc` on this machine, clean; `cargo xtask network`, every
+recorded subject matched; docs.rs for `rustls-graviola` 0.4.0 `suites` and `kx`.
