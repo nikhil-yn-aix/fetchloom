@@ -3,17 +3,17 @@
   "regimes": [
     {
       "regime": "no-op",
-      "iterations": 9,
+      "iterations": 3,
       "metrics": [
         {
           "name": "startup",
-          "value": 6.7567,
+          "value": 9.9,
           "unit": "ms",
           "kind": "timing"
         },
         {
           "name": "binary-size",
-          "value": 7110656.0,
+          "value": 7271424.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -25,7 +25,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1545.6324000000002,
+          "value": 1916.2946000000002,
           "unit": "ms",
           "kind": "timing"
         },
@@ -55,7 +55,7 @@
         },
         {
           "name": "file-operations",
-          "value": 212.0,
+          "value": 213.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -67,7 +67,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 201.2738,
+          "value": 180.944,
           "unit": "ms",
           "kind": "timing"
         },
@@ -109,7 +109,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 88.6069,
+          "value": 72.1188,
           "unit": "ms",
           "kind": "timing"
         },
@@ -139,7 +139,7 @@
         },
         {
           "name": "file-operations",
-          "value": 35.0,
+          "value": 38.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -151,7 +151,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 468.73150000000004,
+          "value": 390.1136,
           "unit": "ms",
           "kind": "timing"
         },
@@ -181,7 +181,7 @@
         },
         {
           "name": "file-operations",
-          "value": 55.0,
+          "value": 58.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -193,7 +193,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 9734.428,
+          "value": 6663.9908,
           "unit": "ms",
           "kind": "timing"
         },
@@ -217,7 +217,7 @@
         },
         {
           "name": "file-operations",
-          "value": 3092.0,
+          "value": 3093.0,
           "unit": "operations",
           "kind": "deterministic"
         }
@@ -229,7 +229,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1319.8635000000002,
+          "value": 872.4695,
           "unit": "ms",
           "kind": "timing"
         },
@@ -253,7 +253,7 @@
         },
         {
           "name": "file-operations",
-          "value": 29.0,
+          "value": 30.0,
           "unit": "operations",
           "kind": "deterministic"
         }
