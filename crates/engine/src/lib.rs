@@ -36,6 +36,7 @@ pub mod timestamp;
 pub mod transfer;
 pub mod tree;
 pub mod trust;
+pub mod tuning;
 pub mod verification;
 pub mod work;
 mod yaml;

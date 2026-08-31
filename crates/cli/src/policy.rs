@@ -13,12 +13,12 @@ use fetchloom_engine::limits::{Bandwidth, Limits};
 use fetchloom_engine::redact::Secret;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::observer::Observer;
-use fetchloom_engine::seam::policy::Policy;
+use fetchloom_engine::seam::policy::{IoMode, Policy};
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::verification::VerificationPolicy;
 
 use crate::settings::{Environment, Settings};
-use crate::surface::{DurabilityChoice, TransferFlags, VerifyChoice};
+use crate::surface::{DurabilityChoice, IoChoice, TransferFlags, VerifyChoice};
 use crate::terminal::Streams;
 
 /// Builds the environment variable name a host's credential is read from.
@@ -110,15 +110,31 @@ impl Policy for CommandLinePolicy<'_> {
     }
 
     fn concurrency(&self) -> Option<NonZeroU32> {
-        None
+        self.settings.concurrency.value
     }
 
     fn per_host(&self) -> Option<NonZeroU32> {
-        None
+        self.settings.per_host.value
     }
 
     fn bandwidth(&self) -> Option<Bandwidth> {
-        None
+        self.settings.bandwidth.value
+    }
+
+    fn aggressive(&self) -> bool {
+        self.settings.aggressive.value
+    }
+
+    fn adapts(&self) -> bool {
+        !self.settings.deterministic_io.value
+    }
+
+    fn io(&self) -> IoMode {
+        match self.settings.io.value {
+            IoChoice::Auto => IoMode::Auto,
+            IoChoice::Buffered => IoMode::Buffered,
+            IoChoice::Uncached => IoMode::Uncached,
+        }
     }
 
     fn accepts(&self, class: TrustClass) -> bool {

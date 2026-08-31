@@ -1,6 +1,7 @@
 //! Moving bytes from a source into the store, once, with retry and resume.
 
 use std::io::{Read, Write};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::degrade::DegradeQueue;
@@ -17,6 +18,7 @@ use crate::seam::source::{
 };
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
+use crate::tuning::{Answer, Controller, Meter};
 
 /// How many bytes move between the source and the store at a time.
 const BUFFER: usize = 1 << 20;
@@ -126,6 +128,11 @@ pub struct Transfer<'a, S, T, P> {
     pub observer: &'a dyn Observer,
     /// The numbers the events are ordered by.
     pub sequence: &'a Sequence,
+    /// How many transfers this run permits for one host, moved as the host
+    /// answers.
+    pub controller: &'a Mutex<Controller>,
+    /// The ceiling on how fast the run may move bytes, when one was set.
+    pub meter: Option<&'a Meter>,
 }
 
 impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
@@ -176,6 +183,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             pause: self.pause,
             observer: self.observer,
             sequence: self.sequence,
+            controller: self.controller,
         };
         let mut buffer = vec![0u8; BUFFER];
         retry.until_spent(|attempt| {
@@ -264,31 +272,18 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
         let started = Span::start();
         let mut moved = 0u64;
-        let arrived = copy(body, &mut writer, location, &mut moved, buffer);
+        let arrived = copy(
+            body,
+            &mut writer,
+            location,
+            &mut moved,
+            buffer,
+            self.meter,
+            self.pause,
+        );
         self.store
             .record_source(key, &record_of(&metadata, rung, keep + moved))?;
-        let short = metadata
-            .size
-            .is_some_and(|expected| keep + moved < expected);
-        let timed_out = arrived
-            .as_ref()
-            .err()
-            .is_some_and(|failure| failure.kind() == ErrorKind::NetworkTimeout);
-        if short || arrived.is_err() {
-            if short && !timed_out {
-                return Err(Error::new(
-                    ErrorKind::IntegrityTruncated,
-                    format!(
-                        "fetch the rest, because the source ended the body after {} of the {} bytes it said the object holds",
-                        keep + moved,
-                        metadata.size.unwrap_or_default()
-                    ),
-                )
-                .with_source(location)
-                .with_retryable(true));
-            }
-            arrived?;
-        }
+        ended_early(&arrived, &metadata, location, keep + moved)?;
         let digests = self.store.commit(lease, writer)?;
         self.emit(EventPayload::TransferEnd {
             bytes: moved,
@@ -438,6 +433,8 @@ fn copy(
     location: &str,
     moved: &mut u64,
     buffer: &mut [u8],
+    meter: Option<&Meter>,
+    pause: &impl Pause,
 ) -> Result<(), Error> {
     loop {
         if crate::cancel::requested() {
@@ -456,6 +453,12 @@ fn copy(
             )
         })?;
         *moved += filled as u64;
+        if let Some(meter) = meter {
+            let owed = meter.moved(filled as u64);
+            if !owed.is_zero() {
+                pause.sleep(owed);
+            }
+        }
     }
 }
 
@@ -469,6 +472,8 @@ pub struct Retry<'a, P> {
     pub observer: &'a dyn Observer,
     /// The numbers the events are ordered by.
     pub sequence: &'a Sequence,
+    /// How many transfers this host permits, moved as the host answers.
+    pub controller: &'a Mutex<Controller>,
 }
 
 impl<P: Pause> Retry<'_, P> {
@@ -485,9 +490,19 @@ impl<P: Pause> Retry<'_, P> {
         loop {
             attempt += 1;
             let failure = match work(attempt) {
-                Ok(done) => return Ok(done),
+                Ok(done) => {
+                    if attempt == 1 {
+                        self.answered(Answer::Clean);
+                    }
+                    return Ok(done);
+                }
                 Err(failure) => failure,
             };
+            self.answered(if failure.retry_after().is_some() {
+                Answer::RateLimited
+            } else {
+                Answer::Faltered
+            });
             if !failure.retryable() || attempt >= self.limits.retry_attempts {
                 return Err(failure.with_attempts(attempt));
             }
@@ -498,9 +513,21 @@ impl<P: Pause> Retry<'_, P> {
                     reason: failure.next_action().to_owned(),
                 },
             ));
+            let backing_off = backoff(self.limits, attempt, self.pause.fraction());
+            let asked = failure
+                .retry_after()
+                .filter(|wait| honors(self.limits, *wait));
             self.pause
-                .sleep(backoff(self.limits, attempt, self.pause.fraction()));
+                .sleep(asked.unwrap_or(backing_off).max(backing_off));
         }
+    }
+
+    /// Moves the host's permitted count for what it answered.
+    fn answered(&self, answer: Answer) {
+        self.controller
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .answered(answer);
     }
 }
 
@@ -539,4 +566,42 @@ pub fn body_failure(location: &str, reason: &std::io::Error) -> Error {
     )
     .with_source(location)
     .with_retryable(true)
+}
+
+/// Fails when a body stopped before the length the source stated, or when the
+/// copy itself failed.
+///
+/// # Errors
+///
+/// Fails with `integrity.truncated` when the source ended a body early, and
+/// with whatever ended the copy otherwise.
+fn ended_early(
+    arrived: &Result<(), Error>,
+    metadata: &SourceMetadata,
+    location: &str,
+    have: u64,
+) -> Result<(), Error> {
+    let short = metadata.size.is_some_and(|expected| have < expected);
+    let timed_out = arrived
+        .as_ref()
+        .err()
+        .is_some_and(|failure| failure.kind() == ErrorKind::NetworkTimeout);
+    if !short && arrived.is_ok() {
+        return Ok(());
+    }
+    if short && !timed_out {
+        return Err(Error::new(
+            ErrorKind::IntegrityTruncated,
+            format!(
+                "fetch the rest, because the source ended the body after {have} of the {} bytes it said the object holds",
+                metadata.size.unwrap_or_default()
+            ),
+        )
+        .with_source(location)
+        .with_retryable(true));
+    }
+    match arrived {
+        Ok(()) => Ok(()),
+        Err(failure) => Err(failure.clone()),
+    }
 }

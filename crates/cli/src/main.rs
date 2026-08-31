@@ -87,7 +87,21 @@ fn execute() -> ExitCode {
         }
     };
 
-    let resolved = settings::resolve_all(&parsed.global, &discovered, &environment);
+    let transfer = transfer_flags(&parsed.command);
+    let resolved = match settings::resolve_all(&parsed.global, &transfer, &discovered, &environment)
+    {
+        Ok(resolved) => resolved,
+        Err(refused) => {
+            eprintln!("{refused}");
+            return ExitCode::Usage;
+        }
+    };
+    if resolved.aggressive.value {
+        eprintln!(
+            "--aggressive raises the transfers in flight for one host past the {} a run holds itself to, so a source may answer with a rate limit or refuse the run outright",
+            fetchloom_engine::limits::Limits::default().connections_per_host
+        );
+    }
     let display = terminal::resolve_display(
         resolved.display.value,
         parsed.global.quiet,
@@ -135,6 +149,21 @@ fn execute() -> ExitCode {
     code
 }
 
+/// Returns the materialization flags a command carries, or none when it takes
+/// none.
+fn transfer_flags(command: &Command) -> surface::TransferFlags {
+    match command {
+        Command::Get { transfer, .. }
+        | Command::Plan { transfer, .. }
+        | Command::Apply { transfer, .. }
+        | Command::Repair { transfer, .. } => (**transfer).clone(),
+        Command::Verify { .. }
+        | Command::Completions { .. }
+        | Command::Cache { .. }
+        | Command::Explain { .. } => surface::TransferFlags::default(),
+    }
+}
+
 fn dispatch(
     parsed: &CommandLine,
     resolved: &settings::Settings,
@@ -166,7 +195,6 @@ fn dispatch(
             transfer,
         } => run_repair(reference, transfer, parsed, resolved, observer, sequence),
         Command::Cache { command } => run_cache(
-            parsed,
             resolved,
             command,
             &Reporter::new(parsed.global.json, observer, sequence),
@@ -192,7 +220,7 @@ fn run_repair(
         Ok(root) => root,
         Err(error) => return reporter.report(&error),
     };
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+    let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
@@ -233,7 +261,6 @@ fn run_repair(
 }
 
 fn run_cache(
-    parsed: &CommandLine,
     resolved: &settings::Settings,
     command: &surface::CacheCommand,
     reporter: &Reporter<'_>,
@@ -243,11 +270,72 @@ fn run_cache(
         Ok(root) => root,
         Err(error) => return reporter.report(&error),
     };
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+    let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
     cache::run(&root, command, Arc::new(processor), reporter, yes)
+}
+
+/// Returns what bounds a run's transfers, and whether measurement may move
+/// them.
+fn tuning_for(
+    resolved: &settings::Settings,
+    policy: &dyn fetchloom_engine::seam::policy::Policy,
+) -> run::Tuning {
+    run::Tuning {
+        ceilings: fetchloom_engine::tuning::Ceilings::resolve(
+            thread_budget(resolved),
+            policy.limits(),
+            policy.concurrency(),
+            policy.per_host(),
+            policy.aggressive(),
+        ),
+        adapts: policy.adapts(),
+        bandwidth: policy.bandwidth(),
+    }
+}
+
+/// Returns what this machine and this cache measured for the settings no level
+/// supplies.
+fn measured_for(resolved: &settings::Settings) -> explain::Measured {
+    let budget = thread_budget(resolved);
+    let ceilings = fetchloom_engine::tuning::Ceilings::resolve(
+        budget,
+        &fetchloom_engine::limits::Limits::default(),
+        resolved.concurrency.value,
+        resolved.per_host.value,
+        resolved.aggressive.value,
+    );
+    let recorded = run::resolve_path(&resolved.cache_dir.value)
+        .ok()
+        .and_then(|root| {
+            let work = Arc::new(WorkCounter::new());
+            let pool = Processor::new(budget).ok()?;
+            match cache::open(
+                &root,
+                DurabilityTier::Normal,
+                fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+                work,
+                Arc::new(pool),
+            ) {
+                cache::Opened::Ready(held) => Some(held),
+                cache::Opened::Degraded { .. } | cache::Opened::Refused(_) => None,
+            }
+        })
+        .map(|held| {
+            held.measurements()
+                .iter()
+                .map(|(host, found)| found.describe(host))
+                .collect()
+        })
+        .unwrap_or_default();
+    explain::Measured {
+        threads: detected_threads(),
+        concurrency: ceilings.global.get(),
+        per_host: ceilings.per_host.get(),
+        recorded,
+    }
 }
 
 fn run_explain(
@@ -256,7 +344,7 @@ fn run_explain(
     key: Option<&str>,
     json: bool,
 ) -> ExitCode {
-    let rows = explain::rows(resolved, detected_threads());
+    let rows = explain::rows(resolved, &measured_for(resolved));
     if let Some(key) = key {
         let Some(row) = rows.iter().find(|row| row.key == key) else {
             eprintln!("{key} is not a setting this build has");
@@ -353,7 +441,14 @@ fn run_verify(
         observer,
         sequence,
     );
-    let held = match open_cache(&root, &policy, &work, &Arc::new(processor), observer, sequence) {
+    let held = match open_cache(
+        &root,
+        &policy,
+        &work,
+        &Arc::new(processor),
+        observer,
+        sequence,
+    ) {
         Ok(held) => held,
         Err(refused) => {
             cache::report_degrade(observer, sequence, &root, refused.next_action());
@@ -438,11 +533,11 @@ fn run_get(
         processor,
         work,
         platform,
-        held,
         durability,
-        scratch,
+        scratch: _scratch,
+        held,
     } = match open_for(
-        parsed,
+        resolved,
         transfer,
         &destination,
         &policy,
@@ -464,6 +559,7 @@ fn run_get(
         Err(error) => return reporter.report(&error),
     };
 
+    let tuning = tuning_for(resolved, &policy);
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
         processor: processor.as_ref(),
@@ -474,6 +570,7 @@ fn run_get(
         work: &work,
         extract: !transfer.no_extract,
         verify: policy.verification(),
+        tuning: &tuning,
     };
     let produced = resolve_and_publish(
         &with,
@@ -492,7 +589,7 @@ fn run_get(
         sequence,
     );
 
-    let code = record(
+    record(
         &produced,
         &Recording {
             manifest: &manifest,
@@ -506,10 +603,7 @@ fn run_get(
         },
         observer,
         sequence,
-    );
-    drop(held);
-    drop(scratch);
-    code
+    )
 }
 
 /// Everything one materialization is asked for.
@@ -693,14 +787,21 @@ fn run_plan(
         Err(error) => return reporter.report(&error),
     };
     let work = Arc::new(WorkCounter::new());
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+    let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
     let held = if transfer.no_cache {
         None
     } else {
-        match open_cache(&root, &policy, &work, &Arc::new(processor), observer, sequence) {
+        match open_cache(
+            &root,
+            &policy,
+            &work,
+            &Arc::new(processor),
+            observer,
+            sequence,
+        ) {
             Ok(held) => held,
             Err(refused) => return reporter.report(&refused),
         }
@@ -743,19 +844,10 @@ fn run_apply(
     sequence: &Sequence,
 ) -> ExitCode {
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
-    let plan = match planning::read(plan_path, &fetchloom_engine::limits::Limits::default()) {
-        Ok(plan) => plan,
+    let (plan, artifact, destination) = match read_plan(plan_path, transfer) {
+        Ok(read) => read,
         Err(error) => return reporter.report(&error),
     };
-    let artifact = match planning::only_artifact(&plan) {
-        Ok(artifact) => artifact.clone(),
-        Err(error) => return reporter.report(&error),
-    };
-    let destination =
-        match run::resolve_path(transfer.output.as_deref().unwrap_or(&plan.destination)) {
-            Ok(destination) => destination,
-            Err(error) => return reporter.report(&error),
-        };
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(
         resolved.clone(),
@@ -770,11 +862,11 @@ fn run_apply(
         processor,
         work,
         platform,
-        held,
         durability,
-        scratch,
+        scratch: _scratch,
+        held,
     } = match open_for(
-        parsed,
+        resolved,
         transfer,
         &destination,
         &policy,
@@ -785,6 +877,7 @@ fn run_apply(
         Ok(opened) => opened,
         Err(code) => return code,
     };
+    let tuning = tuning_for(resolved, &policy);
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
         processor: processor.as_ref(),
@@ -795,6 +888,7 @@ fn run_apply(
         work: &work,
         extract: !transfer.no_extract,
         verify: policy.verification(),
+        tuning: &tuning,
     };
     let selection = fetchloom_engine::selection::Selection {
         include: artifact.select.clone(),
@@ -841,17 +935,14 @@ fn run_apply(
     };
     let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
     let resolved = run::resolved_object(&result, &selection);
-    let code = finish_get(
+    finish_get(
         &result,
         held.as_deref(),
         &manifest,
         &resolved,
         &policy,
         &reporter,
-    );
-    drop(held);
-    drop(scratch);
-    code
+    )
 }
 
 /// Returns the lock file this run reads and writes.
@@ -1046,15 +1137,45 @@ fn selection_of(transfer: &surface::TransferFlags) -> fetchloom_engine::selectio
     }
 }
 
-fn thread_budget(parsed: &CommandLine) -> ThreadBudget {
+fn thread_budget(resolved: &settings::Settings) -> ThreadBudget {
     ThreadBudget::resolve(
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
-        parsed
-            .global
+        resolved
             .threads
-            .and_then(|value| usize::try_from(value).ok())
+            .value
+            .and_then(|value| usize::try_from(value.get()).ok())
             .and_then(std::num::NonZeroUsize::new),
     )
+}
+
+/// Says that a thread ceiling above what this machine detected was clamped to
+/// it, because a ceiling that is silently ignored is a ceiling nobody set.
+fn report_clamp(
+    budget: ThreadBudget,
+    resolved: &settings::Settings,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) {
+    if budget.origin() != fetchloom_engine::threads::BudgetOrigin::Clamped {
+        return;
+    }
+    let requested = resolved
+        .threads
+        .value
+        .map_or_else(String::new, |value| value.to_string());
+    observer.emit(&Event::new(
+        sequence,
+        EventPayload::Degrade {
+            requested: format!("{requested} threads for processor work"),
+            used: format!("{} threads", budget.threads()),
+            reason: format!(
+                "the {} threads asked for from the {} are more than the {} this machine detected, and a ceiling above the budget is clamped to it",
+                requested,
+                resolved.threads.origin,
+                budget.detected()
+            ),
+        },
+    ));
 }
 
 fn open_cache(
@@ -1115,7 +1236,7 @@ struct Opened {
 
 /// Opens the pool, the counter, the platform, and the cache one run needs.
 fn open_for(
-    parsed: &CommandLine,
+    resolved: &settings::Settings,
     transfer: &surface::TransferFlags,
     destination: &Path,
     policy: &dyn fetchloom_engine::seam::policy::Policy,
@@ -1124,7 +1245,9 @@ fn open_for(
     reporter: &Reporter<'_>,
 ) -> Result<Opened, ExitCode> {
     let durability = policy.durability();
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+    let budget = thread_budget(resolved);
+    report_clamp(budget, resolved, observer, sequence);
+    let Ok(processor) = Processor::new(budget) else {
         eprintln!("the processor pool could not be built");
         return Err(ExitCode::Resource);
     };
@@ -1161,4 +1284,27 @@ fn open_for(
         durability,
         scratch,
     })
+}
+
+/// Reads a plan, its one artifact, and the destination the run publishes into.
+///
+/// # Errors
+///
+/// Fails when the plan cannot be read, when it names no artifact, and when the
+/// destination cannot be resolved.
+fn read_plan(
+    plan_path: &std::path::Path,
+    transfer: &surface::TransferFlags,
+) -> Result<
+    (
+        fetchloom_engine::plan::Plan,
+        fetchloom_engine::plan::PlanArtifact,
+        PathBuf,
+    ),
+    fetchloom_engine::error::Error,
+> {
+    let plan = planning::read(plan_path, &fetchloom_engine::limits::Limits::default())?;
+    let artifact = planning::only_artifact(&plan)?.clone();
+    let destination = run::resolve_path(transfer.output.as_deref().unwrap_or(&plan.destination))?;
+    Ok((plan, artifact, destination))
 }

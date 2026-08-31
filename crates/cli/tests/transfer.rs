@@ -21,7 +21,7 @@ use toml as _;
 use windows_sys as _;
 
 use std::io::Read as _;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -40,6 +40,7 @@ use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::selection::Selection;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{Pause, Transfer};
+use fetchloom_engine::tuning::{Ceilings, Controller};
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_faults::{RecordingObserver, Reply, Script, TestServer};
 use fetchloom_platform::NativePlatform;
@@ -77,6 +78,7 @@ struct Harness {
     degradations: DegradeQueue,
     observer: RecordingObserver,
     sequence: Sequence,
+    controller: Mutex<Controller>,
 }
 
 impl Harness {
@@ -103,6 +105,7 @@ impl Harness {
             degradations: DegradeQueue::new(),
             observer: RecordingObserver::new(),
             sequence: Sequence::new(),
+            controller: Mutex::new(Controller::start(None, NonZeroU32::MIN)),
         }
     }
 
@@ -115,6 +118,8 @@ impl Harness {
             degradations: &self.degradations,
             observer: &self.observer,
             sequence: &self.sequence,
+            controller: &self.controller,
+            meter: None,
         }
     }
 
@@ -357,6 +362,8 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
         degradations: &harness.degradations,
         observer: &harness.observer,
         sequence: &harness.sequence,
+        controller: &harness.controller,
+        meter: None,
     };
 
     let done = transfer
@@ -385,12 +392,25 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
     );
 }
 
+/// The tuning a test runs under: one transfer in flight, adapting, unmetered.
+fn test_tuning() -> fetchloom_cli::run::Tuning {
+    fetchloom_cli::run::Tuning {
+        ceilings: Ceilings {
+            global: NonZeroU32::MIN,
+            per_host: NonZeroU32::MIN,
+        },
+        adapts: true,
+        bandwidth: None,
+    }
+}
+
 fn materialization<'a>(
     processor: &'a Processor,
     platform: &'a NativePlatform,
     cache: &'a Cache<NativePlatform>,
     work: &'a std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
+    tuning: &'a fetchloom_cli::run::Tuning,
 ) -> Materialization<'a> {
     Materialization {
         processor,
@@ -401,6 +421,7 @@ fn materialization<'a>(
         extract: true,
         verify: fetchloom_engine::verification::VerificationPolicy::Fingerprint,
         digester,
+        tuning,
     }
 }
 
@@ -432,7 +453,8 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
-    let with = materialization(&processor, &platform, &cache, &work, &digester);
+    let tuning = test_tuning();
+    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
     let destination = root.path().join("dest").join("object");
 
     let first_observer = RecordingObserver::new();

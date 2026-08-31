@@ -103,6 +103,34 @@ impl Bandwidth {
     }
 }
 
+impl std::fmt::Display for Bandwidth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for Bandwidth {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let refused = || {
+            format!(
+                "write {text} as a count of bytes per second, with an optional k, m or g for a \
+                 multiple of 1024, because a rate is read in one form and no other"
+            )
+        };
+        let (digits, scale) = match text.as_bytes().last() {
+            Some(b'k' | b'K') => (&text[..text.len() - 1], 1024),
+            Some(b'm' | b'M') => (&text[..text.len() - 1], 1024 * 1024),
+            Some(b'g' | b'G') => (&text[..text.len() - 1], 1024 * 1024 * 1024),
+            _ => (text, 1),
+        };
+        let count: u64 = digits.parse().map_err(|_| refused())?;
+        let rate = count.checked_mul(scale).ok_or_else(refused)?;
+        NonZeroU64::new(rate).map(Self).ok_or_else(refused)
+    }
+}
+
 /// The object size at or below which an object is packed beside others rather
 /// than given a file of its own.
 pub const PACK_THRESHOLD: u64 = OUTBOARD_CHUNK_GROUP;

@@ -188,6 +188,18 @@ impl Layout {
         self.witnesses().join(hexadecimal(key.bytes()))
     }
 
+    /// Returns the directory holding one measurement per host.
+    #[must_use]
+    pub fn measurements(&self) -> PathBuf {
+        self.meta().join("host")
+    }
+
+    /// Returns the measurement recorded for one host.
+    #[must_use]
+    pub fn measurement_of(&self, key: &[u8; 32]) -> PathBuf {
+        self.measurements().join(hexadecimal(key))
+    }
+
     /// Returns the directory holding one record per reference resolved.
     #[must_use]
     pub fn resolutions(&self) -> PathBuf {

@@ -12,7 +12,7 @@ use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
-use fetchloom_engine as _;
+use fetchloom_engine::tuning::FIRST_PER_HOST;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
 #[cfg(unix)]
@@ -26,7 +26,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use fetchloom_faults::{TYPEFLAG_REGULAR, TarHeader, TarWriter};
+use fetchloom_faults::{Reply, Script, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use tempfile::TempDir;
@@ -257,4 +257,206 @@ fn a_thread_ceiling_above_the_detected_budget_is_clamped_and_says_so() {
         "explain never said the ceiling was clamped: {}",
         explained.out()
     );
+}
+
+/// A corpus of several files, so a run has more than one object to move.
+fn corpus(workspace: &Workspace, files: usize) -> PathBuf {
+    for index in 0..files {
+        let body: Vec<u8> = (0..1024_usize)
+            .map(|offset| u8::try_from((offset + index * 7) % 251).unwrap_or(0))
+            .collect();
+        workspace.write(&format!("corpus/file-{index}.bin"), &body);
+    }
+    workspace.path().join("corpus")
+}
+
+/// Runs the same fetch under a setting and returns the tree digest and the
+/// four deterministic counters.
+fn shape(run: &Run) -> (String, serde_json::Value) {
+    let body = run.json();
+    (
+        body["tree"].as_str().unwrap_or_default().to_owned(),
+        body["work"].clone(),
+    )
+}
+
+#[test]
+fn a_warm_measurement_cache_and_an_empty_one_produce_the_same_bytes() {
+    let workspace = Workspace::new();
+    let source = corpus(&workspace, 8);
+    let source = source.to_str().unwrap();
+
+    let mut trees = Vec::new();
+    for (index, ceilings) in [
+        vec![],
+        vec!["--concurrency", "1", "--per-host", "1"],
+        vec!["--concurrency", "4", "--per-host", "2"],
+        vec!["--per-host", "1"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = format!("out-{index}");
+        let mut arguments = vec!["get", source, "--output", out.as_str(), "--json"];
+        arguments.extend_from_slice(&ceilings);
+        let run = workspace.run(&arguments);
+        assert_eq!(run.code(), 0, "{ceilings:?} said {}", run.err());
+        trees.push(run.json()["tree"].as_str().unwrap().to_owned());
+    }
+    assert!(
+        trees.windows(2).all(|pair| pair[0] == pair[1]),
+        "a ceiling changed the tree digest: {trees:?}"
+    );
+
+    let entries: Vec<Vec<String>> = (0..4)
+        .map(|index| entries_under(&workspace.path().join(format!("out-{index}"))))
+        .collect();
+    assert!(
+        entries.windows(2).all(|pair| pair[0] == pair[1]),
+        "a ceiling changed what was materialized: {entries:?}"
+    );
+}
+
+#[test]
+fn a_measurement_a_run_recorded_never_changes_what_the_next_run_produces() {
+    let object: Vec<u8> = (0..64 * 1024_usize)
+        .map(|index| u8::try_from(index % 251).unwrap_or(0))
+        .collect();
+    let server =
+        TestServer::start(Script::serving(object).tagged(vec!["\"one\"".to_owned()])).unwrap();
+    let location = format!("{}/object", server.origin());
+
+    let observing = Workspace::new();
+    let observed = observing.run(&["get", &location, "--output", "first", "--json"]);
+    assert_eq!(observed.code(), 0, "{}", observed.err());
+    let learned = recorded_concurrency(&observing);
+    assert!(
+        learned > u64::from(FIRST_PER_HOST),
+        "the run recorded {learned}, which is where a host nothing is known about starts, so \
+         there is no warm state for this test to vary"
+    );
+
+    let empty = Workspace::new();
+    let warm = Workspace::new();
+    for workspace in [&empty, &warm] {
+        assert_eq!(
+            workspace.run(&["cache", "status"]).code(),
+            0,
+            "the cache would not open"
+        );
+    }
+    seed_measurements(&observing, &warm);
+    assert!(
+        measurement_files(&empty.cache()).is_empty(),
+        "the empty side already holds a measurement"
+    );
+    assert_eq!(
+        measurement_files(&warm.cache()).len(),
+        1,
+        "the warm side holds no measurement, so this test varies nothing"
+    );
+
+    let mut shapes = Vec::new();
+    for (workspace, name) in [(&empty, "empty"), (&warm, "warm")] {
+        let run = workspace.run(&[
+            "get",
+            &location,
+            "--output",
+            "out",
+            "--json",
+            "--deterministic-io",
+        ]);
+        assert_eq!(run.code(), 0, "the {name} side said {}", run.err());
+        shapes.push(shape(&run));
+    }
+    assert_eq!(
+        shapes[0].0, shapes[1].0,
+        "the measurement state changed the tree digest"
+    );
+    assert_eq!(
+        shapes[0].1, shapes[1].1,
+        "deterministic mode did not produce identical counters across measurement states"
+    );
+    assert_eq!(
+        recorded_concurrency(&warm),
+        learned,
+        "the deterministic run rewrote the measurement it was told not to adapt from"
+    );
+}
+
+/// Returns the measurement records a cache holds.
+fn measurement_files(cache: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(cache.join("meta").join("host"))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default()
+}
+
+/// Copies the measurements one workspace recorded into another, so the two
+/// differ in the measurement state and in nothing else.
+fn seed_measurements(from: &Workspace, into: &Workspace) {
+    let target = into.cache().join("meta").join("host");
+    std::fs::create_dir_all(&target).unwrap();
+    for path in measurement_files(&from.cache()) {
+        std::fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
+    }
+}
+
+#[test]
+fn a_rate_limit_reduces_the_recorded_concurrency_in_the_run_it_happened_in() {
+    let object: Vec<u8> = (0..32 * 1024_usize)
+        .map(|index| u8::try_from(index % 251).unwrap_or(0))
+        .collect();
+    let workspace = Workspace::new();
+
+    let clean = TestServer::start(Script::serving(object.clone())).unwrap();
+    let first = workspace.run(&[
+        "get",
+        &format!("{}/object", clean.origin()),
+        "--output",
+        "clean",
+        "--json",
+    ]);
+    assert_eq!(first.code(), 0, "{}", first.err());
+    let unlimited = recorded_concurrency(&workspace);
+    drop(clean);
+
+    let limited = TestServer::start(Script::serving(object).replying(vec![
+        Reply::Status {
+            code: 429,
+            retry_after: Some("0".to_owned()),
+        };
+        2
+    ]))
+    .unwrap();
+    let second = workspace.run(&[
+        "get",
+        &format!("{}/object", limited.origin()),
+        "--output",
+        "limited",
+        "--json",
+    ]);
+    assert_eq!(second.code(), 0, "{}", second.err());
+    let after = recorded_concurrency(&workspace);
+
+    assert!(
+        after < unlimited,
+        "a rate limit left the concurrency at {after} where a clean run recorded {unlimited}"
+    );
+}
+
+/// Returns the concurrency the cache recorded for the one host a test fetched
+/// from.
+fn recorded_concurrency(workspace: &Workspace) -> u64 {
+    let directory = workspace.cache().join("meta").join("host");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
+        .flatten()
+    {
+        let text = std::fs::read_to_string(entry.path()).unwrap();
+        let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+        found.push(record["measurement"]["concurrency"].as_u64().unwrap());
+    }
+    assert_eq!(found.len(), 1, "expected one host, found {found:?}");
+    found[0]
 }

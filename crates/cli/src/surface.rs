@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use fetchloom_engine::limits::Bandwidth;
 use fetchloom_engine::selection::Layout;
 
 /// How progress is presented.
@@ -65,7 +66,7 @@ pub struct GlobalFlags {
     #[arg(long, global = true)]
     pub no_animation: bool,
     /// Ceiling on threads used for processor work.
-    #[arg(long, global = true, value_name = "n")]
+    #[arg(long, global = true, value_name = "n", value_parser = clap::value_parser!(u32).range(1..))]
     pub threads: Option<u32>,
     /// Where the cache is.
     #[arg(long, global = true, value_name = "path")]
@@ -97,6 +98,30 @@ pub enum VerifyChoice {
     Fingerprint,
     /// Trust the object unconditionally, which makes the result unverified.
     Never,
+}
+
+/// Which write path a run takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum IoChoice {
+    /// Let the volume's own capabilities decide.
+    Auto,
+    /// Write through the operating system's page cache.
+    Buffered,
+    /// Write without leaving the bytes in the operating system's page cache.
+    Uncached,
+}
+
+/// The value `--bandwidth` was given, parsed into a ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RateArg(pub Bandwidth);
+
+impl std::str::FromStr for RateArg {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.parse().map(Self)
+    }
 }
 
 /// The value `--layout` was given, parsed into what selection acts on.
@@ -154,6 +179,24 @@ pub struct TransferFlags {
     /// Accept current destination contents as correct.
     #[arg(long)]
     pub adopt: bool,
+    /// Ceiling on transfers in flight across every host.
+    #[arg(long, value_name = "n", value_parser = clap::value_parser!(u32).range(1..))]
+    pub concurrency: Option<u32>,
+    /// Ceiling on transfers in flight for one host.
+    #[arg(long, value_name = "n", value_parser = clap::value_parser!(u32).range(1..))]
+    pub per_host: Option<u32>,
+    /// Ceiling on how fast the run may transfer.
+    #[arg(long, value_name = "rate")]
+    pub bandwidth: Option<RateArg>,
+    /// Which write path a run takes.
+    #[arg(long, value_name = "auto|buffered|uncached")]
+    pub io: Option<IoChoice>,
+    /// Raise politeness ceilings.
+    #[arg(long)]
+    pub aggressive: bool,
+    /// Disable adaptation, so two runs do identical work.
+    #[arg(long)]
+    pub deterministic_io: bool,
 }
 
 /// What to do with the cache.

@@ -1,6 +1,7 @@
 //! Configuration files and the five levels a setting can come from.
 
 use std::fmt;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -79,11 +80,19 @@ pub struct ConfigFile {
     /// Forbid all network activity.
     pub offline: Option<bool>,
     /// Ceiling on threads used for processor work.
-    pub threads: Option<u32>,
+    pub threads: Option<NonZeroU32>,
     /// Progress presentation.
     pub display: Option<String>,
     /// Where the cache is.
     pub cache: Option<CacheSection>,
+    /// Ceiling on transfers in flight across every host.
+    pub concurrency: Option<NonZeroU32>,
+    /// Ceiling on transfers in flight for one host.
+    pub per_host: Option<NonZeroU32>,
+    /// Ceiling on how fast a run may transfer.
+    pub bandwidth: Option<String>,
+    /// Which write path a run takes.
+    pub io: Option<String>,
 }
 
 /// Everything the cache table of a configuration file may set.

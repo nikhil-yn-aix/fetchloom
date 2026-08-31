@@ -12,6 +12,7 @@ pub mod diagnosis;
 pub mod format;
 pub mod ingest;
 pub mod layout;
+pub mod measurement;
 pub mod pack;
 pub mod prune;
 pub mod rebuild;
@@ -257,6 +258,7 @@ fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> 
     wanted.push(layout.records());
     wanted.push(layout.witnesses());
     wanted.push(layout.resolutions());
+    wanted.push(layout.measurements());
     for directory in wanted {
         let absent = !directory.is_dir();
         std::fs::create_dir_all(&directory)

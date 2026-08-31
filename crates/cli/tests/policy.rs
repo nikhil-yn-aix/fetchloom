@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -41,7 +42,13 @@ mod support;
 use support::FakeEnvironment;
 
 fn settings_for(flags: &GlobalFlags, environment: &dyn Environment) -> settings::Settings {
-    settings::resolve_all(flags, &Discovered::default(), environment)
+    settings::resolve_all(
+        flags,
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &Discovered::default(),
+        environment,
+    )
+    .expect("no level supplied a value this build cannot read")
 }
 
 const NON_INTERACTIVE: Streams = Streams {

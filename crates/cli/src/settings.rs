@@ -1,9 +1,12 @@
 //! Resolving every setting across the five precedence levels.
 
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
+use fetchloom_engine::limits::Bandwidth;
+
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
-use crate::surface::{DisplayMode, GlobalFlags};
+use crate::surface::{DisplayMode, GlobalFlags, IoChoice, TransferFlags};
 
 /// Somewhere a value can be read from.
 pub trait Environment: Send + Sync {
@@ -21,17 +24,52 @@ impl Environment for ProcessEnvironment {
     }
 }
 
+/// A value a level supplied that this build cannot read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    /// The setting the value was for.
+    pub key: String,
+    /// The level that supplied it.
+    pub origin: Origin,
+    /// What to do about it.
+    pub next_action: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} from the {} is not a value {} takes: {}",
+            self.key, self.origin, self.key, self.next_action
+        )
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// Every effective setting, each carrying the level that supplied it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// Whether all network activity is forbidden.
     pub offline: Sourced<bool>,
     /// The ceiling on threads used for processor work.
-    pub threads: Sourced<Option<u32>>,
+    pub threads: Sourced<Option<NonZeroU32>>,
     /// The progress presentation requested.
     pub display: Sourced<DisplayMode>,
     /// Where the cache is.
     pub cache_dir: Sourced<PathBuf>,
+    /// The ceiling on transfers in flight across every host.
+    pub concurrency: Sourced<Option<NonZeroU32>>,
+    /// The ceiling on transfers in flight for one host.
+    pub per_host: Sourced<Option<NonZeroU32>>,
+    /// The ceiling on how fast the run may transfer.
+    pub bandwidth: Sourced<Option<Bandwidth>>,
+    /// Which write path the run takes.
+    pub io: Sourced<IoChoice>,
+    /// Whether the politeness ceilings are raised.
+    pub aggressive: Sourced<bool>,
+    /// Whether adaptation is disabled, so two runs do identical work.
+    pub deterministic_io: Sourced<bool>,
 }
 
 /// Returns the cache directory this platform puts a cache in by default.
@@ -87,6 +125,15 @@ fn parse_display(text: &str) -> Option<DisplayMode> {
     }
 }
 
+fn parse_io(text: &str) -> Option<IoChoice> {
+    match text {
+        "auto" => Some(IoChoice::Auto),
+        "buffered" => Some(IoChoice::Buffered),
+        "uncached" => Some(IoChoice::Uncached),
+        _ => None,
+    }
+}
+
 struct Levels<'a> {
     project: Option<&'a ConfigFile>,
     user: Option<&'a ConfigFile>,
@@ -129,45 +176,107 @@ where
     Sourced::new(fallback, Origin::Default)
 }
 
+/// Reads a variable a setting takes, refusing a value this build cannot read
+/// rather than falling through to the next level.
+fn from_environment<T: std::str::FromStr>(
+    environment: &dyn Environment,
+    name: &str,
+    key: &str,
+) -> Result<Option<T>, Refused> {
+    let Some(text) = environment.get(name) else {
+        return Ok(None);
+    };
+    text.parse().map(Some).map_err(|_| Refused {
+        key: key.to_owned(),
+        origin: Origin::Environment,
+        next_action: format!("set {name} to a value {key} takes, or unset it"),
+    })
+}
+
+/// Reads what a configuration file said for a setting whose surface form is
+/// text, refusing a value this build cannot read.
+fn from_files<T, F, P>(
+    levels: &Levels<'_>,
+    read: F,
+    parse: P,
+    key: &str,
+) -> Result<Option<(T, Origin)>, Refused>
+where
+    F: Fn(&ConfigFile) -> Option<String>,
+    P: Fn(&str) -> Option<T>,
+{
+    let Some((text, origin)) = levels.pick(read) else {
+        return Ok(None);
+    };
+    match parse(&text) {
+        Some(value) => Ok(Some((value, origin))),
+        None => Err(Refused {
+            key: key.to_owned(),
+            origin,
+            next_action: format!("write {key} in the {origin} as a value it takes, or remove it"),
+        }),
+    }
+}
+
 /// Resolves every setting across the five precedence levels.
-#[must_use]
+///
+/// # Errors
+///
+/// Fails when a level supplied a value this build cannot read, naming the
+/// setting and the level.
 pub fn resolve_all(
     flags: &GlobalFlags,
+    transfer: &TransferFlags,
     discovered: &Discovered,
     environment: &dyn Environment,
-) -> Settings {
+) -> Result<Settings, Refused> {
     let levels = Levels {
         project: discovered.project.as_ref().map(|loaded| &loaded.values),
         user: discovered.user.as_ref().map(|loaded| &loaded.values),
     };
 
+    let offline_variable = match environment.get("FETCHLOOM_OFFLINE") {
+        None => None,
+        Some(text) => Some(parse_bool(&text).ok_or_else(|| Refused {
+            key: "offline".to_owned(),
+            origin: Origin::Environment,
+            next_action: "set FETCHLOOM_OFFLINE to 1 or 0, or unset it".to_owned(),
+        })?),
+    };
     let offline = resolve(
         flags.offline.then_some(true),
-        environment
-            .get("FETCHLOOM_OFFLINE")
-            .as_deref()
-            .and_then(parse_bool),
+        offline_variable,
         &levels,
         |file| file.offline,
         false,
     );
     let threads = resolve(
-        flags.threads.map(Some),
-        environment
-            .get("FETCHLOOM_THREADS")
-            .and_then(|text| text.parse().ok())
-            .map(Some),
+        flags.threads.and_then(NonZeroU32::new).map(Some),
+        from_environment::<NonZeroU32>(environment, "FETCHLOOM_THREADS", "threads")?.map(Some),
         &levels,
         |file| file.threads.map(Some),
         None,
     );
-    let display = resolve(
-        flags.display,
-        None,
-        &levels,
-        |file| file.display.as_deref().and_then(parse_display),
-        DisplayMode::Plain,
-    );
+    let display = match flags.display {
+        Some(mode) => Sourced::new(mode, Origin::CommandLine),
+        None => match from_files(
+            &levels,
+            |file| file.display.clone(),
+            parse_display,
+            "display",
+        )? {
+            Some((mode, origin)) => Sourced::new(mode, origin),
+            None => Sourced::new(DisplayMode::Plain, Origin::Default),
+        },
+    };
+    let Tuned {
+        concurrency,
+        per_host,
+        bandwidth,
+        io,
+        aggressive,
+        deterministic_io,
+    } = resolve_tuning(transfer, &levels, environment)?;
 
     let cache_dir = if let Some(named) = flags.cache_dir.clone() {
         Sourced::new(named, Origin::CommandLine)
@@ -185,10 +294,96 @@ pub fn resolve_all(
         Sourced::new(default_cache_dir(environment), Origin::Default)
     };
 
-    Settings {
+    Ok(Settings {
         offline,
         threads,
         display,
         cache_dir,
-    }
+        concurrency,
+        per_host,
+        bandwidth,
+        io,
+        aggressive,
+        deterministic_io,
+    })
+}
+
+/// The settings that bound a run's transfers.
+struct Tuned {
+    concurrency: Sourced<Option<NonZeroU32>>,
+    per_host: Sourced<Option<NonZeroU32>>,
+    bandwidth: Sourced<Option<Bandwidth>>,
+    io: Sourced<IoChoice>,
+    aggressive: Sourced<bool>,
+    deterministic_io: Sourced<bool>,
+}
+
+/// Resolves the settings that bound a run's transfers.
+fn resolve_tuning(
+    transfer: &TransferFlags,
+    levels: &Levels<'_>,
+    environment: &dyn Environment,
+) -> Result<Tuned, Refused> {
+    let concurrency = resolve(
+        transfer.concurrency.and_then(NonZeroU32::new).map(Some),
+        from_environment::<NonZeroU32>(environment, "FETCHLOOM_CONCURRENCY", "concurrency")?
+            .map(Some),
+        levels,
+        |file| file.concurrency.map(Some),
+        None,
+    );
+    let per_host = resolve(
+        transfer.per_host.and_then(NonZeroU32::new).map(Some),
+        from_environment::<NonZeroU32>(environment, "FETCHLOOM_PER_HOST", "per-host")?.map(Some),
+        levels,
+        |file| file.per_host.map(Some),
+        None,
+    );
+    let bandwidth = if let Some(rate) = transfer.bandwidth {
+        Sourced::new(Some(rate.0), Origin::CommandLine)
+    } else if let Some(rate) =
+        from_environment::<Bandwidth>(environment, "FETCHLOOM_BANDWIDTH", "bandwidth")?
+    {
+        Sourced::new(Some(rate), Origin::Environment)
+    } else if let Some((rate, origin)) = from_files(
+        levels,
+        |file| file.bandwidth.clone(),
+        |text| text.parse::<Bandwidth>().ok(),
+        "bandwidth",
+    )? {
+        Sourced::new(Some(rate), origin)
+    } else {
+        Sourced::new(None, Origin::Default)
+    };
+    let io = match transfer.io {
+        Some(choice) => Sourced::new(choice, Origin::CommandLine),
+        None => match from_files(levels, |file| file.io.clone(), parse_io, "io")? {
+            Some((choice, origin)) => Sourced::new(choice, origin),
+            None => Sourced::new(IoChoice::Auto, Origin::Default),
+        },
+    };
+    let aggressive = Sourced::new(
+        transfer.aggressive,
+        if transfer.aggressive {
+            Origin::CommandLine
+        } else {
+            Origin::Default
+        },
+    );
+    let deterministic_io = Sourced::new(
+        transfer.deterministic_io,
+        if transfer.deterministic_io {
+            Origin::CommandLine
+        } else {
+            Origin::Default
+        },
+    );
+    Ok(Tuned {
+        concurrency,
+        per_host,
+        bandwidth,
+        io,
+        aggressive,
+        deterministic_io,
+    })
 }

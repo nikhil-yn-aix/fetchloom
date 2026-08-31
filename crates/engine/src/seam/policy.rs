@@ -12,6 +12,18 @@ use crate::reference::Host;
 use crate::trust::TrustClass;
 use crate::verification::VerificationPolicy;
 
+/// Which write path a run takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IoMode {
+    /// Let the volume's own capabilities decide.
+    Auto,
+    /// Write through the operating system's page cache.
+    Buffered,
+    /// Write without leaving the bytes in the operating system's page cache.
+    Uncached,
+}
+
 /// What a run is allowed to do.
 pub trait Policy: Send + Sync {
     /// Reports whether every network activity is forbidden.
@@ -37,6 +49,15 @@ pub trait Policy: Send + Sync {
 
     /// Returns the ceiling on how fast the run may transfer.
     fn bandwidth(&self) -> Option<Bandwidth>;
+
+    /// Reports whether the politeness ceilings are raised.
+    fn aggressive(&self) -> bool;
+
+    /// Reports whether a run's decisions may move with what it measures.
+    fn adapts(&self) -> bool;
+
+    /// Returns the write path a run takes.
+    fn io(&self) -> IoMode;
 
     /// Reports whether a trust class is weak enough to refuse.
     fn accepts(&self, class: TrustClass) -> bool;

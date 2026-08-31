@@ -36,6 +36,7 @@ use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::resume::ResumeRung;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::transfer::{Pause, Transfer};
+use fetchloom_engine::tuning::Controller;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_faults::{RecordingObserver, Reply, Script, TestServer};
 use fetchloom_platform::NativePlatform;
@@ -73,6 +74,7 @@ struct Harness {
     degradations: DegradeQueue,
     observer: RecordingObserver,
     sequence: Sequence,
+    controller: std::sync::Mutex<Controller>,
 }
 
 impl Harness {
@@ -99,6 +101,7 @@ impl Harness {
             degradations: DegradeQueue::new(),
             observer: RecordingObserver::new(),
             sequence: Sequence::new(),
+            controller: std::sync::Mutex::new(Controller::start(None, std::num::NonZeroU32::MIN)),
         }
     }
 
@@ -115,6 +118,8 @@ impl Harness {
             degradations: &self.degradations,
             observer: &self.observer,
             sequence: &self.sequence,
+            controller: &self.controller,
+            meter: None,
         }
     }
 }

@@ -200,7 +200,7 @@ impl Source for HttpSource {
             return Err(status_failure(
                 location,
                 status,
-                header(&answer, "retry-after"),
+                header(&answer, "retry-after").as_deref(),
                 credential,
             ));
         }
@@ -240,7 +240,7 @@ impl Source for HttpSource {
             return Err(status_failure(
                 location,
                 status,
-                header(&answer, "retry-after"),
+                header(&answer, "retry-after").as_deref(),
                 credential,
             ));
         }
@@ -292,7 +292,7 @@ impl Source for HttpSource {
             return Err(status_failure(
                 location,
                 status,
-                header(&answer, "retry-after"),
+                header(&answer, "retry-after").as_deref(),
                 credential,
             ));
         }
@@ -352,7 +352,7 @@ impl Source for HttpSource {
             return Err(status_failure(
                 location,
                 status,
-                header(&answer, "retry-after"),
+                header(&answer, "retry-after").as_deref(),
                 credential,
             ));
         }
@@ -401,7 +401,7 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
 fn status_failure(
     location: &str,
     status: u16,
-    retry_after: Option<String>,
+    retry_after: Option<&str>,
     presented: Option<&Credential>,
 ) -> Error {
     if let Some(credential) = presented
@@ -417,7 +417,7 @@ fn status_failure(
         .with_source(location);
     }
     let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504);
-    let action = match retry_after {
+    let action = match &retry_after {
         Some(wait) => format!(
             "the source answered {status} and asked to be left alone for {wait} seconds before another request"
         ),
@@ -430,9 +430,17 @@ fn status_failure(
             "name a source that can serve the object, because this one answered {status}, which will not change without the source or the request changing"
         ),
     };
-    Error::new(ErrorKind::NetworkStatus, action)
+    let failure = Error::new(ErrorKind::NetworkStatus, action)
         .with_source(location)
-        .with_retryable(retryable)
+        .with_retryable(retryable);
+    let asked = retry_after
+        .and_then(parse_retry_after)
+        .map(|wait| failure.clone().with_retry_after(wait));
+    match asked {
+        Some(carrying) => carrying,
+        None if status == 429 => failure.rate_limited(),
+        None => failure,
+    }
 }
 
 fn transport_failure(location: &str, reason: &ureq::Error) -> Error {

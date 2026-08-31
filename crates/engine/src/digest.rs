@@ -29,6 +29,10 @@ pub const WITNESS_KEY_CONTEXT: &str = "fetchloom witness key";
 /// under from every other domain.
 pub const RESOLUTION_KEY_CONTEXT: &str = "fetchloom resolution key";
 
+/// The derived key context separating the name a per-host measurement is filed
+/// under from every other domain.
+pub const MEASUREMENT_KEY_CONTEXT: &str = "fetchloom measurement key";
+
 /// The hash algorithm a digest was produced by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Algorithm {

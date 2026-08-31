@@ -26,6 +26,8 @@ fn statements() -> Vec<String> {
         "a prune mark is meta/prune/<hex> and holds the instant it was marked".to_owned(),
         "one record per object is meta/object/<hex> and holds its interop digest and its fingerprint"
             .to_owned(),
+        "one measurement per host is meta/host/<hex>, where hex is the derived-key digest of the host, and holds the concurrency, throughput and time to first byte the last run observed"
+            .to_owned(),
         "the boot of the last recovery is meta/recovered".to_owned(),
         "the content digest is BLAKE3 over the object bytes".to_owned(),
         "every record is canonical JSON with no unknown keys".to_owned(),

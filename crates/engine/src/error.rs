@@ -242,7 +242,9 @@ pub struct Error {
     retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     member: Option<Box<str>>,
-    next_action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_seconds: Option<std::num::NonZeroU32>,
+    next_action: Box<str>,
 }
 
 impl Error {
@@ -258,7 +260,8 @@ impl Error {
             attempts: 0,
             retryable: false,
             member: None,
-            next_action: next_action.into(),
+            retry_after_seconds: None,
+            next_action: next_action.into().into_boxed_str(),
         }
     }
 
@@ -308,6 +311,30 @@ impl Error {
     pub fn with_retryable(mut self, retryable: bool) -> Self {
         self.retryable = retryable;
         self
+    }
+
+    /// Records that the source asked to be left alone, and for how long.
+    #[must_use]
+    pub fn with_retry_after(mut self, wait: std::time::Duration) -> Self {
+        let seconds = u32::try_from(wait.as_secs()).unwrap_or(u32::MAX);
+        self.retry_after_seconds =
+            Some(std::num::NonZeroU32::new(seconds).unwrap_or(std::num::NonZeroU32::MIN));
+        self
+    }
+
+    /// Records that the source asked to be left alone without saying for how
+    /// long, which is the shortest wait a source can ask for.
+    #[must_use]
+    pub fn rate_limited(mut self) -> Self {
+        self.retry_after_seconds = self.retry_after_seconds.or(Some(std::num::NonZeroU32::MIN));
+        self
+    }
+
+    /// Returns how long the source asked to be left alone, when it asked.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        self.retry_after_seconds
+            .map(|seconds| std::time::Duration::from_secs(u64::from(seconds.get())))
     }
 
     /// Returns the kind of this failure.

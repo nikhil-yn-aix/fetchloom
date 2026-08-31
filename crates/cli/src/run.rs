@@ -204,6 +204,95 @@ pub struct Materialization<'a> {
     /// What a destination entry and a cache hit are both checked against before
     /// they are reused.
     pub verify: fetchloom_engine::verification::VerificationPolicy,
+    /// What bounds the run's transfers, and whether they may move.
+    pub tuning: &'a Tuning,
+}
+
+/// What bounds a run's transfers, and whether measurement may move them.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// The two ceilings no measurement may push a run past.
+    pub ceilings: fetchloom_engine::tuning::Ceilings,
+    /// Whether a run's decisions may move with what it measures.
+    pub adapts: bool,
+    /// The ceiling on how fast the run may transfer.
+    pub bandwidth: Option<fetchloom_engine::limits::Bandwidth>,
+}
+
+impl Tuning {
+    /// Returns the controller a transfer to a host starts with: what the cache
+    /// recorded for that host, or a count that never moves when the run was
+    /// told not to adapt.
+    #[must_use]
+    pub fn controller_for(
+        &self,
+        host: &str,
+        cache: Option<&Cache<NativePlatform>>,
+    ) -> std::sync::Mutex<fetchloom_engine::tuning::Controller> {
+        if !self.adapts {
+            return std::sync::Mutex::new(fetchloom_engine::tuning::Controller::fixed(
+                self.ceilings.per_host,
+            ));
+        }
+        let recorded = cache
+            .and_then(|cache| cache.measurement(host))
+            .map(|found| found.concurrency);
+        std::sync::Mutex::new(fetchloom_engine::tuning::Controller::start(
+            recorded,
+            self.ceilings.per_host,
+        ))
+    }
+
+    /// Returns the meter a run's transfers share, when a rate was set.
+    #[must_use]
+    pub fn meter(&self) -> Option<fetchloom_engine::tuning::Meter> {
+        self.bandwidth.map(fetchloom_engine::tuning::Meter::new)
+    }
+}
+
+/// Records what a transfer learned about the host it ran against, so the next
+/// run starts where this one finished.
+fn record_measurement(
+    cache: &Cache<NativePlatform>,
+    with: &Materialization<'_>,
+    host: &str,
+    controller: &std::sync::Mutex<fetchloom_engine::tuning::Controller>,
+    moved: u64,
+    took: std::time::Duration,
+) {
+    if !with.tuning.adapts || host.is_empty() {
+        return;
+    }
+    let permitted = controller
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .permitted();
+    let nanos = u64::try_from(took.as_nanos()).unwrap_or(u64::MAX);
+    let throughput = moved
+        .saturating_mul(1_000_000_000)
+        .checked_div(nanos)
+        .unwrap_or_default();
+    let _ = cache.record_measurement(
+        host,
+        &fetchloom_engine::tuning::HostMeasurement {
+            concurrency: permitted,
+            throughput,
+            time_to_first_byte_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+            observed_at: fetchloom_engine::timestamp::Timestamp::now(),
+        },
+    );
+}
+
+/// Returns the host a location names, which is what a measurement is filed
+/// under.
+#[must_use]
+pub fn host_of(location: &str) -> String {
+    let Some(after) = location.split_once("://") else {
+        return String::new();
+    };
+    let authority = after.1.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    host.split(':').next().unwrap_or_default().to_owned()
 }
 
 /// Materializes a local source tree into a destination.
@@ -1203,6 +1292,9 @@ pub fn materialize_remote(
     };
 
     let degradations = DegradeQueue::new();
+    let host = host_of(location);
+    let controller = with.tuning.controller_for(&host, Some(cache));
+    let meter = with.tuning.meter();
     let transfer = Transfer {
         store: cache,
         source: &source,
@@ -1211,8 +1303,19 @@ pub fn materialize_remote(
         degradations: &degradations,
         observer,
         sequence,
+        controller: &controller,
+        meter: meter.as_ref(),
     };
+    let moving = std::time::Instant::now();
     let transferred = transfer.run(pinned, &prior_from(cache), &[location.to_owned()])?;
+    record_measurement(
+        cache,
+        with,
+        &host,
+        &controller,
+        transferred.bytes_transferred,
+        moving.elapsed(),
+    );
     remember(cache, location, &transferred)?;
     for entry in source.take_degradations() {
         emit(EventPayload::Degrade {
@@ -2187,6 +2290,12 @@ fn transfer_object(
     let pause = SleepingPause;
     let limits = Limits::default();
     let degradations = DegradeQueue::new();
+    let host = locations
+        .first()
+        .map(|first| host_of(first))
+        .unwrap_or_default();
+    let controller = with.tuning.controller_for(&host, Some(cache));
+    let meter = with.tuning.meter();
     let transfer = Transfer {
         store: cache,
         source: &source,
@@ -2195,8 +2304,19 @@ fn transfer_object(
         degradations: &degradations,
         observer,
         sequence,
+        controller: &controller,
+        meter: meter.as_ref(),
     };
+    let moving = std::time::Instant::now();
     let transferred = transfer.run(expected, &prior_from(cache), locations)?;
+    record_measurement(
+        cache,
+        with,
+        &host,
+        &controller,
+        transferred.bytes_transferred,
+        moving.elapsed(),
+    );
     for location in locations {
         remember(cache, location, &transferred)?;
     }

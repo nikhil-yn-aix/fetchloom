@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -58,9 +59,15 @@ fn threads_origin(
     project: Option<&str>,
     user: Option<&str>,
     environment: &dyn Environment,
-) -> (Option<u32>, Origin) {
+) -> (Option<std::num::NonZeroU32>, Origin) {
     let (_temporary, discovered) = discovered_from(project, user);
-    let resolved = settings::resolve_all(flags, &discovered, environment);
+    let resolved = settings::resolve_all(
+        flags,
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &discovered,
+        environment,
+    )
+    .expect("no level supplied a value this build cannot read");
     (resolved.threads.value, resolved.threads.origin)
 }
 
@@ -84,7 +91,7 @@ fn a_user_config_beats_a_default() {
         Some("threads = 9\n"),
         &FakeEnvironment::default(),
     );
-    assert_eq!(value, Some(9));
+    assert_eq!(value, std::num::NonZeroU32::new(9));
     assert_eq!(origin, Origin::UserConfig);
 }
 
@@ -96,7 +103,7 @@ fn a_project_config_beats_a_user_config() {
         Some("threads = 9\n"),
         &FakeEnvironment::default(),
     );
-    assert_eq!(value, Some(2));
+    assert_eq!(value, std::num::NonZeroU32::new(2));
     assert_eq!(origin, Origin::ProjectConfig);
 }
 
@@ -108,7 +115,7 @@ fn the_environment_beats_a_project_config() {
         Some("threads = 9\n"),
         &FakeEnvironment::with(&[("FETCHLOOM_THREADS", "5")]),
     );
-    assert_eq!(value, Some(5));
+    assert_eq!(value, std::num::NonZeroU32::new(5));
     assert_eq!(origin, Origin::Environment);
 }
 
@@ -124,7 +131,7 @@ fn the_command_line_beats_the_environment() {
         Some("threads = 9\n"),
         &FakeEnvironment::with(&[("FETCHLOOM_THREADS", "5")]),
     );
-    assert_eq!(value, Some(7));
+    assert_eq!(value, std::num::NonZeroU32::new(7));
     assert_eq!(origin, Origin::CommandLine);
 }
 
@@ -136,7 +143,13 @@ fn all_five_levels_are_distinguished_in_one_resolution() {
         offline: true,
         ..GlobalFlags::default()
     };
-    let resolved = settings::resolve_all(&flags, &discovered, &FakeEnvironment::default());
+    let resolved = settings::resolve_all(
+        &flags,
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &discovered,
+        &FakeEnvironment::default(),
+    )
+    .expect("no level supplied a value this build cannot read");
 
     assert_eq!(resolved.offline.origin, Origin::CommandLine);
     assert_eq!(resolved.threads.origin, Origin::UserConfig);
@@ -144,16 +157,18 @@ fn all_five_levels_are_distinguished_in_one_resolution() {
 
     let with_environment = settings::resolve_all(
         &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
         &discovered,
         &FakeEnvironment::with(&[("FETCHLOOM_THREADS", "4")]),
-    );
+    )
+    .expect("no level supplied a value this build cannot read");
     assert_eq!(with_environment.threads.origin, Origin::Environment);
     assert_eq!(with_environment.offline.origin, Origin::Default);
 
     assert!(resolved.offline.value);
-    assert_eq!(resolved.threads.value, Some(9));
+    assert_eq!(resolved.threads.value, std::num::NonZeroU32::new(9));
     assert_eq!(resolved.display.value, DisplayMode::None);
-    assert_eq!(with_environment.threads.value, Some(4));
+    assert_eq!(with_environment.threads.value, std::num::NonZeroU32::new(4));
 }
 
 #[test]
@@ -161,10 +176,12 @@ fn explain_names_the_origin_of_every_setting() {
     let (_temporary, discovered) = discovered_from(Some("threads = 3\n"), None);
     let resolved = settings::resolve_all(
         &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
         &discovered,
         &FakeEnvironment::default(),
-    );
-    let rows = fetchloom_cli::explain::rows(&resolved, 4);
+    )
+    .expect("no level supplied a value this build cannot read");
+    let rows = fetchloom_cli::explain::rows(&resolved, &measured(4));
 
     let threads = rows.iter().find(|row| row.key == "threads").unwrap();
     assert_eq!(threads.origin, "project config");
@@ -179,10 +196,12 @@ fn a_setting_no_level_supplied_reports_the_measurement_that_chose_it() {
     let (_temporary, discovered) = discovered_from(None, None);
     let resolved = settings::resolve_all(
         &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
         &discovered,
         &FakeEnvironment::default(),
-    );
-    let rows = fetchloom_cli::explain::rows(&resolved, 4);
+    )
+    .expect("no level supplied a value this build cannot read");
+    let rows = fetchloom_cli::explain::rows(&resolved, &measured(4));
     let threads = rows.iter().find(|row| row.key == "threads").unwrap();
     assert_eq!(threads.value, "4");
     assert_eq!(threads.origin, "measured");
@@ -236,9 +255,11 @@ fn disabling_configuration_reaches_neither_file() {
 
     let resolved = settings::resolve_all(
         &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
         &discovered,
         &FakeEnvironment::default(),
-    );
+    )
+    .expect("no level supplied a value this build cannot read");
     assert_eq!(resolved.threads.value, None);
     assert_eq!(resolved.threads.origin, Origin::Default);
 }
@@ -252,10 +273,12 @@ fn a_named_file_disables_the_search() {
     let discovered = config::discover(temporary.path(), Some(&named), false).unwrap();
     let resolved = settings::resolve_all(
         &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
         &discovered,
         &FakeEnvironment::default(),
-    );
-    assert_eq!(resolved.threads.value, Some(8));
+    )
+    .expect("no level supplied a value this build cannot read");
+    assert_eq!(resolved.threads.value, std::num::NonZeroU32::new(8));
     assert_eq!(resolved.threads.origin, Origin::ProjectConfig);
 }
 
@@ -271,4 +294,15 @@ fn the_configuration_location_is_not_the_cache_location() {
     let cache = fetchloom_cli::settings::default_cache_dir(&environment);
     let configuration = config::user_config_directory().unwrap_or_else(|| PathBuf::from("unset"));
     assert_ne!(cache, configuration);
+}
+
+/// What a test's machine is said to have measured, so a row's origin is the
+/// level that supplied it rather than the machine the test runs on.
+fn measured(threads: u32) -> fetchloom_cli::explain::Measured {
+    fetchloom_cli::explain::Measured {
+        threads,
+        concurrency: 1,
+        per_host: 1,
+        recorded: Vec::new(),
+    }
 }
