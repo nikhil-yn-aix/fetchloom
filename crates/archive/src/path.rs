@@ -3,8 +3,8 @@
 
 use fetchloom_engine::error::{Error, ErrorKind};
 
-fn unsafe_path(next_action: String) -> Error {
-    Error::new(ErrorKind::ArchiveUnsafePath, next_action)
+fn unsafe_path(member: &str, next_action: String) -> Error {
+    Error::new(ErrorKind::ArchiveUnsafePath, next_action).with_member(member)
 }
 
 /// Validates a raw member path and returns it as an owned string.
@@ -17,43 +17,54 @@ fn unsafe_path(next_action: String) -> Error {
 pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
     if raw.contains(&0) {
         let lossy = String::from_utf8_lossy(raw).into_owned();
-        return Err(unsafe_path(format!(
-            "member path \"{lossy}\" holds a NUL byte"
-        )));
+        return Err(unsafe_path(
+            &lossy,
+            format!("member path \"{lossy}\" holds a NUL byte"),
+        ));
     }
     let Ok(text) = std::str::from_utf8(raw) else {
         let lossy = String::from_utf8_lossy(raw).into_owned();
-        return Err(unsafe_path(format!(
-            "member path \"{lossy}\" is not valid UTF-8"
-        )));
+        return Err(unsafe_path(
+            &lossy,
+            format!("member path \"{lossy}\" is not valid UTF-8"),
+        ));
     };
     let path = text.to_owned();
     if path.starts_with('/') {
-        return Err(unsafe_path(format!(
-            "member path \"{path}\" is an absolute path"
-        )));
+        return Err(unsafe_path(
+            &path,
+            format!("member path \"{path}\" is an absolute path"),
+        ));
     }
     if is_drive_letter_prefixed(&path) {
-        return Err(unsafe_path(format!(
-            "member path \"{path}\" names a Windows drive location"
-        )));
+        return Err(unsafe_path(
+            &path,
+            format!("member path \"{path}\" names a Windows drive location"),
+        ));
     }
     if path.contains('\\') {
-        return Err(unsafe_path(format!(
-            "repack \"{path}\" with a writer that separates path components with a forward slash, because a backslash is a legal character in a member name and this archive gives no way to tell a separator from one"
-        )));
+        return Err(unsafe_path(
+            &path,
+            format!(
+                "repack \"{path}\" with a writer that separates path components with a forward slash, because a backslash is a legal character in a member name and this archive gives no way to tell a separator from one"
+            ),
+        ));
     }
     let components: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     if components.contains(&"..") {
-        return Err(unsafe_path(format!(
-            "member path \"{path}\" holds a parent-directory component"
-        )));
+        return Err(unsafe_path(
+            &path,
+            format!("member path \"{path}\" holds a parent-directory component"),
+        ));
     }
     let depth = u32::try_from(components.len()).unwrap_or(u32::MAX);
     if depth > nesting_limit {
-        return Err(unsafe_path(format!(
-            "member path \"{path}\" nests {depth} components deep, past the limit of {nesting_limit}"
-        )));
+        return Err(unsafe_path(
+            &path,
+            format!(
+                "member path \"{path}\" nests {depth} components deep, past the limit of {nesting_limit}"
+            ),
+        ));
     }
     Ok(path)
 }

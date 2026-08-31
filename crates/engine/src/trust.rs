@@ -148,3 +148,16 @@ fn has_an_independent_pair(witnesses: &[&Witness]) -> bool {
 fn independent(one: &Witness, other: &Witness) -> bool {
     one.machine != other.machine && one.origin != other.origin && one.run != other.run
 }
+
+impl TrustClass {
+    /// Returns the name the contract lists this class under.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Corroborated => "corroborated",
+            Self::Tofu => "tofu",
+            Self::Unverified => "unverified",
+        }
+    }
+}

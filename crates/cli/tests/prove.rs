@@ -196,9 +196,12 @@ fn repairing_a_one_megabyte_region_of_a_very_large_object_transfers_about_one_me
 
     let work = &result["work"];
     let written = work["bytes_written"].as_u64().unwrap();
+    let whole = object.len() as u64;
     assert!(
-        written >= group && written < group * 2,
-        "a repair of one megabyte wrote {written} bytes, where it writes the megabyte it          fetched plus the four kilobytes of tree that cover the whole object"
+        written >= whole + group && written < whole + group * 2,
+        "a repair of one megabyte wrote {written} bytes, where it rebuilds the object it \
+         cannot patch in place: the whole {whole} bytes copied forward, the megabyte it \
+         fetched, and the tree that covers it"
     );
     assert!(
         work["requests"].as_u64().is_some_and(|count| count <= 2),

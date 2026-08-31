@@ -110,6 +110,7 @@ fn extract_entry(
         staging,
         extract_limits,
         platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
 }
 
@@ -377,6 +378,7 @@ fn a_symlink_member_is_created_only_after_every_regular_member_exists() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap_err();
     assert_eq!(error.kind().label(), "archive.collision");
@@ -412,6 +414,7 @@ fn a_hard_link_to_a_member_the_archive_does_not_hold_is_a_link_escape() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap_err();
     assert_eq!(error.kind().label(), "archive.link_escape");
@@ -447,6 +450,7 @@ fn a_hard_link_member_materializes_the_bytes_of_its_target() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     assert_eq!(entries.len(), 2);
@@ -484,6 +488,7 @@ fn many_members_extract_correctly_through_one_reused_buffer() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     assert_eq!(entries.len(), count);
@@ -590,6 +595,7 @@ fn a_colon_in_a_member_name_is_refused_rather_than_hidden_in_an_alternate_data_s
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap_err();
     assert_eq!(error.kind().label(), "destination.unrepresentable");
@@ -641,6 +647,7 @@ fn tree_of(bytes: Vec<u8>) -> fetchloom_engine::digest::TreeDigest {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     fetchloom_engine::canonical::tree_digest(&entries)

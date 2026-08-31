@@ -1,12 +1,12 @@
 //! Moving bytes from a source into the store, once, with retry and resume.
 
 use std::io::{Read, Write};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::degrade::DegradeQueue;
 use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
-use crate::event::{Event, EventPayload, Sequence};
+use crate::event::{Event, EventPayload, Sequence, Span};
 use crate::limits::Limits;
 use crate::partial_key::PartialKey;
 use crate::redact::SafeUrl;
@@ -207,6 +207,16 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
+    /// Takes the single-writer claim on a key, reporting a wait for another
+    /// writer as `cache.wait`.
+    fn claim(&self, key: PartialKey) -> Result<T::Lease, Error> {
+        let lease = self.store.lease(key)?;
+        if self.store.waited(&lease) {
+            self.emit(EventPayload::CacheWait { digest: key.name() });
+        }
+        Ok(lease)
+    }
+
     fn attempt_once(
         &self,
         expected: Option<ContentDigest>,
@@ -253,7 +263,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             self.store.discard_partial(key)?;
         }
 
-        let lease = self.store.lease(key)?;
+        let lease = self.claim(key)?;
         self.emit(EventPayload::TransferStart {
             source: metadata.location.clone(),
             expected_bytes: metadata.size,
@@ -280,7 +290,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         let length = metadata.size.unwrap_or(0);
         let mut writer = self.store.resume(&lease, length, keep)?;
 
-        let started = Instant::now();
+        let started = Span::start();
         let mut moved = 0u64;
         let arrived = copy(body, &mut writer, location, &mut moved, buffer);
         self.store
@@ -310,7 +320,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         let digests = self.store.commit(lease, writer)?;
         self.emit(EventPayload::TransferEnd {
             bytes: moved,
-            duration_ms: duration_ms(started.elapsed()),
+            duration_ms: started.elapsed_ms(),
         });
 
         Ok(Transferred {
@@ -430,10 +440,6 @@ fn validator_of(identity: &SourceIdentity) -> Option<String> {
         }
         _ => None,
     }
-}
-
-fn duration_ms(elapsed: Duration) -> u64 {
-    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn copy(

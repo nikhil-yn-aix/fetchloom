@@ -1,7 +1,7 @@
 //! The composition root: the only place the seams are wired together.
 
 use fetchloom_cli::{
-    cache, config, explain, locked, planning, report, run, settings, surface, terminal,
+    Reporter, cache, config, explain, locked, planning, policy, run, settings, surface, terminal,
 };
 
 use fetchloom_cache as _;
@@ -13,19 +13,19 @@ use tempfile as _;
 use toml as _;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{CommandFactory, Parser};
 use fetchloom_archive as _;
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::event::{Event, EventPayload, Sequence};
+use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
+use fetchloom_engine::seam::policy::Policy as _;
 use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::threads::ThreadBudget;
-use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
@@ -96,6 +96,7 @@ fn execute() -> ExitCode {
     }
     let observer = Fanout::new(sinks);
 
+    let running = Span::start();
     observer.emit(&Event::new(&sequence, EventPayload::RunStart));
     if let (Some(requested), Some(reason)) = (display.requested, display.reason.as_ref()) {
         observer.emit(&Event::new(
@@ -112,7 +113,9 @@ fn execute() -> ExitCode {
 
     observer.emit(&Event::new(
         &sequence,
-        EventPayload::RunEnd { duration_ms: 0 },
+        EventPayload::RunEnd {
+            duration_ms: running.elapsed_ms(),
+        },
     ));
     code
 }
@@ -149,7 +152,7 @@ fn dispatch(
             parsed,
             resolved,
             command,
-            parsed.global.json,
+            &Reporter::new(parsed.global.json, observer, sequence),
             parsed.global.yes,
         ),
     }
@@ -167,13 +170,13 @@ fn run_repair(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
-    let json = parsed.global.json;
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
     if let Err(error) = run::allowed_offline(reference, resolved.offline.value) {
-        return report(&error, json);
+        return reporter.report(&error);
     }
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let Ok(processor) = Processor::new(thread_budget(parsed)) else {
         eprintln!("the processor pool could not be built");
@@ -182,12 +185,12 @@ fn run_repair(
     let work = Arc::new(WorkCounter::new());
     let held = match cache::require(&root, Arc::clone(&work), Arc::new(processor)) {
         Ok(held) => held,
-        Err(refused) => return report(&refused, json),
+        Err(refused) => return reporter.report(&refused),
     };
 
     let lock_path = match lock_path_of(transfer) {
         Ok(path) => path,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let pinned = match locked::pinned(&lock_path, &run::remote_name(reference), false) {
         Ok(found) => found.and_then(|dataset| {
@@ -197,11 +200,11 @@ fn run_repair(
                 .next()
                 .map(|artifact| artifact.digest)
         }),
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let digest = match fetchloom_cli::repair::digest_for(&held, reference, pinned) {
         Ok(digest) => digest,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
 
     let outcome = fetchloom_cli::repair::Repair {
@@ -212,45 +215,25 @@ fn run_repair(
         sequence,
     }
     .run(digest);
-    if let Err(error) = outcome.as_ref() {
-        observer.emit(&Event::new(
-            sequence,
-            EventPayload::Failure {
-                error: error.clone(),
-            },
-        ));
-    }
-    fetchloom_cli::repair::report(&outcome, json)
-}
-
-/// Returns the check a run applies to a cache hit and to a destination entry.
-///
-/// One policy governs both sides: whether a recorded fingerprint may stand in
-/// for reading the bytes.
-fn verification_of(transfer: &surface::TransferFlags) -> VerificationPolicy {
-    match transfer.verify {
-        Some(surface::VerifyChoice::Always) => VerificationPolicy::Always,
-        Some(surface::VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
-        Some(surface::VerifyChoice::Never) => VerificationPolicy::Never,
-    }
+    fetchloom_cli::repair::report(&outcome, &reporter)
 }
 
 fn run_cache(
     parsed: &CommandLine,
     resolved: &settings::Settings,
     command: &surface::CacheCommand,
-    json: bool,
+    reporter: &Reporter<'_>,
     yes: bool,
 ) -> ExitCode {
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let Ok(processor) = Processor::new(thread_budget(parsed)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
-    cache::run(&root, command, Arc::new(processor), json, yes)
+    cache::run(&root, command, Arc::new(processor), reporter, yes)
 }
 
 fn run_explain(
@@ -298,14 +281,15 @@ fn run_verify(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
+    let reporter = Reporter::new(json, observer, sequence);
     let path = match run::local_path(target).and_then(|path| run::resolve_path(&path)) {
         Ok(path) => path,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
     let root = match run::resolve_path(&resolved.cache_dir.value) {
         Ok(root) => root,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let work = Arc::new(WorkCounter::new());
     let Ok(processor) = Processor::new(ThreadBudget::resolve(
@@ -315,10 +299,20 @@ fn run_verify(
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        &surface::TransferFlags::default(),
+        Streams::detect(),
+        false,
+        &environment,
+        observer,
+        sequence,
+    );
     let held = match open_cache(
         &surface::TransferFlags::default(),
         &root,
-        DurabilityTier::Normal,
+        &policy,
         &work,
         &Arc::new(processor),
         observer,
@@ -332,7 +326,7 @@ fn run_verify(
     };
     let receipt = match held.as_deref().map(|cache| cache.read_receipt(&path)) {
         Some(Ok(receipt)) => receipt,
-        Some(Err(error)) => return report(&error, json),
+        Some(Err(error)) => return reporter.report(&error),
         None => None,
     };
     match run::verify_tree(&path, receipt.as_ref(), &emit) {
@@ -343,17 +337,11 @@ fn run_verify(
                 let error = fetchloom_engine::error::Error::new(
                     fetchloom_engine::error::ErrorKind::IntegrityMismatch,
                     format!(
-                        "fetch {} again, because it now holds {tree} where the run that wrote it                          reported {recorded}",
+                        "fetch {} again, because it now holds {tree} where the run that wrote it reported {recorded}",
                         path.display()
                     ),
                 );
-                observer.emit(&Event::new(
-                    sequence,
-                    EventPayload::Failure {
-                        error: error.clone(),
-                    },
-                ));
-                return report(&error, json);
+                return reporter.report(&error);
             }
             if json {
                 let body = serde_json::json!({
@@ -368,7 +356,7 @@ fn run_verify(
             }
             ExitCode::Success
         }
-        Err(error) => report(&error, json),
+        Err(error) => reporter.report(&error),
     }
 }
 
@@ -380,6 +368,7 @@ fn run_get(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     if references.len() != 1 {
         eprintln!("this build takes exactly one reference at a time");
@@ -389,53 +378,49 @@ fn run_get(
     let (source, named) = match resolve_places(&references[0], transfer, resolved) {
         Ok(places) => places,
         Err(error) => {
-            observer.emit(&Event::new(
-                sequence,
-                EventPayload::Failure {
-                    error: error.clone(),
-                },
-            ));
-            return report(&error, json);
+            return reporter.report(&error);
         }
     };
 
     let (manifest, is_dataset) = match resolve_manifest(&references[0], &source, remote) {
         Ok(found) => found,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let dataset = manifest.name.clone();
     let destination = match destination_for(named, &dataset) {
         Ok(destination) => destination,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
 
-    let durability = durability_of(transfer);
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
-        eprintln!("the processor pool could not be built");
-        return ExitCode::Resource;
-    };
-    let processor = Arc::new(processor);
-    let root = match run::resolve_path(&resolved.cache_dir.value) {
-        Ok(root) => root,
-        Err(error) => return report(&error, json),
-    };
-    let work = Arc::new(WorkCounter::new());
-    let platform = NativePlatform::new(Arc::clone(&work));
-    let held = match open_cache(
-        transfer, &root, durability, &work, &processor, observer, sequence,
-    ) {
-        Ok(held) => held,
-        Err(refused) => return report(&refused, json),
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    let Opened {
+        processor,
+        work,
+        platform,
+        held,
+        durability,
+    } = match open_for(parsed, transfer, &policy, observer, sequence, &reporter) {
+        Ok(opened) => opened,
+        Err(code) => return code,
     };
 
     let lock_path = match lock_path_of(transfer) {
         Ok(path) => path,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let selection = selection_of(transfer);
     let pinned = match held_to_lock(&lock_path, &dataset, &manifest, &selection, transfer.locked) {
         Ok(pinned) => pinned,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
 
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
@@ -447,7 +432,7 @@ fn run_get(
         cache: held.as_deref(),
         work: &work,
         extract: !transfer.no_extract,
-        verify: verification_of(transfer),
+        verify: policy.verification(),
     };
     let produced = resolve_and_publish(
         &with,
@@ -475,7 +460,7 @@ fn run_get(
             pinned: pinned.as_ref(),
             locked: transfer.locked,
             cache: held.as_deref(),
-            verify: verification_of(transfer),
+            policy: &policy,
             json,
         },
         observer,
@@ -566,8 +551,8 @@ struct Recording<'a> {
     locked: bool,
     /// The cache the receipt is kept in, when the run has one.
     cache: Option<&'a fetchloom_cache::Cache<NativePlatform>>,
-    /// What a cache hit and a destination entry are checked against.
-    verify: VerificationPolicy,
+    /// What the run is allowed to do.
+    policy: &'a dyn fetchloom_engine::seam::policy::Policy,
     /// Whether the result is machine readable.
     json: bool,
 }
@@ -594,8 +579,9 @@ fn record(
             sequence,
         )
     });
+    let reporter = Reporter::new(into.json, observer, sequence);
     if let Err(error) = settled {
-        return report(&error, into.json);
+        return reporter.report(&error);
     }
     match &produced.outcome {
         Ok(result) => finish_get(
@@ -603,10 +589,10 @@ fn record(
             into.cache,
             into.manifest,
             &produced.resolved,
-            into.verify,
-            into.json,
+            into.policy,
+            &reporter,
         ),
-        Err(error) => report(error, into.json),
+        Err(error) => reporter.report(error),
     }
 }
 
@@ -622,6 +608,7 @@ fn run_plan(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     if references.len() != 1 {
         eprintln!("this build takes exactly one reference at a time");
@@ -629,27 +616,37 @@ fn run_plan(
     }
     let (source, named) = match resolve_places(&references[0], transfer, resolved) {
         Ok(places) => places,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let dataset = run::dataset_name(&references[0], &source);
     let destination = match named {
         Some(named) => named,
         None => match run::resolve_path(&PathBuf::from(".").join(&dataset)) {
             Ok(destination) => destination,
-            Err(error) => return report(&error, json),
+            Err(error) => return reporter.report(&error),
         },
     };
     let lock_path = match lock_path_of(transfer) {
         Ok(path) => path,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let pinned = match locked::pinned(&lock_path, &dataset, true) {
         Ok(pinned) => pinned,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
-    let root = match run::resolve_path(&resolved.cache_dir.value) {
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    let root = match run::resolve_path(policy.cache_directory().unwrap_or(Path::new("."))) {
         Ok(root) => root,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let work = Arc::new(WorkCounter::new());
     let Ok(processor) = Processor::new(thread_budget(parsed)) else {
@@ -659,14 +656,14 @@ fn run_plan(
     let held = match open_cache(
         transfer,
         &root,
-        DurabilityTier::Normal,
+        &policy,
         &work,
         &Arc::new(processor),
         observer,
         sequence,
     ) {
         Ok(held) => held,
-        Err(refused) => return report(&refused, json),
+        Err(refused) => return reporter.report(&refused),
     };
     let plan = match planning::build(
         pinned.as_ref(),
@@ -676,7 +673,7 @@ fn run_plan(
         held.as_deref(),
     ) {
         Ok(plan) => plan,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     observer.emit(&Event::new(sequence, EventPayload::PlanReady));
     let written = if json {
@@ -709,37 +706,39 @@ fn run_apply(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
-    let json = parsed.global.json;
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let plan = match planning::read(plan_path, &fetchloom_engine::limits::Limits::default()) {
         Ok(plan) => plan,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let artifact = match planning::only_artifact(&plan) {
         Ok(artifact) => artifact.clone(),
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let destination =
         match run::resolve_path(transfer.output.as_deref().unwrap_or(&plan.destination)) {
             Ok(destination) => destination,
-            Err(error) => return report(&error, json),
+            Err(error) => return reporter.report(&error),
         };
-    let durability = durability_of(transfer);
-    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
-        eprintln!("the processor pool could not be built");
-        return ExitCode::Resource;
-    };
-    let processor = Arc::new(processor);
-    let root = match run::resolve_path(&resolved.cache_dir.value) {
-        Ok(root) => root,
-        Err(error) => return report(&error, json),
-    };
-    let work = Arc::new(WorkCounter::new());
-    let platform = NativePlatform::new(Arc::clone(&work));
-    let held = match open_cache(
-        transfer, &root, durability, &work, &processor, observer, sequence,
-    ) {
-        Ok(held) => held,
-        Err(refused) => return report(&refused, json),
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    let Opened {
+        processor,
+        work,
+        platform,
+        held,
+        durability,
+    } = match open_for(parsed, transfer, &policy, observer, sequence, &reporter) {
+        Ok(opened) => opened,
+        Err(code) => return code,
     };
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
@@ -750,7 +749,7 @@ fn run_apply(
         cache: held.as_deref(),
         work: &work,
         extract: !transfer.no_extract,
-        verify: verification_of(transfer),
+        verify: policy.verification(),
     };
     let selection = fetchloom_engine::selection::Selection {
         include: artifact.select.clone(),
@@ -777,7 +776,7 @@ fn run_apply(
     } else if let Err(error) =
         run::allowed_offline(artifact.source.as_str(), resolved.offline.value)
     {
-        return report(&error, json);
+        return reporter.report(&error);
     } else {
         run::materialize_remote(
             &with,
@@ -793,7 +792,7 @@ fn run_apply(
     };
     let result = match produced {
         Ok(result) => result,
-        Err(error) => return report(&error, json),
+        Err(error) => return reporter.report(&error),
     };
     let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
     let resolved = run::resolved_object(&result, &selection);
@@ -802,8 +801,8 @@ fn run_apply(
         held.as_deref(),
         &manifest,
         &resolved,
-        verification_of(transfer),
-        json,
+        &policy,
+        &reporter,
     )
 }
 
@@ -897,6 +896,10 @@ fn materialize(
         selection,
         transfer.force,
         transfer.adopt,
+        pinned
+            .filter(|_| transfer.locked)
+            .and_then(|entry| entry.artifacts.values().next())
+            .map(|artifact| artifact.digest),
         observer,
         sequence,
     )
@@ -950,15 +953,27 @@ fn finish_get(
     cache: Option<&fetchloom_cache::Cache<NativePlatform>>,
     manifest: &fetchloom_engine::manifest::Manifest,
     artifacts: &[run::ResolvedArtifact],
-    verify: VerificationPolicy,
-    json: bool,
+    policy: &dyn fetchloom_engine::seam::policy::Policy,
+    reporter: &Reporter<'_>,
 ) -> ExitCode {
-    if let Some(cache) = cache
-        && let Err(error) = run::write_receipt(cache, manifest, artifacts, result, verify)
-    {
-        return report(&error, json);
+    let mut result = result.clone();
+    if let Some(cache) = cache {
+        match run::write_receipt(cache, manifest, artifacts, &result, policy.verification()) {
+            Ok(trust) => result.trust = trust,
+            Err(error) => return reporter.report(&error),
+        }
     }
-    if json {
+    if !policy.accepts(result.trust) {
+        return reporter.report(&fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::PolicyTrustRefused,
+            format!(
+                "run it again with --verify never to accept it, because this run can claim only that the bytes are {}",
+                result.trust.label()
+            ),
+        ));
+    }
+    let result = &result;
+    if reporter.json() {
         match serde_json::to_string(result) {
             Ok(body) => println!("{body}"),
             Err(error) => {
@@ -995,14 +1010,6 @@ fn selection_of(transfer: &surface::TransferFlags) -> fetchloom_engine::selectio
     }
 }
 
-fn durability_of(transfer: &surface::TransferFlags) -> DurabilityTier {
-    match transfer.durability {
-        Some(surface::DurabilityChoice::Strict) => DurabilityTier::Strict,
-        Some(surface::DurabilityChoice::Normal) | None => DurabilityTier::Normal,
-        Some(surface::DurabilityChoice::Fast) => DurabilityTier::Fast,
-    }
-}
-
 fn thread_budget(parsed: &CommandLine) -> ThreadBudget {
     ThreadBudget::resolve(
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
@@ -1017,14 +1024,13 @@ fn thread_budget(parsed: &CommandLine) -> ThreadBudget {
 fn open_cache(
     transfer: &surface::TransferFlags,
     root: &std::path::Path,
-    durability: DurabilityTier,
+    policy: &dyn fetchloom_engine::seam::policy::Policy,
     work: &Arc<WorkCounter>,
     processor: &Arc<Processor>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<Option<Box<fetchloom_cache::Cache<NativePlatform>>>, Box<fetchloom_engine::error::Error>>
 {
-    let policy = verification_of(transfer);
     let opened = if transfer.no_cache {
         cache::Opened::Degraded {
             reason: "this run asked for no cache".to_owned(),
@@ -1032,23 +1038,15 @@ fn open_cache(
     } else {
         cache::open(
             root,
-            durability,
-            policy,
+            policy.durability(),
+            policy.verification(),
             Arc::clone(work),
             Arc::clone(processor),
         )
     };
     match opened {
         cache::Opened::Ready(held) => Ok(Some(held)),
-        cache::Opened::Refused(refused) => {
-            observer.emit(&Event::new(
-                sequence,
-                EventPayload::Failure {
-                    error: (*refused).clone(),
-                },
-            ));
-            Err(refused)
-        }
+        cache::Opened::Refused(refused) => Err(refused),
         cache::Opened::Degraded { reason } => {
             if !transfer.no_cache {
                 cache::report_degrade(observer, sequence, root, &reason);
@@ -1056,4 +1054,53 @@ fn open_cache(
             Ok(None)
         }
     }
+}
+
+/// What every materializing command opens before it moves a byte.
+struct Opened {
+    processor: Arc<Processor>,
+    work: Arc<WorkCounter>,
+    platform: NativePlatform,
+    held: Option<Box<fetchloom_cache::Cache<NativePlatform>>>,
+    durability: DurabilityTier,
+}
+
+/// Opens the pool, the counter, the platform, and the cache one run needs.
+///
+/// Takes the command line, the flags that decide the cache, the policy the run
+/// obeys, and where events and failures go. Returns what the run holds, or the
+/// exit code the failure it already reported maps to.
+fn open_for(
+    parsed: &CommandLine,
+    transfer: &surface::TransferFlags,
+    policy: &dyn fetchloom_engine::seam::policy::Policy,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+    reporter: &Reporter<'_>,
+) -> Result<Opened, ExitCode> {
+    let durability = policy.durability();
+    let Ok(processor) = Processor::new(thread_budget(parsed)) else {
+        eprintln!("the processor pool could not be built");
+        return Err(ExitCode::Resource);
+    };
+    let processor = Arc::new(processor);
+    let root = match run::resolve_path(policy.cache_directory().unwrap_or(Path::new("."))) {
+        Ok(root) => root,
+        Err(error) => return Err(reporter.report(&error)),
+    };
+    let work = Arc::new(WorkCounter::new());
+    let platform = NativePlatform::new(Arc::clone(&work));
+    let held = match open_cache(
+        transfer, &root, policy, &work, &processor, observer, sequence,
+    ) {
+        Ok(held) => held,
+        Err(refused) => return Err(reporter.report(&refused)),
+    };
+    Ok(Opened {
+        processor,
+        work,
+        platform,
+        held,
+        durability,
+    })
 }

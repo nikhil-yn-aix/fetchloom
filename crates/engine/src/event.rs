@@ -335,6 +335,33 @@ impl Sequence {
     }
 }
 
+/// How long an operation has been running.
+///
+/// Every `*.end` event carries a duration, and every one of them takes it from
+/// here, so there is one clock and one rounding.
+#[derive(Clone, Copy, Debug)]
+pub struct Span(std::time::Instant);
+
+impl Span {
+    /// Starts a span now.
+    #[must_use]
+    pub fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+
+    /// Returns how many milliseconds have passed since the span started.
+    #[must_use]
+    pub fn elapsed_ms(self) -> u64 {
+        u64::try_from(self.0.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+impl Default for Span {
+    fn default() -> Self {
+        Self::start()
+    }
+}
+
 /// One line of the event stream.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Event {

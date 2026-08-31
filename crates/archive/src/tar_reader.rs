@@ -54,6 +54,7 @@ fn unsupported_member(member: &str, detail: &str) -> Error {
         ErrorKind::ArchiveUnsupported,
         format!("member \"{member}\" {detail}"),
     )
+    .with_member(member)
 }
 
 fn io_error(name: &str, error: &std::io::Error) -> Error {

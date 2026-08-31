@@ -20,25 +20,74 @@ pub mod settings;
 pub mod surface;
 pub mod terminal;
 
-/// Writes a failure where the caller asked for it and returns its exit code.
-///
-/// Takes the failure and whether the result is machine readable. Returns the
-/// code the layer of that failure maps to.
-#[must_use]
-pub fn report(
-    error: &fetchloom_engine::error::Error,
+/// Where a failure is written, and the event stream it also enters.
+pub struct Reporter<'a> {
     json: bool,
-) -> fetchloom_engine::outcome::ExitCode {
-    if json {
-        match serde_json::to_string(error) {
-            Ok(body) => println!("{body}"),
-            Err(_) => eprintln!("{error}"),
+    observer: &'a dyn fetchloom_engine::seam::observer::Observer,
+    sequence: &'a fetchloom_engine::event::Sequence,
+}
+
+impl<'a> Reporter<'a> {
+    /// Builds a reporter over the stream a run is already writing.
+    #[must_use]
+    pub fn new(
+        json: bool,
+        observer: &'a dyn fetchloom_engine::seam::observer::Observer,
+        sequence: &'a fetchloom_engine::event::Sequence,
+    ) -> Self {
+        Self {
+            json,
+            observer,
+            sequence,
         }
-    } else {
-        eprintln!("{error}");
-        eprintln!("next: {}", error.next_action());
     }
-    fetchloom_engine::outcome::ExitCode::from(error.layer())
+
+    /// Reports whether the result is machine readable.
+    #[must_use]
+    pub fn json(&self) -> bool {
+        self.json
+    }
+
+    /// Writes a failure where the caller asked for it, puts it on the event
+    /// stream, and returns its exit code.
+    ///
+    /// Takes the failure. Emits `extract.reject` first when the failure is an
+    /// extraction rejection, then `error`, so a consumer of the stream alone
+    /// learns why a run stopped. Returns the code the layer of that failure
+    /// maps to.
+    #[must_use]
+    pub fn report(
+        &self,
+        error: &fetchloom_engine::error::Error,
+    ) -> fetchloom_engine::outcome::ExitCode {
+        use fetchloom_engine::error::Layer;
+        use fetchloom_engine::event::{Event, EventPayload};
+
+        if error.layer() == Layer::Extract {
+            self.observer.emit(&Event::new(
+                self.sequence,
+                EventPayload::ExtractReject {
+                    path: error.member().unwrap_or_default().to_owned(),
+                    error: error.clone(),
+                },
+            ));
+        }
+        self.observer.emit(&Event::new(
+            self.sequence,
+            EventPayload::Failure {
+                error: error.clone(),
+            },
+        ));
+        if self.json {
+            match serde_json::to_string(error) {
+                Ok(body) => println!("{body}"),
+                Err(_) => eprintln!("{error}"),
+            }
+        } else {
+            eprintln!("{error}");
+        }
+        fetchloom_engine::outcome::ExitCode::from(error.layer())
+    }
 }
 
 #[cfg(test)]

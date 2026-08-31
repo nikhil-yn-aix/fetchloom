@@ -126,6 +126,18 @@ pub trait Platform: Send + Sync {
     /// Fails when the name exists and when the parent cannot be written to.
     fn create_directory_exclusive(&self, path: &Path) -> Result<(), Error>;
 
+    /// Creates a directory and every missing ancestor of it.
+    ///
+    /// Takes the directory to create. Succeeds when it already exists. Counts
+    /// one file operation per directory actually created, which is why a caller
+    /// goes through here rather than reaching around the seam.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a directory cannot be created and when a name on the path
+    /// exists as something other than a directory.
+    fn create_directories(&self, path: &Path) -> Result<(), Error>;
+
     /// Reserves the full length of a file before anything is written to it.
     ///
     /// # Errors

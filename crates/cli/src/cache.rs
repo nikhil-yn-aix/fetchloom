@@ -101,44 +101,44 @@ pub fn run(
     root: &Path,
     command: &CacheCommand,
     processor: Arc<fetchloom_engine::pool::Processor>,
-    json: bool,
+    reporter: &crate::Reporter<'_>,
     yes: bool,
 ) -> ExitCode {
     let held = match require(root, Arc::new(WorkCounter::new()), processor) {
         Ok(held) => held,
         Err(refused) if matches!(command, CacheCommand::Clear) => {
             let _ = refused;
-            return clear(root, None, json, yes);
+            return clear(root, None, reporter, yes);
         }
-        Err(refused) => return crate::report(&refused, json),
+        Err(refused) => return reporter.report(&refused),
     };
 
     match command {
-        CacheCommand::Status => report_status(&held, json),
-        CacheCommand::Ls => report_list(&held, json),
-        CacheCommand::Verify => report_verify(&held, json),
-        CacheCommand::Pin { digest } => change_pin(&held, digest, true, json),
-        CacheCommand::Unpin { digest } => change_pin(&held, digest, false, json),
-        CacheCommand::Export { bundle } => report_bundle(&held.export(bundle), json),
+        CacheCommand::Status => report_status(&held, reporter),
+        CacheCommand::Ls => report_list(&held, reporter),
+        CacheCommand::Verify => report_verify(&held, reporter),
+        CacheCommand::Pin { digest } => change_pin(&held, digest, true, reporter),
+        CacheCommand::Unpin { digest } => change_pin(&held, digest, false, reporter),
+        CacheCommand::Export { bundle } => report_bundle(&held.export(bundle), reporter),
         CacheCommand::Import { bundle } => {
             let read = fetchloom_cache::bundle::BundleReader::open(bundle)
                 .and_then(|reader| held.import(bundle, reader));
-            report_bundle(&read, json)
+            report_bundle(&read, reporter)
         }
-        CacheCommand::Repair => report_rebuild(&held, json),
-        CacheCommand::Prune => report_prune(&held, json),
+        CacheCommand::Repair => report_rebuild(&held, reporter),
+        CacheCommand::Prune => report_prune(&held, reporter),
         CacheCommand::Clear => {
             let counted = held.status().ok();
             drop(held);
-            clear(root, counted.as_ref(), json, yes)
+            clear(root, counted.as_ref(), reporter, yes)
         }
     }
 }
 
-fn report_status(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+fn report_status(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match held.status() {
         Ok(found) => {
-            if json {
+            if reporter.json() {
                 print_json(&found);
             } else {
                 println!("{}", found.root.display());
@@ -150,14 +150,14 @@ fn report_status(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
-fn report_list(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+fn report_list(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match held.list() {
         Ok(found) => {
-            if json {
+            if reporter.json() {
                 let rendered: Vec<String> =
                     found.iter().map(std::string::ToString::to_string).collect();
                 print_json(&rendered);
@@ -175,14 +175,14 @@ fn report_list(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
-fn report_verify(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+fn report_verify(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match fetchloom_cache::verify::run(held) {
         Ok(found) => {
-            if json {
+            if reporter.json() {
                 print_json(&found);
             } else {
                 println!("verified    {:>12}", found.verified);
@@ -198,11 +198,16 @@ fn report_verify(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
                 ExitCode::Cache
             }
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
-fn change_pin(held: &Cache<NativePlatform>, digest: &str, pin: bool, json: bool) -> ExitCode {
+fn change_pin(
+    held: &Cache<NativePlatform>,
+    digest: &str,
+    pin: bool,
+    reporter: &crate::Reporter<'_>,
+) -> ExitCode {
     let parsed = match digest
         .parse::<fetchloom_engine::digest::Digest>()
         .map_err(|reason| reason.to_string())
@@ -214,7 +219,7 @@ fn change_pin(held: &Cache<NativePlatform>, digest: &str, pin: bool, json: bool)
                 ErrorKind::CacheCorrupt,
                 format!("name an object the way cache ls prints it: {reason}"),
             );
-            return crate::report(&refused, json);
+            return reporter.report(&refused);
         }
     };
     let outcome = if pin {
@@ -224,19 +229,19 @@ fn change_pin(held: &Cache<NativePlatform>, digest: &str, pin: bool, json: bool)
     };
     match outcome {
         Ok(()) => {
-            if !json {
+            if !reporter.json() {
                 println!("{parsed} is {}", if pin { "pinned" } else { "not pinned" });
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
-fn report_rebuild(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+fn report_rebuild(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match fetchloom_cache::rebuild::run(held) {
         Ok(found) => {
-            if json {
+            if reporter.json() {
                 print_json(&found);
             } else {
                 println!("trees       {:>12}", found.trees_rebuilt);
@@ -254,14 +259,14 @@ fn report_rebuild(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
                 ExitCode::Cache
             }
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
-fn report_prune(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
+fn report_prune(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match held.prune(fetchloom_cache::prune::GRACE) {
         Ok(found) => {
-            if json {
+            if reporter.json() {
                 print_json(&found);
             } else {
                 println!("removed     {:>12}", found.removed);
@@ -277,14 +282,14 @@ fn report_prune(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
 fn clear(
     root: &Path,
     found: Option<&fetchloom_engine::seam::store::CacheStatus>,
-    json: bool,
+    reporter: &crate::Reporter<'_>,
     yes: bool,
 ) -> ExitCode {
     if !yes {
@@ -293,7 +298,7 @@ fn clear(
                 ErrorKind::PolicyTermsRequired,
                 "run it again with --yes, because clearing the cache needs an answer and this run has nowhere to ask".to_owned(),
             );
-            return crate::report(&refused, json);
+            return reporter.report(&refused);
         }
         match found {
             Some(found) => eprintln!(
@@ -319,7 +324,7 @@ fn clear(
 
     match fetchloom_cache::clear(root) {
         Ok(()) => {
-            if !json {
+            if !reporter.json() {
                 match found {
                     Some(found) => {
                         println!("removed {} objects from {}", found.objects, root.display());
@@ -329,7 +334,7 @@ fn clear(
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(&refused, json),
+        Err(refused) => reporter.report(&refused),
     }
 }
 
@@ -343,11 +348,11 @@ fn print_json<T: serde::Serialize>(body: &T) {
 /// Reports what an export or an import moved.
 fn report_bundle(
     outcome: &Result<fetchloom_cache::bundle::BundleReport, Error>,
-    json: bool,
+    reporter: &crate::Reporter<'_>,
 ) -> ExitCode {
     match outcome {
         Ok(report) => {
-            if json {
+            if reporter.json() {
                 let body = serde_json::json!({
                     "status": "bundled",
                     "objects": report.objects,
@@ -363,6 +368,6 @@ fn report_bundle(
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(refused, json),
+        Err(refused) => reporter.report(refused),
     }
 }

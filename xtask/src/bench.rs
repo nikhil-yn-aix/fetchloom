@@ -360,8 +360,7 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
         let many = scratch.join("many");
         fs::create_dir_all(&many).map_err(BenchError::Process)?;
         for index in 0..SMALL_FILES {
-            let seed = u8::try_from(index % 251).unwrap_or(1);
-            let bytes = non_repeating_bytes(seed, SMALL_FILE_BYTES);
+            let bytes = non_repeating_bytes(index, SMALL_FILE_BYTES);
             fs::write(many.join(format!("file-{index}.bin")), bytes)
                 .map_err(BenchError::Process)?;
         }
@@ -552,20 +551,31 @@ fn scratch_directory(round: u32) -> Result<PathBuf, BenchError> {
 fn write_corpus(into: &Path) -> Result<(), BenchError> {
     fs::create_dir_all(into).map_err(BenchError::Process)?;
     for index in 0..CORPUS_FILES {
-        let seed = u8::try_from(index % 251).unwrap_or(1);
-        let bytes = non_repeating_bytes(seed, CORPUS_FILE_BYTES);
+        let bytes = non_repeating_bytes(index, CORPUS_FILE_BYTES);
         fs::write(into.join(format!("file-{index}.bin")), bytes).map_err(BenchError::Process)?;
     }
     Ok(())
 }
 
-fn non_repeating_bytes(seed: u8, length: usize) -> Vec<u8> {
-    (0..length)
+/// Returns bytes no two indices share.
+///
+/// Takes the index of the file and its length. The pattern is non-repeating
+/// within one file and the index is written into the leading bytes, so a corpus
+/// of n files holds n distinct objects and the cache deduplicates none of it.
+fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
+    let seed = u8::try_from(index % 251).unwrap_or(0);
+    let mut bytes: Vec<u8> = (0..length)
         .map(|offset| {
             let offset = u8::try_from(offset % 251).unwrap_or(0);
             offset.wrapping_mul(seed).wrapping_add(seed)
         })
-        .collect()
+        .collect();
+    for (at, byte) in index.to_le_bytes().iter().enumerate() {
+        if let Some(slot) = bytes.get_mut(at) {
+            *slot = *byte;
+        }
+    }
+    bytes
 }
 
 /// How many bytes the transfer regimes' object holds.

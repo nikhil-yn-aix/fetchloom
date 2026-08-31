@@ -262,7 +262,7 @@ fn the_configuration_location_is_not_the_cache_location() {
         ("APPDATA", "C:\\Users\\person\\AppData\\Roaming"),
         ("LOCALAPPDATA", "C:\\Users\\person\\AppData\\Local"),
     ]);
-    let cache = fetchloom_cli::policy::default_cache_directory(&environment).unwrap();
+    let cache = fetchloom_cli::settings::default_cache_dir(&environment);
     let configuration = config::user_config_directory().unwrap_or_else(|| PathBuf::from("unset"));
     assert_ne!(cache, configuration);
 }

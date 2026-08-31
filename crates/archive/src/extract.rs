@@ -14,6 +14,7 @@ use fetchloom_engine::seam::archive::{Archive, ArchiveMember, MemberKind};
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::selection::{Applied, AppliedMember, Candidate, Selection};
 use fetchloom_engine::tree::{EntryPath, TreeEntry};
+use fetchloom_engine::work::WorkCounter;
 
 pub(crate) const BUFFER_LEN: usize = 65_536;
 
@@ -96,13 +97,22 @@ pub fn extract<A, P>(
     staging: &Path,
     limits: Limits,
     platform: &P,
+    work: &WorkCounter,
 ) -> Result<Vec<TreeEntry>, Error>
 where
     A: Archive,
     P: Platform,
 {
     let mut created: Vec<Created> = Vec::new();
-    let result = run(archive, selection, staging, limits, platform, &mut created);
+    let result = run(
+        archive,
+        selection,
+        staging,
+        limits,
+        platform,
+        work,
+        &mut created,
+    );
     if result.is_err() {
         cleanup(staging);
     }
@@ -208,7 +218,8 @@ pub(crate) fn build_plan<'a>(
                         "member \"{}\" is a type extraction does not carry",
                         member.path
                     ),
-                ));
+                )
+                .with_member(&member.path));
             }
         }
         let full = applied_member.path.as_str();
@@ -223,6 +234,7 @@ pub(crate) fn build_plan<'a>(
                 ErrorKind::ArchiveUnsafePath,
                 format!("ancestor directory \"{raw}\" {reason}"),
             )
+            .with_member(&raw)
         })?;
         directories.push(path);
     }
@@ -238,6 +250,7 @@ struct Site<'a, P> {
     staging: &'a Path,
     capabilities: &'a VolumeCapabilities,
     platform: &'a P,
+    work: &'a WorkCounter,
 }
 
 struct WriteState<'a> {
@@ -291,7 +304,8 @@ where
                             "member \"{}\" hard-links to \"{target_path}\", which this archive does not hold",
                             member.path
                         ),
-                    ));
+                    )
+                    .with_member(&member.path));
                 };
                 &members[target_index]
             }
@@ -300,6 +314,7 @@ where
         let mut body = archive.open(source_member)?;
         let file = create_file(site.platform, &target, member.path.as_str(), state.created)?;
         let written = stream_to_file(&mut body, file, buffer, member.path.as_str())?;
+        site.work.wrote_bytes(written.len_bytes);
         state.guard.observe_bytes(written.len_bytes)?;
         state.entries.push(TreeEntry::File {
             path: path.clone(),
@@ -346,6 +361,7 @@ fn run<A, P>(
     staging: &Path,
     limits: Limits,
     platform: &P,
+    work: &WorkCounter,
     created: &mut Vec<Created>,
 ) -> Result<Vec<TreeEntry>, Error>
 where
@@ -365,6 +381,7 @@ where
         staging,
         capabilities: &capabilities,
         platform,
+        work,
     };
 
     let mut entries: Vec<TreeEntry> = Vec::new();
@@ -457,7 +474,8 @@ fn confirm_stored_name(member: &str, full: &Path) -> Result<(), Error> {
         format!(
             "rename member \"{member}\", because this volume accepted the name and stored a different one"
         ),
-    ))
+    )
+    .with_member(member))
 }
 
 fn check_path(
@@ -474,7 +492,8 @@ fn check_path(
                     "member \"{entry}\" has a path component {length} bytes long, past this volume's maximum component length of {} bytes",
                     capabilities.max_component_length
                 ),
-            ));
+            )
+            .with_member(entry.as_str()));
         }
     }
     let full = staged_path(staging, entry);
@@ -486,7 +505,8 @@ fn check_path(
                 "member \"{entry}\" stages to a path {full_length} bytes long, past this volume's maximum path length of {} bytes",
                 capabilities.max_path_length
             ),
-        ));
+        )
+        .with_member(entry.as_str()));
     }
     Ok(full)
 }
@@ -521,7 +541,8 @@ fn reclassify_creation_failure(
             format!(
                 "member \"{member}\" and member \"{other}\" both claim one name on this volume"
             ),
-        );
+        )
+        .with_member(member);
     }
     error
 }
@@ -598,6 +619,7 @@ pub(crate) fn io_failure(member: &str, error: &std::io::Error) -> Error {
         ErrorKind::ArchiveUnsupported,
         format!("member \"{member}\" could not be streamed to staging: {error}"),
     )
+    .with_member(member)
 }
 
 fn stream_to_file(

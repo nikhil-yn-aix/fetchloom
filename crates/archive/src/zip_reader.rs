@@ -51,6 +51,7 @@ fn unsupported_member(member: &str, detail: &str) -> Error {
         ErrorKind::ArchiveUnsupported,
         format!("member \"{member}\" {detail}"),
     )
+    .with_member(member)
 }
 
 fn unsafe_path_member(member: &str, detail: &str) -> Error {
@@ -58,6 +59,7 @@ fn unsafe_path_member(member: &str, detail: &str) -> Error {
         ErrorKind::ArchiveUnsafePath,
         format!("member \"{member}\" {detail}"),
     )
+    .with_member(member)
 }
 
 /// Decides whether every backslash in this zip's member paths can safely be

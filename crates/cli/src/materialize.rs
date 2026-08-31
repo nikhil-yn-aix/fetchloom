@@ -190,6 +190,7 @@ pub fn copy_file(
 ) -> Result<(u64, hashing::Digests), Error> {
     let source = fs::File::open(from).map_err(|reason| read_failure(from, &reason))?;
     let target = fs::File::create(to).map_err(|reason| read_failure(to, &reason))?;
+    work.touched_file();
     let length = source
         .metadata()
         .map_err(|reason| read_failure(from, &reason))?

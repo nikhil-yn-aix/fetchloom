@@ -120,8 +120,9 @@ impl NativePlatform {
 
     /// Copies the bytes of one file into a path that does not exist.
     fn copy_bytes(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
-        std::fs::copy(from, to)
+        let copied = std::fs::copy(from, to)
             .map_err(|error| failure(ErrorKind::DestinationUnrepresentable, to, &error))?;
+        self.work.wrote_bytes(copied);
         self.work.touched_file();
         Ok(CopyMechanism::Copy)
     }
@@ -235,6 +236,31 @@ impl Platform for NativePlatform {
             .map_err(|reason| failure(ErrorKind::DestinationUnrepresentable, path, &reason))?;
         self.work.touched_file();
         Ok(())
+    }
+
+    fn create_directories(&self, path: &Path) -> Result<(), Error> {
+        if path.is_dir() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            self.create_directories(parent)?;
+        }
+        match std::fs::create_dir(path) {
+            Ok(()) => {
+                self.work.touched_file();
+                Ok(())
+            }
+            Err(reason) if reason.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+                Ok(())
+            }
+            Err(reason) => Err(failure(
+                ErrorKind::DestinationUnrepresentable,
+                path,
+                &reason,
+            )),
+        }
     }
 
     fn preallocate(&self, file: &File, length: u64) -> Result<(), Error> {

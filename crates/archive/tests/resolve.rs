@@ -80,6 +80,7 @@ fn resolving_answers_what_extracting_answers() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     let read = resolve(&mut reader(subject()), &selection, Limits::default()).unwrap();
@@ -131,6 +132,7 @@ fn resolving_honors_the_selection_extraction_honors() {
         staging.path(),
         Limits::default(),
         &platform,
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     let read = resolve(&mut reader(subject()), &selection, Limits::default()).unwrap();

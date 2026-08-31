@@ -1,7 +1,7 @@
 //! What a run is allowed to do, decided by settings, streams, and terms.
 
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use fetchloom_engine::credential::{Credential, CredentialOrigin, Necessity, ProviderHelp};
@@ -18,6 +18,7 @@ use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::verification::VerificationPolicy;
 
 use crate::settings::{Environment, Settings};
+use crate::surface::{DurabilityChoice, TransferFlags, VerifyChoice};
 use crate::terminal::Streams;
 
 /// Builds the environment variable name a host's credential is read from.
@@ -40,6 +41,8 @@ pub fn token_variable(host: &Host) -> String {
 /// The Policy the command line resolves to.
 pub struct CommandLinePolicy<'a> {
     settings: Settings,
+    verification: VerificationPolicy,
+    durability: DurabilityTier,
     limits: Limits,
     streams: Streams,
     accepted_terms: bool,
@@ -67,6 +70,7 @@ impl<'a> CommandLinePolicy<'a> {
     #[must_use]
     pub fn new(
         settings: Settings,
+        transfer: &TransferFlags,
         streams: Streams,
         accepted_terms: bool,
         environment: &'a dyn Environment,
@@ -75,6 +79,8 @@ impl<'a> CommandLinePolicy<'a> {
     ) -> Self {
         Self {
             settings,
+            verification: verification_of(transfer),
+            durability: durability_of(transfer),
             limits: Limits::default(),
             streams,
             accepted_terms,
@@ -99,15 +105,15 @@ impl Policy for CommandLinePolicy<'_> {
     }
 
     fn verification(&self) -> VerificationPolicy {
-        VerificationPolicy::default()
+        self.verification
     }
 
     fn durability(&self) -> DurabilityTier {
-        DurabilityTier::default()
+        self.durability
     }
 
     fn cache_directory(&self) -> Option<&Path> {
-        None
+        Some(self.settings.cache_dir.value.as_path())
     }
 
     fn concurrency(&self) -> Option<NonZeroU32> {
@@ -125,7 +131,7 @@ impl Policy for CommandLinePolicy<'_> {
     fn accepts(&self, class: TrustClass) -> bool {
         match class {
             TrustClass::Verified | TrustClass::Corroborated | TrustClass::Tofu => true,
-            TrustClass::Unverified => false,
+            TrustClass::Unverified => self.verification == VerificationPolicy::Never,
         }
     }
 
@@ -197,25 +203,23 @@ impl Policy for CommandLinePolicy<'_> {
     }
 }
 
-/// Returns the cache directory a run uses when no level supplied one.
+/// Returns the check a run applies to a cache hit and to a destination entry.
 ///
-/// This is the cache location and never the configuration location; the two are
-/// separate directories. Returns nothing when the platform's own variable is
-/// unset and no home directory is known.
-#[must_use]
-pub fn default_cache_directory(environment: &dyn Environment) -> Option<PathBuf> {
-    if cfg!(windows) {
-        environment
-            .get("LOCALAPPDATA")
-            .map(|base| Path::new(&base).join("Fetchloom").join("Cache"))
-    } else {
-        environment
-            .get("XDG_CACHE_HOME")
-            .map(|base| Path::new(&base).join("fetchloom"))
-            .or_else(|| {
-                environment
-                    .get("HOME")
-                    .map(|home| Path::new(&home).join(".cache").join("fetchloom"))
-            })
+/// One policy governs both sides: whether a recorded fingerprint may stand in
+/// for reading the bytes.
+fn verification_of(transfer: &TransferFlags) -> VerificationPolicy {
+    match transfer.verify {
+        Some(VerifyChoice::Always) => VerificationPolicy::Always,
+        Some(VerifyChoice::Fingerprint) | None => VerificationPolicy::Fingerprint,
+        Some(VerifyChoice::Never) => VerificationPolicy::Never,
+    }
+}
+
+/// Returns how far a write is pushed before publication.
+fn durability_of(transfer: &TransferFlags) -> DurabilityTier {
+    match transfer.durability {
+        Some(DurabilityChoice::Strict) => DurabilityTier::Strict,
+        Some(DurabilityChoice::Normal) | None => DurabilityTier::Normal,
+        Some(DurabilityChoice::Fast) => DurabilityTier::Fast,
     }
 }

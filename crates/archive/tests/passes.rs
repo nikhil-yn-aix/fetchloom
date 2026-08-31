@@ -87,6 +87,7 @@ fn compressed_bytes_read(count: usize) -> (u64, u64) {
         &NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
+        &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
     assert_eq!(

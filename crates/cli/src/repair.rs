@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fetchloom_cache::Cache;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::event::{Event, EventPayload, Sequence};
+use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::repair::{RepairPlan, WholeReason, plan_repair};
@@ -56,6 +56,7 @@ impl Repair<'_> {
     /// hash to the digest, and with whatever the source failed with.
     pub fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
         let emit = |payload: EventPayload| self.observer.emit(&Event::new(self.sequence, payload));
+        let checking = Span::start();
         emit(EventPayload::VerifyStart);
 
         let localized = self.cache.localize(digest)?;
@@ -80,7 +81,7 @@ impl Repair<'_> {
             RepairPlan::Nothing => {
                 emit(EventPayload::VerifyEnd {
                     bytes: 0,
-                    duration_ms: 0,
+                    duration_ms: checking.elapsed_ms(),
                 });
                 return Ok(RepairResult {
                     status: "unchanged",
@@ -128,7 +129,7 @@ impl Repair<'_> {
             Ok(_) => {
                 emit(EventPayload::VerifyEnd {
                     bytes: moved,
-                    duration_ms: 0,
+                    duration_ms: checking.elapsed_ms(),
                 });
                 emit(EventPayload::PublishCommit);
                 Ok(RepairResult {
@@ -225,10 +226,10 @@ fn parse_digest(reference: &str) -> Option<ContentDigest> {
 
 /// Reports what a repair did.
 #[must_use]
-pub fn report(outcome: &Result<RepairResult, Error>, json: bool) -> ExitCode {
+pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match outcome {
         Ok(result) => {
-            if json {
+            if reporter.json() {
                 match serde_json::to_string(result) {
                     Ok(rendered) => println!("{rendered}"),
                     Err(reason) => eprintln!("the result could not be written: {reason}"),
@@ -243,6 +244,6 @@ pub fn report(outcome: &Result<RepairResult, Error>, json: bool) -> ExitCode {
             }
             ExitCode::Success
         }
-        Err(refused) => crate::report(refused, json),
+        Err(refused) => reporter.report(refused),
     }
 }

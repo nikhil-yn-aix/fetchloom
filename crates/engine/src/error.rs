@@ -243,6 +243,8 @@ pub struct Error {
     source: Option<SafeUrl>,
     attempts: u32,
     retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    member: Option<Box<str>>,
     next_action: String,
 }
 
@@ -258,6 +260,7 @@ impl Error {
             source: None,
             attempts: 0,
             retryable: false,
+            member: None,
             next_action: next_action.into(),
         }
     }
@@ -274,6 +277,19 @@ impl Error {
     pub fn with_artifact(mut self, artifact: impl Into<String>) -> Self {
         self.artifact = Some(artifact.into());
         self
+    }
+
+    /// Records the archive member this failure rejected.
+    #[must_use]
+    pub fn with_member(mut self, member: &str) -> Self {
+        self.member = Some(member.into());
+        self
+    }
+
+    /// Returns the archive member this failure rejected, when it names one.
+    #[must_use]
+    pub fn member(&self) -> Option<&str> {
+        self.member.as_deref()
     }
 
     /// Records the source this failure came from, redacting it as it is stored.

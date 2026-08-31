@@ -84,6 +84,13 @@ pub trait Store {
     /// ends without the claim.
     fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error>;
 
+    /// Reports whether this lease waited for another writer to finish.
+    ///
+    /// Takes a lease this store handed out. Returns true when the claim was
+    /// held by someone else and this one waited for it, which is the fact a
+    /// run reports with `cache.wait`.
+    fn waited(&self, lease: &Self::Lease) -> bool;
+
     /// Opens an in-progress object for writing, reserving its full length.
     ///
     /// # Errors

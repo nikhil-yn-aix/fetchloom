@@ -311,6 +311,10 @@ impl<P: Platform> Store for Cache<P> {
         })
     }
 
+    fn waited(&self, lease: &Self::Lease) -> bool {
+        lease.waited_for().is_some()
+    }
+
     fn begin(&self, lease: &Self::Lease, length: u64) -> Result<Self::Writer, Error> {
         let path = self.layout.partial_of(lease.key.name());
         if path.exists() {

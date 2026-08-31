@@ -87,6 +87,11 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
         self.inner.create_directory_exclusive(path)
     }
 
+    fn create_directories(&self, path: &Path) -> Result<(), Error> {
+        self.gate(Operation::CreateDirectoryExclusive)?;
+        self.inner.create_directories(path)
+    }
+
     fn preallocate(&self, file: &File, length: u64) -> Result<(), Error> {
         self.gate(Operation::Preallocate)?;
         self.inner.preallocate(file, length)

@@ -13,7 +13,7 @@ use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Layer};
-use fetchloom_engine::event::{Event, EventPayload, Sequence};
+use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::hashing;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
@@ -70,6 +70,8 @@ pub struct RunResult {
     pub bytes: u64,
     /// What the run read, wrote, and asked for.
     pub work: Work,
+    /// What the run may claim about the bytes it produced.
+    pub trust: TrustClass,
     /// The entry paths the run materialized with the executable mode, in
     /// ascending order. Never part of the machine-readable result.
     #[serde(skip)]
@@ -239,11 +241,13 @@ pub fn materialize_local(
     selection: &Selection,
     force: bool,
     adopt: bool,
+    pinned: Option<ContentDigest>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
 
+    let resolving = Span::start();
     emit(EventPayload::ResolveStart);
 
     let dataset = source.file_name().map_or_else(
@@ -252,7 +256,18 @@ pub fn materialize_local(
     );
 
     if let Some(ingested) = object_to_resolve(with, source)? {
-        emit(EventPayload::ResolveEnd { duration_ms: 0 });
+        emit(EventPayload::ResolveEnd {
+            duration_ms: resolving.elapsed_ms(),
+        });
+        emit(if ingested.was_present {
+            EventPayload::CacheHit {
+                digest: ingested.digest,
+            }
+        } else {
+            EventPayload::CacheMiss {
+                digest: ingested.digest,
+            }
+        });
         emit(EventPayload::PlanReady);
         return materialize_object(
             with,
@@ -265,7 +280,10 @@ pub fn materialize_local(
             adopt,
             Some(ingested.interop),
             &SafeUrl::new(&source.to_string_lossy()),
-            &Provenance::default(),
+            &Provenance {
+                prior: pinned,
+                observed: None,
+            },
             &emit,
         );
     }
@@ -273,7 +291,9 @@ pub fn materialize_local(
     let walked = materialize::walk(source)?;
     let walked = apply_selection(walked, selection)?;
     report_unread_modes(!walked.files.is_empty(), &emit);
-    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::ResolveEnd {
+        duration_ms: resolving.elapsed_ms(),
+    });
     emit(EventPayload::PlanReady);
 
     if destination.exists() {
@@ -301,8 +321,7 @@ fn materialize_fresh(
         std::fs::remove_dir_all(&staging)
             .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
     }
-    std::fs::create_dir_all(&staging)
-        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    with.platform.create_directories(&staging)?;
 
     let outcome = fill_staging(with, &staging, walked, emit);
     let mut entries = match outcome {
@@ -318,8 +337,7 @@ fn materialize_fresh(
 
     {
         let parent = containing_directory(destination);
-        std::fs::create_dir_all(&parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+        with.platform.create_directories(&parent)?;
     }
     if let Err(error) = platform.publish_directory(&staging, destination, durability) {
         let _ = std::fs::remove_dir_all(&staging);
@@ -342,6 +360,7 @@ fn materialize_fresh(
         entries: entries.len() as u64,
         bytes: walked.bytes,
         work: with.work.taken(),
+        trust: provisional_trust(with, None),
         executable: executable_paths(&entries),
         artifact: None,
     })
@@ -453,6 +472,7 @@ fn settle(
             entries: resolved.len() as u64,
             bytes: resolved.iter().map(entry_size).sum(),
             work: with.work.taken(),
+            trust: provisional_trust(with, artifact.as_ref()),
             executable: executable_paths(resolved),
             artifact,
         });
@@ -467,6 +487,7 @@ fn settle(
             entries: destination_tree.len() as u64,
             bytes: destination_tree.iter().map(entry_size).sum(),
             work: with.work.taken(),
+            trust: provisional_trust(with, artifact.as_ref()),
             executable: executable_paths(&destination_tree),
             artifact,
         });
@@ -516,6 +537,7 @@ fn settle(
         entries: resolved.len() as u64,
         bytes: resolved.iter().map(entry_size).sum(),
         work: with.work.taken(),
+        trust: provisional_trust(with, artifact.as_ref()),
         executable: executable_paths(resolved),
         artifact,
     })
@@ -587,8 +609,7 @@ fn restore_missing(
     directories.sort_by_key(|path| path.as_str().matches('/').count());
     for path in directories {
         let target = destination.join(path.as_str());
-        std::fs::create_dir_all(&target)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &target, &reason))?;
+        with.platform.create_directories(&target)?;
     }
 
     let gave_up = std::cell::Cell::new(false);
@@ -599,8 +620,7 @@ fn restore_missing(
         let to = destination.join(file.entry.as_str());
         {
             let parent = containing_directory(&to);
-            std::fs::create_dir_all(&parent)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+            with.platform.create_directories(&parent)?;
         }
         let from = walked.root.join(&file.relative);
         let temp = temp_beside(&to);
@@ -608,8 +628,7 @@ fn restore_missing(
             let _ = std::fs::remove_file(&temp);
             return Err(error);
         }
-        std::fs::rename(&temp, &to)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &to, &reason))?;
+        with.platform.publish_file(&temp, &to, with.durability)?;
     }
 
     for entry in with.platform.take_degradations() {
@@ -630,6 +649,7 @@ fn fill_staging(
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
     let source = walked.root.as_path();
+    let moving = Span::start();
     emit(EventPayload::TransferStart {
         source: fetchloom_engine::redact::SafeUrl::new(&source.to_string_lossy()),
         expected_bytes: Some(walked.bytes),
@@ -638,8 +658,7 @@ fn fill_staging(
     for entry in &walked.entries {
         if let TreeEntry::Directory { path } = entry {
             let target = staging.join(path.as_str());
-            std::fs::create_dir_all(&target)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, &target, &reason))?;
+            with.platform.create_directories(&target)?;
         }
     }
 
@@ -651,8 +670,7 @@ fn fill_staging(
         let to = staging.join(file.entry.as_str());
         {
             let parent = containing_directory(&to);
-            std::fs::create_dir_all(&parent)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+            with.platform.create_directories(&parent)?;
         }
         let (size, digests) = place_file(with, &gave_up, &from, &to, emit)?;
         copied += size;
@@ -683,7 +701,7 @@ fn fill_staging(
 
     emit(EventPayload::TransferEnd {
         bytes: copied,
-        duration_ms: 0,
+        duration_ms: moving.elapsed_ms(),
     });
     Ok(entries)
 }
@@ -1237,11 +1255,14 @@ pub fn materialize_remote(
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
     let name = object_name(location);
 
+    let resolving = Span::start();
     emit(EventPayload::ResolveStart);
     let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
     let pause = SleepingPause;
     let limits = Limits::default();
-    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::ResolveEnd {
+        duration_ms: resolving.elapsed_ms(),
+    });
     emit(EventPayload::PlanReady);
 
     let Some(cache) = with.cache else {
@@ -1367,6 +1388,7 @@ fn materialize_object(
             entries: entries.len() as u64,
             bytes: size,
             work: with.work.taken(),
+            trust: provisional_trust(with, Some(&recorded)),
             executable: executable_paths(&entries),
             artifact: Some(recorded.clone()),
         })
@@ -1456,11 +1478,11 @@ fn restore_object(
         std::fs::remove_dir_all(&staging)
             .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
     }
-    std::fs::create_dir_all(&staging)
-        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    with.platform.create_directories(&staging)?;
 
     let built = build_into_staging(with, digest, dataset, &staging, resolved, emit);
-    let outcome = built.and_then(|()| move_missing(&staging, destination, resolved, &missing));
+    let outcome =
+        built.and_then(|()| move_missing(with, &staging, destination, resolved, &missing));
     let _ = std::fs::remove_dir_all(&staging);
     outcome?;
     emit(EventPayload::PublishCommit);
@@ -1494,6 +1516,7 @@ fn build_into_staging(
 }
 
 fn move_missing(
+    with: &Materialization<'_>,
     staging: &Path,
     destination: &Path,
     resolved: &[TreeEntry],
@@ -1509,15 +1532,12 @@ fn move_missing(
         let from = staging.join(path);
         let to = destination.join(path);
         let parent = containing_directory(&to);
-        std::fs::create_dir_all(&parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+        with.platform.create_directories(&parent)?;
         if matches!(entry, TreeEntry::Directory { .. }) {
-            std::fs::create_dir_all(&to)
-                .map_err(|reason| failure(ErrorKind::DestinationForeign, &to, &reason))?;
+            with.platform.create_directories(&to)?;
             continue;
         }
-        std::fs::rename(&from, &to)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &to, &reason))?;
+        with.platform.publish_file(&from, &to, with.durability)?;
     }
     Ok(())
 }
@@ -1584,8 +1604,7 @@ fn publish_one_object(
         std::fs::remove_dir_all(&staging)
             .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
     }
-    std::fs::create_dir_all(&staging)
-        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    with.platform.create_directories(&staging)?;
 
     let built = match packed_format(with, digest, name)? {
         Some(format) => extract_into(with, digest, format, name, &staging, selection, emit),
@@ -1610,8 +1629,7 @@ fn publish_one_object(
 
     {
         let parent = containing_directory(destination);
-        std::fs::create_dir_all(&parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+        with.platform.create_directories(&parent)?;
     }
     if let Err(error) = with
         .platform
@@ -1734,6 +1752,8 @@ fn extract_into(
     selection: &Selection,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
+    let unpacking = Span::start();
+    emit(EventPayload::ExtractStart);
     let mut reader = open_archive(with, digest, format, name)?;
     let result = fetchloom_archive::extract(
         &mut reader,
@@ -1741,12 +1761,26 @@ fn extract_into(
         staging,
         Limits::default(),
         with.platform,
+        with.work,
     );
     for entry in reader.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,
             used: entry.used,
             reason: entry.reason,
+        });
+    }
+    if let Ok(entries) = &result {
+        emit(EventPayload::ExtractEnd {
+            entries: entries.len() as u64,
+            bytes: entries
+                .iter()
+                .map(|entry| match entry {
+                    TreeEntry::File { size, .. } | TreeEntry::Symlink { size, .. } => *size,
+                    TreeEntry::Directory { .. } => 0,
+                })
+                .sum(),
+            duration_ms: unpacking.elapsed_ms(),
         });
     }
     result
@@ -1821,10 +1855,11 @@ pub fn write_receipt(
     artifacts: &[ResolvedArtifact],
     result: &RunResult,
     verify: fetchloom_engine::verification::VerificationPolicy,
-) -> Result<(), Error> {
+) -> Result<TrustClass, Error> {
     let manifest_digest = manifest.digest()?;
     let run = run_identity(cache);
     let mut recorded = std::collections::BTreeMap::new();
+    let mut weakest = result.trust;
     for artifact in artifacts {
         let key = ArtifactKey::of(manifest_digest, &artifact.id);
         if let Some(origin) = artifact.observed.as_deref() {
@@ -1840,16 +1875,18 @@ pub fn write_receipt(
             )?;
         }
         let witnesses = cache.witnesses(&key)?;
+        let class = if verify == fetchloom_engine::verification::VerificationPolicy::Never {
+            TrustClass::Unverified
+        } else {
+            classify(artifact.prior, artifact.digest, &witnesses)
+        };
+        weakest = weakest.max(class);
         recorded.insert(
             artifact.id.clone(),
             fetchloom_engine::receipt::ReceiptArtifact {
                 digest: artifact.digest,
                 source_used: artifact.source.clone(),
-                trust: if verify == fetchloom_engine::verification::VerificationPolicy::Never {
-                    TrustClass::Unverified
-                } else {
-                    classify(artifact.prior, artifact.digest, &witnesses)
-                },
+                trust: class,
             },
         );
     }
@@ -1864,7 +1901,8 @@ pub fn write_receipt(
         accepted_terms: None,
         fetchloom: env!("CARGO_PKG_VERSION").to_owned(),
         completed_at: fetchloom_engine::timestamp::Timestamp::now(),
-    })
+    })?;
+    Ok(weakest)
 }
 
 /// Returns what names this run.
@@ -1946,8 +1984,11 @@ pub fn materialize_cached(
     sequence: &Sequence,
 ) -> Result<RunResult, Error> {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let resolving = Span::start();
     emit(EventPayload::ResolveStart);
-    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::ResolveEnd {
+        duration_ms: resolving.elapsed_ms(),
+    });
     emit(EventPayload::CacheHit { digest });
     emit(EventPayload::PlanReady);
     let interop = match with.cache {
@@ -2069,6 +2110,7 @@ pub fn materialize_manifest(
     sequence: &Sequence,
 ) -> DatasetRun {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let resolving = Span::start();
     emit(EventPayload::ResolveStart);
 
     let mut resolved = Vec::new();
@@ -2083,7 +2125,9 @@ pub fn materialize_manifest(
             }
         }
     }
-    emit(EventPayload::ResolveEnd { duration_ms: 0 });
+    emit(EventPayload::ResolveEnd {
+        duration_ms: resolving.elapsed_ms(),
+    });
     emit(EventPayload::PlanReady);
 
     let outcome = publish_dataset(
@@ -2378,6 +2422,7 @@ fn publish_dataset(
             entries: entries.len() as u64,
             bytes,
             work: with.work.taken(),
+            trust: provisional_trust(with, None),
             executable: executable_paths(&entries),
             artifact: None,
         })
@@ -2446,8 +2491,7 @@ fn build_dataset_staging(
         std::fs::remove_dir_all(&staging)
             .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
     }
-    std::fs::create_dir_all(&staging)
-        .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    with.platform.create_directories(&staging)?;
 
     let built = fill_dataset_staging(with, resolved, &staging, emit);
     let entries = match built {
@@ -2459,8 +2503,7 @@ fn build_dataset_staging(
     };
     {
         let parent = containing_directory(destination);
-        std::fs::create_dir_all(&parent)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &parent, &reason))?;
+        with.platform.create_directories(&parent)?;
     }
     if let Err(error) = with
         .platform
@@ -2544,4 +2587,25 @@ pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<Resolve
         prior: artifact.prior,
         observed: artifact.observed.clone(),
     }]
+}
+
+/// Returns the trust class a run may claim before its own witness is recorded.
+///
+/// Takes what the materialization runs against and the object it resolved,
+/// when it resolved one. Returns `unverified` when the run was told to check
+/// nothing, `verified` when a digest the lock or the manifest supplied before
+/// the run matches what was produced, and `tofu` otherwise. A run that records
+/// a receipt replaces this with the class its witnesses support, which is the
+/// only way `corroborated` is reached.
+fn provisional_trust(
+    with: &Materialization<'_>,
+    artifact: Option<&RecordedArtifact>,
+) -> TrustClass {
+    if with.verify == fetchloom_engine::verification::VerificationPolicy::Never {
+        return TrustClass::Unverified;
+    }
+    match artifact {
+        Some(artifact) if artifact.prior == Some(artifact.digest) => TrustClass::Verified,
+        _ => TrustClass::Tofu,
+    }
 }

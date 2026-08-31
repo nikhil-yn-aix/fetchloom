@@ -20,7 +20,7 @@ use toml as _;
 use fetchloom_cli::config::Discovered;
 use fetchloom_cli::policy::{CommandLinePolicy, token_variable};
 use fetchloom_cli::settings::{self, Environment};
-use fetchloom_cli::surface::GlobalFlags;
+use fetchloom_cli::surface::{GlobalFlags, TransferFlags};
 use fetchloom_cli::terminal::Streams;
 use fetchloom_engine::credential::{Necessity, ProviderHelp};
 use fetchloom_engine::error::ErrorKind;
@@ -66,6 +66,7 @@ fn a_required_prompt_in_a_non_interactive_run_is_a_policy_failure() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -85,6 +86,7 @@ fn asserting_acceptance_on_the_command_line_needs_no_prompt() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         true,
         &environment,
@@ -105,6 +107,7 @@ fn a_license_needing_no_acceptance_never_prompts() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -125,6 +128,7 @@ fn a_missing_required_credential_is_a_policy_failure() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -145,6 +149,7 @@ fn a_missing_optional_credential_does_not_stop_the_run() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -168,6 +173,7 @@ fn a_credential_is_read_from_the_host_scoped_variable_and_never_reported() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -214,6 +220,7 @@ fn an_optional_credential_is_never_offered_without_a_terminal() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,
@@ -245,6 +252,7 @@ fn an_interactive_run_may_be_offered_a_credential() {
     let sequence = Sequence::new();
     let policy = CommandLinePolicy::new(
         settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
         INTERACTIVE,
         false,
         &environment,
@@ -278,6 +286,7 @@ fn settings_reach_the_policy() {
     };
     let policy = CommandLinePolicy::new(
         settings_for(&flags, &environment),
+        &TransferFlags::default(),
         NON_INTERACTIVE,
         false,
         &environment,

@@ -5602,3 +5602,111 @@ is the code catching up with that sentence.
 
 Sources: `cargo test --workspace` on this machine, 586 passed and 5 ignored,
 against 548 before; `crates/cli/tests/surface.rs`.
+
+## Making the numbers mean what they say
+
+Phase 6 gates on the benchmark and on the event stream. Both were measuring
+something other than what they named, so both gates were decorative.
+
+The many-small-files corpus generated file content from `index % 251`, so the
+1024 files it wrote held 251 distinct objects and the other 773 were cache hits
+on a store the regime exists to stress. The regime named "many small files" was
+measuring deduplication. The generator now writes the file's own index into the
+leading bytes, so every file in a corpus is distinct. Every number that regime
+reports got worse, and none of them got worse because the code did.
+
+`bytes_written` read zero wherever the byte copy did not go through the write
+path the counter was attached to: the archive extraction wrote its members
+without counting them, and `NativePlatform::copy_bytes` -- the publish that runs
+when the volume refuses to clone -- counted the file and not its bytes. Both now
+count. This is why the written totals roughly double in every regime that
+materializes a destination: one copy was always being made and one copy was
+always being reported.
+
+`file_operations` disagreed across paths because the CLI created directories
+with `std::fs::create_dir_all`, which the Platform seam never sees. A run with a
+cache reported 403 operations for the same corpus a run without one reported 66,
+and the earlier 338-against-2 gap was not two paths doing different work, it was
+one path being visible and the other not. Directory creation is now
+`Platform::create_directories`, which recurses so that each directory it
+actually creates counts once, and every call site goes through it. Both counts
+are now correct, and they still differ: the cache path performs five operations
+per object and publishes each file individually, and the no-cache path stages a
+tree and publishes it with one directory rename. That difference is real work.
+
+The baseline is re-recorded rather than repaired. Which numbers moved because
+the measurement got honest, and which because the code changed:
+
+| regime | metric | before | after | why |
+| --- | --- | --- | --- | --- |
+| no-op | binary-size | 5515776 | 5548032 | code |
+| cold-cache | bytes-written | 33554432 | 50331648 | measurement |
+| cold-cache | file-operations | 338 | 403 | measurement |
+| warm-cache | file-operations | 2 | 67 | measurement |
+| cold-transfer | bytes-written | 4194304 | 8388608 | measurement |
+| cold-transfer | file-operations | 33 | 34 | measurement |
+| interrupted-transfer | bytes-written | 4194304 | 8388608 | measurement |
+| interrupted-transfer | file-operations | 53 | 54 | measurement |
+| many-small-files | bytes-written | 1305600 | 3145728 | corpus and measurement |
+| many-small-files | file-operations | 1273 | 6163 | corpus and measurement |
+| one-large-file | bytes-written | 536887240 | 805322696 | measurement |
+| one-large-file | file-operations | 26 | 28 | measurement |
+
+Unchanged: warm-cache bytes-written, many-small-files bytes-read, every cache
+growth figure, and every tree digest. The one deterministic move attributable to
+code is the binary, which grew by the events and the reporter below. One code
+change in this set was not isolated against the benchmark: `move_missing` now
+publishes through the Platform seam rather than renaming directly, so it applies
+the durability tier the rest of publication applies. It is a repair-path
+publish, and no regime here exercises it; the claim is that it is correct, not
+that it is measured.
+
+Timing is reported and never gates. The many-small-files wall clock moved from
+2936 ms to about 21777 ms on this volume, which is the corpus fix and a small
+write costing between thirty and sixty times a large one depending on when the
+scanner looks.
+
+## A stream a reader can reconstruct the run from
+
+Phase 9 builds the live view on the event stream and nothing else, so anything
+the view must show has to be in the stream first. A cold archive fetch emitted
+six events and named neither the transfer, the extraction, nor the cache
+decision, and every `*.end` event but one carried `duration_ms: 0` because the
+field was written as a literal zero at almost every site.
+
+Duration is now a `Span`, taken at the start of the operation and asked for its
+elapsed milliseconds at the end, and every end event carries a real one. Four
+contracted events that no production code emitted now have emitters:
+`extract.start` and `extract.end` around extraction, `cache.hit` and
+`cache.miss` on the ingest path, and `cache.wait` when a writer actually waited
+for a lease, which the Store seam now answers with `waited`. Six remain
+unemitted and each belongs to an unshipped phase: `resolve.alias` needs the
+alias resolution of phase 7, and `listing.start`, `listing.skipped`,
+`listing.end`, `source.probe` and `source.selected` need the multi-source
+listing of phase 8. They are contracted shapes waiting for the code that
+produces them, not holes.
+
+Failures reached the stream twice or not at all, because four call sites in
+`main.rs` hand-rolled an `EventPayload::Failure` alongside the printer that
+already emitted one, and the extraction rejection path emitted neither. There is
+now one `Reporter`, which every command error goes through: it emits
+`extract.reject` naming the member when the failure came from the extraction
+layer, then the `error` event, then prints once in the shape the flags asked
+for. The hand-rolled emissions are gone. `Error` carries the member it rejected,
+as `Option<Box<str>>` rather than `Option<String>`, because the latter puts the
+type at exactly the 128 bytes `clippy::result_large_err` refuses.
+
+A result now carries the trust class the receipt recorded, which is the weakest
+class of any artifact in it, and the policy is asked whether it accepts that
+class before the run reports success. `--verify never` is the only setting that
+accepts `unverified`.
+
+The Policy seam is still called by nothing that decides anything: it answers
+`cache_directory`, `accepts` and the verification and durability settings, and
+those are read. What it does not do is arbitrate a decision between two
+candidates, which is what phase 7 needs it for. It is a settings carrier today.
+Phase 7 either widens it or admits it is one.
+
+Sources: `cargo test --workspace` on this machine, 593 passed and 5 ignored;
+`crates/cli/tests/stream.rs`, `crates/cli/tests/work.rs`;
+`cargo xtask bench --save-baseline` under `FETCHLOOM_VERIFY`.
