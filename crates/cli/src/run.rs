@@ -23,7 +23,7 @@ use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::selection::Selection;
+use fetchloom_engine::selection::{Candidate, Selection};
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
@@ -251,7 +251,7 @@ pub fn materialize_local(
         |name| name.to_string_lossy().into_owned(),
     );
 
-    if let Some(ingested) = archive_to_unpack(with, source, &dataset)? {
+    if let Some(ingested) = object_to_resolve(with, source)? {
         emit(EventPayload::ResolveEnd { duration_ms: 0 });
         emit(EventPayload::PlanReady);
         return materialize_object(
@@ -960,7 +960,7 @@ fn destination_entries(
 ) -> Result<Vec<TreeEntry>, Error> {
     let walked = materialize::walk(destination)?;
     let mut entries = walked.entries.clone();
-    let recorded = recorded_fingerprints(with, destination);
+    let recorded = recorded_fingerprints(with, destination, resolved);
     let mut to_hash = Vec::with_capacity(walked.files.len());
     for file in &walked.files {
         match unchanged_by_fingerprint(with, &walked.root, file, &recorded, resolved) {
@@ -978,15 +978,22 @@ fn destination_entries(
     Ok(entries)
 }
 
-/// Returns the fingerprints the run that wrote this destination recorded.
+/// Returns the fingerprints the run that wrote this destination recorded, when
+/// they are a cached answer to the question this run is asking.
 ///
-/// A destination with no receipt has none, and every file is hashed.
+/// A recorded fingerprint says that a file still holds what the run that wrote
+/// the receipt published, so it answers only for the tree that receipt
+/// describes. A destination with no receipt, and one whose receipt describes a
+/// different tree, has none, and every file is hashed.
 fn recorded_fingerprints(
     with: &Materialization<'_>,
     destination: &Path,
+    resolved: &[TreeEntry],
 ) -> std::collections::BTreeMap<String, RecordedFingerprint> {
+    let wanted = canonical::tree_digest(resolved);
     with.cache
         .and_then(|cache| cache.read_receipt(destination).ok().flatten())
+        .filter(|receipt| receipt.tree == Some(wanted))
         .map(|receipt| receipt.fingerprints)
         .unwrap_or_default()
 }
@@ -1055,10 +1062,9 @@ enum SelectionCandidate {
 /// with `destination.unrepresentable` when the layout leaves a member with
 /// no path, and with `archive.collision` when two members land on the same
 /// path.
-fn apply_selection(
-    walked: materialize::Walked,
-    selection: &Selection,
-) -> Result<materialize::Walked, Error> {
+/// Returns every member of a walked tree and what each one is, in the order a
+/// selection is applied to them.
+fn offer(walked: &materialize::Walked) -> (Vec<String>, Vec<SelectionCandidate>) {
     let mut members: Vec<String> = Vec::new();
     let mut candidates: Vec<SelectionCandidate> = Vec::new();
     for entry in &walked.entries {
@@ -1092,9 +1098,24 @@ fn apply_selection(
         members.push(file.entry.as_str().to_owned());
         candidates.push(SelectionCandidate::File(file.clone()));
     }
+    (members, candidates)
+}
 
-    let refs: Vec<&str> = members.iter().map(String::as_str).collect();
-    let applied = selection.apply(&refs)?;
+fn apply_selection(
+    walked: materialize::Walked,
+    selection: &Selection,
+) -> Result<materialize::Walked, Error> {
+    let (members, candidates) = offer(&walked);
+
+    let offered: Vec<Candidate<'_>> = members
+        .iter()
+        .zip(&candidates)
+        .map(|(path, candidate)| Candidate {
+            path,
+            directory: matches!(candidate, SelectionCandidate::Directory),
+        })
+        .collect();
+    let applied = selection.apply(&offered)?;
 
     let mut new_entries: Vec<TreeEntry> = Vec::new();
     let mut new_files: Vec<materialize::SourceFile> = Vec::new();
@@ -1399,7 +1420,7 @@ fn object_tree(
             content: digest,
         }]);
     };
-    let mut reader = open_archive(with, digest, format)?;
+    let mut reader = open_archive(with, digest, format, name)?;
     let result = fetchloom_archive::resolve(&mut reader, selection, Limits::default());
     for entry in reader.take_degradations() {
         emit(EventPayload::Degrade {
@@ -1460,7 +1481,16 @@ fn build_into_staging(
         };
         return place_object(with, digest, &staging.join(entry_path_str(first)));
     };
-    extract_into(with, digest, format, staging, &Selection::default(), emit).map(|_| ())
+    extract_into(
+        with,
+        digest,
+        format,
+        dataset,
+        staging,
+        &Selection::default(),
+        emit,
+    )
+    .map(|_| ())
 }
 
 fn move_missing(
@@ -1558,7 +1588,7 @@ fn publish_one_object(
         .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
 
     let built = match packed_format(with, digest, name)? {
-        Some(format) => extract_into(with, digest, format, &staging, selection, emit),
+        Some(format) => extract_into(with, digest, format, name, &staging, selection, emit),
         None => place_object(with, digest, &staging.join(name)).and_then(|()| {
             Ok(vec![TreeEntry::File {
                 path: EntryPath::new(name).map_err(|reason| {
@@ -1635,7 +1665,7 @@ fn recognized_format(
     let object = cache.layout().object(digest);
     let mut file = std::fs::File::open(&object)
         .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
-    let mut header = [0_u8; 16];
+    let mut header = [0_u8; fetchloom_archive::SNIFF_LENGTH];
     let filled = read_up_to(&mut file, &mut header)?;
     fetchloom_archive::recognize(declared, name, &header[..filled])
 }
@@ -1670,6 +1700,7 @@ fn open_archive(
     with: &Materialization<'_>,
     digest: ContentDigest,
     format: ArchiveFormat,
+    name: &str,
 ) -> Result<fetchloom_archive::ArchiveReader<std::fs::File>, Error> {
     let Some(cache) = with.cache else {
         return Err(Error::new(
@@ -1680,12 +1711,7 @@ fn open_archive(
     let object = cache.layout().object(digest);
     let file = std::fs::File::open(&object)
         .map_err(|reason| failure(ErrorKind::ArchiveUnsupported, &object, &reason))?;
-    fetchloom_archive::ArchiveReader::new(
-        file,
-        format,
-        object.to_string_lossy().into_owned(),
-        Limits::default(),
-    )
+    fetchloom_archive::ArchiveReader::new(file, format, name.to_owned(), Limits::default())
 }
 
 /// Extracts a cached archive into a staging directory.
@@ -1703,11 +1729,12 @@ fn extract_into(
     with: &Materialization<'_>,
     digest: ContentDigest,
     format: ArchiveFormat,
+    name: &str,
     staging: &Path,
     selection: &Selection,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
-    let mut reader = open_archive(with, digest, format)?;
+    let mut reader = open_archive(with, digest, format, name)?;
     let result = fetchloom_archive::extract(
         &mut reader,
         selection,
@@ -1725,28 +1752,21 @@ fn extract_into(
     result
 }
 
-/// Puts a local archive into the cache, where extraction reads it from.
+/// Puts a local file into the cache, where the run resolves it as one object.
 ///
-/// Takes what the materialization runs against, the source, and the name the
-/// source is known by. Returns nothing when the source is not one file, when
-/// its name states no archive extension, when the run asked for no
-/// extraction, and when there is no cache to hold it.
+/// Takes what the materialization runs against and the source. Returns nothing
+/// when the source is not one file and when there is no cache to hold it.
+/// Whether the object is then extracted is decided from its own bytes, not
+/// here.
 ///
 /// # Errors
 ///
 /// Fails when the source cannot be read into the cache.
-fn archive_to_unpack(
-    with: &Materialization<'_>,
-    source: &Path,
-    name: &str,
-) -> Result<Option<Ingested>, Error> {
-    if !with.extract {
-        return Ok(None);
-    }
+fn object_to_resolve(with: &Materialization<'_>, source: &Path) -> Result<Option<Ingested>, Error> {
     let Some(cache) = with.cache else {
         return Ok(None);
     };
-    if fetchloom_archive::format_from_extension(name).is_none() || !source.is_file() {
+    if !source.is_file() {
         return Ok(None);
     }
     Ok(Some(cache.ingest(source)?))
@@ -2402,7 +2422,7 @@ fn dataset_entries(
             content: artifact.digest,
         }]);
     };
-    let mut reader = open_archive(with, artifact.digest, format)?;
+    let mut reader = open_archive(with, artifact.digest, format, &artifact.name)?;
     let result = fetchloom_archive::resolve(&mut reader, &artifact.selection, Limits::default());
     for entry in reader.take_degradations() {
         emit(EventPayload::Degrade {
@@ -2467,6 +2487,7 @@ fn fill_dataset_staging(
                 with,
                 artifact.digest,
                 format,
+                &artifact.name,
                 staging,
                 &artifact.selection,
                 emit,

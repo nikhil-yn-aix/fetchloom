@@ -79,14 +79,15 @@ $ fetchloom get file://$PWD/sample.tar.gz --output s5 --select 'nothing/**' --js
 {"kind":"reference.unresolved", ... ,"next_action":"select a pattern that matches, because none of the 4 members matched nothing/**"}
 ```
 
-`--layout flatten:n` drops the first n path components. It fails when any member
-would be left with no path, which includes the archive's own top-level directory
-entry, so on an archive written by `tar -c` from a directory it currently always
-fails:
+`--layout flatten:n` drops the first n path components. A directory left with no
+path is the destination itself and is dropped; a file left with no path fails
+with `destination.unrepresentable` naming the member and the count.
 
 ```
-$ fetchloom get file://$PWD/deep.tar.gz --output d2 --layout flatten:1 --json
-{"kind":"destination.unrepresentable", ... ,"next_action":"flatten fewer than 1 components, because pkg-1.0 has 1 and would be left with no path"}
+$ fetchloom get ./deep.tar.gz --output d2 --layout flatten:1 --json
+{"status":"materialized","dataset":"deep.tar.gz","tree":"blake3:f9995ab0c39285d6fdfa6ef386a235b0716a185c846c61f910d50279b3272a27","entries":3, ... }
+$ find d2
+d2  d2/README  d2/src  d2/src/m.txt
 ```
 
 `--verify` decides what a run trusts without reading, both for a cached object

@@ -38,6 +38,10 @@ impl Family {
     }
 }
 
+/// How many leading bytes `recognize` needs to answer for every format this
+/// build reads. A tar states its magic at offset 257.
+pub const SNIFF_LENGTH: usize = 262;
+
 const EXTENSIONS: &[(&str, ArchiveFormat)] = &[
     (".tar.gz", ArchiveFormat::TarGzip),
     (".tar.zst", ArchiveFormat::TarZstd),

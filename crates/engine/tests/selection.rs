@@ -13,7 +13,7 @@ use sha2 as _;
 use toml as _;
 
 use fetchloom_engine::error::ErrorKind;
-use fetchloom_engine::selection::{Glob, Layout, Selection};
+use fetchloom_engine::selection::{Candidate, Glob, Layout, Selection};
 
 fn paths(applied: &fetchloom_engine::selection::Applied) -> Vec<&str> {
     applied
@@ -29,6 +29,10 @@ fn directories(applied: &fetchloom_engine::selection::Applied) -> Vec<&str> {
         .iter()
         .map(fetchloom_engine::tree::EntryPath::as_str)
         .collect()
+}
+
+fn files<'a>(paths: &[&'a str]) -> Vec<Candidate<'a>> {
+    paths.iter().map(|path| Candidate::file(path)).collect()
 }
 
 fn selecting(patterns: &[&str]) -> Selection {
@@ -94,17 +98,19 @@ fn matching_is_case_sensitive_and_normalizes_nothing() {
 
 #[test]
 fn an_empty_include_list_selects_every_member() {
-    let applied = Selection::default().apply(&["a.txt", "b/c.txt"]).unwrap();
+    let applied = Selection::default()
+        .apply(&files(&["a.txt", "b/c.txt"]))
+        .unwrap();
     assert_eq!(paths(&applied), vec!["a.txt", "b/c.txt"]);
 }
 
 #[test]
 fn a_pattern_selects_member_paths_and_not_what_is_under_them() {
     let members = ["data", "data/a.txt", "other.txt"];
-    let named = selecting(&["data"]).apply(&members).unwrap();
+    let named = selecting(&["data"]).apply(&files(&members)).unwrap();
     assert_eq!(paths(&named), vec!["data"]);
 
-    let under = selecting(&["data/**"]).apply(&members).unwrap();
+    let under = selecting(&["data/**"]).apply(&files(&members)).unwrap();
     assert_eq!(under.members.len(), 2);
 }
 
@@ -116,7 +122,7 @@ fn exclusion_is_applied_after_every_include() {
         layout: Layout::Keep,
     };
     let applied = selection
-        .apply(&["a.txt", "data/b.txt", "other/c.txt"])
+        .apply(&files(&["a.txt", "data/b.txt", "other/c.txt"]))
         .unwrap();
     assert_eq!(paths(&applied), vec!["a.txt", "other/c.txt"]);
 }
@@ -124,7 +130,7 @@ fn exclusion_is_applied_after_every_include() {
 #[test]
 fn a_selection_that_matches_nothing_is_an_error() {
     let error = selecting(&["nothing/**"])
-        .apply(&["a.txt", "b.txt"])
+        .apply(&files(&["a.txt", "b.txt"]))
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::ReferenceUnresolved);
     assert!(error.next_action().contains("nothing/**"));
@@ -133,7 +139,7 @@ fn a_selection_that_matches_nothing_is_an_error() {
 #[test]
 fn every_ancestor_of_a_selected_member_is_a_directory_entry() {
     let applied = selecting(&["**/*.txt"])
-        .apply(&["a/b/c.txt", "a/d.txt"])
+        .apply(&files(&["a/b/c.txt", "a/d.txt"]))
         .unwrap();
     assert_eq!(directories(&applied), vec!["a", "a/b"]);
 }
@@ -141,7 +147,7 @@ fn every_ancestor_of_a_selected_member_is_a_directory_entry() {
 #[test]
 fn an_ancestor_that_is_itself_selected_is_not_listed_twice() {
     let applied = selecting(&["a", "a/b.txt"])
-        .apply(&["a", "a/b.txt"])
+        .apply(&files(&["a", "a/b.txt"]))
         .unwrap();
     assert_eq!(paths(&applied), vec!["a", "a/b.txt"]);
     assert!(directories(&applied).is_empty());
@@ -155,7 +161,7 @@ fn flattening_drops_the_first_components_of_every_path() {
         layout: Layout::Flatten(1),
     };
     let applied = selection
-        .apply(&["release/a.txt", "release/inner/b.txt"])
+        .apply(&files(&["release/a.txt", "release/inner/b.txt"]))
         .unwrap();
     assert_eq!(paths(&applied), vec!["a.txt", "inner/b.txt"]);
     assert_eq!(directories(&applied), vec!["inner"]);
@@ -168,7 +174,7 @@ fn flattening_a_member_to_nothing_names_the_member_and_the_count() {
         exclude: Vec::new(),
         layout: Layout::Flatten(2),
     };
-    let error = selection.apply(&["release/a.txt"]).unwrap_err();
+    let error = selection.apply(&files(&["release/a.txt"])).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::DestinationUnrepresentable);
     assert!(error.next_action().contains("release/a.txt"));
     assert!(error.next_action().contains('2'));
@@ -181,12 +187,74 @@ fn a_member_the_layout_leaves_unnamed_is_never_dropped_silently() {
         exclude: Vec::new(),
         layout: Layout::Flatten(1),
     };
-    assert!(selection.apply(&["a.txt"]).is_err());
+    assert!(selection.apply(&files(&["a.txt"])).is_err());
 }
 
 #[test]
 fn selection_reports_which_member_each_selected_path_came_from() {
-    let applied = selecting(&["b/**"]).apply(&["a.txt", "b/c.txt"]).unwrap();
+    let applied = selecting(&["b/**"])
+        .apply(&files(&["a.txt", "b/c.txt"]))
+        .unwrap();
     assert_eq!(applied.members.len(), 1);
     assert_eq!(applied.members[0].index, 1);
+}
+
+#[test]
+fn flattening_a_directory_member_to_nothing_drops_it_rather_than_failing() {
+    let selection = Selection {
+        include: Vec::new(),
+        exclude: Vec::new(),
+        layout: Layout::Flatten(1),
+    };
+    let applied = selection
+        .apply(&[
+            Candidate::directory("pkg-1.0"),
+            Candidate::directory("pkg-1.0/src"),
+            Candidate::file("pkg-1.0/README"),
+            Candidate::file("pkg-1.0/src/m.txt"),
+        ])
+        .unwrap();
+    assert_eq!(paths(&applied), vec!["src", "README", "src/m.txt"]);
+    assert!(directories(&applied).is_empty());
+}
+
+#[test]
+fn flattening_leaves_the_same_paths_whether_or_not_the_directories_were_named() {
+    let selection = Selection {
+        include: Vec::new(),
+        exclude: Vec::new(),
+        layout: Layout::Flatten(1),
+    };
+    let declared = selection
+        .apply(&[
+            Candidate::directory("pkg-1.0"),
+            Candidate::directory("pkg-1.0/src"),
+            Candidate::file("pkg-1.0/README"),
+            Candidate::file("pkg-1.0/src/m.txt"),
+        ])
+        .unwrap();
+    let bare = selection
+        .apply(&files(&["pkg-1.0/README", "pkg-1.0/src/m.txt"]))
+        .unwrap();
+    let mut from_declared: Vec<&str> = paths(&declared);
+    from_declared.extend(directories(&declared));
+    from_declared.sort_unstable();
+    let mut from_bare: Vec<&str> = paths(&bare);
+    from_bare.extend(directories(&bare));
+    from_bare.sort_unstable();
+    assert_eq!(from_declared, from_bare);
+}
+
+#[test]
+fn flattening_every_member_to_nothing_fails_rather_than_emptying_the_tree() {
+    let selection = Selection {
+        include: Vec::new(),
+        exclude: Vec::new(),
+        layout: Layout::Flatten(1),
+    };
+    let error = selection
+        .apply(&[Candidate::directory("pkg-1.0")])
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DestinationUnrepresentable);
+    assert!(error.next_action().contains('1'), "{}", error.next_action());
 }

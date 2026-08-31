@@ -96,19 +96,13 @@ Recognized extensions are `.tar.gz`, `.tar.zst`, `.tar.xz`, `.tar.bz2`, `.tgz`,
 `.tbz2`, `.zip`, `.gz`, `.zst`, `.xz`, `.bz2` and `.tar`. A manifest may state
 the format instead, and it is still checked against the bytes.
 
-In this build a bare, uncompressed `.tar` is refused. The sniff reads too few
-leading bytes to find a tar's magic, which sits at offset 257, so every bare tar
-reports that its bytes are unrecognized:
+A name and the bytes must agree, and the bytes are read far enough to find every
+magic this build knows, including a tar's, which sits at offset 257:
 
 ```
-$ fetchloom get file://$PWD/posix.tar --output d --json
-{"kind":"archive.unsupported","layer":"extract", ... ,"next_action":"rename it or state its format in a manifest, because the name said \"tar\" and the archive's bytes said unrecognized bytes"}
-$ echo $?
-70
+$ fetchloom get ./posix.tar --output d1 --json
+{"status":"materialized","dataset":"posix.tar","tree":"blake3:f2f3752199f59bd488aa9346f9e8314ee78691339cf6b512d410ce4788a72064","entries":4, ... }
 ```
-
-Every compressed form works, including `.tar.gz` of the same content. Compress
-the tar, or pass `--no-extract` to take it as a file.
 
 ## What a lock is written for
 
@@ -116,15 +110,25 @@ An unlocked run records what it resolved. A reference that resolves to an object
 gets a lock entry; one that resolves to no object gets none, and the run says so
 with a `degrade`.
 
-In this build a plain local file — one that is not a recognized archive — is
-walked as a tree rather than resolved as an object, so it writes no lock even
-though it resolved to exactly one thing. The degradation it emits says the
-reference names a directory, which for a single file is not true. The
-consequences are that `plan`, `apply` and `--locked` cannot be used with such a
-reference; `get` and `verify` work normally.
+A local file is one object, whether or not it is an archive, so it is pinned:
 
-An archive, a directory-of-files, a manifest and an HTTPS reference are all
-unaffected.
+```
+$ fetchloom get ./blob.txt --output d3 --lock my.lock
+$ cat my.lock
+datasets:
+  blob.txt:
+    artifacts:
+      blob.txt:
+        digest: "blake3:afa664f576ebf4ba3b5733fae8491ce7636be9cc124cb2216edfcad41ece8e7b"
+        interop: "sha256:e816a3bb9b048c85c1a7d814972db5a833e5d37b2f15175e5c63d99f7c82cb03"
+        layout: "keep"
+        size: 12
+    manifest: "blake3:93ee5a5fefd4b14d13c554fab5c3c3bdf0661cfc87d41d699b8f1d3dd9cdf32c"
+    tree: "blake3:11a0acf3176fdb4857221e1ce9ab54f8687ef000477be1312d33a040e43a586d"
+```
+
+A directory resolves to a tree rather than to an object, so it gets no lock
+entry, and the run says so with a `degrade`.
 
 ## Selection
 

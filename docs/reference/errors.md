@@ -164,7 +164,7 @@ $ echo $?
 |---|---|---|
 | `cache.locked` | Another process holds the object and the wait ended without it | Run again |
 | `cache.corrupt` | A cached object does not hash to its name, or a cache file could not be read or written | `fetchloom cache verify`, then `fetchloom repair <ref>` |
-| `cache.format_mismatch` | The cache was written by a build that used a different format | Delete the cache directory |
+| `cache.format_mismatch` | The cache was written by a build that used a different format | `fetchloom cache clear` |
 | `cache.cross_volume` | A publication into the cache would have crossed volumes | Put the cache on the volume the staging is on |
 | `cache.locking_unsupported` | The volume cannot express the advisory locks a shared cache needs | Put the cache somewhere else |
 
@@ -175,8 +175,8 @@ $ echo $?
 80
 ```
 
-The message names `cache clear`, and in this build `cache clear` is refused by
-the same check, so delete the cache directory yourself instead.
+`cache clear` is the one command the check does not apply to, because removing
+a directory does not depend on what wrote it.
 
 A cache that is missing, read-only, or out of space is not this. It does not
 stop a run: Fetchloom says so with a `degrade` event and continues as though

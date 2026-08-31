@@ -118,7 +118,7 @@ A pattern matches member paths, not subtrees. `--select data` selects a member n
 
 An empty selection is an error, not a no-op. It fails with `reference.unresolved` naming how many members were considered and which patterns matched none of them.
 
-Under `--layout flatten:<n>`, a member left with no path after dropping `n` components fails with `destination.unrepresentable` naming the member and the count.
+Under `--layout flatten:<n>`, a file left with no path after dropping `n` components fails with `destination.unrepresentable` naming the member and the count. A directory left with no path names the destination itself and is dropped, because the directories the surviving members need are synthesized whether or not the container declared them. A selection that flattening leaves with no member at all fails with the same kind. One logical tree therefore flattens the same way whether or not its container wrote directory entries, which is what makes flattening deterministic across encodings.
 
 ## Manifest
 
@@ -513,7 +513,7 @@ The cache is an optimization and is never required. The destination is the real 
 
 A cache that is missing, read-only, or out of space does not stop a run. Fetchloom emits `degrade` naming the reason and continues in `--no-cache` behavior.
 
-A format mismatch stops it. The difference is whether the user can act: no disk and no permission are conditions they often cannot fix now, while a format mismatch always has one command that fixes it. Continuing would silently refetch everything the unusable cache already held, which on a large or metered source costs far more than stopping. Every command that would touch the cache fails with `cache.format_mismatch` and exit 80, naming `cache clear` as the fix.
+A format mismatch stops it. The difference is whether the user can act: no disk and no permission are conditions they often cannot fix now, while a format mismatch always has one command that fixes it. Continuing would silently refetch everything the unusable cache already held, which on a large or metered source costs far more than stopping. Every command that would touch the cache fails with `cache.format_mismatch` and exit 80, naming `cache clear` as the fix. `cache clear` is that fix and is therefore the one command the check does not apply to: it removes the directory without reading a format, and its confirmation says what it could not count.
 
 Sharing is not a mode. A cache directory may be used by several users at once and Fetchloom never assumes otherwise, so there is one behavior rather than two and no way to select the unsafe one by mistake. Objects are readable by every user of the directory and writable only by their creator. Advisory locks must be honored across users, so a cache on a filesystem that cannot express cross-user locking is refused with `cache.locking_unsupported` rather than used. Prune removes only objects the invoking user created, and reports what it skipped and why.
 
@@ -615,7 +615,12 @@ policy governs a destination entry and a cache hit rather than two. Under
 its bytes unread, and one whose fingerprint has moved is hashed, exactly as a
 cache hit falls through to hashing. Under `always` every file is hashed whatever
 its fingerprint says. Under `never` the fingerprint alone decides. A destination
-with no receipt has no recorded fingerprint, so every file is hashed.
+with no receipt has no recorded fingerprint, so every file is hashed. So does one
+whose receipt describes a tree other than the one this run resolved: a recorded
+fingerprint is a cached answer to the question the run that wrote it asked and
+answers no other. That is what keeps `--adopt`, which records a tree the run did
+not resolve, from letting the next run report a tree the destination does not
+hold.
 
 Every entry unchanged writes nothing: no staging directory, no rename, status `unchanged`, exit 0.
 

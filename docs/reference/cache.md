@@ -262,6 +262,12 @@ $ fetchloom cache status
 cache.format_mismatch: run cache clear, because ...\cache was written in a format this build does not read and nothing is migrated
 ```
 
-In this build `cache clear` is refused by the same check, so delete the cache
-directory instead. It costs only the time to fetch again: nothing in a cache is
-durable, and everything in it can be rebuilt from a lock, a bundle, or a source.
+`cache clear` is exempt from the check, because removing a directory does not
+depend on what wrote it. Clearing costs only the time to fetch again: nothing in
+a cache is durable, and everything in it can be rebuilt from a lock, a bundle,
+or a source.
+
+```
+$ fetchloom cache clear --yes
+removed ...che
+```

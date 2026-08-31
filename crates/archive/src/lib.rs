@@ -13,7 +13,7 @@ mod zip_reader;
 
 pub use extract::extract;
 pub use reader::ArchiveReader;
-pub use recognize::{format_from_extension, recognize};
+pub use recognize::{SNIFF_LENGTH, format_from_extension, recognize};
 pub use resolve::resolve;
 
 #[cfg(test)]

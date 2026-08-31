@@ -140,6 +140,36 @@ impl TryFrom<String> for Layout {
     }
 }
 
+/// One member offered to a selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate<'a> {
+    /// The canonical member path, with `/` separators and nothing normalized.
+    pub path: &'a str,
+    /// Whether the member is a directory, which decides what a layout that
+    /// leaves it with no path does with it.
+    pub directory: bool,
+}
+
+impl<'a> Candidate<'a> {
+    /// Builds a candidate for a member that is not a directory.
+    #[must_use]
+    pub fn file(path: &'a str) -> Self {
+        Self {
+            path,
+            directory: false,
+        }
+    }
+
+    /// Builds a candidate for a directory member.
+    #[must_use]
+    pub fn directory(path: &'a str) -> Self {
+        Self {
+            path,
+            directory: true,
+        }
+    }
+}
+
 /// One member a selection took, and the path it lands under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppliedMember {
@@ -180,20 +210,23 @@ impl Selection {
 
     /// Applies this selection to a list of canonical member paths.
     ///
-    /// Takes the member paths in the order the archive holds them. Returns the
+    /// Takes the members in the order the archive holds them. Returns the
     /// members that survive the include and exclude lists, each with the path
     /// the layout leaves it under, and every directory those paths need that no
-    /// selected member already names.
+    /// selected member already names. A directory the layout leaves with no
+    /// path is the destination itself and is dropped; the directories the
+    /// surviving members need are synthesized either way.
     ///
     /// # Errors
     ///
     /// Fails with `reference.unresolved` when nothing matches, and with
-    /// `destination.unrepresentable` when the layout leaves a member with no
-    /// path or a path the destination cannot hold.
-    pub fn apply(&self, members: &[&str]) -> Result<Applied, Error> {
+    /// `destination.unrepresentable` when the layout leaves a file with no
+    /// path, when it leaves nothing at all, or when it produces a path the
+    /// destination cannot hold.
+    pub fn apply(&self, members: &[Candidate<'_>]) -> Result<Applied, Error> {
         let mut taken = Vec::new();
         for (index, member) in members.iter().enumerate() {
-            if self.takes(member) {
+            if self.takes(member.path) {
                 taken.push((index, *member));
             }
         }
@@ -210,10 +243,23 @@ impl Selection {
 
         let mut applied = Applied::default();
         for (index, member) in taken {
-            applied.members.push(AppliedMember {
-                index,
-                path: self.rewrite(member)?,
-            });
+            if let Some(path) = self.rewrite(member)? {
+                applied.members.push(AppliedMember { index, path });
+            }
+        }
+        if applied.members.is_empty() {
+            let Layout::Flatten(dropped) = self.layout else {
+                return Err(Error::new(
+                    ErrorKind::DestinationUnrepresentable,
+                    "select a member that has a path".to_owned(),
+                ));
+            };
+            return Err(Error::new(
+                ErrorKind::DestinationUnrepresentable,
+                format!(
+                    "flatten fewer than {dropped} components, because every selected member is a directory that would be left with no path"
+                ),
+            ));
         }
 
         let named: BTreeSet<&str> = applied
@@ -250,24 +296,31 @@ impl Selection {
             .join(" ")
     }
 
-    fn rewrite(&self, member: &str) -> Result<EntryPath, Error> {
+    fn rewrite(&self, member: Candidate<'_>) -> Result<Option<EntryPath>, Error> {
+        let path = member.path;
         let Layout::Flatten(depth) = self.layout else {
-            return EntryPath::new(member)
-                .map_err(|reason| unrepresentable(member, &reason.to_string()));
+            return EntryPath::new(path)
+                .map(Some)
+                .map_err(|reason| unrepresentable(path, &reason.to_string()));
         };
         let dropped = depth as usize;
-        let components: Vec<&str> = member.split('/').collect();
+        let components: Vec<&str> = path.split('/').collect();
         if components.len() <= dropped {
+            if member.directory {
+                return Ok(None);
+            }
             return Err(Error::new(
                 ErrorKind::DestinationUnrepresentable,
                 format!(
-                    "flatten fewer than {dropped} components, because {member} has {} and would be left with no path",
+                    "flatten fewer than {dropped} components, because {path} has {} and would be left with no path",
                     components.len()
                 ),
             ));
         }
         let flattened = components[dropped..].join("/");
-        EntryPath::new(&flattened).map_err(|reason| unrepresentable(member, &reason.to_string()))
+        EntryPath::new(&flattened)
+            .map(Some)
+            .map_err(|reason| unrepresentable(path, &reason.to_string()))
     }
 }
 

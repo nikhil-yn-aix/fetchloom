@@ -12,7 +12,7 @@ use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::seam::archive::{Archive, ArchiveMember, MemberKind};
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::selection::{Applied, AppliedMember, Selection};
+use fetchloom_engine::selection::{Applied, AppliedMember, Candidate, Selection};
 use fetchloom_engine::tree::{EntryPath, TreeEntry};
 
 pub(crate) const BUFFER_LEN: usize = 65_536;
@@ -152,18 +152,24 @@ pub(crate) fn select_members(
     members: &[ArchiveMember],
     selection: &Selection,
 ) -> Result<Applied, Error> {
-    let mut canonical: Vec<String> = Vec::with_capacity(members.len());
+    let mut canonical: Vec<(String, bool)> = Vec::with_capacity(members.len());
     let mut named: Vec<usize> = Vec::with_capacity(members.len());
     for (index, member) in members.iter().enumerate() {
         let path = canonical_member_path(member);
         if path.is_empty() {
             continue;
         }
-        canonical.push(path);
+        canonical.push((path, member.kind == MemberKind::Directory));
         named.push(index);
     }
-    let paths: Vec<&str> = canonical.iter().map(String::as_str).collect();
-    let mut applied = selection.apply(&paths)?;
+    let candidates: Vec<Candidate<'_>> = canonical
+        .iter()
+        .map(|(path, directory)| Candidate {
+            path,
+            directory: *directory,
+        })
+        .collect();
+    let mut applied = selection.apply(&candidates)?;
     for member in &mut applied.members {
         member.index = named[member.index];
     }

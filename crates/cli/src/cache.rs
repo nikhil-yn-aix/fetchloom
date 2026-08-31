@@ -106,6 +106,10 @@ pub fn run(
 ) -> ExitCode {
     let held = match require(root, Arc::new(WorkCounter::new()), processor) {
         Ok(held) => held,
+        Err(refused) if matches!(command, CacheCommand::Clear) => {
+            let _ = refused;
+            return clear(root, None, json, yes);
+        }
         Err(refused) => return crate::report(&refused, json),
     };
 
@@ -123,7 +127,11 @@ pub fn run(
         }
         CacheCommand::Repair => report_rebuild(&held, json),
         CacheCommand::Prune => report_prune(&held, json),
-        CacheCommand::Clear => clear(&held, json, yes),
+        CacheCommand::Clear => {
+            let counted = held.status().ok();
+            drop(held);
+            clear(root, counted.as_ref(), json, yes)
+        }
     }
 }
 
@@ -273,12 +281,12 @@ fn report_prune(held: &Cache<NativePlatform>, json: bool) -> ExitCode {
     }
 }
 
-fn clear(held: &Cache<NativePlatform>, json: bool, yes: bool) -> ExitCode {
-    let found = match held.status() {
-        Ok(found) => found,
-        Err(refused) => return crate::report(&refused, json),
-    };
-
+fn clear(
+    root: &Path,
+    found: Option<&fetchloom_engine::seam::store::CacheStatus>,
+    json: bool,
+    yes: bool,
+) -> ExitCode {
     if !yes {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             let refused = Error::new(
@@ -287,12 +295,18 @@ fn clear(held: &Cache<NativePlatform>, json: bool, yes: bool) -> ExitCode {
             );
             return crate::report(&refused, json);
         }
-        eprintln!(
-            "{} objects and {} bytes will be removed from {}, and fetching them again may take hours.",
-            found.objects,
-            found.bytes,
-            found.root.display()
-        );
+        match found {
+            Some(found) => eprintln!(
+                "{} objects and {} bytes will be removed from {}, and fetching them again may take hours.",
+                found.objects,
+                found.bytes,
+                root.display()
+            ),
+            None => eprintln!(
+                "{} will be removed, and fetching again may take hours. It was written in a format this build does not read, so what it holds cannot be counted.",
+                root.display()
+            ),
+        }
         eprint!("Remove them? [y/N] ");
         let mut answer = String::new();
         if std::io::stdin().read_line(&mut answer).is_err()
@@ -303,14 +317,15 @@ fn clear(held: &Cache<NativePlatform>, json: bool, yes: bool) -> ExitCode {
         }
     }
 
-    match held.clear() {
+    match fetchloom_cache::clear(root) {
         Ok(()) => {
             if !json {
-                println!(
-                    "removed {} objects from {}",
-                    found.objects,
-                    found.root.display()
-                );
+                match found {
+                    Some(found) => {
+                        println!("removed {} objects from {}", found.objects, root.display());
+                    }
+                    None => println!("removed {}", root.display()),
+                }
             }
             ExitCode::Success
         }

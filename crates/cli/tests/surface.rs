@@ -267,7 +267,7 @@ fn package_zip() -> Vec<u8> {
         directory.extend_from_slice(&length.to_le_bytes());
         directory.extend_from_slice(&length.to_le_bytes());
         directory.extend_from_slice(&name_length.to_le_bytes());
-        directory.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        directory.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         directory.extend_from_slice(&offset.to_le_bytes());
         directory.extend_from_slice(name);
     }
@@ -574,7 +574,7 @@ fn every_shipped_container_is_extracted_by_the_command() {
             "out",
             "--json",
         ]);
-        assert_eq!(run.code(), 0, "{name} said {}", run.err());
+        assert_eq!(run.code(), 0, "{name} said {}{}", run.out(), run.err());
         let listing = entries_under(&workspace.path().join("out"));
         assert!(!listing.is_empty(), "{name} produced nothing");
     }

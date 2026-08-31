@@ -5531,3 +5531,74 @@ Sources: `cargo build --workspace`, `cargo clippy --workspace --all-targets`,
 and `cargo clippy --target x86_64-unknown-linux-musl` for the platform, engine,
 cache and archive crates, all on this machine; `cargo deny check`;
 `cargo test --workspace`.
+
+## Four shipped behaviors nobody had ever run
+
+Every one of these was found by spawning the binary and walking the contracts
+tables, which nothing in this tree had done. 548 tests passed while a bare tar
+could not be fetched. The suite is the deliverable; the four fixes are what it
+found.
+
+A bare tar could not be fetched at all. `run.rs` read sixteen leading bytes and
+handed them to `recognize`, which finds the tar magic at offset 257. Every other
+magic this build sniffs lives in the first sixteen bytes, so tar alone was
+affected and the failure blamed the archive: "the name said tar and the
+archive's bytes said unrecognized bytes". The number of bytes recognition needs
+is knowledge the archive crate owns, so it is now `SNIFF_LENGTH` there and the
+caller reads it rather than restating it. The surface suite fetches all ten
+shipped containers and compressions through the command, from bytes that really
+hold them.
+
+Flattening failed on every archive that declared its directories. contracts.md
+said a member left with no path after dropping `n` components fails, and the
+code implemented that exactly. A top-level directory entry has one component, so
+at `flatten:1` -- which is the only thing flatten is for -- the run always failed
+when the writer wrote directory headers and always succeeded when it did not.
+Fetchloom synthesizes the ancestor directories itself, so the same logical tree
+flattened or failed on an encoding detail the user cannot see, which is a
+determinism defect as much as a usability one.
+
+The contract is now that a directory left with no path names the destination
+itself and is dropped, and a file left with no path is still fatal. Nothing is
+lost by dropping it: the directories the surviving members need are synthesized
+whether or not the container declared them, which is why `zip -D` already
+produced the identical tree. A selection that flattening empties entirely fails,
+because an empty destination is not an answer. Selection now takes a
+`Candidate` carrying the member path and whether it is a directory, rather than
+a path alone; both callers already knew which their members were.
+
+A reference naming one file wrote no lock. The one-object path was entered only
+when the name carried an archive extension, so a plain file fell through to the
+directory walk, resolved to no object, and emitted a degrade saying "this
+reference names a directory", which for a file is untrue. `plan`, `apply` and
+`--locked` were unusable for that whole reference shape. The gate was in the
+wrong place: whether a local file is an archive is decided from its own bytes,
+later, by `recognized_format`. `object_to_resolve` now ingests any local file
+and lets that decision happen where it already lived. One object out of the same
+change: the archive reader was being given the cache object's path as the
+archive's name, so a bare `.gz` materialized its one file under a digest in
+hexadecimal instead of under the object's own name, which contracts.md's
+reference grammar states.
+
+`cache clear` could not clear a cache whose format did not match. The check that
+refuses every command naming `cache clear` as the fix also refused `cache
+clear`. The product printed a remedy that did not work and never mentioned the
+one that did. `Cache::clear` was a method on an open cache, which is the reason
+it could not run: clearing is the only operation that needs no format at all,
+because removing a directory does not depend on what wrote it. It is now a free
+function taking a root. The confirmation still reports what will be removed when
+the cache can be opened, and says it could not count when it cannot.
+
+One more, found by the same suite and fixed with them. A run after `--adopt`
+reported a tree the destination did not hold. `--adopt` records the adopted
+tree; the next run resolved a different tree, found every recorded fingerprint
+still matching, and concluded `unchanged` against that different tree -- then
+wrote it into the receipt as truth. `verify` disagreed with `get` on the same
+directory. A recorded fingerprint is a cached answer to the question the run
+that wrote it asked, so it now answers only when the receipt describes the tree
+this run resolved, and every other case hashes. contracts.md already said a
+receipt is "a cached copy of that answer, never a second authority for it"; this
+is the code catching up with that sentence.
+
+Sources: `cargo test --workspace` on this machine, 586 passed and 5 ignored,
+against 548 before; `crates/cli/tests/surface.rs`.

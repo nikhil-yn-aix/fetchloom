@@ -163,15 +163,23 @@ impl<P: Platform> Cache<P> {
         self.work.touched_file();
         Ok(())
     }
+}
 
-    /// Removes the whole cache.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the directory cannot be removed.
-    pub fn clear(&self) -> Result<(), Error> {
-        std::fs::remove_dir_all(self.layout.root())
-            .map_err(|reason| failure(ErrorKind::CacheCorrupt, self.layout.root(), &reason))
+/// Removes the whole cache at a root, whatever wrote it.
+///
+/// Takes the cache root. Removes the directory and everything under it. A
+/// format this build does not read is the failure this command exists to fix,
+/// so nothing about the format is read first and the cache is never opened.
+///
+/// # Errors
+///
+/// Fails when the directory cannot be removed. A root that is already absent
+/// succeeds.
+pub fn clear(root: &Path) -> Result<(), Error> {
+    match std::fs::remove_dir_all(root) {
+        Ok(()) => Ok(()),
+        Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(reason) => Err(failure(ErrorKind::CacheCorrupt, root, &reason)),
     }
 }
 
