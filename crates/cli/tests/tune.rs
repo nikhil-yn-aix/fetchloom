@@ -517,3 +517,141 @@ fn a_plan_lists_every_field_no_source_stated_and_reports_none_of_them_as_zero() 
         );
     }
 }
+
+#[test]
+fn ordering_candidates_by_measurement_never_changes_the_bytes_a_manifest_with_two_sources_produces()
+{
+    let object: Vec<u8> = (0..32 * 1024_usize)
+        .map(|index| u8::try_from(index % 251).unwrap_or(0))
+        .collect();
+
+    let manifest_of = |first: &str, second: &str| {
+        format!("name: mirrored\nartifacts:\n  - id: object\n    sources: [{first}, {second}]\n")
+    };
+
+    let observing = Workspace::new();
+    let first = TestServer::start(Script::serving(object.clone())).unwrap();
+    let second = TestServer::start(Script::serving(object.clone())).unwrap();
+    observing.write(
+        "dataset.yaml",
+        manifest_of(
+            &format!("{}/object", first.origin()),
+            &format!("{}/object", second.origin()),
+        )
+        .as_bytes(),
+    );
+    let observed = observing.run(&["get", "dataset.yaml", "--output", "first", "--json"]);
+    assert_eq!(observed.code(), 0, "{}", observed.err());
+    let baseline = shape(&observed);
+    assert!(
+        !measurement_files(&observing.cache()).is_empty(),
+        "the observing run recorded no measurement, so the warm side varies nothing"
+    );
+    drop(first);
+    drop(second);
+
+    let empty = Workspace::new();
+    let warm = Workspace::new();
+    seed_measurements(&observing, &warm);
+    assert!(
+        measurement_files(&empty.cache()).is_empty(),
+        "the empty side already holds a measurement"
+    );
+    assert!(
+        !measurement_files(&warm.cache()).is_empty(),
+        "the warm side holds no measurement, so this test varies nothing"
+    );
+
+    let mut shapes = Vec::new();
+    for (workspace, name) in [(&empty, "empty"), (&warm, "warm")] {
+        let first = TestServer::start(Script::serving(object.clone())).unwrap();
+        let second = TestServer::start(Script::serving(object.clone())).unwrap();
+        workspace.write(
+            "dataset.yaml",
+            manifest_of(
+                &format!("{}/object", first.origin()),
+                &format!("{}/object", second.origin()),
+            )
+            .as_bytes(),
+        );
+        let run = workspace.run(&["get", "dataset.yaml", "--output", "out", "--json"]);
+        assert_eq!(run.code(), 0, "the {name} side said {}", run.err());
+        shapes.push(shape(&run));
+    }
+    assert_eq!(
+        baseline.0, shapes[0].0,
+        "the empty side produced different bytes"
+    );
+    assert_eq!(
+        shapes[0].0, shapes[1].0,
+        "seeding a measurement changed which bytes a manifest with two sources produced"
+    );
+}
+
+#[test]
+fn buffered_and_uncached_write_paths_produce_identical_bytes() {
+    let buffered_workspace = Workspace::new();
+    let buffered_source = corpus(&buffered_workspace, 4);
+    let buffered = buffered_workspace.run(&[
+        "get",
+        buffered_source.to_str().unwrap(),
+        "--output",
+        "out",
+        "--io",
+        "buffered",
+        "--json",
+    ]);
+
+    let uncached_workspace = Workspace::new();
+    let uncached_source = corpus(&uncached_workspace, 4);
+    let uncached = uncached_workspace.run(&[
+        "get",
+        uncached_source.to_str().unwrap(),
+        "--output",
+        "out",
+        "--io",
+        "uncached",
+        "--json",
+    ]);
+
+    assert_eq!(buffered.code(), 0, "{}", buffered.err());
+    assert_eq!(uncached.code(), 0, "{}", uncached.err());
+    let (buffered_tree, buffered_work) = shape(&buffered);
+    let (uncached_tree, uncached_work) = shape(&uncached);
+    assert_eq!(buffered_tree, uncached_tree, "--io changed the tree digest");
+    assert_eq!(
+        buffered_work["bytes_written"], uncached_work["bytes_written"],
+        "--io changed bytes_written"
+    );
+    assert_eq!(
+        entries_under(&buffered_workspace.path().join("out")),
+        entries_under(&uncached_workspace.path().join("out")),
+        "--io changed what was materialized"
+    );
+}
+
+#[test]
+fn auto_io_never_emits_a_write_path_degradation() {
+    let workspace = Workspace::new();
+    let source = corpus(&workspace, 4);
+    let run = workspace.run(&[
+        "get",
+        source.to_str().unwrap(),
+        "--output",
+        "out",
+        "--io",
+        "auto",
+        "--json",
+        "--events",
+        "stream.ndjson",
+    ]);
+    assert_eq!(run.code(), 0, "{}", run.err());
+    let stream = std::fs::read_to_string(workspace.path().join("stream.ndjson")).unwrap();
+    let found = degrades(&stream);
+    assert!(
+        found
+            .iter()
+            .all(|line| !line.contains("uncached") && !line.contains("buffered")),
+        "auto emitted a write path degrade: {found:?}"
+    );
+}

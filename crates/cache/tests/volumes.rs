@@ -18,6 +18,7 @@ use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{ErrorKind, lock_failure};
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_faults::{FaultyPlatform, Operation};
@@ -163,6 +164,7 @@ fn a_volume_whose_locks_are_refused_is_refused_as_a_cache() {
         platform,
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
         std::sync::Arc::clone(&work),
         std::sync::Arc::new(
             fetchloom_engine::pool::Processor::new(

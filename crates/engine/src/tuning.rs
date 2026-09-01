@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::{Backing, Scanner, VolumeCapabilities};
+use crate::degrade::DegradeQueue;
 use crate::limits::{Bandwidth, Limits};
+use crate::seam::policy::IoMode;
 use crate::threads::ThreadBudget;
 use crate::timestamp::Timestamp;
 
@@ -43,6 +46,46 @@ impl HostMeasurement {
             "{host} {} in flight at {} bytes per second, {} ms to first byte, taken {}",
             self.concurrency, self.throughput, self.time_to_first_byte_ms, self.observed_at
         )
+    }
+}
+
+/// Orders candidate locations by the measured part of source selection:
+/// recorded throughput for the host, higher first, then time to first byte,
+/// lower first, with manifest order breaking every tie.
+///
+/// A candidate whose host carries no measurement is never placed ahead of one
+/// that does, however low that measurement is: the run learned nothing about
+/// it, so it cannot be preferred on the strength of what was measured. With no
+/// measurement behind any candidate, the result is the input order unchanged.
+#[must_use]
+pub fn order_candidates(
+    locations: &[String],
+    measurement_for: &dyn Fn(&str) -> Option<HostMeasurement>,
+) -> Vec<String> {
+    let mut indexed: Vec<(usize, &String, Option<HostMeasurement>)> = locations
+        .iter()
+        .enumerate()
+        .map(|(index, location)| (index, location, measurement_for(location)))
+        .collect();
+    indexed.sort_by(|left, right| candidate_order(left.2, right.2).then(left.0.cmp(&right.0)));
+    indexed
+        .into_iter()
+        .map(|(_, location, _)| location.clone())
+        .collect()
+}
+
+fn candidate_order(
+    left: Option<HostMeasurement>,
+    right: Option<HostMeasurement>,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => right
+            .throughput
+            .cmp(&left.throughput)
+            .then(left.time_to_first_byte_ms.cmp(&right.time_to_first_byte_ms)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     }
 }
 
@@ -163,6 +206,33 @@ pub fn debt(rate: u64, moved: u64, elapsed: Duration) -> Duration {
     (whole + part).saturating_sub(elapsed)
 }
 
+/// How far below what a run had been sustaining the store may accept bytes
+/// before the volume counts as having collapsed under it.
+pub const COLLAPSE_FRACTION: u64 = 4;
+
+/// The rate at which the store has been accepting bytes, and whether it has
+/// just collapsed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WriteRate {
+    best: u64,
+}
+
+impl WriteRate {
+    /// Records one window of writing and reports whether the volume collapsed
+    /// under it. The first window never collapses, because nothing has been
+    /// sustained for it to fall away from.
+    pub fn observed(&mut self, bytes: u64, elapsed: Duration) -> bool {
+        let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+        if nanos == 0 {
+            return false;
+        }
+        let rate = bytes.saturating_mul(1_000_000_000) / nanos;
+        let sustained = self.best;
+        self.best = self.best.max(rate);
+        sustained > 0 && rate < sustained / COLLAPSE_FRACTION
+    }
+}
+
 /// The aggregate ceiling on how fast a run transfers.
 #[derive(Debug)]
 pub struct Meter {
@@ -186,5 +256,44 @@ impl Meter {
     pub fn moved(&self, bytes: u64) -> Duration {
         let total = self.moved.fetch_add(bytes, Ordering::Relaxed) + bytes;
         debt(self.rate, total, self.start.elapsed())
+    }
+}
+
+/// Whether this build's target can release a file's written range from the
+/// page cache without constraining every write to sector alignment.
+pub const CAN_RELEASE_PAGES: bool = cfg!(target_os = "linux");
+
+/// Resolves the write path mode a run actually takes, recording a degrade
+/// when an explicit request cannot be honored.
+#[must_use]
+pub fn resolve_io_mode(
+    requested: IoMode,
+    capabilities: &VolumeCapabilities,
+    can_release_pages: bool,
+    degradations: &DegradeQueue,
+) -> IoMode {
+    match requested {
+        IoMode::Buffered => IoMode::Buffered,
+        IoMode::Uncached => {
+            if can_release_pages {
+                IoMode::Uncached
+            } else {
+                degradations.record(
+                    "uncached",
+                    "buffered",
+                    "the platform offers no way to release written pages without constraining every write to sector alignment",
+                );
+                IoMode::Buffered
+            }
+        }
+        IoMode::Auto => {
+            let local_and_unwatched =
+                capabilities.backing == Backing::Local && capabilities.scanner == Scanner::Absent;
+            if can_release_pages && local_and_unwatched {
+                IoMode::Uncached
+            } else {
+                IoMode::Buffered
+            }
+        }
     }
 }

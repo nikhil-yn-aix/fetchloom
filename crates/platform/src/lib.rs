@@ -257,6 +257,10 @@ impl Platform for NativePlatform {
         Ok(())
     }
 
+    fn release_written(&self, file: &File, from: u64, length: u64) -> Result<bool, Error> {
+        imp::release_written(file, from, length)
+    }
+
     fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
         let source_volume = imp::volume_id(&containing_directory(from))?;
         let target_volume = imp::volume_id(&containing_directory(to))?;

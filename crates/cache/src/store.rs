@@ -13,6 +13,7 @@ use fetchloom_engine::identity::CacheFormatFingerprint;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::{CacheStatus, PruneReport, Store};
 use fetchloom_engine::source_record::SourceRecord;
 use fetchloom_engine::verification::VerificationPolicy;
@@ -400,6 +401,10 @@ impl<P: Platform> Store for Cache<P> {
         }
 
         self.platform.flush(&writer.file, self.tier)?;
+        if self.io_mode == IoMode::Uncached && writer.written > 0 {
+            self.platform
+                .release_written(&writer.file, 0, writer.written)?;
+        }
         drop(writer.file);
 
         self.publish_object(&writer.path, &digests)?;

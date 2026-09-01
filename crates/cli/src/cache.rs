@@ -11,6 +11,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::seam::observer::Observer;
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
@@ -37,11 +38,12 @@ pub fn open(
     root: &Path,
     tier: DurabilityTier,
     policy: VerificationPolicy,
+    io: IoMode,
     work: Arc<WorkCounter>,
     processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Opened {
     let platform = NativePlatform::new(Arc::clone(&work));
-    match Cache::open(root, platform, tier, policy, work, processor) {
+    match Cache::open(root, platform, tier, policy, io, work, processor) {
         Ok(held) => Opened::Ready(Box::new(held)),
         Err(refused)
             if refused.kind() == ErrorKind::CacheFormatMismatch
@@ -71,6 +73,7 @@ pub fn require(
         platform,
         DurabilityTier::Normal,
         VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
         work,
         processor,
     )

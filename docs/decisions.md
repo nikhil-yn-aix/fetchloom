@@ -6056,3 +6056,129 @@ x86_64-unknown-linux-musl` runs clean on this Windows host now, so the host
 lints Linux as well as its own target and the degradation is gone rather than
 reworded. Four remain, and each names a machine or a privilege this matrix does
 not have rather than a decision anyone made.
+
+## Phase 6. What a measurement is allowed to decide
+
+Seven decisions were named for this phase. They are recorded here in the order
+roadmap.md names them, and every one of them is bounded by the same rule: a
+measurement may change how long a run takes and may never change what a run
+produces. Where a decision needed a sentence contracts.md did not have, that
+sentence was written into contracts.md in the same change.
+
+### What is measured, how a decision is scored, and how it is stored per host
+
+Three numbers per host: the concurrency the last run settled on, the throughput
+it observed, and the time to first byte it observed. Nothing else, because
+nothing else is read by anything. They are stored one host per file at
+`meta/host/<hex>`, where the hex is the derived-key digest of the host name, so
+the cache directory does not leak the list of hosts a user fetches from to
+anything that can read a directory listing but not a file.
+
+They are derived data under contracts.md:13 and contracts.md:424, so they carry
+no version field and are discarded rather than migrated when the format
+fingerprint changes. A record that will not parse, is truncated, or was written
+under a different fingerprint is discarded and the host is measured again. That
+is safe precisely because the record can only move timing: a run that reads no
+measurement and a run that reads a good one produce the same bytes.
+
+Scoring is deliberately not a formula. The concurrency number is the previous
+run's answer and is used as a starting point, not as a target, because the
+controller below moves it from there on this run's evidence. Throughput and time
+to first byte are inputs to the source order in contracts.md:803 and are not
+combined into any other number.
+
+### The increase and backoff policy for concurrency
+
+Additive increase, multiplicative decrease, one step per completed transfer. A
+clean transfer adds one. A rate limit halves, with a floor of one. Any other
+failure subtracts one, with the same floor. A host nothing is recorded for
+starts at two: one request to move bytes and one more to learn whether a second
+helps, which is the smallest starting point that can produce evidence at all.
+
+The ceiling is the thread budget clamped to eight, then bounded by the
+politeness limit of four connections per host. A measurement never raises that
+ceiling. Only `--aggressive` raises it, and it prints a warning when it does.
+The asymmetry is the point: the cost of being one connection too slow is
+seconds, and the cost of being several too fast is a host that stops answering.
+
+### How protocol choice is evaluated
+
+It is not evaluated separately. contracts.md:803 already fixes the order —
+reachable, supports ranges, exposes immutable identity, recorded throughput for
+that host, time to first byte, egress cost, remaining politeness headroom, ties
+broken by manifest order. Phase 6 supplies two of those inputs from the
+measurement cache and reorders nothing. A candidate list with no measurements
+behind it scores every candidate equally and therefore comes out in manifest
+order, which is what every source-order test in the suite already asserts.
+
+Probing, and with it `source.probe` and `source.selected`, stays deferred to
+phase 8 with the rest of multi-source selection. What phase 6 adds is that a
+source abandoned for the next one records a `degrade` naming the one left, the
+one taken, and why, rather than only emitting `source.failover`. A failover is a
+fallback, and a fallback that is not in the degrade list is a fallback the
+`--strict-degrade` gate cannot see.
+
+### When ranged splitting of a single object is worthwhile
+
+Never, in this phase, and this is a decision rather than an omission. Splitting
+one object across several ranged requests to one host spends the politeness
+budget on a single object, so it can only pay when that budget is otherwise
+idle — a run fetching exactly one large artifact. The regime that would show the
+gain is `one-large-file`, and on this machine that regime is bounded by hashing
+and by the write path rather than by the network. Building the split now would
+add a second way to transfer an object, which this project forbids, for a gain
+no regime here can measure. It is deferred with a condition that would clear it:
+a `one-large-file` measurement against a real remote host where the single-stream
+throughput is below the measured link rate.
+
+### How disk write rate applies backpressure to network concurrency
+
+Through the same controller, as a fourth answer rather than a second mechanism.
+The write path reports the rate at which the store accepted bytes. When that
+rate falls below a fraction of what the same run had been sustaining, the
+transfer answers the controller as though the host had faltered, which
+subtracts one. There is no separate disk controller and no separate ceiling.
+This keeps one number in charge of how many transfers are in flight, which is
+the only way the politeness ceiling can remain a ceiling.
+
+### Which I/O mode is chosen per platform and volume
+
+`--io buffered` writes through the operating system's page cache. `--io
+uncached` asks the operating system not to retain the written bytes once they
+are durable, which is worth asking for because a cache object is verified as it
+is written and is not read again by the run that wrote it.
+
+On Linux that is `posix_fadvise` with `POSIX_FADV_DONTNEED` over the written
+range after the flush. On Windows there is no per-file equivalent that does not
+also require every write to be sector aligned in buffer, offset and length,
+which would mean a second write path. So `--io uncached` on Windows uses
+buffered writes and emits a `degrade` naming what was requested, what was used,
+and that the platform offers no way to release written pages without
+constraining every write.
+
+`auto` chooses from the capability answers the Platform seam already produces,
+never from the platform name, per contracts.md:1002. It chooses `uncached` only
+on a volume whose backing is local, whose scanner answer is absent, and on a
+platform that has the call. Network backing keeps the page cache, because on a
+network volume the cache is the only thing hiding the latency. A scanner that is
+present or unknown keeps the page cache, because a scanner reads the bytes back
+immediately and dropping them buys a reread. `auto` never degrades, because
+`auto` requested nothing in particular.
+
+### How user limits and core counts bound every decision
+
+Every decision above is bounded before it is made, by `Ceilings::resolve`, and
+nothing downstream may exceed what it returns. The order is fixed: the detected
+thread budget after affinity, container and job limits; clamped to the transfer
+ceiling; then the politeness limit per host unless `--aggressive`; then anything
+the user asked for, which may only lower it. A user asking for more than the
+machine has is clamped and told so, per contracts.md:1002. A measurement enters
+only after all of that, and only as a starting point inside the range those
+bounds already allow.
+
+`--deterministic-io` removes every one of these inputs at once. No measurement
+is read, none is written, the controller is fixed at its starting value and does
+not move, and the I/O mode is `buffered` regardless of what the volume can do.
+It is the switch that makes the timing-independent counters reproducible, and it
+exists so that "adaptation cannot change the bytes" is a claim with a test
+behind it rather than an argument.

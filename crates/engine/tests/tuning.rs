@@ -15,10 +15,17 @@ use serde_json as _;
 use sha2 as _;
 use toml as _;
 
+use fetchloom_engine::capability::{
+    Backing, CaseFolding, Normalization, Scanner, VolumeCapabilities,
+};
+use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::limits::{Bandwidth, Limits};
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::threads::ThreadBudget;
+use fetchloom_engine::timestamp::Timestamp;
 use fetchloom_engine::tuning::{
-    Answer, Ceilings, Controller, FIRST_PER_HOST, TRANSFERS_CEILING, debt,
+    Answer, Ceilings, Controller, FIRST_PER_HOST, HostMeasurement, TRANSFERS_CEILING, WriteRate,
+    debt, order_candidates, resolve_io_mode,
 };
 
 fn budget(threads: usize) -> ThreadBudget {
@@ -144,4 +151,272 @@ fn a_rate_is_read_in_one_form_and_no_other() {
             "{refused} was read as a rate"
         );
     }
+}
+
+fn measured(throughput: u64, time_to_first_byte_ms: u64) -> HostMeasurement {
+    HostMeasurement {
+        concurrency: 1,
+        throughput,
+        time_to_first_byte_ms,
+        observed_at: Timestamp::from_epoch_seconds(0),
+    }
+}
+
+fn locations(count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| format!("https://host-{index}/object"))
+        .collect()
+}
+
+#[test]
+fn with_no_measurements_at_all_the_order_is_exactly_the_input_order() {
+    let candidates = locations(4);
+    let ordered = order_candidates(&candidates, &|_location| None);
+    assert_eq!(ordered, candidates);
+}
+
+#[test]
+fn a_host_with_higher_recorded_throughput_sorts_before_one_with_lower() {
+    let candidates = locations(2);
+    let ordered = order_candidates(&candidates, &|location| {
+        if location == candidates[0] {
+            Some(measured(100, 50))
+        } else {
+            Some(measured(200, 50))
+        }
+    });
+    assert_eq!(ordered, vec![candidates[1].clone(), candidates[0].clone()]);
+}
+
+#[test]
+fn equal_throughput_sorts_by_lower_time_to_first_byte() {
+    let candidates = locations(2);
+    let ordered = order_candidates(&candidates, &|location| {
+        if location == candidates[0] {
+            Some(measured(100, 80))
+        } else {
+            Some(measured(100, 20))
+        }
+    });
+    assert_eq!(ordered, vec![candidates[1].clone(), candidates[0].clone()]);
+}
+
+#[test]
+fn fully_equal_measurements_keep_manifest_order() {
+    let candidates = locations(3);
+    let ordered = order_candidates(&candidates, &|_location| Some(measured(100, 50)));
+    assert_eq!(ordered, candidates);
+}
+
+#[test]
+fn an_unmeasured_candidate_never_jumps_ahead_of_a_measured_one() {
+    let candidates = locations(2);
+    let ordered = order_candidates(&candidates, &|location| {
+        if location == candidates[0] {
+            None
+        } else {
+            Some(measured(1, 999))
+        }
+    });
+    assert_eq!(
+        ordered,
+        vec![candidates[1].clone(), candidates[0].clone()],
+        "the unmeasured candidate outranked one with an actual measurement, however low"
+    );
+}
+
+fn capabilities(backing: Backing, scanner: Scanner) -> VolumeCapabilities {
+    VolumeCapabilities {
+        case_folding: CaseFolding::Sensitive,
+        normalization: Normalization::Sensitive,
+        clone: false,
+        sparse: false,
+        symlink: false,
+        hard_link: false,
+        max_component_length: 255,
+        max_path_length: 4096,
+        backing,
+        scanner,
+    }
+}
+
+#[test]
+fn auto_chooses_uncached_only_when_local_absent_and_the_platform_can_release() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Auto,
+        &capabilities(Backing::Local, Scanner::Absent),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Uncached);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn auto_stays_buffered_on_a_network_volume() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Auto,
+        &capabilities(Backing::Network, Scanner::Absent),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn auto_stays_buffered_when_a_scanner_is_present() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Auto,
+        &capabilities(
+            Backing::Local,
+            Scanner::Present {
+                name: "guard".to_owned(),
+                cost_ratio: 3.0,
+            },
+        ),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn auto_stays_buffered_when_the_scanner_answer_is_unknown() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Auto,
+        &capabilities(Backing::Local, Scanner::Unknown { cost_ratio: 1.0 }),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn auto_stays_buffered_when_the_platform_cannot_release_pages() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Auto,
+        &capabilities(Backing::Local, Scanner::Absent),
+        false,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn explicit_buffered_stays_buffered_whatever_the_volume_says() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Buffered,
+        &capabilities(Backing::Local, Scanner::Absent),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn explicit_uncached_stays_uncached_when_the_platform_can_release() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Uncached,
+        &capabilities(Backing::Network, Scanner::Absent),
+        true,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Uncached);
+    assert_eq!(queue.take(), Vec::new());
+}
+
+#[test]
+fn explicit_uncached_falls_back_to_buffered_when_the_platform_cannot_release() {
+    let queue = DegradeQueue::new();
+    let resolved = resolve_io_mode(
+        IoMode::Uncached,
+        &capabilities(Backing::Local, Scanner::Absent),
+        false,
+        &queue,
+    );
+    assert_eq!(resolved, IoMode::Buffered);
+    let recorded = queue.take();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].requested, "uncached");
+    assert_eq!(recorded[0].used, "buffered");
+    assert_eq!(
+        recorded[0].reason,
+        "the platform offers no way to release written pages without constraining every write to sector alignment"
+    );
+}
+
+#[test]
+fn a_write_rate_that_holds_up_never_answers_the_controller() {
+    let mut rate = WriteRate::default();
+    assert!(!rate.observed(1 << 20, Duration::from_millis(100)));
+    assert!(!rate.observed(1 << 20, Duration::from_millis(100)));
+    assert!(
+        !rate.observed(1 << 20, Duration::from_millis(110)),
+        "a tenth slower is not a collapse"
+    );
+}
+
+#[test]
+fn a_write_rate_that_collapses_answers_the_controller_once_per_window() {
+    let mut rate = WriteRate::default();
+    assert!(!rate.observed(1 << 20, Duration::from_millis(100)));
+    assert!(
+        rate.observed(1 << 20, Duration::from_millis(1000)),
+        "a tenth of the rate the run had been sustaining was not a collapse"
+    );
+}
+
+#[test]
+fn a_write_rate_that_recovers_stops_answering() {
+    let mut rate = WriteRate::default();
+    assert!(!rate.observed(1 << 20, Duration::from_millis(100)));
+    assert!(rate.observed(1 << 20, Duration::from_millis(1000)));
+    assert!(
+        !rate.observed(1 << 20, Duration::from_millis(100)),
+        "a recovered volume kept answering"
+    );
+}
+
+#[test]
+fn the_first_window_is_never_a_collapse_because_nothing_was_sustained_yet() {
+    let mut rate = WriteRate::default();
+    assert!(!rate.observed(1, Duration::from_secs(60)));
+}
+
+#[test]
+fn a_collapsed_write_rate_lowers_what_the_controller_permits() {
+    let ceiling = NonZeroU32::new(8).unwrap();
+    let mut controller = Controller::start(Some(4), ceiling);
+    let before = controller.permitted();
+    controller.answered(Answer::Faltered);
+    assert!(
+        controller.permitted() < before,
+        "a volume that collapsed did not reduce what is in flight"
+    );
+}
+
+#[test]
+fn a_collapsed_write_rate_never_raises_the_ceiling() {
+    let ceiling = NonZeroU32::new(2).unwrap();
+    let mut controller = Controller::start(Some(2), ceiling);
+    for _ in 0..10 {
+        controller.answered(Answer::Clean);
+    }
+    assert_eq!(
+        controller.permitted(),
+        2,
+        "clean answers pushed past the ceiling a measurement may not raise"
+    );
 }

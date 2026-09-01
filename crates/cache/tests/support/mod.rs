@@ -16,6 +16,7 @@ use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_platform::NativePlatform;
@@ -39,6 +40,20 @@ pub fn open_cache_with(
     under: &Path,
     policy: VerificationPolicy,
 ) -> Result<Cache<NativePlatform>, Error> {
+    open_cache_with_io(under, policy, IoMode::Buffered)
+}
+
+/// Opens a cache under a directory with a given check on a hit and write path
+/// mode.
+///
+/// # Errors
+///
+/// Fails when the cache cannot be opened.
+pub fn open_cache_with_io(
+    under: &Path,
+    policy: VerificationPolicy,
+    io: IoMode,
+) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         under.join("cache"),
         NativePlatform::new(std::sync::Arc::new(
@@ -46,6 +61,7 @@ pub fn open_cache_with(
         )),
         DurabilityTier::Fast,
         policy,
+        io,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
         processor(),
     )
@@ -107,6 +123,7 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
         )),
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
         processor(),
     )

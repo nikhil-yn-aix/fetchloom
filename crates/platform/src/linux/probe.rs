@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use fetchloom_engine::capability::{
     Backing, CaseFolding, Normalization, Scanner, VolumeCapabilities,
 };
-use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
+use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 
 use fetchloom_engine::degrade::DegradeQueue;
 

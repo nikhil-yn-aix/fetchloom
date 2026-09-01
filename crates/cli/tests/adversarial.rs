@@ -34,6 +34,7 @@ use fetchloom_engine::limits::Limits;
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::resume::ResumeRung;
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::transfer::{Pause, Transfer};
 use fetchloom_engine::tuning::Controller;
@@ -88,6 +89,7 @@ impl Harness {
             )),
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
+            IoMode::Buffered,
             std::sync::Arc::clone(&work),
             test_processor(),
         )
@@ -116,6 +118,7 @@ impl Harness {
             pause: &self.pause,
             limits: &self.limits,
             degradations: &self.degradations,
+            measurement: &|_location: &str| None,
             observer: &self.observer,
             sequence: &self.sequence,
             controller: &self.controller,

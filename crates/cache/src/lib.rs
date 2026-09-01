@@ -29,11 +29,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fetchloom_engine::capability::Backing;
+use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::BootId;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
+use fetchloom_engine::seam::policy::IoMode;
+use fetchloom_engine::tuning::{CAN_RELEASE_PAGES, resolve_io_mode};
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
 
@@ -57,6 +60,8 @@ pub struct Cache<P: Platform> {
     platform: P,
     tier: DurabilityTier,
     policy: VerificationPolicy,
+    io_mode: IoMode,
+    io_degradations: DegradeQueue,
     token: OwnerToken,
     work: Arc<WorkCounter>,
     processor: Arc<Processor>,
@@ -83,6 +88,7 @@ impl<P: Platform> Cache<P> {
         platform: P,
         tier: DurabilityTier,
         policy: VerificationPolicy,
+        requested_io: IoMode,
         work: Arc<WorkCounter>,
         processor: Arc<Processor>,
     ) -> Result<Self, Error> {
@@ -92,12 +98,23 @@ impl<P: Platform> Cache<P> {
         check_one_volume(&platform, &layout)?;
         check_locking(&platform, &layout)?;
 
+        let capabilities = platform.volume_capabilities(&layout.objects())?;
+        let io_degradations = DegradeQueue::new();
+        let io_mode = resolve_io_mode(
+            requested_io,
+            &capabilities,
+            CAN_RELEASE_PAGES,
+            &io_degradations,
+        );
+
         let token = platform.owner_token()?;
         let cache = Self {
             layout,
             platform,
             tier,
             policy,
+            io_mode,
+            io_degradations,
             token,
             work,
             processor,
@@ -129,6 +146,19 @@ impl<P: Platform> Cache<P> {
     #[must_use]
     pub fn policy(&self) -> VerificationPolicy {
         self.policy
+    }
+
+    /// Returns the write path mode this cache resolved at open, from the
+    /// mode requested and what the cache volume can do.
+    #[must_use]
+    pub fn io_mode(&self) -> IoMode {
+        self.io_mode
+    }
+
+    /// Removes and returns the degradations the write path resolution made.
+    #[must_use]
+    pub fn take_io_degradations(&self) -> Vec<Degradation> {
+        self.io_degradations.take()
     }
 
     /// Returns where the run counts the file bytes it moves.

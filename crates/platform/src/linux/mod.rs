@@ -254,6 +254,25 @@ pub(crate) fn flush(
     outcome.map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}")))
 }
 
+/// Releases a file's written range from the page cache.
+///
+/// # Errors
+///
+/// Fails when the platform reports the request did not complete.
+pub(crate) fn release_written(file: &File, from: u64, length: u64) -> Result<bool, Error> {
+    if length == 0 {
+        return Ok(true);
+    }
+    rustix::fs::fadvise(
+        file,
+        from,
+        std::num::NonZeroU64::new(length),
+        rustix::fs::Advice::DontNeed,
+    )
+    .map(|()| true)
+    .map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}")))
+}
+
 /// Makes a directory's own entries durable.
 ///
 /// # Errors

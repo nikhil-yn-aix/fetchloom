@@ -367,6 +367,8 @@ The rung used is always reported.
 
 Resume never appends to a partial file whose recorded source identity differs from the current response.
 
+A recorded identity that differs from the current response is answered by the rung the partial stood on. On rungs three, four and five the partial is discarded, the transfer restarts, and a `degrade` names the rung it stood on and the rung it fell to. On rung two the source declared an immutable content address or version identity and has since served a different one for the same location, which contradicts the promise that rung stands on, so the transfer fails with `source.identity_changed`, is not retried, and exits 20. A source that has merely stopped stating an immutable identity has broken no promise and restarts like any other rung.
+
 A partial file carries a record beside it holding the redacted location, the host, the length the source stated, what the source said identifies the bytes, the entity tag and last modified value as received, whether the source accepted ranges, how many bytes are known to have arrived, and the rung the transfer was on. The record is written when the partial is opened and removed with it.
 
 A partial is preallocated to its full length, so its size on disk says nothing about how much of it arrived. The recorded byte count is the only offset a resume may append at, and anything past it is discarded before appending. A count that is behind what actually arrived costs a refetch; one that is ahead would be a corruption, so it is only ever written after the bytes are.
@@ -815,6 +817,10 @@ Switch. A transfer moves to the next candidate when it stalls past the idle time
 
 The chosen source and the reason are recorded in the receipt and in `source.selected`. A switch emits `source.failover` naming the source left, the source taken, and why.
 
+Recorded throughput and time to first byte are read from the per-host measurements. A host with no measurement scores neither, so a candidate list behind no measurements comes out in manifest order.
+
+A source abandoned for the next candidate records a `degrade` naming the source left, the source taken, and the failure that ended the first, as well as emitting `source.failover`.
+
 Selection may change speed. It may never change bytes.
 
 ## Directory listing
@@ -1027,6 +1033,14 @@ A capability probe never uses a fixed name. Two probes of one directory, in one 
 A capability the platform reports is queried. One it does not report is probed inside Fetchloom's own staging directory, never by writing into the user's destination.
 
 A capability that is absent is reported, never assumed. On a network filesystem, cloning is disabled and locking uses the conservative path.
+
+## Write path
+
+`--io buffered` writes through the operating system's page cache. `--io uncached` asks the operating system to release the written bytes from that cache once they are durable. A platform with no way to release them without constraining every write to sector alignment uses buffered writes and emits `degrade` naming `uncached` requested, `buffered` used, and that reason.
+
+`--io auto` chooses from the volume's capability answers, never from the platform name. It chooses `uncached` only on a volume whose backing is local and whose scanner answer is absent, and on a platform that can release written pages. It chooses `buffered` otherwise and emits no `degrade`, because `auto` requested nothing in particular.
+
+The write path never changes what is written. Both modes produce the same bytes, the same digests and the same tree digest.
 
 ## Cancellation
 

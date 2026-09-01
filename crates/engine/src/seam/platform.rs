@@ -139,6 +139,14 @@ pub trait Platform: Send + Sync {
     /// Fails when the platform reports the flush did not complete.
     fn flush(&self, file: &File, tier: DurabilityTier) -> Result<(), Error>;
 
+    /// Asks the platform to release a file's written range from the page
+    /// cache, reporting whether it did.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform reports the request did not complete.
+    fn release_written(&self, file: &File, from: u64, length: u64) -> Result<bool, Error>;
+
     /// Publishes one file by renaming it onto its final name.
     ///
     /// # Errors

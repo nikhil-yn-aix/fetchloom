@@ -35,7 +35,9 @@ use fetchloom_engine::event::{EventPayload, Sequence};
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::pool::Processor;
+use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::resume::ResumeRung;
+use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::selection::Selection;
 use fetchloom_engine::threads::ThreadBudget;
@@ -92,6 +94,7 @@ impl Harness {
             )),
             DurabilityTier::Fast,
             VerificationPolicy::Fingerprint,
+            IoMode::Buffered,
             std::sync::Arc::clone(&work),
             test_processor(),
         )
@@ -116,6 +119,7 @@ impl Harness {
             pause: &self.pause,
             limits: &self.limits,
             degradations: &self.degradations,
+            measurement: &|_location: &str| None,
             observer: &self.observer,
             sequence: &self.sequence,
             controller: &self.controller,
@@ -272,6 +276,36 @@ fn a_transfer_leaves_a_dead_source_for_the_next_one() {
 }
 
 #[test]
+fn a_failover_records_a_degradation_naming_both_sources_and_the_reason() {
+    let bytes = object(4096);
+    let dead = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Status {
+        code: 403,
+        retry_after: None,
+    }]))
+    .unwrap();
+    let alive = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let harness = Harness::new();
+
+    let dead_location = format!("{}/object", dead.origin());
+    let alive_location = format!("{}/object", alive.origin());
+    let locations = vec![dead_location.clone(), alive_location.clone()];
+    let done = harness
+        .transfer()
+        .run(Some(digest_of(&bytes)), &nothing_prior, &locations)
+        .unwrap();
+    assert_eq!(done.bytes_transferred, bytes.len() as u64);
+
+    let fell = harness.degradations.take();
+    let dead_safe = SafeUrl::new(&dead_location).to_string();
+    let alive_safe = SafeUrl::new(&alive_location).to_string();
+    assert!(
+        fell.iter()
+            .any(|entry| entry.requested.contains(&dead_safe) && entry.used.contains(&alive_safe)),
+        "no degradation named the source left ({dead_safe}) and the source taken ({alive_safe}): {fell:?}"
+    );
+}
+
+#[test]
 fn an_interrupted_transfer_resumes_from_what_is_already_on_disk() {
     let bytes = object(64 * 1024);
     let server = TestServer::start(
@@ -312,6 +346,14 @@ fn a_validator_that_changes_mid_resume_discards_what_was_kept() {
     assert_eq!(done.rung, ResumeRung::NoValidator);
     assert_eq!(done.bytes_kept, 0, "bytes were kept across a changed tag");
     assert_eq!(done.bytes_transferred, bytes.len() as u64);
+
+    let fell = harness.degradations.take();
+    let named = fell
+        .iter()
+        .find(|entry| entry.used.ends_with("a transfer from zero"))
+        .expect("the restart was silent, which is the thing a degrade exists to prevent");
+    assert_eq!(named.requested, "a resume on rung 3");
+    assert_eq!(named.used, "rung 5, a transfer from zero");
 }
 
 #[test]
@@ -360,6 +402,7 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
         pause: &harness.pause,
         limits: &limits,
         degradations: &harness.degradations,
+        measurement: &|_location: &str| None,
         observer: &harness.observer,
         sequence: &harness.sequence,
         controller: &harness.controller,
@@ -385,7 +428,7 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
             .degradations
             .take()
             .iter()
-            .filter(|entry| entry.used == "a transfer from zero")
+            .filter(|entry| entry.used.ends_with("a transfer from zero"))
             .count(),
         0,
         "the transfer restarted from zero at least once"
@@ -443,6 +486,7 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         )),
         DurabilityTier::Fast,
         VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
         std::sync::Arc::clone(&work),
         test_processor(),
     )
@@ -525,4 +569,227 @@ fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
         None,
     );
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
+}
+
+/// A store that writes through the real cache and takes longer to accept each
+/// buffer than the one before, which is what a volume collapsing under a
+/// transfer looks like from inside the copy loop.
+struct CollapsingVolume<'a> {
+    inner: &'a Cache<NativePlatform>,
+    buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A writer that delays before handing bytes to the real one.
+struct SlowWriter {
+    inner: fetchloom_cache::store::PartialWriter,
+    buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl std::io::Write for SlowWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let seen = self
+            .buffers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if seen > 0 {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        self.inner.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Store for CollapsingVolume<'_> {
+    type Reader = <Cache<NativePlatform> as Store>::Reader;
+    type Writer = SlowWriter;
+    type Lease = <Cache<NativePlatform> as Store>::Lease;
+
+    fn format_fingerprint(
+        &self,
+    ) -> Result<fetchloom_engine::identity::CacheFormatFingerprint, fetchloom_engine::error::Error>
+    {
+        self.inner.format_fingerprint()
+    }
+
+    fn contains(&self, digest: ContentDigest) -> Result<bool, fetchloom_engine::error::Error> {
+        self.inner.contains(digest)
+    }
+
+    fn open(&self, digest: ContentDigest) -> Result<Self::Reader, fetchloom_engine::error::Error> {
+        self.inner.open(digest)
+    }
+
+    fn lease(
+        &self,
+        key: fetchloom_engine::partial_key::PartialKey,
+    ) -> Result<Self::Lease, fetchloom_engine::error::Error> {
+        self.inner.lease(key)
+    }
+
+    fn waited(&self, lease: &Self::Lease) -> bool {
+        self.inner.waited(lease)
+    }
+
+    fn begin(
+        &self,
+        lease: &Self::Lease,
+        length: u64,
+    ) -> Result<Self::Writer, fetchloom_engine::error::Error> {
+        Ok(SlowWriter {
+            inner: self.inner.begin(lease, length)?,
+            buffers: std::sync::Arc::clone(&self.buffers),
+        })
+    }
+
+    fn resume(
+        &self,
+        lease: &Self::Lease,
+        length: u64,
+        valid: u64,
+    ) -> Result<Self::Writer, fetchloom_engine::error::Error> {
+        Ok(SlowWriter {
+            inner: self.inner.resume(lease, length, valid)?,
+            buffers: std::sync::Arc::clone(&self.buffers),
+        })
+    }
+
+    fn record_source(
+        &self,
+        key: fetchloom_engine::partial_key::PartialKey,
+        record: &fetchloom_engine::source_record::SourceRecord,
+    ) -> Result<(), fetchloom_engine::error::Error> {
+        self.inner.record_source(key, record)
+    }
+
+    fn recorded_source(
+        &self,
+        key: fetchloom_engine::partial_key::PartialKey,
+    ) -> Result<Option<fetchloom_engine::source_record::SourceRecord>, fetchloom_engine::error::Error>
+    {
+        self.inner.recorded_source(key)
+    }
+
+    fn discard_partial(
+        &self,
+        key: fetchloom_engine::partial_key::PartialKey,
+    ) -> Result<(), fetchloom_engine::error::Error> {
+        self.inner.discard_partial(key)
+    }
+
+    fn commit(
+        &self,
+        lease: Self::Lease,
+        writer: Self::Writer,
+    ) -> Result<fetchloom_engine::hashing::Digests, fetchloom_engine::error::Error> {
+        self.inner.commit(lease, writer.inner)
+    }
+
+    fn has_outboard(&self, digest: ContentDigest) -> Result<bool, fetchloom_engine::error::Error> {
+        self.inner.has_outboard(digest)
+    }
+
+    fn open_outboard(
+        &self,
+        digest: ContentDigest,
+    ) -> Result<Self::Reader, fetchloom_engine::error::Error> {
+        self.inner.open_outboard(digest)
+    }
+
+    fn verified_prefix(
+        &self,
+        key: fetchloom_engine::partial_key::PartialKey,
+        digest: ContentDigest,
+        on_disk: u64,
+    ) -> Result<u64, fetchloom_engine::error::Error> {
+        self.inner.verified_prefix(key, digest, on_disk)
+    }
+
+    fn write_outboard(
+        &self,
+        digest: ContentDigest,
+        tree: &[u8],
+    ) -> Result<(), fetchloom_engine::error::Error> {
+        self.inner.write_outboard(digest, tree)
+    }
+
+    fn stage(
+        &self,
+        destination_volume: &std::path::Path,
+    ) -> Result<std::path::PathBuf, fetchloom_engine::error::Error> {
+        self.inner.stage(destination_volume)
+    }
+
+    fn pin(&self, digest: ContentDigest) -> Result<(), fetchloom_engine::error::Error> {
+        self.inner.pin(digest)
+    }
+
+    fn unpin(&self, digest: ContentDigest) -> Result<(), fetchloom_engine::error::Error> {
+        self.inner.unpin(digest)
+    }
+
+    fn list(&self) -> Result<Vec<ContentDigest>, fetchloom_engine::error::Error> {
+        self.inner.list()
+    }
+
+    fn prune(
+        &self,
+        grace: Duration,
+    ) -> Result<fetchloom_engine::seam::store::PruneReport, fetchloom_engine::error::Error> {
+        self.inner.prune(grace)
+    }
+
+    fn status(
+        &self,
+    ) -> Result<fetchloom_engine::seam::store::CacheStatus, fetchloom_engine::error::Error> {
+        self.inner.status()
+    }
+}
+
+#[test]
+fn a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_bytes() {
+    let bytes = object(4 * 1024 * 1024);
+    let harness = Harness::new();
+
+    let steady = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let fast = harness
+        .transfer()
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&steady))
+        .unwrap();
+
+    let collapsing = Harness::new();
+    let volume = CollapsingVolume {
+        inner: &collapsing.cache,
+        buffers: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    };
+    let controller = Mutex::new(Controller::start(Some(4), NonZeroU32::new(8).unwrap()));
+    let slow = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let done = Transfer {
+        store: &volume,
+        source: &collapsing.source,
+        pause: &collapsing.pause,
+        limits: &collapsing.limits,
+        degradations: &collapsing.degradations,
+        measurement: &|_location| None,
+        observer: &collapsing.observer,
+        sequence: &collapsing.sequence,
+        controller: &controller,
+        meter: None,
+    }
+    .run(Some(digest_of(&bytes)), &nothing_prior, &at(&slow))
+    .unwrap();
+
+    assert!(
+        controller.lock().unwrap().permitted() < 4,
+        "a volume that collapsed under the transfer did not reduce what is in flight"
+    );
+    assert_eq!(
+        done.digest, fast.digest,
+        "the collapsing volume changed the content digest"
+    );
+    assert_eq!(
+        done.bytes_transferred, fast.bytes_transferred,
+        "the collapsing volume changed how many bytes moved"
+    );
 }

@@ -1295,12 +1295,14 @@ pub fn materialize_remote(
     let host = host_of(location);
     let controller = with.tuning.controller_for(&host, Some(cache));
     let meter = with.tuning.meter();
+    let measurement = |location: &str| cache.measurement(&host_of(location));
     let transfer = Transfer {
         store: cache,
         source: &source,
         pause: &pause,
         limits: &limits,
         degradations: &degradations,
+        measurement: &measurement,
         observer,
         sequence,
         controller: &controller,
@@ -2296,12 +2298,14 @@ fn transfer_object(
         .unwrap_or_default();
     let controller = with.tuning.controller_for(&host, Some(cache));
     let meter = with.tuning.meter();
+    let measurement = |location: &str| cache.measurement(&host_of(location));
     let transfer = Transfer {
         store: cache,
         source: &source,
         pause: &pause,
         limits: &limits,
         degradations: &degradations,
+        measurement: &measurement,
         observer,
         sequence,
         controller: &controller,

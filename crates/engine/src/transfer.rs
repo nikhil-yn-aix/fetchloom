@@ -1,8 +1,8 @@
 //! Moving bytes from a source into the store, once, with retry and resume.
 
 use std::io::{Read, Write};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::degrade::DegradeQueue;
 use crate::digest::ContentDigest;
@@ -18,7 +18,7 @@ use crate::seam::source::{
 };
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
-use crate::tuning::{Answer, Controller, Meter};
+use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate, order_candidates};
 
 /// How many bytes move between the source and the store at a time.
 const BUFFER: usize = 1 << 20;
@@ -79,26 +79,42 @@ pub struct Prior {
 
 /// Decides where a transfer starts, given what is on disk and what the source
 /// says now.
-#[must_use]
+///
+/// # Errors
+///
+/// Fails with `source.identity_changed` when the partial stands on the second
+/// rung and the source has since served a different immutable identity for the
+/// same location.
 pub fn rung_for(
     recorded: Option<&SourceRecord>,
     now: &SourceMetadata,
     on_disk: u64,
     verified: u64,
-) -> (ResumeRung, u64) {
+) -> Result<(ResumeRung, u64), Error> {
     if verified > 0 {
-        return (ResumeRung::Outboard, verified);
+        return Ok((ResumeRung::Outboard, verified));
     }
     if on_disk == 0 {
-        return (rung_of(&now.identity), 0);
+        return Ok((rung_of(&now.identity), 0));
     }
     let Some(recorded) = recorded else {
-        return (ResumeRung::NoValidator, 0);
+        return Ok((ResumeRung::NoValidator, 0));
     };
-    if !now.supports_ranges || !recorded.identifies_the_same_bytes_as(&now.identity) {
-        return (ResumeRung::NoValidator, 0);
+    if rung_of(&recorded.identity) == ResumeRung::ImmutableIdentity
+        && rung_of(&now.identity) == ResumeRung::ImmutableIdentity
+        && recorded.identity != now.identity
+    {
+        return Err(Error::new(
+            ErrorKind::SourceIdentityChanged,
+            "fetch this object from a source whose immutable identity is immutable, because this \
+             one served a different one for the same location and so the identity it promised does \
+             not hold",
+        ));
     }
-    (rung_of(&now.identity), on_disk)
+    if !now.supports_ranges || !recorded.identifies_the_same_bytes_as(&now.identity) {
+        return Ok((ResumeRung::NoValidator, 0));
+    }
+    Ok((rung_of(&now.identity), on_disk))
 }
 
 fn rung_of(identity: &SourceIdentity) -> ResumeRung {
@@ -124,6 +140,9 @@ pub struct Transfer<'a, S, T, P> {
     pub limits: &'a Limits,
     /// Where a fallback is recorded.
     pub degradations: &'a DegradeQueue,
+    /// What this run has measured about a candidate's host, when it has
+    /// measured anything.
+    pub measurement: &'a dyn Fn(&str) -> Option<HostMeasurement>,
     /// Where the event stream is written.
     pub observer: &'a dyn Observer,
     /// The numbers the events are ordered by.
@@ -148,12 +167,18 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         prior: &dyn Fn(&str) -> Option<Prior>,
         locations: &[String],
     ) -> Result<Transferred, Error> {
+        let ordered = order_candidates(locations, self.measurement);
         let mut last = None;
-        for (index, location) in locations.iter().enumerate() {
+        for (index, location) in ordered.iter().enumerate() {
             match self.attempt_until_spent(expected, prior, location) {
                 Ok(done) => return Ok(done),
                 Err(error) => {
-                    if let Some(next) = locations.get(index + 1) {
+                    if let Some(next) = ordered.get(index + 1) {
+                        self.degradations.record(
+                            SafeUrl::new(location).to_string(),
+                            SafeUrl::new(next).to_string(),
+                            error.next_action().to_owned(),
+                        );
                         self.emit(EventPayload::SourceFailover {
                             from: SafeUrl::new(location),
                             to: SafeUrl::new(next),
@@ -240,12 +265,15 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             }
             _ => 0,
         };
-        let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified);
+        let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified)?;
 
         if on_disk > keep {
             self.degradations.record(
-                "the bytes already on disk kept",
-                "a transfer from zero",
+                format!(
+                    "a resume on rung {}",
+                    recorded.as_ref().map_or(5, |record| record.rung.number())
+                ),
+                format!("rung {}, a transfer from zero", rung.number()),
                 "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
             );
             self.store.discard_partial(key)?;
@@ -278,8 +306,11 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             location,
             &mut moved,
             buffer,
-            self.meter,
-            self.pause,
+            &Backpressure {
+                meter: self.meter,
+                pause: self.pause,
+                controller: self.controller,
+            },
         );
         self.store
             .record_source(key, &record_of(&metadata, rung, keep + moved))?;
@@ -427,15 +458,29 @@ fn validator_of(identity: &SourceIdentity) -> Option<String> {
     }
 }
 
+/// The three things that decide how fast a copy loop is allowed to go: the
+/// bandwidth ceiling, the wait it is served with, and the controller the volume
+/// answers when it collapses.
+struct Backpressure<'a, P> {
+    meter: Option<&'a Meter>,
+    pause: &'a P,
+    controller: &'a Mutex<Controller>,
+}
+
 fn copy(
     mut body: impl Read,
     writer: &mut impl Write,
     location: &str,
     moved: &mut u64,
     buffer: &mut [u8],
-    meter: Option<&Meter>,
-    pause: &impl Pause,
+    backpressure: &Backpressure<'_, impl Pause>,
 ) -> Result<(), Error> {
+    let Backpressure {
+        meter,
+        pause,
+        controller,
+    } = backpressure;
+    let mut rate = WriteRate::default();
     loop {
         if crate::cancel::requested() {
             return Ok(());
@@ -446,12 +491,19 @@ fn copy(
         if filled == 0 {
             return Ok(());
         }
+        let accepting = Instant::now();
         writer.write_all(&buffer[..filled]).map_err(|reason| {
             Error::new(
                 ErrorKind::CacheCorrupt,
                 format!("make room in the cache, because the bytes could not be written: {reason}"),
             )
         })?;
+        if rate.observed(filled as u64, accepting.elapsed()) {
+            controller
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .answered(Answer::Faltered);
+        }
         *moved += filled as u64;
         if let Some(meter) = meter {
             let owed = meter.moved(filled as u64);

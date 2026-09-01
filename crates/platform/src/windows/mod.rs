@@ -190,6 +190,20 @@ pub(crate) fn flush(
     }
 }
 
+/// Releases a file's written range from the page cache, which this platform
+/// has no way to do without constraining every write to sector alignment.
+///
+/// # Errors
+///
+/// Never fails.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape is the seam's, and the Linux side of it can fail"
+)]
+pub(crate) fn release_written(_file: &File, _from: u64, _length: u64) -> Result<bool, Error> {
+    Ok(false)
+}
+
 /// Makes a directory's own entries durable.
 ///
 /// # Errors

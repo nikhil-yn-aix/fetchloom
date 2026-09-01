@@ -26,6 +26,8 @@ pub enum Operation {
     Preallocate,
     /// Pushing a file's bytes as far as a durability tier requires.
     Flush,
+    /// Releasing a file's written range from the page cache.
+    ReleaseWritten,
     /// Renaming one file onto its final name.
     PublishFile,
     /// Renaming a staging tree onto a destination.

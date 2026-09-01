@@ -1,5 +1,11 @@
 //! Contract tests over where a transfer starts and how long it waits.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test setup, where a failure to build the input is the assertion"
+)]
+
 use blake3 as _;
 use rayon as _;
 use serde as _;
@@ -9,7 +15,9 @@ use toml as _;
 
 use std::time::Duration;
 
+use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::limits::Limits;
+use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::resume::ResumeRung;
@@ -53,7 +61,8 @@ fn bytes_verified_against_the_tree_put_a_transfer_on_the_first_rung() {
         &metadata(SourceIdentity::None, true),
         1024,
         1024,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::Outboard);
     assert_eq!(keep, 1024);
 }
@@ -66,7 +75,8 @@ fn an_unchanged_immutable_identity_puts_a_transfer_on_the_second_rung() {
         &metadata(identity, true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::ImmutableIdentity);
     assert_eq!(keep, 1024);
 }
@@ -79,7 +89,8 @@ fn an_unchanged_strong_validator_puts_a_transfer_on_the_third_rung() {
         &metadata(identity, true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::StrongValidator);
     assert_eq!(keep, 1024);
 }
@@ -92,7 +103,8 @@ fn an_unchanged_weak_validator_puts_a_transfer_on_the_fourth_rung() {
         &metadata(identity, true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::WeakValidator);
     assert_eq!(keep, 1024);
 }
@@ -106,7 +118,8 @@ fn a_changed_validator_restarts_from_zero_on_the_fifth_rung() {
         &metadata(SourceIdentity::StrongValidator("\"two\"".to_owned()), true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0, "bytes were kept across a changed validator");
 }
@@ -118,7 +131,8 @@ fn a_source_with_no_identity_never_resumes_even_when_it_matches() {
         &metadata(SourceIdentity::None, true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
 }
@@ -131,7 +145,8 @@ fn a_source_that_cannot_serve_a_range_restarts_however_good_its_validator_is() {
         &metadata(identity, false),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
 }
@@ -143,7 +158,8 @@ fn a_partial_with_no_record_beside_it_restarts() {
         &metadata(SourceIdentity::StrongValidator("\"one\"".to_owned()), true),
         1024,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
 }
@@ -155,7 +171,8 @@ fn nothing_on_disk_reports_the_rung_the_source_would_earn() {
         &metadata(SourceIdentity::StrongValidator("\"one\"".to_owned()), true),
         0,
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(rung, ResumeRung::StrongValidator);
     assert_eq!(keep, 0);
 }
@@ -204,4 +221,50 @@ fn a_wait_longer_than_the_ceiling_is_not_honored() {
         "a wait past the ceiling was accepted"
     );
     assert!(!honors(&limits, Duration::from_secs(3600)));
+}
+
+#[test]
+fn an_immutable_identity_that_moved_is_terminal_rather_than_a_restart() {
+    let failed = rung_for(
+        Some(&recorded(SourceIdentity::ImmutableVersion(
+            "one".to_owned(),
+        ))),
+        &metadata(SourceIdentity::ImmutableVersion("two".to_owned()), true),
+        1024,
+        0,
+    )
+    .expect_err("a source that moved an immutable identity was allowed to restart");
+
+    assert_eq!(failed.kind(), ErrorKind::SourceIdentityChanged);
+    assert!(
+        !failed.retryable(),
+        "asking again cannot make a source immutable"
+    );
+    assert_eq!(ExitCode::from(failed.kind().layer()), ExitCode::Network);
+}
+
+#[test]
+fn a_content_address_that_moved_is_terminal_rather_than_a_restart() {
+    let one = SourceIdentity::ContentAddress(fetchloom_engine::hashing::hash_bytes(b"one"));
+    let two = SourceIdentity::ContentAddress(fetchloom_engine::hashing::hash_bytes(b"two"));
+    let failed = rung_for(Some(&recorded(one)), &metadata(two, true), 1024, 0)
+        .expect_err("a source that moved a content address was allowed to restart");
+
+    assert_eq!(failed.kind(), ErrorKind::SourceIdentityChanged);
+}
+
+#[test]
+fn a_source_that_stopped_stating_an_immutable_identity_restarts_rather_than_failing() {
+    let (rung, keep) = rung_for(
+        Some(&recorded(SourceIdentity::ImmutableVersion(
+            "one".to_owned(),
+        ))),
+        &metadata(SourceIdentity::StrongValidator("\"tag\"".to_owned()), true),
+        1024,
+        0,
+    )
+    .expect("a source that stopped making the promise did not break it");
+
+    assert_eq!(rung, ResumeRung::NoValidator);
+    assert_eq!(keep, 0);
 }

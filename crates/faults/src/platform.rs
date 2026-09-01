@@ -102,6 +102,11 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
         self.inner.flush(file, tier)
     }
 
+    fn release_written(&self, file: &File, from: u64, length: u64) -> Result<bool, Error> {
+        self.gate(Operation::ReleaseWritten)?;
+        self.inner.release_written(file, from, length)
+    }
+
     fn publish_file(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
         self.gate(Operation::PublishFile)?;
         self.inner.publish_file(from, to, tier)

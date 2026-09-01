@@ -24,7 +24,7 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
-use fetchloom_engine::seam::policy::Policy as _;
+use fetchloom_engine::seam::policy::{IoMode, Policy as _};
 use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::work::WorkCounter;
@@ -316,6 +316,7 @@ fn measured_for(resolved: &settings::Settings) -> explain::Measured {
                 &root,
                 DurabilityTier::Normal,
                 fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+                IoMode::Buffered,
                 work,
                 Arc::new(pool),
             ) {
@@ -1191,10 +1192,23 @@ fn open_cache(
         root,
         policy.durability(),
         policy.verification(),
+        policy.io(),
         Arc::clone(work),
         Arc::clone(processor),
     ) {
-        cache::Opened::Ready(held) => Ok(Some(held)),
+        cache::Opened::Ready(held) => {
+            for entry in held.take_io_degradations() {
+                observer.emit(&Event::new(
+                    sequence,
+                    EventPayload::Degrade {
+                        requested: entry.requested,
+                        used: entry.used,
+                        reason: entry.reason,
+                    },
+                ));
+            }
+            Ok(Some(held))
+        }
         cache::Opened::Refused(refused) => Err(refused),
         cache::Opened::Degraded { reason } => {
             cache::report_degrade(observer, sequence, root, &reason);
