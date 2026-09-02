@@ -546,7 +546,7 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
-    let adapters = fetchloom_cli::run::adapters_for(&work);
+    let adapters = fetchloom_cli::run::adapters_for(&work, &fetchloom_engine::limits::Limits::default());
     let with = materialization(
         &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
@@ -646,7 +646,7 @@ fn a_container_reference_lists_and_materializes_every_entry() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
-    let adapters = fetchloom_cli::run::adapters_for(&work);
+    let adapters = fetchloom_cli::run::adapters_for(&work, &fetchloom_engine::limits::Limits::default());
     let with = materialization(
         &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
@@ -971,7 +971,7 @@ fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
-    let adapters = fetchloom_cli::run::adapters_for(&work);
+    let adapters = fetchloom_cli::run::adapters_for(&work, &fetchloom_engine::limits::Limits::default());
     let with = materialization(
         &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
@@ -1049,7 +1049,7 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
-    let adapters = fetchloom_cli::run::adapters_for(&work);
+    let adapters = fetchloom_cli::run::adapters_for(&work, &fetchloom_engine::limits::Limits::default());
     let with = materialization(
         &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );

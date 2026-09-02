@@ -109,11 +109,12 @@ impl<'a> CommandLinePolicy<'a> {
         sequence: &'a Sequence,
         prompter: &'a dyn Prompter,
     ) -> Self {
+        let limits = crate::settings::limits_for(&settings);
         Self {
             settings,
             verification: verification_of(transfer),
             durability: durability_of(transfer),
-            limits: Limits::default(),
+            limits,
             streams,
             accepted_terms,
             environment,

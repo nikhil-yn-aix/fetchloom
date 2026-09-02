@@ -59,6 +59,9 @@ pub struct GlobalFlags {
     /// Suppress progress.
     #[arg(long, global = true)]
     pub quiet: bool,
+    /// Raise the log level one step. Repeatable.
+    #[arg(long, short, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
     /// Progress presentation.
     #[arg(long, global = true, value_name = "plain|live|none")]
     pub display: Option<DisplayMode>,
@@ -121,6 +124,34 @@ impl std::str::FromStr for RateArg {
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         text.parse().map(Self)
+    }
+}
+
+/// The value `--timeout` was given, parsed into a span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DurationArg(pub std::time::Duration);
+
+impl std::str::FromStr for DurationArg {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let refusal = || format!("{text} is not a duration such as 30s, 500ms, or 2m");
+        let (digits, unit) = text.split_at(
+            text.find(|letter: char| !letter.is_ascii_digit())
+                .ok_or_else(refusal)?,
+        );
+        let count: u64 = digits.parse().map_err(|_| refusal())?;
+        let span = match unit {
+            "ms" => std::time::Duration::from_millis(count),
+            "s" => std::time::Duration::from_secs(count),
+            "m" => std::time::Duration::from_secs(count.saturating_mul(60)),
+            "h" => std::time::Duration::from_secs(count.saturating_mul(3600)),
+            _ => return Err(refusal()),
+        };
+        if span.is_zero() {
+            return Err(refusal());
+        }
+        Ok(Self(span))
     }
 }
 
@@ -188,6 +219,12 @@ pub struct TransferFlags {
     /// Ceiling on how fast the run may transfer.
     #[arg(long, value_name = "rate")]
     pub bandwidth: Option<RateArg>,
+    /// Attempts per transient failure.
+    #[arg(long, value_name = "n", value_parser = clap::value_parser!(u32).range(1..))]
+    pub retries: Option<u32>,
+    /// Idle timeout per connection.
+    #[arg(long, value_name = "duration")]
+    pub timeout: Option<DurationArg>,
     /// Which write path a run takes.
     #[arg(long, value_name = "auto|buffered|uncached")]
     pub io: Option<IoChoice>,

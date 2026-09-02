@@ -81,6 +81,26 @@ impl Describe for crate::surface::IoChoice {
     }
 }
 
+impl Describe for std::time::Duration {
+    fn describe(&self) -> String {
+        if self.subsec_millis() == 0 {
+            format!("{}s", self.as_secs())
+        } else {
+            format!("{}ms", self.as_millis())
+        }
+    }
+}
+
+impl Describe for Vec<String> {
+    fn describe(&self) -> String {
+        if self.is_empty() {
+            "none configured".to_owned()
+        } else {
+            self.join(", ")
+        }
+    }
+}
+
 impl<T: Describe> Describe for Option<T> {
     fn describe(&self) -> String {
         self.as_ref()
@@ -160,7 +180,28 @@ pub fn rows(settings: &Settings, measured: &Measured) -> Vec<Explained> {
         row!("io", io),
         row!("aggressive", aggressive),
         row!("deterministic-io", deterministic_io),
+        log_row(settings),
+        row!("retries", retries),
+        row!("timeout", timeout),
+        row!("sources", sources),
     ]
+}
+
+/// Reports the log level, saying when a request was clamped to the highest.
+fn log_row(settings: &Settings) -> Explained {
+    Explained {
+        key: "log".to_owned(),
+        value: settings.log.value.label().to_owned(),
+        origin: if settings.log_clamped {
+            format!(
+                "{}, clamped to the highest level",
+                settings.log.origin.label()
+            )
+        } else {
+            settings.log.origin.to_string()
+        },
+        measurement: None,
+    }
 }
 
 /// Describes when the per-host measurement was taken, host by host.

@@ -609,7 +609,7 @@ fn a_command_this_build_does_not_perform_is_not_accepted() {
 
 #[test]
 fn a_flag_this_build_does_not_act_on_is_not_accepted() {
-    for absent in ["--verbose", "--color=never", "--no-hints"] {
+    for absent in ["--color=never", "--no-hints"] {
         let output = run(&["explain", absent]);
         assert_eq!(
             output.status.code(),

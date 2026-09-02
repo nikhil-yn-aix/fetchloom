@@ -93,6 +93,14 @@ pub struct ConfigFile {
     pub bandwidth: Option<String>,
     /// Which write path a run takes.
     pub io: Option<String>,
+    /// How much of the event stream is rendered to standard error.
+    pub log: Option<String>,
+    /// Attempts per transient failure.
+    pub retries: Option<NonZeroU32>,
+    /// Idle timeout per connection.
+    pub timeout: Option<String>,
+    /// The base locations a bare name resolves against, in order.
+    pub sources: Option<Vec<String>>,
 }
 
 /// Everything the cache table of a configuration file may set.

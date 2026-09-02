@@ -136,25 +136,25 @@ Done when. A new adapter can be added by implementing the seam and passing the s
 
 ## Phase 8. Ingest
 
-Purpose. Existing metadata is absorbed rather than retyped. This is what removes the cold start.
+Purpose. Existing metadata is absorbed rather than retyped, and every feature the product describes exists. This is what removes the cold start and what ends the era of a document promising more than the binary does.
 
-Decide. Which metadata formats map cleanly onto the manifest model and which cannot be represented honestly. How inference handles listings, APIs, and local directories. What inference records when a source supplies no digest.
+Decide. Which metadata formats map cleanly onto the manifest model and which cannot be represented honestly. How inference handles listings, APIs, and local directories. What inference records when a source supplies no digest. Where `init` writes. Where the second credential shape's values come from. What a configured source priority is. What a log level is.
 
-Build. Readers for the chosen metadata formats and checksum sidecars. `init` for URLs, listings, and local directories. Manifest emission in the human format.
+Build. Readers for the chosen metadata formats and checksum sidecars. `init` for URLs, listings, and local directories. Manifest emission in the human format. The four reference forms that remain: metadata document, provider, bare name, and namespaced release. Provider adapters behind the Source seam. SigV4 request signing as a second credential shape, and the provider-native credential helper tier. Repository, record, and FTP listing. `doctor`, `why`, `watch`, the live display mode, hints, and the flags contracts names that this build does not carry.
 
-Prove. Round-trip tests from each supported metadata format to a manifest to a materialized tree. Inference over a directory produces a manifest that reproduces that directory exactly. Formats that cannot be represented fail with a named reason rather than an approximation.
+Prove. Round-trip tests from each supported metadata format to a manifest to a materialized tree. Inference over a directory produces a manifest that reproduces that directory exactly. Formats that cannot be represented fail with a named reason rather than an approximation. Adding two real provider adapters changes no engine code. `doctor` leaves the state it inspects byte-identical. Identical runs under every display mode produce identical results, exit codes, and event streams, and the live view is shown structurally, not by inspection, to read nothing but events.
 
-Done when. A dataset with existing published metadata is fetched with no hand-written manifest, and a local directory becomes a publishable manifest in one command.
+Done when. A dataset with existing published metadata is fetched with no hand-written manifest, a local directory becomes a publishable manifest in one command, and features.md carries no unbuilt marker except for distribution.
 
 ## Phase 9. Ship
 
 Purpose. Distribution is part of the product. A binary users cannot trust or install does not exist.
 
-Decide. Packaging targets and install paths, including no-root installation. Signing, notarization, and offline verification per platform. What the live view shows, drawn only from events that already exist. What earns 1.0 and what the compatibility freeze covers.
+Decide. Packaging targets and install paths, including no-root installation. Signing, notarization, and offline verification per platform. What earns 1.0 and what the compatibility freeze covers.
 
-Build. Static binaries for all targets. Signing and notarization pipelines. Checksums and signed release metadata. Package manager entries. Shell completion. `doctor`. `why`. The live display mode and `watch`, as a consumer of the event stream.
+Build. Static binaries for all targets. Signing and notarization pipelines. Checksums and signed release metadata. Package manager entries. No-root install.
 
-Prove. Every artifact installs and runs on a clean machine per platform, without root and without a network beyond the download. Signatures verify offline. The full suite runs green on release artifacts, not only on development builds. Identical runs under every display mode produce identical results, exit codes, and event streams, and the live view is shown to read nothing but events.
+Prove. Every artifact installs and runs on a clean machine per platform, without root and without a network beyond the download. Signatures verify offline. The full suite runs green on release artifacts, not only on development builds, including phase 8's display-mode equivalence and the structural proof that the live view reads only events.
 
 Done when. Contracts are frozen, all six conformance directions and the adversarial suite are green, benchmark regimes are published, and the portable artifact set is committed to permanent readability. That is 1.0.
 

@@ -220,10 +220,10 @@ pub struct Materialization<'a> {
 
 /// Returns the adapters a run dispatches to, asked in the order they are given.
 #[must_use]
-pub fn adapters_for(work: &Arc<WorkCounter>) -> Adapters {
+pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
     Adapters::new(vec![
-        AnySource::new(ObjectStoreSource::new(Limits::default(), Arc::clone(work))),
-        AnySource::new(HttpSource::new(Limits::default(), Arc::clone(work))),
+        AnySource::new(ObjectStoreSource::new(limits.clone(), Arc::clone(work))),
+        AnySource::new(HttpSource::new(limits.clone(), Arc::clone(work))),
     ])
 }
 
@@ -1383,7 +1383,7 @@ pub fn materialize_remote(
         return Err(unserved(location));
     };
     let pause = SleepingPause;
-    let limits = Limits::default();
+    let limits = with.policy.limits().clone();
     emit(EventPayload::ResolveEnd {
         duration_ms: resolving.elapsed_ms(),
     });
@@ -1661,7 +1661,7 @@ fn transfer_container_entries(
     sequence: &Sequence,
     emit: &(dyn Fn(EventPayload) + Sync),
 ) -> Result<Vec<(String, ContentDigest, u64)>, Error> {
-    let limits = Limits::default();
+    let limits = with.policy.limits().clone();
     let pause = SleepingPause;
     let locations: Vec<String> = listed
         .iter()
@@ -2789,7 +2789,7 @@ fn transfer_object(
         ));
     };
     let pause = SleepingPause;
-    let limits = Limits::default();
+    let limits = with.policy.limits().clone();
     let degradations = DegradeQueue::new();
     let host = locations
         .first()

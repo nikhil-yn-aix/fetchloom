@@ -84,7 +84,7 @@ refused wherever a document is read.
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
 
-Resolution order is deterministic: explicit scheme, then local path if it exists, then configured source priority. A bare name that matches nothing fails; it is never guessed.
+Resolution order is deterministic: explicit scheme, then local path if it exists, then configured source priority, which is the `sources` list under Configuration files. A bare name that matches nothing fails; it is never guessed.
 
 A reference naming one object materializes a destination directory holding that one entry, under the object's own name. Its dataset name is that name and its tree is the one-entry tree. A reference naming a container materializes every entry the container holds. The two forms differ only in what is walked, never in what a destination is.
 
@@ -148,6 +148,8 @@ license:
 ```
 
 Rules. `name` and at least one artifact are required. `sources` is ordered; earlier entries are preferred and later entries are failover only. `digest` may be absent, which forces a weak trust class. Unknown top-level keys are an error. No key may express a command, a script, or a path to execute.
+
+Both digests a manifest states are compared to the bytes. `blake3` is compared to the content digest and `sha256` to the interop digest, both taken in the pass that reads the bytes, and either difference fails `integrity.mismatch` naming the algorithm, what was stated, and what was found. A manifest stating one of them and not the other is compared on the one it stated.
 
 YAML is parsed as a restricted subset: no anchors, no aliases, no merge keys, no implicit boolean coercion of strings. Depth and node count are bounded.
 
@@ -293,7 +295,7 @@ Mechanical definitions. No other meaning is implied.
 
 | Class | Condition |
 |---|---|
-| `verified` | Content digest matched a digest supplied by the manifest or the lock before this run. |
+| `verified` | A digest computed from the bytes matched a digest of the same algorithm supplied by the manifest or the lock before this run. Either algorithm satisfies it, because a publisher's SHA-256 checked against the SHA-256 of the bytes is the same evidence as a publisher's BLAKE3 checked against theirs. |
 | `corroborated` | No prior digest, but the observed digest matches at least two independent recorded witnesses. |
 | `tofu` | No prior digest and no witnesses. The observed digest is recorded for future runs. |
 | `unverified` | Content could not be digested, or the user disabled verification. |
@@ -714,6 +716,12 @@ doctor                       environment checks, changes nothing
 why      <ref>               resolution, source choice, and trust reasoning
 ```
 
+`init` writes the manifest to standard output, in the canonical text form or as
+JSON under `--json`. The manifest is the result of the command, so nothing else
+is written there. `--output <path>` writes it to a file instead, and a path that
+already exists fails with `destination.unrepresentable` unless `--force` is
+given, because a manifest is edited after it is generated.
+
 This surface describes the finished product. Before 1.0 a command, flag, or value exists in the binary only once it performs what is written here. There is no state in which something is present and unable to act, because that is a placeholder, and because a caller cannot distinguish it from a usage error. The roadmap says which phase delivers each one.
 
 ## Flags
@@ -729,7 +737,7 @@ Global flags apply to every command.
 | `--json` | off | Machine-readable result on stdout |
 | `--events <path\|->` | off | Newline-delimited event stream |
 | `--quiet` | off | Suppress progress |
-| `--verbose` | off | Raise log level. Repeatable |
+| `--verbose` | off | Raise log level one step. Repeatable |
 | `--color <auto\|always\|never>` | auto | Color policy |
 | `--display <plain\|live\|none>` | plain | Progress presentation |
 | `--no-animation` | off | Disable redrawing |
@@ -762,6 +770,29 @@ Flags for `get` and `apply`.
 | `--aggressive` | off | Raise politeness ceilings. Prints a warning |
 | `--deterministic-io` | off | Disable adaptation. For benchmarking |
 
+Flags for `init`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--output <path>` | stdout | Write the manifest to this file |
+| `--force` | off | Overwrite the file `--output` names |
+
+### Log levels
+
+A log level decides which of the events the run already emits are rendered to
+standard error as human lines. It never decides which events exist, and the
+stream `--events` writes is byte-identical at every level.
+
+| Level | Rendered |
+|---|---|
+| `error` | `error` and `degrade` |
+| `info` | those, plus `run.start`, `run.end`, and the result. Default |
+| `debug` | every event the stream carries, one line each |
+
+`--verbose` raises the level one step and is repeatable. A step past `debug` is
+clamped and the clamp is reported. `FETCHLOOM_LOG` names a level and sits at the
+environment precedence level.
+
 ## Environment
 
 | Variable | Effect |
@@ -773,8 +804,13 @@ Flags for `get` and `apply`.
 | `FETCHLOOM_THREADS` | Processor thread ceiling |
 | `FETCHLOOM_PER_HOST` | Per-host concurrency |
 | `FETCHLOOM_BANDWIDTH` | Bandwidth ceiling |
-| `FETCHLOOM_LOG` | Log level |
+| `FETCHLOOM_LOG` | Log level: `error`, `info`, or `debug` |
 | `FETCHLOOM_TOKEN_<HOST>` | Bearer credential scoped to that host |
+| `FETCHLOOM_ACCESS_KEY_<HOST>` | Access key of a signing credential scoped to that host |
+| `FETCHLOOM_SECRET_KEY_<HOST>` | Secret key of the same signing credential |
+| `FETCHLOOM_SESSION_TOKEN_<HOST>` | Session token of the same signing credential, when it has one |
+| `FETCHLOOM_REGION_<HOST>` | Region the same signing credential signs for |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION` | Read by the provider-native helper tier, never by the first tier |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy policy |
 | `XDG_CACHE_HOME` | Cache root on Linux |
 | `NO_COLOR` | Disable color |
@@ -791,11 +827,39 @@ User configuration is `config.toml` in the platform's own configuration location
 
 `--config` names one file and disables the search. `--no-config` disables both levels.
 
+`sources` is an ordered list of base locations a bare name and a namespaced
+release resolve against.
+
+```toml
+sources = ["https://lab.edu/data/", "hf:datasets/acme/"]
+```
+
+The reference is appended to each base in order and the first that resolves wins.
+A reference matching none fails `reference.unresolved` naming how many bases were
+tried, and one given when no base is configured fails naming that none is.
+
 Unknown keys are an error and `x-` is reserved, as everywhere else.
 
 ## Credentials
 
-Lookup order per host: matching `FETCHLOOM_TOKEN_<HOST>`, platform credential store, provider-native helper. First match wins and the source is reported without the secret.
+A credential has one of two shapes. A bearer credential is one opaque value that
+is sent. A signing credential is an access key, a secret key, a region, and
+optionally a session token, and its secret is never sent: it derives a key that
+signs a canonical request. Which shape a host needs is decided by the adapter
+serving it, never by the user.
+
+Lookup order per host: matching `FETCHLOOM_TOKEN_<HOST>` or the matching
+`FETCHLOOM_ACCESS_KEY_<HOST>` set, platform credential store, provider-native
+helper. First match wins and the source is reported without the secret.
+
+The provider-native helper is a provider's own convention for where its users
+already keep a credential. For a source signing with SigV4 that is the `AWS_`
+environment variables and the shared credentials file the provider defines. A
+helper is asked only after the two tiers above answered nothing.
+
+A signing credential found without a region fails `policy.credential_invalid`
+naming the region as what is missing, because a signature is computed over one
+and a guessed region produces a refusal the user cannot act on.
 
 A credential is bound to the host it was resolved for. It is dropped on any redirect to a different host, and the drop is reported.
 

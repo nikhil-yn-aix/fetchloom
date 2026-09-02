@@ -7687,3 +7687,445 @@ place.
 
 Sources: `crates/engine/src/tuning.rs`; `crates/engine/tests/tuning.rs`;
 `crates/cli/tests/transfer.rs`.
+
+## Phase 8. Five commands move here, and what phase 9 keeps
+
+Question: roadmap.md:150 lists `doctor`, `why`, the live display mode and `watch`
+under phase 9, Ship. Phase 8's own measure is that every feature exists. Which
+phase owns them.
+
+Options: leave them in phase 9 as written; move them into phase 8; split them.
+
+Chosen: move all five, hints included.
+
+Ship is distribution. Packaging targets, install paths, signing, notarization,
+offline signature verification, package manager entries, and the compatibility
+freeze are all facts about how a binary reaches a machine, and none of them is a
+thing the binary does once it is there. `doctor`, `why`, the live view, `watch`
+and the post-run hint are the second kind. They were listed under Ship because
+Ship was where the command surface was finished, not because any of them is
+distribution, and phase 8 is now the phase whose exit criterion is that the
+surface is finished.
+
+The live view has a second reason. contracts.md's Display modes make it a
+consumer of the event stream with no other input, and phase 9's Prove clause
+leans on that property. A property is cheaper to establish while the events it
+reads are still being added than to retrofit onto a renderer written after them.
+
+roadmap.md is amended: phase 8 gains `init`, the metadata readers, the remaining
+reference forms, `doctor`, `why`, the live display mode, `watch`, and hints.
+Phase 9 keeps static binaries, signing, notarization, checksums and signed
+release metadata, package manager entries, no-root install, shell completion
+verification on release artifacts, and the 1.0 freeze.
+
+Costs: phase 9's Prove clause about display modes is now a phase 8 obligation
+tested a phase early, and phase 9 re-runs it against release artifacts rather
+than writing it.
+
+Sources: docs/roadmap.md; docs/contracts.md Display modes, Hints, Command
+surface.
+
+## Phase 8. Where `init` writes
+
+Question: contracts.md:701 says `init` infers and writes a manifest and never
+says to what. `plan` has an explicit rule and `init` has none.
+
+Options: standard output only, like `plan`; a file only, with a default name; a
+file, with standard output reachable.
+
+Chosen: standard output by default, and `--output <path>` writes a file instead.
+
+A manifest is the result of the command, which is the rule contracts.md already
+fixes for `plan`, so standard output is the default and nothing else is written
+there. Piping it into a file is what a person does the first time and reading it
+before saving it is what they do the second, so a default that prints costs
+nothing and a default that writes a file costs a surprise.
+
+`--output` is one destination argument rather than a second code path: the
+emitter writes to a stream, and the stream is standard output or a file. It is
+the name `get` and `apply` already use for where a result is placed.
+
+A file that already exists is not overwritten. `init --output` onto an existing
+path fails with `destination.unrepresentable` naming the path, and `--force`
+overwrites, which is the meaning `--force` already carries. A manifest is a thing
+a person edits after generating, and silently replacing an edited one is the
+class of loss this project refuses everywhere else.
+
+Costs: two destinations means two tests for one emitter rather than one.
+
+Sources: docs/contracts.md Plan, Command surface, Flags; docs/standards.md One
+thing.
+
+## Phase 8. The second credential shape, and where SigV4's three values come from
+
+Question: phase 7 carried SigV4 forward as the deliberate second credential
+shape and named `Credential { host, origin, value: Secret<String> }` as the type
+that has to widen. contracts.md names one credential variable,
+`FETCHLOOM_TOKEN_<HOST>`, and says nothing about an access key, a secret key, or
+a region.
+
+Options: Fetchloom-namespaced host-scoped variables only; the AWS variables only;
+both, in the lookup order contracts already fixes.
+
+Chosen: both, mapped onto the three tiers that already exist.
+
+`Credential` becomes a second shape rather than a wider first one. `Bearer` holds
+the one opaque value that is sent. `Signing` holds an access key, a secret key,
+an optional session token, and a region, and the secret is never sent: it derives
+a signing key that signs a canonical request. Packing `key:secret` into the one
+string is refused for the reason phase 7 gave, and widening `Bearer` with three
+optional fields would be the same defect wearing a struct.
+
+Placement follows contracts.md's existing lookup order rather than inventing one.
+`FETCHLOOM_ACCESS_KEY_<HOST>`, `FETCHLOOM_SECRET_KEY_<HOST>`,
+`FETCHLOOM_SESSION_TOKEN_<HOST>` and `FETCHLOOM_REGION_<HOST>` are the first
+tier, host-scoped by exactly the rule `FETCHLOOM_TOKEN_<HOST>` uses, so an
+explicit per-host credential wins. The platform credential store is the second
+tier, unchanged. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN` and `AWS_REGION`, and the profile in the shared credentials
+file, are the third tier, which is the provider-native helper contracts.md:766
+already names and which has answered nothing until now because the one adapter
+built had no helper to call.
+
+That is not two ways of doing one thing. The tiers are different mechanisms with
+a fixed order, which is what the contract describes, and the third tier is a
+provider's own convention rather than a second spelling of the first. It is also
+what a person with a working AWS setup already has, and asking them to restate it
+under a new name to use one tool is the kind of setup step contracts.md's Never
+present setup before it is needed exists to prevent.
+
+An access key found without a region fails with `policy.credential_invalid`
+naming the region as what is missing, because a signature is computed over a
+region and guessing one produces a signature that fails at the source with an
+error the user cannot act on.
+
+HMAC-SHA256 is implemented here rather than taken as a dependency.
+standards.md prefers no dependency over a small one, HMAC is a fixed construction
+of the hash already in the tree, and RFC 4231 publishes the test vectors that
+make it verifiable rather than trusted.
+
+Costs: four environment variables and one file format enter the surface, and the
+provider helper tier now has a platform-independent implementation where phase 7
+expected a platform-specific one.
+
+Sources: docs/contracts.md Credentials, Environment; docs/standards.md Language;
+`crates/engine/src/credential.rs`; the phase 7 record on bearer only.
+
+## Phase 8. Source priority, and how a bare name resolves
+
+Question: contracts.md:113 resolves a bare name and a namespaced release through
+"configured source priority", and no configuration key for it exists anywhere in
+contracts.md.
+
+Options: an ordered list of base locations; a named registry table with explicit
+priorities; leave both forms unbuilt.
+
+Chosen: an ordered list of base locations, `sources`, in project or user
+configuration.
+
+```toml
+sources = ["https://lab.edu/data/", "hf:datasets/acme/"]
+```
+
+A bare name is appended to each base in order and the first that resolves wins. A
+namespaced release appends the same way, so `acme/imagenet@2012` against a base
+is one concatenation rather than a second grammar. Nothing is guessed: a name
+matching no base fails `reference.unresolved` naming how many bases were tried,
+and a run with no `sources` configured fails naming that none is configured, so
+the failure tells a first-time user what to do rather than that the name is
+wrong.
+
+A list is chosen over a named table because a name buys one thing, which is that
+`why` can say which entry answered, and `why` can say the base itself instead. A
+table buys per-source options that nothing needs yet, and contracts.md's Unknown
+keys are an error rule means adding the table later is a change and adding
+options to a list later is also a change, so nothing is bought by deciding now.
+
+Resolution order is contracts.md's own and does not move: an explicit scheme
+first, then a local path if it exists, then this list. A bare name that is also
+a directory in the working directory is that directory, which is what a person
+means when they type it.
+
+Costs: a base that is a prefix of another resolves the shorter one first, which
+is order-dependent and is exactly what an ordered list is for.
+
+Sources: docs/contracts.md Reference grammar, Configuration files.
+
+## Phase 8. What a log level is, and what `--verbose` raises
+
+Question: contracts.md's Flags table gives `--verbose` the meaning "raise log
+level, repeatable" and its Environment table gives `FETCHLOOM_LOG` the meaning
+"log level". Neither says what a level is. No level exists in the binary and
+`FETCHLOOM_LOG` is read by nothing.
+
+Options: three levels rendering events already contracted; four levels, the
+fourth carrying lines no event backs; a bare verbosity count with no names.
+
+Chosen: three named levels, and a level decides only which already-contracted
+events are rendered to standard error.
+
+`error`, `info`, `debug`. `info` is the default. `error` renders the `error` and
+`degrade` payloads. `info` renders those plus the run's own start, end and result.
+`debug` renders every event the stream carries, one line each. `--verbose` steps
+up one level and is repeatable; a step past `debug` is clamped and the clamp is
+reported, which is the rule `--threads` already follows. `FETCHLOOM_LOG` takes a
+level name and sits at the environment precedence level like every other setting.
+
+The decisive constraint is standards.md's rule that log level controls verbosity
+and never which events exist, and contracts.md's rule that the live view can
+display nothing the event stream does not carry. A fourth level whose lines have
+no event behind them would be a second observability channel and would make the
+live view structurally unable to show what a log can, which is the property step
+7 has to prove. So a level is a filter over the one stream and never a source of
+its own.
+
+`--events` output is byte-identical at every level, which is a test.
+
+Costs: someone wanting socket-level tracing does not get it from this binary, and
+gets it from the event stream or not at all.
+
+Sources: docs/contracts.md Flags, Environment, Display modes; docs/standards.md
+Observability.
+
+## Phase 8. Protocol choice, re-checked rather than recalled
+
+Question: features.md says this build speaks HTTP/1.1 because the client offers
+nothing else, and marks measuring protocol choice per host as unbuilt with no
+phase owning it. CLAUDE.md requires that claim to be confirmed against current
+documentation rather than carried.
+
+Checked against ureq 3.4.0, the pinned version. Its documentation describes body
+transfer in terms of HTTP/1.1's two mechanisms and names no other version;
+`ConfigBuilder` exposes no protocol selection among its methods; HTTP/2 appears
+nowhere in the crate's API or prose.
+
+The claim holds. The marker stays and no phase owns it, which is honest: there is
+one protocol to speak and nothing to measure. It becomes a decision again only if
+the client changes, which is a dependency change with its own justification.
+
+Checked at the same time and worth recording, because it was assumed and never
+verified: contracts.md's `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honored.
+`Agent::config_builder()` starts from `Config::default()`, whose `proxy` field is
+`Proxy::try_from_env()`, which reads `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY`
+and applies `NO_PROXY`. No Fetchloom code names them, which is why nobody had
+confirmed they work.
+
+Sources: https://docs.rs/ureq/3.4.0/ureq/, its `config` and `Proxy` pages;
+docs/features.md Adaptive performance; docs/contracts.md Environment.
+
+## Phase 8. Which metadata formats map onto the manifest, and which cannot
+
+Question: roadmap.md:141 asks which of the seven formats features.md names map
+cleanly onto the manifest model and which cannot be represented honestly. Each
+was read against its own specification rather than from memory.
+
+The manifest model an artifact has to fit is `id`, ordered `sources`, `size`,
+`digest` holding a BLAKE3 and a SHA-256, `media_type`, `archive.format`, `select`
+and `layout`. Two things decide representability: whether the document states a
+digest in one of those two algorithms, and whether it states a location the bytes
+can be fetched from.
+
+**Represented.**
+
+*Checksum sidecars.* `<hex>  <path>` per line, which is the `sha256sum`,
+`shasum` and `sha256` sidecar convention. A 64-character hexadecimal digest is
+SHA-256 and becomes `digest.sha256`; the path becomes the artifact id and
+resolves against wherever the sidecar itself was read. A 32-character digest is
+MD5 and a 40-character one is SHA-1, and both are refused by name.
+
+*Croissant.* A `FileObject` carries `contentUrl`, `contentSize`, `encodingFormat`
+and `sha256`, which are `sources`, `size`, `media_type` and `digest.sha256`
+exactly. A `FileSet` whose `containedIn` names one `FileObject` is that object's
+artifact with the `FileSet`'s `includes` as `select` and its `excludes` applied
+after, which is contracts.md's own selection rule. A `FileSet` whose `containedIn`
+names several objects, or another `FileSet`, is refused: it is one logical
+collection drawn from several archives, and the manifest's selection belongs to
+one artifact.
+
+*Frictionless data packages.* `resources[].path` or `url`, `bytes`, `mediatype`
+and `hash`. The specification's default for a bare `hash` value is MD5 and other
+algorithms are indicated by a lower-case prefix, so `sha256:` is read and a bare
+value, `md5:` and `sha1:` are refused by name. `name`, `version` and
+`licenses[].name` become `name`, `release` and `license.spdx`.
+
+*pooch registries.* `<path> <hash>` per line, `#` comments. A bare value is
+SHA-256 and a prefixed one is read only when the prefix is `sha256`. The base URL
+is not in the registry file at all -- pooch holds it in the calling code -- so
+entries resolve against where the registry was read, which is stated rather than
+guessed.
+
+*BagIt.* `manifest-sha256.txt` is `<hex> <filepath>` and `fetch.txt` is
+`<url> <length> <filepath>`, which together give a source, a size and a digest per
+payload file. A length of `-` is unspecified and the `size` is omitted rather
+than estimated. A bag with no `fetch.txt` is a local bag and its payload resolves
+under `data/`.
+
+**Refused, by name, with a test for the refusal.**
+
+*Torrent piece hashes.* In version 1 these are SHA-1 over fixed-size pieces that
+span file boundaries, so a piece hash proves a piece and there is no per-file
+digest at all. In version 2 the per-file `pieces root` is the root of a merkle
+tree of 16 KiB blocks under SHA-256, which is a different value from the SHA-256
+of the file and cannot be compared to one. Neither is the content digest and
+neither is the interop digest. A torrent also names a swarm rather than a
+location bytes can be fetched from. Two independent reasons, and approximating
+either would be recording a number under a name that does not mean it.
+
+*DVC files.* `outs[].hash` is MD5 and nothing else for a local or SSH output, and
+an ETag for an HTTP, S3 or Azure one -- and contracts.md's Verification and
+repair rule is that an ETag is supporting evidence and never content identity.
+The remote is a name resolved through DVC's own configuration rather than a URL
+in the file, so the document states neither a usable digest nor a location.
+
+**What this costs, stated rather than hidden.** BagIt's own specification
+recommends SHA-512 by default, so a bag published with `manifest-sha512.txt` and
+no SHA-256 manifest is refused even though it carries a strong per-file digest.
+The manifest model carries two algorithms and adding a third is a change to
+identity, which is not a thing an ingest reader gets to make. The refusal names
+the algorithm the bag used and the two the manifest carries.
+
+features.md is corrected in the same change. It claimed all seven were absorbed;
+five are, two are refused by name, and the sentence now says which.
+
+Sources: https://docs.mlcommons.org/croissant/docs/croissant-spec.html;
+https://datapackage.org/standard/data-resource/;
+https://www.fatiando.org/pooch/latest/registry-files.html;
+https://www.rfc-editor.org/rfc/rfc8493.html;
+https://www.bittorrent.org/beps/bep_0052.html;
+https://doc.dvc.org/user-guide/project-structure/dvc-files;
+docs/contracts.md Manifest, Identity, Selection.
+
+## Phase 8. A manifest's SHA-256 was never compared to anything
+
+Question: five of the five representable metadata formats state a SHA-256 and
+none states a BLAKE3. What happens today when a manifest states a SHA-256.
+
+Nothing happens. `crates/cli/src/run.rs:2599` takes the expected digest from
+`artifact.digest.and_then(|claims| claims.blake3)` and falls back to the lock. The
+`sha256` field of a manifest is parsed, is written back out, and is compared
+against no bytes anywhere. A publisher can state a SHA-256 and Fetchloom will
+serve bytes that disagree with it without a word.
+
+`LockedArtifact::check` at `crates/engine/src/lock.rs:163` does compare a lock's
+interop digest and fails `integrity.mismatch` on a difference, so the gap is the
+manifest alone. It is not a phase 8 regression; it has been true since manifests
+existed, and it was invisible because nothing in the tree ever wrote a manifest
+with a SHA-256 and no BLAKE3 until this phase did.
+
+Fixed: a manifest's `sha256` is compared to the interop digest of the bytes, and
+a difference fails `integrity.mismatch` naming both values. This is not new
+behavior being invented, it is contracts.md's Identity line -- the interop digest
+is recorded for matching publisher claims -- finally having a caller.
+
+**The trust table is amended, and this is the sharper half.** contracts.md
+defined `verified` as the content digest matching a digest supplied before the
+run, and the content digest is BLAKE3 by definition. Read literally, a manifest
+supplying only a SHA-256 can never produce anything better than `tofu`, which
+would make every Croissant, Frictionless, BagIt and pooch dataset in the world
+permanently first-use no matter how firmly its publisher stated a digest. That is
+not a mechanical definition doing its job, it is one algorithm's name having been
+written where the argument wanted the idea of a prior claim.
+
+`verified` now reads: a digest computed from the bytes matched a digest of the
+same algorithm supplied by the manifest or the lock before this run. A publisher's
+SHA-256, checked against the SHA-256 of the bytes this run read, is exactly the
+evidence the class describes, and SHA-256 is not the weaker hash. The content
+digest remains the cache key and the resume authority and nothing about identity
+moves.
+
+The `unverified` and `tofu` definitions do not change. A manifest stating neither
+digest is still `tofu`, and a claim stated in an algorithm the manifest model does
+not carry is still a refusal at read time rather than a weaker class at run time.
+
+Costs: the trust table now names two algorithms where it named one, and a reader
+has to know that either satisfies it. That is one sentence against a class that
+would otherwise be unreachable for most published data.
+
+Sources: docs/contracts.md Identity, Trust classes; `crates/cli/src/run.rs`;
+`crates/engine/src/lock.rs`.
+
+## Phase 8. How inference walks a listing, an API, and a directory
+
+Question: roadmap.md:141 asks how inference handles listings, APIs, and local
+directories.
+
+There is one walk and three things it can be pointed at, because a listing, a
+provider API and a directory all answer the same question: which entries are at
+or below this reference, and what does the source state about each. `Source::list`
+is already that question and already returns `Listing { entries, skipped }`, so
+inference asks the seam and never learns what kind of thing answered.
+
+Each entry becomes one artifact. The id is the entry's path relative to the
+prefix, which is what makes the manifest reproduce the tree the prefix holds. The
+source is the entry's location. The size is what the listing stated and is
+omitted when it stated none.
+
+A local directory is walked by the same code through the local adapter rather
+than by a second walker. Its entries' locations are their paths relative to the
+directory, so the manifest holds no absolute path and is publishable by putting
+it beside the data, which is the use features.md names. `resolve_source_path`
+already resolves a manifest's relative source against the manifest's own
+location, so the round trip is the existing resolution path rather than a new one.
+
+Ordering is by raw path bytes, so two runs over one directory emit byte-identical
+manifests and the manifest digest of an unchanged directory does not move.
+
+`listing.skipped` is emitted by inference exactly as it is by a fetch, because a
+link outside the prefix is ignored and counted whichever command did the ignoring.
+
+The entry count is bounded by the listing limit already in Limits, and exceeding
+it fails `resource.limit` rather than emitting a truncated manifest. A manifest
+that silently held some of a dataset would be worse than none.
+
+Sources: docs/roadmap.md; docs/contracts.md Directory listing, Manifest;
+`crates/engine/src/seam/source.rs`; `crates/cli/src/run.rs`.
+
+## Phase 8. What inference records when a source states no digest
+
+Question: roadmap.md:141's third decision, and the one contracts.md:286 makes
+sharp: a field is never estimated into a number, and zero is a number.
+
+Options: record no digest and let the manifest force a weak class; synthesize a
+digest from what a metadata request states; read the bytes and record what they
+hash to.
+
+Chosen: read the bytes and record what they hash to, and record nothing at all
+when the bytes were not read.
+
+A digest is never taken from a metadata request. An entity tag is not a digest,
+an S3 ETag is the MD5 of one upload part arrangement rather than of the content,
+and a length is not evidence about bytes. contracts.md already rules that these
+are supporting evidence and never content identity, and writing one into a
+`digest` field would be laundering a validator into an identity, which is the
+single thing this project exists to refuse.
+
+So inference transfers. `init` over a location with no stated digest fetches each
+object through the same path `get` uses, hashes it in the same pass, and records
+both the BLAKE3 and the SHA-256 it observed. The objects land in the cache, so the
+`get` that follows moves no bytes. features.md's promise that init emits a
+manifest with digests filled in is met by having observed them.
+
+What that is worth is stated honestly and is not inflated. The init run itself is
+`tofu`: it had no prior digest and it recorded its own first observation, which is
+exactly the class definition, and it writes a witness like any other run that
+transferred and verified bytes in full. It is not `verified`, because nothing
+supplied a digest before it. The manifest it emits is a first-use pin, not a
+publisher's attestation, and the difference is the whole reason the class exists.
+
+A later run against that manifest is `verified`, because a digest was supplied
+before it. That is not the class being inflated by a trick; it is what pinning is
+for, and it is the same mechanism as a lock.
+
+An object inference could not read records no digest and no size, and the run
+emits `degrade` naming the artifact and why the bytes were not read. Under
+`--offline` a network location is not read at all and the run fails
+`policy.offline` before anything is written, because a manifest holding some
+digests and not others would be a document whose reader cannot tell which of its
+silences mean unknown.
+
+An artifact carrying no digest forces a weak trust class on every run that uses
+it, which contracts.md's Manifest rules already state. Nothing here makes that
+softer.
+
+Sources: docs/contracts.md Manifest, Trust classes, Verification and repair,
+Plan; docs/roadmap.md.

@@ -2,11 +2,13 @@
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use fetchloom_engine::limits::Bandwidth;
+use fetchloom_engine::limits::{Bandwidth, Limits};
 
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
-use crate::surface::{DisplayMode, GlobalFlags, IoChoice, TransferFlags};
+use crate::logging::LogLevel;
+use crate::surface::{DisplayMode, DurationArg, GlobalFlags, IoChoice, TransferFlags};
 
 /// Somewhere a value can be read from.
 pub trait Environment: Send + Sync {
@@ -70,6 +72,27 @@ pub struct Settings {
     pub aggressive: Sourced<bool>,
     /// Whether adaptation is disabled, so two runs do identical work.
     pub deterministic_io: Sourced<bool>,
+    /// How much of the event stream is rendered to standard error.
+    pub log: Sourced<LogLevel>,
+    /// Whether the log level asked for was above the highest one.
+    pub log_clamped: bool,
+    /// Attempts per transient failure.
+    pub retries: Sourced<NonZeroU32>,
+    /// Idle timeout per connection.
+    pub timeout: Sourced<Duration>,
+    /// The base locations a bare name resolves against, in order.
+    pub sources: Sourced<Vec<String>>,
+}
+
+/// Returns the limits a run holds itself to, after the levels that name any of
+/// them.
+#[must_use]
+pub fn limits_for(settings: &Settings) -> Limits {
+    Limits {
+        retry_attempts: settings.retries.value.get(),
+        idle_timeout: settings.timeout.value,
+        ..Limits::default()
+    }
 }
 
 /// Returns the cache directory this platform puts a cache in by default.
@@ -294,6 +317,47 @@ pub fn resolve_all(
         Sourced::new(default_cache_dir(environment), Origin::Default)
     };
 
+    let (log, log_clamped) = if flags.verbose > 0 {
+        let (level, clamped) = LogLevel::default().raised(u32::from(flags.verbose));
+        (Sourced::new(level, Origin::CommandLine), clamped)
+    } else if let Some(level) = from_environment::<LogLevel>(environment, "FETCHLOOM_LOG", "log")? {
+        (Sourced::new(level, Origin::Environment), false)
+    } else if let Some((level, origin)) = from_files(
+        &levels,
+        |file| file.log.clone(),
+        |text| text.parse::<LogLevel>().ok(),
+        "log",
+    )? {
+        (Sourced::new(level, origin), false)
+    } else {
+        (Sourced::new(LogLevel::default(), Origin::Default), false)
+    };
+
+    let defaults = Limits::default();
+    let retries = resolve(
+        transfer.retries.and_then(NonZeroU32::new),
+        None,
+        &levels,
+        |file| file.retries,
+        NonZeroU32::new(defaults.retry_attempts).unwrap_or(NonZeroU32::MIN),
+    );
+    let timeout = if let Some(span) = transfer.timeout {
+        Sourced::new(span.0, Origin::CommandLine)
+    } else if let Some((span, origin)) = from_files(
+        &levels,
+        |file| file.timeout.clone(),
+        |text| text.parse::<DurationArg>().ok().map(|span| span.0),
+        "timeout",
+    )? {
+        Sourced::new(span, origin)
+    } else {
+        Sourced::new(defaults.idle_timeout, Origin::Default)
+    };
+    let sources = match levels.pick(|file| file.sources.clone()) {
+        Some((bases, origin)) => Sourced::new(bases, origin),
+        None => Sourced::new(Vec::new(), Origin::Default),
+    };
+
     Ok(Settings {
         offline,
         threads,
@@ -305,6 +369,11 @@ pub fn resolve_all(
         io,
         aggressive,
         deterministic_io,
+        log,
+        log_clamped,
+        retries,
+        timeout,
+        sources,
     })
 }
 

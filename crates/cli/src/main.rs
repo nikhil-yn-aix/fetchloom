@@ -111,10 +111,10 @@ fn execute() -> ExitCode {
     );
 
     let sequence = Sequence::new();
-    let mut sinks: Vec<Box<dyn Observer>> = vec![Box::new(Renderer::new(
-        display.mode,
-        !parsed.global.no_animation,
-    ))];
+    let mut sinks: Vec<Box<dyn Observer>> = vec![
+        Box::new(Renderer::new(display.mode, !parsed.global.no_animation)),
+        Box::new(fetchloom_cli::logging::Log::new(resolved.log.value)),
+    ];
     if let Some(target) = parsed.global.events.as_deref() {
         match EventStream::open(target) {
             Ok(stream) => sinks.push(Box::new(stream)),
@@ -128,6 +128,16 @@ fn execute() -> ExitCode {
 
     let running = Span::start();
     observer.emit(&Event::new(&sequence, EventPayload::RunStart));
+    if resolved.log_clamped {
+        observer.emit(&Event::new(
+            &sequence,
+            EventPayload::Degrade {
+                requested: format!("a log level {} steps above info", parsed.global.verbose),
+                used: format!("the {} level", resolved.log.value),
+                reason: "debug is the highest level, so the request was clamped".to_owned(),
+            },
+        ));
+    }
     if let (Some(requested), Some(reason)) = (display.requested, display.reason.as_ref()) {
         observer.emit(&Event::new(
             &sequence,
@@ -518,7 +528,7 @@ fn run_get(
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     let work = Arc::new(WorkCounter::new());
-    let adapters = run::adapters_for(&work);
+    let adapters = run::adapters_for(&work, &settings::limits_for(resolved));
     let remote = run::is_served(&adapters, reference);
     let environment = ProcessEnvironment;
     let policy = get_policy(transfer, parsed, resolved, &environment, observer, sequence);
@@ -769,7 +779,7 @@ fn run_plan(
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     let work = Arc::new(WorkCounter::new());
-    let adapters = run::adapters_for(&work);
+    let adapters = run::adapters_for(&work, &settings::limits_for(resolved));
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(
         resolved.clone(),
@@ -868,7 +878,7 @@ fn run_apply(
         Err(error) => return reporter.report(&error),
     };
     let work = Arc::new(WorkCounter::new());
-    let adapters = run::adapters_for(&work);
+    let adapters = run::adapters_for(&work, &settings::limits_for(resolved));
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(
         resolved.clone(),

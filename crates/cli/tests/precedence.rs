@@ -217,7 +217,7 @@ fn an_unknown_key_is_an_error() {
 #[test]
 fn a_key_this_build_does_not_act_on_is_an_error() {
     let temporary = TempDir::new().unwrap();
-    for key in ["retries = 4", "color = \"never\"", "hints = false"] {
+    for key in ["color = \"never\"", "hints = false"] {
         let path = write(temporary.path(), "fetchloom.toml", &format!("{key}\n"));
         assert!(
             config::read(&path).is_err(),

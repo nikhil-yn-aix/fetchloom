@@ -15,6 +15,7 @@ use tempfile as _;
 use windows_sys as _;
 pub mod explain;
 pub mod locked;
+pub mod logging;
 pub mod materialize;
 pub mod observer;
 pub mod planning;
