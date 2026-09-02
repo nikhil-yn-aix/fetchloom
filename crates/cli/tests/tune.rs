@@ -12,6 +12,7 @@ use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
+use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::tuning::FIRST_PER_HOST;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
@@ -654,4 +655,89 @@ fn auto_io_never_emits_a_write_path_degradation() {
             .all(|line| !line.contains("uncached") && !line.contains("buffered")),
         "auto emitted a write path degrade: {found:?}"
     );
+}
+
+/// Every file a run materialized, paired with the content digest of its bytes,
+/// so two configurations are compared on what reached the disk rather than on
+/// what the receipt said reached it.
+fn digests_under(root: &Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            found.push((
+                path.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                hash_bytes(&bytes).to_string(),
+            ));
+        }
+    }
+    found.sort();
+    found
+}
+
+#[test]
+fn no_tuning_setting_changes_the_bytes_a_run_produces() {
+    let settings: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["--concurrency", "1", "--per-host", "1"],
+        vec!["--concurrency", "8", "--per-host", "4"],
+        vec!["--aggressive"],
+        vec!["--bandwidth", "64k"],
+        vec!["--io", "buffered"],
+        vec!["--io", "uncached"],
+        vec!["--deterministic-io"],
+        vec!["--threads", "1"],
+        vec!["--threads", "4"],
+    ];
+
+    let mut produced = Vec::new();
+    for tuning in &settings {
+        let workspace = Workspace::new();
+        let source = corpus(&workspace, 8);
+        let source = source.to_str().unwrap().to_owned();
+        let mut arguments = vec!["get", source.as_str(), "--output", "out", "--json"];
+        arguments.extend_from_slice(tuning);
+        let run = workspace.run(&arguments);
+        assert_eq!(run.code(), 0, "{tuning:?} said {}", run.err());
+        let (tree, work) = shape(&run);
+        produced.push((
+            tuning,
+            tree,
+            work,
+            digests_under(&workspace.path().join("out")),
+        ));
+    }
+
+    let (settled, tree, work, files) = &produced[0];
+    assert_eq!(
+        files.len(),
+        8,
+        "the corpus did not materialize, so this configuration matrix compares nothing"
+    );
+    for (tuning, other_tree, other_work, other_files) in &produced[1..] {
+        assert_eq!(
+            tree, other_tree,
+            "{tuning:?} produced a different tree digest than {settled:?}"
+        );
+        assert_eq!(
+            files, other_files,
+            "{tuning:?} produced different content digests than {settled:?}"
+        );
+        assert_eq!(
+            work, other_work,
+            "{tuning:?} did different deterministic work than {settled:?}"
+        );
+    }
 }
