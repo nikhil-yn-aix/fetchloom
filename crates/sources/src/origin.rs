@@ -3,6 +3,7 @@
 use std::fmt;
 
 use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::redact::SafeUrl;
 
 /// The scheme, host and port a location names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +68,8 @@ impl Origin {
         Err(Error::new(
             ErrorKind::NetworkStatus,
             format!(
-                "ask the source for a location Fetchloom can follow, because it redirected to {target}, which is neither an absolute location nor a rooted path"
+                "ask the source for a location Fetchloom can follow, because it redirected to {}, which is neither an absolute location nor a rooted path",
+                SafeUrl::new(target)
             ),
         )
         .with_source(from))
@@ -84,7 +86,8 @@ fn unreachable(location: &str) -> Error {
     Error::new(
         ErrorKind::ReferenceUnresolved,
         format!(
-            "give a location beginning with http or https, because {location} names no scheme this source reaches"
+            "give a location beginning with http or https, because {} names no scheme this source reaches",
+            SafeUrl::new(location)
         ),
     )
 }

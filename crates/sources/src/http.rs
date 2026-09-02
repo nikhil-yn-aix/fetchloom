@@ -416,7 +416,8 @@ impl Source for HttpSource {
             return Err(Error::new(
                 ErrorKind::ResourceLimit,
                 format!(
-                    "ask for a narrower prefix, because the index at {location} lists more than the {} entries a run reads",
+                    "ask for a narrower prefix, because the index at {} lists more than the {} entries a run reads",
+                    SafeUrl::new(location),
                     self.limits.listing_entries
                 ),
             )

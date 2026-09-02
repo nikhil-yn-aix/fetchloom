@@ -183,7 +183,8 @@ impl Source for ObjectStoreSource {
             return Err(Error::new(
                 ErrorKind::ReferenceUnresolved,
                 format!(
-                    "name the objects instead of the container, because {location} answered with something that is not an object store list response, which is what this adapter requires"
+                    "name the objects instead of the container, because {} answered with something that is not an object store list response, which is what this adapter requires",
+                    SafeUrl::new(location)
                 ),
             )
             .with_source(location));
@@ -194,7 +195,8 @@ impl Source for ObjectStoreSource {
             return Err(Error::new(
                 ErrorKind::ResourceLimit,
                 format!(
-                    "ask for a narrower prefix, because the index at {location} lists more than the {} entries a run reads",
+                    "ask for a narrower prefix, because the index at {} lists more than the {} entries a run reads",
+                    SafeUrl::new(location),
                     limits.listing_entries
                 ),
             )

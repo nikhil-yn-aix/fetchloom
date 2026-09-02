@@ -41,7 +41,8 @@ pub fn parse(location: &str, status: u16, body: &str) -> Result<Vec<ListingEntry
     Err(Error::new(
         ErrorKind::ReferenceUnresolved,
         format!(
-            "name the objects instead of the container, because {location} answered with an index in no format Fetchloom recognizes: an object store list response, a multi-status response, or a generated index carrying its own heading"
+            "name the objects instead of the container, because {} answered with an index in no format Fetchloom recognizes: an object store list response, a multi-status response, or a generated index carrying its own heading",
+            SafeUrl::new(location)
         ),
     )
     .with_source(location))
