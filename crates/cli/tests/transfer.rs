@@ -375,6 +375,37 @@ fn a_source_with_no_validator_restarts_rather_than_appending() {
 }
 
 #[test]
+fn a_source_without_range_support_names_that_as_the_reason_it_restarts() {
+    let bytes = object(64 * 1024);
+    let server = TestServer::start(
+        Script::serving(bytes.clone())
+            .ranges(false)
+            .replying(vec![Reply::ClosedMidBody { after: 16 * 1024 }]),
+    )
+    .unwrap();
+    let harness = Harness::new();
+
+    let done = harness
+        .transfer()
+        .run(Some(digest_of(&bytes)), &nothing_prior, &at(&server))
+        .unwrap();
+
+    assert_eq!(done.rung, ResumeRung::NoValidator);
+    assert_eq!(
+        done.bytes_kept, 0,
+        "bytes were kept from a source with no range support"
+    );
+
+    let fell = harness.degradations.take();
+    let named = fell
+        .iter()
+        .find(|entry| entry.reason == "the source does not serve ranges")
+        .expect("no degradation named the missing range support as the reason for the restart");
+    assert_eq!(named.requested, "a resume by range");
+    assert_eq!(named.used, "the whole object, transferred again from zero");
+}
+
+#[test]
 fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_zero() {
     let bytes = object(2 * 1024 * 1024);
     let interruptions = 20;
@@ -560,6 +591,72 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         "the destination did not materialize the whole object"
     );
     assert_eq!(second.bytes, bytes.len() as u64);
+}
+
+#[test]
+fn a_container_reference_lists_and_materializes_every_entry() {
+    let bytes = object(11);
+    let server = TestServer::start(
+        Script::serving(bytes.clone()).replying(vec![Reply::Listing {
+            format: fetchloom_faults::IndexFormat::ObjectStore,
+        }]),
+    )
+    .unwrap();
+    let location = format!("{}/set/", server.origin());
+
+    let root = TempDir::new().unwrap();
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    let cache = Cache::open(
+        root.path().join("cache"),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
+        DurabilityTier::Fast,
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        std::sync::Arc::clone(&work),
+        test_processor(),
+    )
+    .unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let processor =
+        Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let tuning = test_tuning();
+    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let destination = root.path().join("dest");
+
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let result = fetchloom_cli::run::materialize_remote_container(
+        &with,
+        &location,
+        &destination,
+        &fetchloom_engine::selection::Selection::default(),
+        false,
+        false,
+        &observer,
+        &sequence,
+    )
+    .expect("a container reference did not materialize");
+
+    assert_eq!(result.entries, 2, "not every listed entry was materialized");
+    for name in ["one", "two"] {
+        let mut found = Vec::new();
+        std::fs::File::open(destination.join(name))
+            .expect("the entry was not materialized")
+            .read_to_end(&mut found)
+            .unwrap();
+        assert_eq!(found, bytes, "{name} did not carry the object's bytes");
+    }
+
+    let listed = observer
+        .events()
+        .into_iter()
+        .any(|event| event.name() == "listing.end");
+    assert!(listed, "the container was materialized without listing it");
 }
 
 /// The processor pool every cache in a test is opened with.
@@ -791,5 +888,147 @@ fn a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_by
     assert_eq!(
         done.bytes_transferred, fast.bytes_transferred,
         "the collapsing volume changed how many bytes moved"
+    );
+}
+
+#[test]
+fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
+    let bytes = object(11);
+    let server = TestServer::start(Script::serving(bytes.clone()).replying(vec![
+        Reply::Listing {
+            format: fetchloom_faults::IndexFormat::ObjectStore,
+        },
+        Reply::Whole,
+        Reply::Whole,
+        Reply::Listing {
+            format: fetchloom_faults::IndexFormat::ObjectStore,
+        },
+    ]))
+    .unwrap();
+    let location = format!("{}/set/", server.origin());
+
+    let root = TempDir::new().unwrap();
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    let cache = Cache::open(
+        root.path().join("cache"),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
+        DurabilityTier::Fast,
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        std::sync::Arc::clone(&work),
+        test_processor(),
+    )
+    .unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let processor =
+        Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let tuning = test_tuning();
+    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let destination = root.path().join("dest");
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+
+    let first = fetchloom_cli::run::materialize_remote_container(
+        &with,
+        &location,
+        &destination,
+        &fetchloom_engine::selection::Selection::default(),
+        false,
+        false,
+        &observer,
+        &sequence,
+    )
+    .expect("a container reference did not materialize");
+    assert_eq!(
+        first.status,
+        fetchloom_engine::outcome::RunStatus::Materialized
+    );
+
+    let second = fetchloom_cli::run::materialize_remote_container(
+        &with,
+        &location,
+        &destination,
+        &fetchloom_engine::selection::Selection::default(),
+        false,
+        false,
+        &observer,
+        &sequence,
+    )
+    .expect("a second container run against an unchanged destination failed");
+
+    assert_eq!(
+        second.status,
+        fetchloom_engine::outcome::RunStatus::Unchanged,
+        "a container run against a destination it already holds did not reconcile"
+    );
+    assert_eq!(
+        second.tree, first.tree,
+        "the second run reported a different tree"
+    );
+}
+
+#[test]
+fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destination() {
+    let bytes = object(11);
+    let server = TestServer::start(Script::serving(bytes).replying(vec![Reply::Listing {
+        format: fetchloom_faults::IndexFormat::ObjectStore,
+    }]))
+    .unwrap();
+    let location = format!("{}/set/", server.origin());
+
+    let root = TempDir::new().unwrap();
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    let cache = Cache::open(
+        root.path().join("cache"),
+        NativePlatform::new(std::sync::Arc::new(
+            fetchloom_engine::work::WorkCounter::new(),
+        )),
+        DurabilityTier::Fast,
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        std::sync::Arc::clone(&work),
+        test_processor(),
+    )
+    .unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let processor =
+        Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
+    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let tuning = test_tuning();
+    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let destination = root.path().join("dest");
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+
+    let selection = fetchloom_engine::selection::Selection {
+        include: vec![fetchloom_engine::selection::Glob::new(
+            "nothing-matches-this",
+        )],
+        exclude: Vec::new(),
+        layout: fetchloom_engine::selection::Layout::Keep,
+    };
+    let refused = fetchloom_cli::run::materialize_remote_container(
+        &with,
+        &location,
+        &destination,
+        &selection,
+        false,
+        false,
+        &observer,
+        &sequence,
+    )
+    .expect_err("a selection matching no listed entry produced a destination");
+
+    assert_eq!(refused.kind(), ErrorKind::ReferenceUnresolved);
+    assert!(
+        !destination.exists(),
+        "a destination was published for a selection that matched nothing"
     );
 }

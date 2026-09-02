@@ -220,6 +220,7 @@ fn run_repair(
         Streams::detect(),
         parsed.global.yes,
         &environment,
+        &policy::NativeCredentialStore,
         observer,
         sequence,
     );
@@ -449,6 +450,7 @@ fn run_verify(
         Streams::detect(),
         false,
         &environment,
+        &policy::NativeCredentialStore,
         observer,
         sequence,
     );
@@ -514,15 +516,7 @@ fn run_get(
     let json = parsed.global.json;
     let remote = run::is_remote(reference);
     let environment = ProcessEnvironment;
-    let policy = policy::CommandLinePolicy::new(
-        resolved.clone(),
-        transfer,
-        Streams::detect(),
-        parsed.global.yes,
-        &environment,
-        observer,
-        sequence,
-    );
+    let policy = get_policy(transfer, parsed, resolved, &environment, observer, sequence);
     let (source, named) = match resolve_places(reference, transfer, &policy) {
         Ok(places) => places,
         Err(error) => {
@@ -770,6 +764,7 @@ fn run_plan(
         Streams::detect(),
         parsed.global.yes,
         &environment,
+        &policy::NativeCredentialStore,
         observer,
         sequence,
     );
@@ -866,6 +861,7 @@ fn run_apply(
         Streams::detect(),
         parsed.global.yes,
         &environment,
+        &policy::NativeCredentialStore,
         observer,
         sequence,
     );
@@ -1012,6 +1008,18 @@ fn materialize(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<run::RunResult, fetchloom_engine::error::Error> {
+    if remote && run::is_container(reference) {
+        return run::materialize_remote_container(
+            with,
+            reference,
+            destination,
+            selection,
+            transfer.force,
+            transfer.adopt,
+            observer,
+            sequence,
+        );
+    }
     if remote {
         return run::materialize_remote(
             with,
@@ -1329,4 +1337,25 @@ fn read_plan(
     let artifact = planning::only_artifact(&plan)?.clone();
     let destination = run::resolve_path(transfer.output.as_deref().unwrap_or(&plan.destination))?;
     Ok((plan, artifact, destination))
+}
+
+/// Builds the policy a get or an apply runs under.
+fn get_policy<'a>(
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    environment: &'a ProcessEnvironment,
+    observer: &'a dyn Observer,
+    sequence: &'a Sequence,
+) -> policy::CommandLinePolicy<'a> {
+    policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        environment,
+        &policy::NativeCredentialStore,
+        observer,
+        sequence,
+    )
 }

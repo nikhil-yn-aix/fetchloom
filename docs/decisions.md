@@ -6839,11 +6839,11 @@ to transfer until the user asserts acceptance, with `--yes` or with an
 interactive confirmation. The assertion is recorded in the receipt. Fetchloom
 makes no legal determination.
 
-The receipt records it as a `terms` list naming what was accepted, which is the
-shape the plan's `terms` already carries, so a plan naming terms and a receipt
-recording their acceptance say the same thing in the same form. contracts.md
-Receipt is amended in this change to carry it, because contracts already said the
-assertion is recorded there and did not say in what.
+The receipt records it in `accepted_terms`, a field `crates/engine/src/receipt.rs`
+has carried since phase 4 and which contracts.md Receipt never documented and no
+run ever filled in. contracts.md is amended in this change to state it rather
+than to add a second field beside it: the code already had the right shape and
+the document was the thing that was wrong.
 
 A run that cannot prompt and was not given `--yes` fails with
 `policy.terms_required` and exit 40 before a byte moves, per contracts.md Output

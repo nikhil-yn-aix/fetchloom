@@ -44,6 +44,7 @@ pub struct CommandLinePolicy<'a> {
     streams: Streams,
     accepted_terms: bool,
     environment: &'a dyn Environment,
+    store: &'a dyn CredentialStore,
     observer: &'a dyn Observer,
     sequence: &'a Sequence,
 }
@@ -61,12 +62,17 @@ impl std::fmt::Debug for CommandLinePolicy<'_> {
 impl<'a> CommandLinePolicy<'a> {
     /// Builds the policy for a run.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a policy is decided by its settings, its streams, whether terms were asserted, and each place a credential is looked for"
+    )]
     pub fn new(
         settings: Settings,
         transfer: &TransferFlags,
         streams: Streams,
         accepted_terms: bool,
         environment: &'a dyn Environment,
+        store: &'a dyn CredentialStore,
         observer: &'a dyn Observer,
         sequence: &'a Sequence,
     ) -> Self {
@@ -78,6 +84,7 @@ impl<'a> CommandLinePolicy<'a> {
             streams,
             accepted_terms,
             environment,
+            store,
             observer,
             sequence,
         }
@@ -85,6 +92,48 @@ impl<'a> CommandLinePolicy<'a> {
 
     fn emit(&self, payload: EventPayload) {
         self.observer.emit(&Event::new(self.sequence, payload));
+    }
+
+    fn found(host: &Host, origin: CredentialOrigin, value: String, from: &str) -> Credential {
+        eprintln!("using the credential for {host} from {from}");
+        Credential {
+            host: host.clone(),
+            origin,
+            value: Secret::new(value),
+        }
+    }
+}
+
+/// This platform's own credential store, which is the second place a run looks.
+pub trait CredentialStore: Send + Sync {
+    /// Reads the token the store holds for a host.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `policy.credential_invalid` when the store is present and
+    /// cannot be read.
+    fn token(&self, host: &Host) -> Result<Option<String>, Error>;
+
+    /// Names where the store keeps a credential, without the secret.
+    fn describe(&self) -> String;
+}
+
+/// The credential store this platform ships.
+#[derive(Debug, Default)]
+pub struct NativeCredentialStore;
+
+impl CredentialStore for NativeCredentialStore {
+    fn token(&self, host: &Host) -> Result<Option<String>, Error> {
+        let configuration = crate::config::user_config_directory().unwrap_or_default();
+        fetchloom_platform::stored_token(host.as_str(), &configuration)
+    }
+
+    fn describe(&self) -> String {
+        if cfg!(windows) {
+            "the Windows Credential Manager".to_owned()
+        } else {
+            "the credentials file beside the user configuration".to_owned()
+        }
     }
 }
 
@@ -146,17 +195,21 @@ impl Policy for CommandLinePolicy<'_> {
 
     fn credential(&self, host: &Host, necessity: Necessity) -> Result<Option<Credential>, Error> {
         if let Some(value) = self.environment.get(&token_variable(host)) {
-            return Ok(Some(Credential {
-                host: host.clone(),
-                origin: CredentialOrigin::Environment,
-                value: Secret::new(value),
-            }));
+            return Ok(Some(Self::found(
+                host,
+                CredentialOrigin::Environment,
+                value,
+                &token_variable(host),
+            )));
         }
-        self.emit(EventPayload::Degrade {
-            requested: "a credential from the platform credential store".to_owned(),
-            used: "the host scoped environment variable only".to_owned(),
-            reason: "this build reads no platform credential store".to_owned(),
-        });
+        if let Some(value) = self.store.token(host)? {
+            return Ok(Some(Self::found(
+                host,
+                CredentialOrigin::PlatformStore,
+                value,
+                &self.store.describe(),
+            )));
+        }
         match necessity {
             Necessity::Optional => Ok(None),
             Necessity::Required => {

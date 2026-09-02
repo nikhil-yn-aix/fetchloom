@@ -344,3 +344,44 @@ pub(crate) fn volume_backing(path: &Path) -> Backing {
         Backing::Local
     }
 }
+
+/// Reads the token the Windows Credential Manager holds for a host.
+///
+/// # Errors
+///
+/// Fails with `policy.credential_invalid` when the store is present and the
+/// credential cannot be read.
+pub fn stored_token(host: &str) -> Result<Option<String>, Error> {
+    let target = format!("fetchloom:{host}");
+    let held = ffi::read_credential(&target).map_err(|reason| {
+        Error::new(
+            ErrorKind::PolicyCredentialInvalid,
+            format!(
+                "unlock the Windows Credential Manager and run the command again, because the credential stored under {target} could not be read: {reason}"
+            ),
+        )
+    })?;
+    held.map(|blob| decode(&blob, &target)).transpose()
+}
+
+/// Reads a credential blob, which the Credential Manager stores as UTF-16
+/// little endian, the encoding its own tools write.
+fn decode(blob: &[u8], target: &str) -> Result<String, Error> {
+    if !blob.len().is_multiple_of(2) {
+        return Err(Error::new(
+            ErrorKind::PolicyCredentialInvalid,
+            format!(
+                "store the credential under {target} again with cmdkey, because what is there is not the text its own tools write"
+            ),
+        ));
+    }
+    let wide: Vec<u16> = blob
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    Ok(String::from_utf16_lossy(&wide)
+        .trim_end_matches(char::from(0))
+        .to_owned())
+}

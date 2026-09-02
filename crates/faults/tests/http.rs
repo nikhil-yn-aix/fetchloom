@@ -253,6 +253,22 @@ fn a_server_that_withholds_range_support_says_so() {
 }
 
 #[test]
+fn extra_headers_are_carried_on_every_response() {
+    let server = TestServer::start(Script::serving(object()).headers(vec![
+        ("x-amz-version-id".to_owned(), "v7".to_owned()),
+        ("x-amz-request-charged".to_owned(), "requester".to_owned()),
+    ]))
+    .unwrap();
+    let (head, _) = split(&ask(&server, ""));
+
+    assert!(head.contains("x-amz-version-id: v7"), "head was {head}");
+    assert!(
+        head.contains("x-amz-request-charged: requester"),
+        "head was {head}"
+    );
+}
+
+#[test]
 fn every_index_format_is_served_and_the_unrecognized_one_matches_none_of_them() {
     let signatures = [
         (IndexFormat::ObjectStore, "<ListBucketResult"),

@@ -187,8 +187,7 @@ artifacts:
 tree: blake3:...
 executable:
   - bin/run.sh
-terms:
-  - CC-BY-4.0
+accepted_terms: asserted
 destination: D:\data\silesia
 fetchloom: 0.1.0-dev
 completed_at: 2026-08-29T04:11:02Z
@@ -206,9 +205,9 @@ and is never compared against another machine's. Recording one does not make the
 receipt an identity authority, because nothing is ever concluded from it except
 whether bytes have to be read.
 
-`terms` names what the user asserted acceptance of, and is present only when the
-manifest recorded `requires_acceptance`. It records that the assertion was made
-and states nothing about what the terms mean.
+`accepted_terms` records that the user asserted acceptance, and is present only
+when the manifest recorded `requires_acceptance`. It states that the assertion
+was made and nothing about what the terms mean.
 
 `fetchloom` is provenance. It says which build produced a result and nothing ever
 branches on it.

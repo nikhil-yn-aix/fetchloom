@@ -268,14 +268,22 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified)?;
 
         if on_disk > keep {
-            self.degradations.record(
-                format!(
-                    "a resume on rung {}",
-                    recorded.as_ref().map_or(5, |record| record.rung.number())
-                ),
-                format!("rung {}, a transfer from zero", rung.number()),
-                "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
-            );
+            if metadata.supports_ranges {
+                self.degradations.record(
+                    format!(
+                        "a resume on rung {}",
+                        recorded.as_ref().map_or(5, |record| record.rung.number())
+                    ),
+                    format!("rung {}, a transfer from zero", rung.number()),
+                    "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
+                );
+            } else {
+                self.degradations.record(
+                    "a resume by range",
+                    "the whole object, transferred again from zero",
+                    "the source does not serve ranges",
+                );
+            }
             self.store.discard_partial(key)?;
         }
 

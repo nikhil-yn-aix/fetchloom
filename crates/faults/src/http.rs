@@ -139,6 +139,8 @@ pub struct Script {
     pub refuses_tls: bool,
     /// The latency charged before any answer is written.
     pub latency: Latency,
+    /// Additional headers carried on every response.
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl Script {
@@ -155,6 +157,7 @@ impl Script {
             honors_conditionals: true,
             refuses_tls: false,
             latency: Latency::default(),
+            extra_headers: Vec::new(),
         }
     }
 
@@ -205,6 +208,13 @@ impl Script {
     #[must_use]
     pub fn delayed(mut self, latency: Latency) -> Self {
         self.latency = latency;
+        self
+    }
+
+    /// Returns the script with these additional headers on every response.
+    #[must_use]
+    pub fn headers(mut self, extra: Vec<(String, String)>) -> Self {
+        self.extra_headers = extra;
         self
     }
 }
@@ -624,6 +634,7 @@ fn head(
             ),
         ));
     }
+    headers.extend(script.extra_headers.iter().cloned());
     headers
 }
 

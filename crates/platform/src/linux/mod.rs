@@ -388,3 +388,57 @@ pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
 pub(crate) fn volume_backing(path: &Path) -> Backing {
     probe::backing(path)
 }
+
+/// The mode bits that let a user other than the owner read a file.
+const READABLE_BY_OTHERS: u32 = 0o077;
+
+/// Reads the token the credential file holds for a host.
+///
+/// # Errors
+///
+/// Fails with `policy.credential_invalid` when the file is present and cannot
+/// be read, and when any user but its owner can read it.
+pub fn stored_token(host: &str, configuration: &Path) -> Result<Option<String>, Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let file = configuration.join("credentials");
+    let Ok(found) = std::fs::metadata(&file) else {
+        return Ok(None);
+    };
+    let mode = found.permissions().mode();
+    if mode & READABLE_BY_OTHERS != 0 {
+        return Err(Error::new(
+            ErrorKind::PolicyCredentialInvalid,
+            format!(
+                "run chmod 600 on {}, because it is mode {:03o} and a credential another user can read is not one Fetchloom will send",
+                file.display(),
+                mode & 0o777
+            ),
+        ));
+    }
+    let text = std::fs::read_to_string(&file).map_err(|reason| {
+        Error::new(
+            ErrorKind::PolicyCredentialInvalid,
+            format!("make {} readable: {reason}", file.display()),
+        )
+    })?;
+    Ok(token_for(host, &text))
+}
+
+/// Returns the token an entry names for a host.
+fn token_for(host: &str, text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((named, value)) = line.split_once('=') else {
+            continue;
+        };
+        if named.trim() != host {
+            continue;
+        }
+        return Some(value.trim().trim_matches('"').to_owned());
+    }
+    None
+}

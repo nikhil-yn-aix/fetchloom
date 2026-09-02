@@ -25,6 +25,7 @@ use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::policy::Policy;
+use fetchloom_engine::seam::source::Source;
 use fetchloom_engine::selection::{Candidate, Selection};
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
@@ -32,7 +33,7 @@ use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::trust::{ArtifactKey, RunId, TrustClass, Witness, classify};
 use fetchloom_engine::work::{Work, WorkCounter};
 use fetchloom_platform::NativePlatform;
-use fetchloom_sources::HttpSource;
+use fetchloom_sources::{HttpSource, ObjectStoreSource};
 
 use crate::materialize;
 
@@ -1363,6 +1364,287 @@ pub fn materialize_remote(
     )
 }
 
+/// Returns the dataset name a container reference is recorded under.
+fn container_name(location: &str) -> String {
+    let after_scheme = location
+        .split_once("://")
+        .map_or(location, |(_, rest)| rest);
+    let trimmed = after_scheme.trim_end_matches('/');
+    let last = trimmed.rsplit('/').find(|part| !part.is_empty());
+    last.map_or_else(|| "dataset".to_owned(), str::to_owned)
+}
+
+/// Materializes every entry an object store container lists into one
+/// destination.
+///
+/// # Errors
+///
+/// Fails when the container cannot be listed, when the listing does not
+/// answer in the object store list format, when the selection matches no
+/// entry, when an entry cannot be transferred, and when a destination entry is
+/// modified or foreign and neither `force` nor `adopt` was given.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the selection, force, and adopt flags each name a contract behavior of their own"
+)]
+pub fn materialize_remote_container(
+    with: &Materialization<'_>,
+    location: &str,
+    destination: &Path,
+    selection: &Selection,
+    force: bool,
+    adopt: bool,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<RunResult, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let dataset = container_name(location);
+
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
+        ));
+    };
+
+    let resolving = Span::start();
+    emit(EventPayload::ResolveStart);
+    let source = ObjectStoreSource::new(Limits::default(), Arc::clone(with.work));
+
+    let listing_started = Span::start();
+    emit(EventPayload::ListingStart {
+        source: SafeUrl::new(location),
+    });
+    let listed = selected_entries(location, source.list(location, None)?, selection)?;
+    emit(EventPayload::ListingEnd {
+        entries: listed.len() as u64,
+        duration_ms: listing_started.elapsed_ms(),
+    });
+
+    let placements = transfer_container_entries(
+        with, cache, &source, location, &listed, observer, sequence, &emit,
+    )?;
+    emit(EventPayload::ResolveEnd {
+        duration_ms: resolving.elapsed_ms(),
+    });
+    emit(EventPayload::PlanReady);
+
+    let build = || {
+        let built = place_container_entries(with, destination, &placements)?;
+        let tree = canonical::tree_digest(&built);
+        {
+            let parent = containing_directory(destination);
+            with.platform.create_directories(&parent)?;
+        }
+        let staging = staging_beside(destination);
+        if let Err(error) = with
+            .platform
+            .publish_directory(&staging, destination, with.durability)
+        {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+        for degradation in with.platform.take_degradations() {
+            emit(EventPayload::Degrade {
+                requested: degradation.requested,
+                used: degradation.used,
+                reason: degradation.reason,
+            });
+        }
+        emit(EventPayload::PublishCommit);
+
+        Ok(RunResult {
+            status: RunStatus::Materialized,
+            dataset: dataset.clone(),
+            tree,
+            destination: destination.to_path_buf(),
+            entries: built.len() as u64,
+            bytes: placements.iter().map(|(_, _, size)| *size).sum(),
+            work: with.work.taken(),
+            trust: provisional_trust(with, None),
+            executable: executable_paths(&built),
+            artifact: None,
+        })
+    };
+    if !destination.exists() {
+        return build();
+    }
+
+    let resolved = container_tree(&placements)?;
+    settle(
+        with,
+        destination,
+        &Settlement {
+            resolved: &resolved,
+            force,
+            adopt,
+            dataset: &dataset,
+            artifact: None,
+        },
+        &emit,
+        &build,
+        &|_| build().map(|_| ()),
+    )
+}
+
+/// Returns the entries a listing contributes after a selection is applied.
+fn selected_entries(
+    location: &str,
+    listed: Vec<fetchloom_engine::seam::source::ListingEntry>,
+    selection: &Selection,
+) -> Result<Vec<fetchloom_engine::seam::source::ListingEntry>, Error> {
+    let considered = listed.len();
+    let kept: Vec<_> = listed
+        .into_iter()
+        .filter(|entry| selection.takes(&entry.path))
+        .collect();
+    if kept.is_empty() {
+        return Err(Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!(
+                "widen the selection, because {considered} entries were listed at {location} and none of them matched it"
+            ),
+        ));
+    }
+    Ok(kept)
+}
+
+/// Returns the tree a container's transferred entries resolve to.
+fn container_tree(placements: &[(String, ContentDigest, u64)]) -> Result<Vec<TreeEntry>, Error> {
+    placements
+        .iter()
+        .map(|(path, digest, size)| {
+            Ok(TreeEntry::File {
+                path: EntryPath::new(path).map_err(|reason| {
+                    Error::new(ErrorKind::ReferenceUnresolved, reason.to_string())
+                })?,
+                size: *size,
+                mode: Mode::ReadWrite,
+                content: *digest,
+            })
+        })
+        .collect()
+}
+
+/// Transfers every listed entry of a container into the cache.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument names a piece of the transfer a container's entries share"
+)]
+fn transfer_container_entries(
+    with: &Materialization<'_>,
+    cache: &Cache<NativePlatform>,
+    source: &ObjectStoreSource,
+    location: &str,
+    listed: &[fetchloom_engine::seam::source::ListingEntry],
+    observer: &dyn Observer,
+    sequence: &Sequence,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<(String, ContentDigest, u64)>, Error> {
+    let limits = Limits::default();
+    let pause = SleepingPause;
+    let mut placements = Vec::with_capacity(listed.len());
+
+    for entry in listed {
+        let object_location = format!("{location}{}", entry.path);
+        let degradations = DegradeQueue::new();
+        let host = host_of(&object_location);
+        let controller = with.tuning.controller_for(&host, Some(cache));
+        let meter = with.tuning.meter();
+        let measurement = |location: &str| cache.measurement(&host_of(location));
+        let transfer = Transfer {
+            store: cache,
+            source,
+            pause: &pause,
+            limits: &limits,
+            degradations: &degradations,
+            measurement: &measurement,
+            observer,
+            sequence,
+            controller: &controller,
+            meter: meter.as_ref(),
+        };
+        let moving = std::time::Instant::now();
+        let transferred = transfer.run(
+            None,
+            &prior_from(cache),
+            std::slice::from_ref(&object_location),
+        )?;
+        record_measurement(
+            cache,
+            with,
+            &host,
+            &controller,
+            transferred.bytes_transferred,
+            moving.elapsed(),
+        );
+        remember(cache, &object_location, &transferred)?;
+        for degradation in source.take_degradations() {
+            emit(EventPayload::Degrade {
+                requested: degradation.requested,
+                used: degradation.used,
+                reason: degradation.reason,
+            });
+        }
+        for degradation in degradations.take() {
+            emit(EventPayload::Degrade {
+                requested: degradation.requested,
+                used: degradation.used,
+                reason: degradation.reason,
+            });
+        }
+        let size = if transferred.bytes_kept + transferred.bytes_transferred > 0 {
+            transferred.bytes_kept + transferred.bytes_transferred
+        } else {
+            cache.size_of(transferred.digest).unwrap_or_default()
+        };
+        placements.push((entry.path.clone(), transferred.digest, size));
+    }
+    Ok(placements)
+}
+
+/// Builds a fresh staging directory holding every transferred entry, at its
+/// listed path.
+fn place_container_entries(
+    with: &Materialization<'_>,
+    destination: &Path,
+    placements: &[(String, ContentDigest, u64)],
+) -> Result<Vec<TreeEntry>, Error> {
+    let staging = staging_beside(destination);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+    }
+    with.platform.create_directories(&staging)?;
+
+    let mut built = Vec::with_capacity(placements.len());
+    for (path, digest, size) in placements {
+        let target = staging.join(path);
+        let outcome = with
+            .platform
+            .create_directories(&containing_directory(&target))
+            .and_then(|()| place_object(with, *digest, &target))
+            .and_then(|()| {
+                EntryPath::new(path).map_err(|reason| {
+                    Error::new(ErrorKind::ReferenceUnresolved, reason.to_string())
+                })
+            });
+        match outcome {
+            Ok(path) => built.push(TreeEntry::File {
+                path,
+                size: *size,
+                mode: Mode::ReadWrite,
+                content: *digest,
+            }),
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        }
+    }
+    Ok(built)
+}
+
 /// Materializes one cached object into a destination, reconciling when the
 /// destination already exists.
 ///
@@ -1606,6 +1888,13 @@ fn object_name(location: &str) -> String {
 #[must_use]
 pub fn is_remote(reference: &str) -> bool {
     reference.starts_with("http://") || reference.starts_with("https://")
+}
+
+/// Reports whether a remote reference names a container to be listed rather
+/// than one object.
+#[must_use]
+pub fn is_container(reference: &str) -> bool {
+    is_remote(reference) && reference.ends_with('/')
 }
 
 /// Returns the name the object at a remote location is materialized under.

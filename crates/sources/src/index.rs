@@ -16,6 +16,12 @@ const WEBDAV_NAMESPACE: &str = "DAV:";
 /// The heading a generated index carries.
 const GENERATED_HEADING: &str = "<h1>Index of ";
 
+/// Reports whether a body is an object store's list response.
+#[must_use]
+pub(crate) fn is_object_store_list(body: &str) -> bool {
+    body.contains(OBJECT_STORE_ROOT) && body.contains(OBJECT_STORE_NAMESPACE)
+}
+
 /// Reads a listing out of a body whose format is recognized.
 ///
 /// # Errors

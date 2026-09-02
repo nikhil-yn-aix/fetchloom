@@ -517,3 +517,24 @@ fn open_lock_file(path: &Path) -> Result<File, Error> {
         .open(path)
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }
+
+/// Reads the token this platform's own credential store holds for a host.
+///
+/// The configuration directory is where the store lives on a platform whose
+/// store is a file, and is unread on a platform whose store is not.
+///
+/// # Errors
+///
+/// Fails with `policy.credential_invalid` when the store is present and cannot
+/// be read, and when a file store is readable by any user but its owner.
+pub fn stored_token(host: &str, configuration: &Path) -> Result<Option<String>, Error> {
+    #[cfg(windows)]
+    {
+        let _ = configuration;
+        windows::stored_token(host)
+    }
+    #[cfg(unix)]
+    {
+        linux::stored_token(host, configuration)
+    }
+}

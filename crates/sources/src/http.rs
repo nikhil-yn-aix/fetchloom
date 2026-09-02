@@ -26,6 +26,15 @@ pub struct HttpBody {
     reader: Box<dyn Read + Send + Sync>,
 }
 
+impl HttpBody {
+    /// Wraps a reader as the streamed bytes of one object.
+    pub(crate) fn new(reader: impl Read + Send + Sync + 'static) -> Self {
+        Self {
+            reader: Box::new(reader),
+        }
+    }
+}
+
 impl std::fmt::Debug for HttpBody {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("HttpBody")
@@ -73,7 +82,12 @@ impl HttpSource {
             .clone()
     }
 
-    fn send(
+    /// Returns the bounds this source was built with.
+    pub(crate) fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    pub(crate) fn send(
         &self,
         method: Method,
         location: &str,
@@ -83,7 +97,7 @@ impl HttpSource {
         self.send_conditional(method, location, range, credential, &Validator::default())
     }
 
-    fn send_conditional(
+    pub(crate) fn send_conditional(
         &self,
         method: Method,
         location: &str,
@@ -153,7 +167,7 @@ impl HttpSource {
 
 /// Which request a send is making.
 #[derive(Clone, Copy)]
-enum Method {
+pub(crate) enum Method {
     /// A bounded metadata request.
     Head,
     /// A request for bytes.
@@ -185,6 +199,87 @@ fn redirect_target<T>(answer: &ureq::http::Response<T>, status: u16) -> Option<S
     header(answer, "location")
 }
 
+/// The fields common to every metadata response, independent of what
+/// identifies the bytes or who is billed for them.
+pub(crate) struct CommonFields {
+    /// The length in bytes, when the source states it.
+    pub size: Option<u64>,
+    /// The last modified value the source gave, when it gave one.
+    pub last_modified: Option<String>,
+    /// Whether the source can serve part of the object.
+    pub supports_ranges: bool,
+    /// How long the source asked to be left alone for, when it asked.
+    pub retry_after: Option<Duration>,
+}
+
+/// Reads the fields common to every metadata response out of one answer.
+pub(crate) fn common_fields<T>(answer: &ureq::http::Response<T>) -> CommonFields {
+    CommonFields {
+        size: header(answer, "content-length").and_then(|value| value.parse().ok()),
+        last_modified: header(answer, "last-modified"),
+        supports_ranges: header(answer, "accept-ranges")
+            .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+        retry_after: header(answer, "retry-after")
+            .as_deref()
+            .and_then(parse_retry_after),
+    }
+}
+
+/// Checks a fetch response against the range it was asked to serve.
+///
+/// # Errors
+///
+/// Fails when the source could not serve the span, refused the request, or
+/// answered with a different span than the one asked for.
+pub(crate) fn check_fetch_status(
+    location: &str,
+    range: Option<ByteRange>,
+    answer: &ureq::http::Response<ureq::Body>,
+    credential: Option<&Credential>,
+) -> Result<(), Error> {
+    let status = answer.status().as_u16();
+    if status == 416 {
+        return Err(Error::new(
+            ErrorKind::SourceUnsupportedRange,
+            format!(
+                "ask for the whole object, because the source cannot serve the span that was asked for and reported its length as {}",
+                header(answer, "content-range").unwrap_or_else(|| "unknown".to_owned())
+            ),
+        )
+        .with_source(location));
+    }
+    if !(200..300).contains(&status) {
+        return Err(status_failure(
+            location,
+            status,
+            header(answer, "retry-after").as_deref(),
+            credential,
+        ));
+    }
+    if let Some(range) = range {
+        if status != 206 {
+            return Err(Error::new(
+                ErrorKind::SourceUnsupportedRange,
+                "start the transfer from zero, because the source ignored the range that was asked for and answered with the whole object",
+            )
+            .with_source(location));
+        }
+        let first = header(answer, "content-range").and_then(|value| first_byte_of(&value));
+        if first != Some(range.start) {
+            return Err(Error::new(
+                ErrorKind::IntegrityRangeMismatch,
+                format!(
+                    "name a source that serves the span it is asked for, because this one was asked for the bytes from {} and answered with {}",
+                    range.start,
+                    header(answer, "content-range").unwrap_or_else(|| "no span at all".to_owned())
+                ),
+            )
+            .with_source(location));
+        }
+    }
+    Ok(())
+}
+
 impl Source for HttpSource {
     type Body = HttpBody;
 
@@ -206,20 +301,18 @@ impl Source for HttpSource {
             ));
         }
 
+        let fields = common_fields(&answer);
         Ok(SourceMetadata {
             location: SafeUrl::new(&served),
             host: Host::new(Origin::of(&served)?.host()),
-            size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
+            size: fields.size,
             content: None,
             interop: None,
             identity: identity_of(header(&answer, "etag").as_deref()),
-            last_modified: header(&answer, "last-modified"),
-            supports_ranges: header(&answer, "accept-ranges")
-                .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+            last_modified: fields.last_modified,
+            supports_ranges: fields.supports_ranges,
             time_to_first_byte,
-            retry_after: header(&answer, "retry-after")
-                .as_deref()
-                .and_then(parse_retry_after),
+            retry_after: fields.retry_after,
             cost: Cost::default(),
         })
     }
@@ -246,27 +339,23 @@ impl Source for HttpSource {
                 credential,
             ));
         }
+        let fields = common_fields(&answer);
         let metadata = SourceMetadata {
             location: SafeUrl::new(&served),
             host: Host::new(Origin::of(&served)?.host()),
-            size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
+            size: fields.size,
             content: None,
             interop: None,
             identity: identity_of(header(&answer, "etag").as_deref()),
-            last_modified: header(&answer, "last-modified"),
-            supports_ranges: header(&answer, "accept-ranges")
-                .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+            last_modified: fields.last_modified,
+            supports_ranges: fields.supports_ranges,
             time_to_first_byte,
-            retry_after: header(&answer, "retry-after")
-                .as_deref()
-                .and_then(parse_retry_after),
+            retry_after: fields.retry_after,
             cost: Cost::default(),
         };
         Ok(Revalidated::Changed(Box::new(Served {
             metadata,
-            body: HttpBody {
-                reader: Box::new(answer.into_body().into_reader()),
-            },
+            body: HttpBody::new(answer.into_body().into_reader()),
         })))
     }
 
@@ -279,69 +368,24 @@ impl Source for HttpSource {
         let started = Instant::now();
         let (answer, served) = self.send(Method::Get, location, range, credential)?;
         let time_to_first_byte = started.elapsed();
-        let status = answer.status().as_u16();
+        check_fetch_status(location, range, &answer, credential)?;
 
-        if status == 416 {
-            return Err(Error::new(
-                ErrorKind::SourceUnsupportedRange,
-                format!(
-                    "ask for the whole object, because the source cannot serve the span that was asked for and reported its length as {}",
-                    header(&answer, "content-range").unwrap_or_else(|| "unknown".to_owned())
-                ),
-            )
-            .with_source(location));
-        }
-        if !(200..300).contains(&status) {
-            return Err(status_failure(
-                location,
-                status,
-                header(&answer, "retry-after").as_deref(),
-                credential,
-            ));
-        }
-        if let Some(range) = range {
-            if status != 206 {
-                return Err(Error::new(
-                    ErrorKind::SourceUnsupportedRange,
-                    "start the transfer from zero, because the source ignored the range that was asked for and answered with the whole object",
-                )
-                .with_source(location));
-            }
-            let first = header(&answer, "content-range").and_then(|value| first_byte_of(&value));
-            if first != Some(range.start) {
-                return Err(Error::new(
-                    ErrorKind::IntegrityRangeMismatch,
-                    format!(
-                        "name a source that serves the span it is asked for, because this one was asked for the bytes from {} and answered with {}",
-                        range.start,
-                        header(&answer, "content-range")
-                            .unwrap_or_else(|| "no span at all".to_owned())
-                    ),
-                )
-                .with_source(location));
-            }
-        }
-
+        let fields = common_fields(&answer);
         Ok(Served {
             metadata: SourceMetadata {
                 location: SafeUrl::new(&served),
                 host: Host::new(Origin::of(&served)?.host()),
-                size: header(&answer, "content-length").and_then(|value| value.parse().ok()),
+                size: fields.size,
                 content: None,
                 interop: None,
                 identity: identity_of(header(&answer, "etag").as_deref()),
-                last_modified: header(&answer, "last-modified"),
-                supports_ranges: header(&answer, "accept-ranges")
-                    .is_some_and(|value| value.split(',').any(|unit| unit.trim() == "bytes")),
+                last_modified: fields.last_modified,
+                supports_ranges: fields.supports_ranges,
                 time_to_first_byte,
-                retry_after: header(&answer, "retry-after")
-                    .as_deref()
-                    .and_then(parse_retry_after),
+                retry_after: fields.retry_after,
                 cost: Cost::default(),
             },
-            body: HttpBody {
-                reader: Box::new(answer.into_body().into_reader()),
-            },
+            body: HttpBody::new(answer.into_body().into_reader()),
         })
     }
 
@@ -382,7 +426,7 @@ impl Source for HttpSource {
     }
 }
 
-fn header<T>(answer: &ureq::http::Response<T>, name: &str) -> Option<String> {
+pub(crate) fn header<T>(answer: &ureq::http::Response<T>, name: &str) -> Option<String> {
     answer
         .headers()
         .get(name)
@@ -390,7 +434,7 @@ fn header<T>(answer: &ureq::http::Response<T>, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn identity_of(etag: Option<&str>) -> SourceIdentity {
+pub(crate) fn identity_of(etag: Option<&str>) -> SourceIdentity {
     match etag {
         Some(tag) if tag.starts_with("W/") => SourceIdentity::WeakValidator(tag.to_owned()),
         Some(tag) => SourceIdentity::StrongValidator(tag.to_owned()),
@@ -402,7 +446,7 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse().ok().map(Duration::from_secs)
 }
 
-fn status_failure(
+pub(crate) fn status_failure(
     location: &str,
     status: u16,
     retry_after: Option<&str>,
@@ -447,7 +491,7 @@ fn status_failure(
     }
 }
 
-fn transport_failure(location: &str, reason: &ureq::Error) -> Error {
+pub(crate) fn transport_failure(location: &str, reason: &ureq::Error) -> Error {
     let (kind, retryable, action) = classify(reason);
     Error::new(kind, format!("{action}: {reason}"))
         .with_source(location)

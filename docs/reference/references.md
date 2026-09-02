@@ -13,7 +13,7 @@ never have to say which kind you have.
 | Remote manifest | `https://lab.edu/eeg.yaml` |
 | Direct file | `https://host/x.tar.zst` |
 | Local file or directory | `file:///data/raw`, `./src` |
-| Object store | `s3://bucket/prefix/` |
+| Object store prefix | `https://s3.amazonaws.com/bucket/prefix/` |
 | Provider | `hf:datasets/org/name@rev`, `zenodo:10.5281/zenodo.1234567` |
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
@@ -57,16 +57,17 @@ $ fetchloom get ./data.yaml --output out --json
 {"status":"materialized","dataset":"sample","tree":"blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87","entries":2, ... }
 ```
 
-The rest fail, and the object-store form says exactly why:
-
-```
-$ fetchloom get s3://bucket/prefix/ --json
-{"kind":"reference.unresolved", ... ,"next_action":"this build resolves only a local path or a file: location, not s3://bucket/prefix/"}
-```
-
 A bare name, a provider reference and a content address report that the string
 does not name a path that exists, which is true and is not the reason you want.
 None of them is resolvable in this build.
+
+There is no `s3://` form. An `s3://bucket/prefix/` reference has nowhere to put
+the endpoint that serves it, because the authority slot of that form is spent on
+the bucket and four different vendors serve the protocol. It could only be
+completed from configuration on the machine reading it, which would make one
+reference name different bytes on different machines, and a reference that does
+that cannot carry a lock across a machine. An object store prefix is named by the
+endpoint that serves it, which travels with the reference.
 
 ## One object or many
 

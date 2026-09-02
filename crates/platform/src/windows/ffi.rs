@@ -19,6 +19,9 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT,
 };
+use windows_sys::Win32::Security::Credentials::{
+    CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+};
 use windows_sys::Win32::Security::{
     GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenOwner, TokenUser,
@@ -683,4 +686,41 @@ fn sid_text(sid: PSID) -> io::Result<String> {
     // SAFETY: the string was allocated by the call above and is freed once, and nothing borrows it afterwards.
     unsafe { LocalFree(text.cast()) };
     Ok(rendered)
+}
+
+/// What the credential store returns when it holds nothing under a target.
+const ERROR_NOT_FOUND: i32 = 1168;
+
+/// Reads the blob a generic credential holds, when the store holds one.
+pub(crate) fn read_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
+    let wide: Vec<u16> = std::ffi::OsStr::new(target)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut held: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: the target is a NUL terminated wide string that outlives the call, and the out pointer is owned here and freed below.
+    let ok = unsafe { CredReadW(wide.as_ptr(), CRED_TYPE_GENERIC, 0, &raw mut held) };
+    if ok == 0 {
+        let failure = io::Error::last_os_error();
+        if failure.raw_os_error() == Some(ERROR_NOT_FOUND) {
+            return Ok(None);
+        }
+        return Err(failure);
+    }
+    if held.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: the call succeeded and returned a non-null credential, so the blob pointer and its length are the ones the store wrote.
+    let blob = unsafe {
+        let credential = &*held;
+        let length = credential.CredentialBlobSize as usize;
+        if credential.CredentialBlob.is_null() || length == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(credential.CredentialBlob, length).to_vec()
+        }
+    };
+    // SAFETY: the pointer came from a successful CredReadW and is freed exactly once here.
+    unsafe { CredFree(held.cast::<c_void>()) };
+    Ok(Some(blob))
 }
