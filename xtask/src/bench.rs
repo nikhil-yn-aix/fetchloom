@@ -1009,10 +1009,12 @@ fn hosts_cause(baseline: &Baseline) -> Option<String> {
     Some(format!(
         "many-hosts carries the largest ratio on this page and most of it is not transfer cost. \
          The regime injects {} ms of latency into every request so that a per-host ceiling has \
-         something to hide, and it issues {requests:.0} of them one after another, which is \
-         {injected:.0} ms of the {wall:.0} ms measured. Most of the remainder is the backoff its \
-         rate limited host asks for. The alternative pays the same injected latency and waits out \
-         none of the backoff.",
+         something to hide, and it issues {requests:.0} of them. Those requests are not serial: \
+         the run holds several in flight per host, so the injected latency costs a fraction of the \
+         {injected:.0} ms it would cost if they were. Most of the {wall:.0} ms measured is the \
+         backoff the rate limited host asks for, which this run waits out one request at a time \
+         because a host asking to be left alone drives its count back to one. The alternative pays \
+         the same injected latency and waits out none of the backoff.",
         HOST_LATENCY.as_millis()
     ))
 }

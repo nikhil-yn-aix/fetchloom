@@ -7484,3 +7484,51 @@ as one.
 
 Sources: features.md:63; `crates/engine/src/tuning.rs`;
 `crates/engine/tests/tuning.rs`.
+
+## Phase 7.5. The regime matrix with real concurrency, and what it did not prove
+
+roadmap.md:123 says phase 6 is done when default settings beat hand-tuned fixed
+settings across the regime matrix. The matrix was re-run with concurrency real,
+defaults against `--concurrency 4 --per-host 4`, which is what a competent person
+picks when told to fix the numbers: the politeness ceiling for a host and one
+transfer per core on a small machine.
+
+Defaults do not beat hand-tuned settings. They tie with them. That is the answer
+and roadmap.md:123 is not closed by it.
+
+Six of the eight regimes issue no network request at all, so no concurrency
+setting can change what they do, and on this machine their wall times swing wider
+than any setting could move them. cold-cache measured 979, 1435, 1374 and 1008 ms
+in four consecutive runs alternating between the two settings, with the two
+fastest and the two slowest split one each across them. Nothing can be concluded
+from those six rows and nothing is.
+
+cold-transfer and many-hosts are the two that reach a network. cold-transfer moves
+one object, where there is nothing to hold in flight. That leaves many-hosts, and
+on it defaults measured 9694 ms against 9654 ms hand-tuned at four, 9706 ms at
+two, 9742 ms with a global of eight, and 11058 ms with the per-host ceiling fixed
+at one. Defaults land inside the noise of every plausible fixed setting and beat
+only the implausible one.
+
+The reason is in the regime rather than in the controller. Half of many-hosts'
+servers answer 429, and a host that asks to be left alone has its count halved to
+one, so half the regime runs at one transfer in flight by contract and no ceiling
+above one changes it. The recorded measurements from a run say exactly this: the
+clean host settles at four, the rate limited host at one. The regime was not
+adjusted to make the number better.
+
+The many-hosts row on benchmarks.md was re-attributed. It said the run issues its
+forty requests one after another, which was true when it was written and is not
+now. It says instead that the requests are held several in flight per host, that
+the injected latency therefore costs a fraction of the four seconds it would cost
+serially, and that most of the wall is backoff the rate limited host asks for and
+this run waits out one request at a time.
+
+The published numbers were re-recorded on a quiet machine. The many-hosts ratio
+moved from 22.66x to 4.58x, and almost none of that is Fetchloom: its own number
+moved 8581 to 9672 ms, and curl moved 379 to 2114 ms on the same regime. The
+ratio fell because the alternative got slower, which is a different claim from the
+code getting faster and is published as such.
+
+Sources: roadmap.md:123; `docs/benchmarks.md`; `xtask/src/bench.rs`;
+`benchmarks/x86_64-pc-windows-msvc.json`.
