@@ -194,13 +194,23 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// Starts a server on a port the platform chooses.
+    /// Starts a server on IPv4 loopback, on a port the platform chooses.
     ///
     /// # Errors
     ///
     /// Fails when no port can be bound.
     pub fn start(script: Script) -> std::io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        Self::start_on("127.0.0.1", script)
+    }
+
+    /// Starts a server on the loopback address given, on a port the platform
+    /// chooses, for a test that needs two hosts rather than two ports.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no port can be bound.
+    pub fn start_on(loopback: &str, script: Script) -> std::io::Result<Self> {
+        let listener = TcpListener::bind((loopback, 0))?;
         let address = listener.local_addr()?;
         let received = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));

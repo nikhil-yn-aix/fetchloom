@@ -23,6 +23,7 @@ use toml as _;
 #[cfg(windows)]
 use windows_sys as _;
 
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -738,6 +739,74 @@ fn no_tuning_setting_changes_the_bytes_a_run_produces() {
         assert_eq!(
             work, other_work,
             "{tuning:?} did different deterministic work than {settled:?}"
+        );
+    }
+}
+
+#[test]
+fn no_tuning_setting_changes_what_two_hosts_produce() {
+    let objects: Vec<Vec<u8>> = (0..6)
+        .map(|index| {
+            (0..8192_usize)
+                .map(|offset| u8::try_from((offset + index * 31) % 251).unwrap_or(0))
+                .collect()
+        })
+        .collect();
+
+    let settings: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["--concurrency", "1", "--per-host", "1"],
+        vec!["--concurrency", "8", "--per-host", "4"],
+        vec!["--concurrency", "8", "--per-host", "2"],
+        vec!["--deterministic-io"],
+    ];
+
+    let mut produced = Vec::new();
+    for tuning in &settings {
+        let workspace = Workspace::new();
+        let mut servers = Vec::new();
+        let mut artifacts = String::new();
+        for (index, object) in objects.iter().enumerate() {
+            let server = TestServer::start(Script::serving(object.clone())).unwrap();
+            let origin = if index % 2 == 0 {
+                server.origin().replace("127.0.0.1", "localhost")
+            } else {
+                server.origin()
+            };
+            writeln!(
+                artifacts,
+                "  - id: object-{index}\n    sources: [{origin}/object-{index}]"
+            )
+            .unwrap();
+            servers.push(server);
+        }
+        workspace.write(
+            "dataset.yaml",
+            format!("name: two-hosts\nartifacts:\n{artifacts}").as_bytes(),
+        );
+
+        let mut arguments = vec!["get", "dataset.yaml", "--output", "out", "--json"];
+        arguments.extend_from_slice(tuning);
+        let run = workspace.run(&arguments);
+        assert_eq!(run.code(), 0, "{tuning:?} said {}", run.err());
+        let (tree, _) = shape(&run);
+        produced.push((tuning, tree, digests_under(&workspace.path().join("out"))));
+    }
+
+    let (settled, tree, files) = &produced[0];
+    assert_eq!(
+        files.len(),
+        objects.len(),
+        "the two-host manifest did not materialize, so this matrix compares nothing"
+    );
+    for (tuning, other_tree, other_files) in &produced[1..] {
+        assert_eq!(
+            tree, other_tree,
+            "{tuning:?} produced a different tree digest than {settled:?} across two hosts"
+        );
+        assert_eq!(
+            files, other_files,
+            "{tuning:?} produced different content digests than {settled:?} across two hosts"
         );
     }
 }

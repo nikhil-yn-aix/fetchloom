@@ -1034,12 +1034,14 @@ fn recorded_hosts(cache: &Path) -> Vec<RecordedHost> {
 pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let mut times = Vec::with_capacity(iterations as usize);
     let mut work = Work::default();
+    let mut curls = Vec::with_capacity(iterations as usize);
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
         let cache = scratch.join("cache");
 
         let mut servers = Vec::with_capacity(OBJECTS_PER_HOST * 2);
+        let mut urls = Vec::with_capacity(OBJECTS_PER_HOST * 2);
         let mut artifacts = String::new();
         for index in 0..OBJECTS_PER_HOST * 2 {
             let body = non_repeating_bytes(index + 1, HOST_OBJECT_BYTES);
@@ -1052,17 +1054,15 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
             } else {
                 script
             };
-            let server = TestServer::start(script).map_err(BenchError::Process)?;
-            let origin = if index % 2 == 0 {
-                server.origin().replace("127.0.0.1", "localhost")
-            } else {
-                server.origin()
-            };
+            let loopback = if index % 2 == 0 { "::1" } else { "127.0.0.1" };
+            let server = TestServer::start_on(loopback, script).map_err(BenchError::Process)?;
+            let origin = server.origin();
             writeln!(
                 artifacts,
-                "  - id: object-{index}\n    sources: [{origin}/object-{index}]"
+                "  - id: object-{index}\n    sources: [\"{origin}/object-{index}\"]"
             )
             .map_err(|_| BenchError::MissingBinary(scratch.clone()))?;
+            urls.push(format!("{origin}/object-{index}"));
             servers.push(server);
         }
 
@@ -1088,10 +1088,15 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         }
         let outcome: RunOutcome =
             serde_json::from_slice(&output.stdout).map_err(BenchError::MalformedResult)?;
-        drop(servers);
-
         let hosts = recorded_hosts(&cache);
         decided(&hosts)?;
+
+        let mut fetched = 0.0;
+        for (index, url) in urls.iter().enumerate() {
+            fetched += curl_to(url, &scratch.join(format!("curl-{index}")))?;
+        }
+        curls.push(fetched);
+        drop(servers);
 
         times.push(elapsed.as_secs_f64() * 1000.0);
         work = outcome.work;
@@ -1110,13 +1115,32 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         .into_iter()
         .chain(work_metrics(&work))
         .collect(),
-        alternative: None,
+        alternative: Some(Alternative {
+            tool: "curl".to_owned(),
+            does: "fetches the same sixteen objects from the same two servers one after \n                   another, hashing nothing, verifying nothing, and never backing off when a \n                   host asks it to"
+                .to_owned(),
+            wall_ms: median(curls),
+        }),
     }])
+}
+
+/// Reports whether anything the run was given left the controller free to
+/// decide. A per-host ceiling of one is not an inert controller, it is a
+/// controller with one choice, so the regime measures such a run and asserts
+/// nothing about adaptation in it.
+fn free_to_decide() -> bool {
+    std::env::var("FETCHLOOM_PER_HOST")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .is_none_or(|ceiling| ceiling > 1)
 }
 
 /// Refuses a run in which the controller decided nothing, because a regime that
 /// passes with the controller inert is not a regime.
 fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
+    if !free_to_decide() {
+        return Ok(());
+    }
     if hosts.len() != 2 {
         return Err(BenchError::ControllerInert(format!(
             "the run recorded {} hosts rather than the two it was served by, so the measurement \
