@@ -149,6 +149,7 @@ pub struct Controller {
     ceiling: u32,
     fixed: bool,
     capped: u32,
+    held_down: bool,
     bytes: u64,
     nanos: u64,
     before: Option<u64>,
@@ -166,6 +167,7 @@ impl Controller {
             ceiling,
             fixed: false,
             capped: ceiling,
+            held_down: false,
             bytes: 0,
             nanos: 0,
             before: None,
@@ -181,6 +183,7 @@ impl Controller {
             ceiling: at.get(),
             fixed: true,
             capped: at.get(),
+            held_down: false,
             bytes: 0,
             nanos: 0,
             before: None,
@@ -208,9 +211,16 @@ impl Controller {
             return;
         }
         match answer {
+            Answer::Clean if self.held_down => self.held_down = false,
             Answer::Clean => self.rise_while_it_helps(),
-            Answer::RateLimited => self.settle_at((self.permitted / 2).max(1)),
-            Answer::Faltered => self.settle_at(self.permitted.saturating_sub(1).max(1)),
+            Answer::RateLimited => {
+                self.held_down = true;
+                self.settle_at((self.permitted / 2).max(1));
+            }
+            Answer::Faltered => {
+                self.held_down = true;
+                self.settle_at(self.permitted.saturating_sub(1).max(1));
+            }
         }
     }
 

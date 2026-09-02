@@ -523,3 +523,22 @@ fn a_host_that_has_delivered_less_than_a_window_rises_on_a_clean_answer() {
         "a run that has measured nothing yet refused to measure whether a second stream helps"
     );
 }
+
+#[test]
+fn the_transfer_that_lowered_the_count_does_not_raise_it_again_by_succeeding() {
+    let mut controller = Controller::start(Some(4), count(8));
+    controller.answered(Answer::Faltered);
+    assert_eq!(controller.permitted(), 3);
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        3,
+        "a transfer that succeeded after lowering the count raised it straight back"
+    );
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        4,
+        "a transfer that lowered nothing did not raise the count"
+    );
+}

@@ -73,9 +73,16 @@ $ fetchloom get https://s3.amazonaws.com/bucket/prefix/ --output data --json
 listed entry fails before anything is published. Running it again against a
 destination it already holds reports `unchanged` and writes nothing.
 
-A bare name, a provider reference and a content address report that the string
-does not name a path that exists, which is true and is not the reason you want.
-None of them is resolvable in this build.
+A bare name, a namespaced release, a provider reference, a metadata document and
+a content address are each recognized and refused by the form they are, naming
+what this build does resolve:
+
+```
+$ fetchloom get some-dataset --output x --json
+{"kind":"reference.unresolved", ... ,"next_action":"this build resolves only a local path or a file: location, not some-dataset which is a dataset name"}
+$ fetchloom get zenodo:1234 --output y --json
+{"kind":"reference.unresolved", ... ,"next_action":"this build resolves only a local path or a file: location, not zenodo:1234 which is a provider identifier"}
+```
 
 There is no `s3://` form. An `s3://bucket/prefix/` reference has nowhere to put
 the endpoint that serves it, because the authority slot of that form is spent on
@@ -92,8 +99,17 @@ entry, under the object's own name. A reference naming a container produces
 every entry the container holds. The two differ only in what is walked, never in
 what a destination is.
 
-Directory listing, which is how a container reference over the network is
-expanded, is not in this build. Only a local directory can be walked.
+A listing counts the links it ignored because they pointed outside the prefix,
+and reports the count between `listing.start` and `listing.end`:
+
+```
+{"event":"listing.start","source":"http://host/set/"}
+{"event":"listing.skipped","count":1}
+{"event":"listing.end","entries":2,"duration_ms":3}
+```
+
+A link resolving to the container itself points at the prefix rather than outside
+it and is not counted. A relative escape and an absolute link elsewhere are.
 
 ## Archives
 

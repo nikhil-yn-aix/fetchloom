@@ -1536,3 +1536,41 @@ at once, so `--concurrency` and `--per-host` bound nothing, and contracts gives
 both flags meanings they do not have. This audit measured eight regimes and did
 not ask what the ceilings were doing, because every regime it measured was
 sequential by construction.
+
+**Phase 7.5, against this document.** The largest finding of phase 7, recorded
+above as belonging to phase 6, is closed: `--concurrency` and `--per-host` bound
+transfers actually in flight, and a per-host ceiling of one measurably differs
+from four. The eighth regime was re-run with real concurrency and its published
+row re-attributed, because that row's explanation said the forty requests are
+issued one after another and concurrency made that false.
+
+**F8 is closed.** The seventh event this document named after the fact,
+`listing.skipped`, is emitted: `Source::list` now returns a `Listing` carrying
+the entries and the count of links that pointed outside the prefix, which is the
+place the contract's count had nowhere to live. `credential.offer`,
+`credential.declined`, `source.probe` and `source.selected` are all emitted by
+real runs, because the probe phase they waited on exists. `resolve.alias` remains
+phase 8's. Of the ten events this audit found unemitted, one is left.
+
+**The phase 7 gate's open half is closed.** That gate said adapter behavior is
+behind the seam and adapter dispatch is not, and named `run.rs`'s
+`is_remote(reference) && reference.ends_with('/')` with `HttpSource` and
+`ObjectStoreSource` at five sites. The seam now carries `serves`, dispatch runs
+through a registry, and a third adapter that exists only in a test is reached
+without `run.rs` naming it. roadmap.md:135 holds for dispatch as well as for
+behavior.
+
+**What this document deferred and is still deferred.** F21's cold local fetch
+writing twice still needs a cloning volume this matrix does not have. F26's seams
+holding whole lists still needs the million-object measurement. Neither moved and
+neither is claimed to have.
+
+**One finding this document would make today that it did not then.** It checked
+that features.md agreed with contracts.md and did not check that either agreed
+with the binary. Nine sentences in features.md described behavior the build does
+not have, five of them for one reason and four for four different ones, and none
+of the nine was visible to a test because a test asserts what the code does
+rather than what a document promises. features.md now marks every unbuilt claim
+and states that convention at the top, so an unmarked sentence is a promise about
+today. Nothing enforces that mechanically, which is the shape of defect this
+audit exists to find and the next audit should look for again.

@@ -122,6 +122,46 @@ publication, `normal` flushes the file, `fast` flushes nothing and relies on the
 atomic rename alone. `fast` can lose a completed object to a power failure. It
 cannot leave a torn one.
 
+### Which source is taken
+
+An artifact naming several sources is probed rather than raced. Each candidate
+gets one bounded metadata request, made against all of them at once, and up to
+four candidates are probed however many the manifest names. The candidates are
+then scored on a fixed order of readings and the run says which it took and why:
+
+```
+{"event":"source.probe","source":"http://127.0.0.1:5001/object"}
+{"event":"source.probe","source":"http://127.0.0.1:5002/object"}
+{"event":"source.selected","source":"http://127.0.0.1:5002/object","reason":"it serves part of an object and the alternatives do not"}
+```
+
+The reason is one of a fixed set, and the last of them is manifest order: when
+nothing measured separates two candidates the earlier one in the manifest is
+taken, and the run says `nothing measured separated the candidates, so the
+manifest did`. A manifest naming one source is not probed at all and the reason
+is `the manifest named one source`. The reason is recorded in the receipt as
+`source_reason`.
+
+A candidate that refused the run for want of a credential, whose host has been
+measured faster than the one that was taken, produces a `credential.offer`
+naming the projected saving. A run that cannot ask declines it and says so.
+
+### When one object is split
+
+One object is fetched as several ranges at once only when four conditions all
+hold: the object is larger than 64 MiB, the source states an identity that
+cannot change under the same name, the source serves ranges, and this run has
+measured the host as serving more with more streams. A split that was wanted and
+refused emits a `degrade` naming the condition that failed:
+
+```
+{"event":"degrade","requested":"one object fetched as several ranges at once","used":"the object fetched whole, in one stream","reason":"the source states no identity that cannot change under the same name"}
+```
+
+Over plain HTTP that last reason is the usual one: an entity tag is a strong
+validator, not an immutable identity, so only the object store adapter reaches a
+split today.
+
 ## plan
 
 ```

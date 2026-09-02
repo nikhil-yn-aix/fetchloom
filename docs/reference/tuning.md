@@ -33,16 +33,20 @@ ceiling of 4 unless a host already has a recorded measurement, in which case a
 run starts from what that measurement found and lets throughput move it from
 there. `--deterministic-io` turns that off; see below.
 
-Neither ceiling changes what this build does. A run transfers one object at a
-time: the controller computes a permitted count per host, moves it on what the
-host answers and records it for the next run, and nothing ever runs that many
-transfers at once. Measured on the many-hosts regime, sixteen objects across two
-hosts behind 100 ms of injected latency per request, medians of three: settled
-defaults 12696 ms, a fixed ceiling of one 12751 ms, a fixed ceiling of eight
-12725 ms. Ceilings differing by a factor of eight agree within 0.4 percent
-because every request waited for the one before it. Concurrent transfer of
-independent artifacts is not in this build, and until it is, both flags change
-what is recorded and not what is done.
+Both ceilings bound transfers actually in flight. Independent artifacts of one
+manifest, and the entries of one container, are transferred at once inside them.
+Ordering is unchanged by it: a run publishes and reports in manifest order
+whatever order the transfers finished in, and a failing artifact stops the run at
+the first failure in that order rather than at whichever thread failed first.
+
+Measured on the many-hosts regime, sixteen objects across two hosts behind 100 ms
+of injected latency per request, medians of five: settled defaults 9694 ms, a
+fixed per-host ceiling of one 11058 ms, of two 9706 ms, and of four with a global
+of eight 9742 ms. A ceiling of one is 14 percent slower than the rest, which is
+the measurable difference between one transfer in flight per host and several.
+Above two the regime stops separating them, because half its servers answer with
+a rate limit and a host that asks to be left alone has its count halved back to
+one whatever the ceiling above it says.
 
 `--aggressive` removes the politeness ceiling from the per-host bound, letting
 it rise to the global ceiling. It prints a warning naming the ceiling it is

@@ -7574,3 +7574,116 @@ million-object measurement.
 
 Sources: `docs/features.md`; `docs/roadmap.md`; `crates/cli/src/terminal.rs`;
 `crates/cli/tests/contract.rs`; `crates/cli/tests/precedence.rs`.
+
+## Phase 7.5 gate
+
+Question: Are the six sentences this phase named true, and what did closing them
+leave still open.
+
+**The six, item by item.**
+
+*features.md:49, independent artifacts transfer concurrently inside global and
+per-host limits.* True. `crates/engine/src/flights.rs` is the scheduler and
+`crates/cli/tests/concurrent.rs` proves it three ways: eight artifacts across
+eight hosts complete in materially less than eight times one artifact's time; a
+per-host ceiling of one and of four measurably differ against one host; and no
+setting changes the digests or the tree digest a run produces. Ordering is
+deterministic under it, which was the first test written and the one that had to
+fail first: outputs stop at the first failure in manifest order whichever thread
+finished first, asserted in `crates/engine/tests/flights.rs`.
+
+*features.md:49, a single object splits only under four conditions.*
+True. `crates/engine/src/split.rs` checks size, immutable identity, range
+support, and a measured width, in that order, and `crates/engine/tests/split.rs`
+asserts each refusal by name. `crates/cli/tests/ranged.rs` drives a real object
+store: four ranges at once, one digest whether split or whole, and a `degrade`
+naming the condition that failed when it was not split.
+
+*features.md:51, several sources are probed cheaply in parallel and one is
+picked.* True, and not raced. `crates/engine/src/candidate.rs` holds the fixed
+scoring order from contracts.md:836, ties break by manifest order, and at most
+`probed_candidates` are asked. `crates/cli/tests/probe.rs` asserts that a losing
+candidate is never asked for bytes, that one source is not probed at all, and
+that the reason is recorded in the receipt.
+
+*features.md:63, the count per host rises while throughput improves.* True as of
+this phase. The controller sums what a host delivered at the count it permits and
+raises only when that beats the count below, giving up a count that did not help
+for the rest of the run. Below a window of bytes nothing has been measured and a
+clean answer rises as before, because the second stream is what measures whether
+a second stream helps. `crates/engine/tests/tuning.rs`.
+
+*features.md:165, the offer names the two options with the measured difference.*
+True. It could compute the difference before this phase and had no caller;
+scoring two candidates gave it one. `crates/cli/tests/credential_and_terms.rs`
+asserts a real run offers and, being unable to ask, declines and says so.
+
+*features.md:163, provider-native helpers.* Not built, and the sentence is
+corrected rather than the tier built. Phase 7 owns it.
+
+**Three more the walk found.** Protocol choice is not measured per host and
+cannot be on an HTTP/1.1-only client; the post-run hint and its flag are
+contracted, in no phase, and asserted absent; the live display degrades to plain
+and `watch` does not exist. All three sentences are corrected.
+
+**What closing them broke, and what that says.** Concurrency reached three
+defects nothing else could. Two appends to one process's pack read the same
+end-of-pack offset, so one entry pointed into another's bytes -- silent
+corruption in the thing this project exists to prevent, which survived both the
+eight-racing-writers test and the thousand-kill loop because those race across
+processes and each process has its own pack. Every measurement, credential and
+in-flight count for a bracketed IPv6 host had been filed under `[` since phase 6.
+And `WriteRate` was judging whichever length the socket handed over, reading
+socket jitter as a disk collapse about one run in three. None of the three is a
+concurrency bug. Concurrency is what made them observable.
+
+A fourth surfaced only in the container lane, on the last verify of the phase. A
+volume that collapsed under a transfer lowered the count, and then the same
+transfer's own success raised it straight back, so on Linux -- where the copy
+does fewer, larger writes and the collapse is detected once rather than several
+times -- the disk's signal was erased by the transfer that produced it. A
+transfer that lowered the count no longer raises it by succeeding.
+
+**Answering the question directly.** Are `--concurrency` and `--per-host`
+bounding real in-flight transfers? Yes. Does a per-host ceiling of one measurably
+differ from four? Yes: on the many-hosts regime, medians of five, one measured
+11058 ms against 9694 ms settled and 9742 ms fixed at four, a 14 percent
+difference. That is a real separation and it is smaller than it should be,
+because half that regime's servers answer with a rate limit and a host asking to
+be left alone runs at one transfer in flight whatever the ceiling says.
+
+**What is not closed.** roadmap.md:123 asks that default settings beat hand-tuned
+fixed settings across the regime matrix. They tie. Six of the eight regimes issue
+no request and cannot answer the question, one moves a single object, and on the
+one that remains defaults land inside the noise of every plausible fixed setting.
+This phase does not close phase 6's performance half, and says so rather than
+closing it.
+
+Sources: `docs/features.md`; `docs/roadmap.md`; `crates/engine/src/flights.rs`;
+`crates/engine/src/candidate.rs`; `crates/engine/src/split.rs`;
+`crates/engine/src/erased.rs`; `docs/benchmarks.md`.
+
+## Phase 7.5. The volume's signal was erased by the transfer that produced it
+
+The container lane failed one test on the phase's first full verify:
+`a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_bytes`
+passed on Windows and failed on Linux, and the failure was real rather than
+flaky.
+
+A collapse lowers the count from inside the copy. The transfer then succeeds, and
+a first-attempt success is a clean answer, which raises the count by one. On
+Windows the copy makes many small writes, the collapse is judged several times,
+and the count falls far enough that one clean answer does not undo it. On Linux
+the copy makes fewer, larger writes, the collapse is judged once, and the same
+transfer that lowered the count raised it straight back. The assertion is about
+the count after the transfer, so only Linux could see it.
+
+Both platforms were wrong; only one of them was wrong loudly. A transfer that
+lowered the count no longer raises it by succeeding: the controller remembers
+that it was held down and the next clean answer clears that memory instead of
+adding one. The rule applies to a rate limit as well, though nothing reaches it
+there, because a retried transfer never reports a clean answer in the first
+place.
+
+Sources: `crates/engine/src/tuning.rs`; `crates/engine/tests/tuning.rs`;
+`crates/cli/tests/transfer.rs`.
