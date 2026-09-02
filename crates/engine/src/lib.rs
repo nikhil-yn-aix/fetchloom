@@ -21,6 +21,7 @@ pub mod license;
 pub mod limits;
 pub mod lock;
 pub mod manifest;
+pub mod metadata;
 pub mod outboard;
 pub mod outcome;
 pub mod partial_key;
