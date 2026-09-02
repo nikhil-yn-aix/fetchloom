@@ -12,6 +12,7 @@ mod tar_reader;
 mod zip_reader;
 
 pub use extract::extract;
+pub use path::validate_member_path;
 pub use reader::ArchiveReader;
 pub use recognize::{SNIFF_LENGTH, format_from_extension, recognize};
 pub use resolve::resolve;

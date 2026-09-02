@@ -1497,6 +1497,58 @@ fn container_name(location: &str) -> String {
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
 )]
+/// Lists a container, transfers every entry into the cache, and returns what
+/// each one's bytes hashed to, which is the only digest inference ever records
+/// for a source that stated none.
+///
+/// # Errors
+///
+/// Fails when the container cannot be listed, when an entry cannot be
+/// transferred, or when the run has no store to put the bytes in.
+pub fn infer_remote(
+    with: &Materialization<'_>,
+    location: &str,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Vec<(String, ContentDigest, u64)>, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    let Some(cache) = with.cache else {
+        return Err(Error::new(
+            ErrorKind::CacheCorrupt,
+            "make a directory Fetchloom can write to, because inference streams every object it reads through a store",
+        ));
+    };
+    let Some((source, _)) = with.adapters.serving(location) else {
+        return Err(unserved(location));
+    };
+    let listing_started = Span::start();
+    emit(EventPayload::ListingStart {
+        source: SafeUrl::new(location),
+    });
+    let credential = resolve_credential(with.policy, &host_of(location))?;
+    let listing = source.list(location, credential.as_ref())?;
+    if listing.skipped > 0 {
+        emit(EventPayload::ListingSkipped {
+            count: listing.skipped,
+        });
+    }
+    let listed = selected_entries(location, listing.entries, &Selection::default())?;
+    emit(EventPayload::ListingEnd {
+        entries: listed.len() as u64,
+        duration_ms: listing_started.elapsed_ms(),
+    });
+    transfer_container_entries(
+        with, cache, source, location, &listed, observer, sequence, &emit,
+    )
+}
+
+/// Lists a container, transfers every entry it holds, and materializes them
+/// into one destination.
+///
+/// # Errors
+///
+/// Fails when the container cannot be listed, when an entry cannot be
+/// transferred, and when the destination cannot be published.
 pub fn materialize_remote_container(
     with: &Materialization<'_>,
     location: &str,
@@ -2910,6 +2962,7 @@ fn publish_dataset(
     for artifact in resolved {
         expected.extend(dataset_entries(with, artifact, emit)?);
     }
+    let expected = with_ancestor_directories(expected)?;
     settle(
         with,
         destination,
@@ -2926,6 +2979,50 @@ fn publish_dataset(
     )
 }
 
+/// Returns where under the destination a plain artifact lands, which is its
+/// identifier and never the way one of its sources happens to spell it.
+///
+/// # Errors
+///
+/// Fails with `archive.unsafe_path` when the identifier is not a path the
+/// destination can hold, by exactly the rules an archive member passes.
+fn placement_of(artifact: &ResolvedArtifact, limits: &Limits) -> Result<String, Error> {
+    fetchloom_archive::validate_member_path(artifact.id.as_bytes(), limits.nesting_depth)
+}
+
+/// Returns the entries with one directory entry for every ancestor a file
+/// entry needs, because a tree records every directory it holds.
+fn with_ancestor_directories(entries: Vec<TreeEntry>) -> Result<Vec<TreeEntry>, Error> {
+    let mut held: std::collections::BTreeSet<String> = entries
+        .iter()
+        .map(|entry| entry_path_str(entry).to_owned())
+        .collect();
+    let mut wanted = Vec::new();
+    for entry in &entries {
+        let path = entry_path_str(entry);
+        let mut parts: Vec<&str> = path.split('/').collect();
+        parts.pop();
+        let mut prefix = String::new();
+        for part in parts {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            if held.insert(prefix.clone()) {
+                wanted.push(prefix.clone());
+            }
+        }
+    }
+    let mut all = entries;
+    for path in wanted {
+        all.push(TreeEntry::Directory {
+            path: EntryPath::new(&path)
+                .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+        });
+    }
+    Ok(all)
+}
+
 /// Returns the entries one resolved artifact contributes, writing nothing.
 fn dataset_entries(
     with: &Materialization<'_>,
@@ -2934,8 +3031,9 @@ fn dataset_entries(
 ) -> Result<Vec<TreeEntry>, Error> {
     let Some(format) = recognized_format(with, artifact.digest, &artifact.name, artifact.declared)?
     else {
+        let placement = placement_of(artifact, with.policy.limits())?;
         return Ok(vec![TreeEntry::File {
-            path: EntryPath::new(&artifact.name)
+            path: EntryPath::new(&placement)
                 .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
             size: artifact.size,
             mode: Mode::ReadWrite,
@@ -3011,30 +3109,33 @@ fn fill_dataset_staging(
                 emit,
             )?);
         } else {
-            {
-                let at = staging.join(&artifact.name);
-                if at.exists() {
-                    return Err(Error::new(
-                        ErrorKind::ArchiveCollision,
-                        format!(
-                            "rename one of them, because two artifacts both land on {}",
-                            artifact.name
-                        ),
-                    ));
-                }
-                place_object(with, artifact.digest, &at)?;
-                entries.push(TreeEntry::File {
-                    path: EntryPath::new(&artifact.name).map_err(|reason| {
-                        Error::new(ErrorKind::ReferenceUnresolved, reason.to_string())
-                    })?,
-                    size: artifact.size,
-                    mode: Mode::ReadWrite,
-                    content: artifact.digest,
-                });
+            let placement = placement_of(artifact, with.policy.limits())?;
+            let at = staging.join(&placement);
+            if at.exists() {
+                return Err(Error::new(
+                    ErrorKind::ArchiveCollision,
+                    format!("rename one of them, because two artifacts both land on {placement}"),
+                ));
             }
+            if let Some(parent) = at.parent() {
+                std::fs::create_dir_all(parent).map_err(|reason| {
+                    Error::new(
+                        ErrorKind::DestinationUnrepresentable,
+                        format!("make {} writable: {reason}", parent.display()),
+                    )
+                })?;
+            }
+            place_object(with, artifact.digest, &at)?;
+            entries.push(TreeEntry::File {
+                path: EntryPath::new(&placement)
+                    .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+                size: artifact.size,
+                mode: Mode::ReadWrite,
+                content: artifact.digest,
+            });
         }
     }
-    Ok(entries)
+    with_ancestor_directories(entries)
 }
 
 /// Returns what a run against a single object resolved, in the form the lock

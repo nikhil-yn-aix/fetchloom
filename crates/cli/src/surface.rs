@@ -289,6 +289,18 @@ pub enum Command {
         #[command(flatten)]
         transfer: Box<TransferFlags>,
     },
+    /// Infer a manifest and write it.
+    Init {
+        /// What to infer a manifest for.
+        #[arg(value_name = "url|dir")]
+        reference: String,
+        /// Where the manifest is written, rather than to standard output.
+        #[arg(long, short, value_name = "path")]
+        output: Option<PathBuf>,
+        /// Overwrite the file the manifest is written to.
+        #[arg(long)]
+        force: bool,
+    },
     /// Resolve and report what a run would do, moving no bytes.
     Plan {
         /// What to plan.

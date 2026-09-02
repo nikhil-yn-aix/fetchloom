@@ -14,6 +14,7 @@ use tempfile as _;
 #[cfg(all(test, windows))]
 use windows_sys as _;
 pub mod explain;
+pub mod inference;
 pub mod locked;
 pub mod logging;
 pub mod materialize;
