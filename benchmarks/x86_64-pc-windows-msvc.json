@@ -7,13 +7,13 @@
       "metrics": [
         {
           "name": "startup",
-          "value": 9.9,
+          "value": 8.7067,
           "unit": "ms",
           "kind": "timing"
         },
         {
           "name": "binary-size",
-          "value": 7271424.0,
+          "value": 7327744.0,
           "unit": "bytes",
           "kind": "deterministic"
         }
@@ -25,7 +25,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1916.2946000000002,
+          "value": 1571.5928999999999,
           "unit": "ms",
           "kind": "timing"
         },
@@ -59,7 +59,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "powershell Copy-Item -Recurse",
+        "does": "copies the same 64 files, hashing nothing and verifying nothing",
+        "wall_ms": 391.69419999999997
+      }
     },
     {
       "regime": "warm-cache",
@@ -67,7 +72,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 180.944,
+          "value": 239.8107,
           "unit": "ms",
           "kind": "timing"
         },
@@ -101,7 +106,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "powershell Copy-Item -Recurse",
+        "does": "copies the same 64 files again, which is what a tool with no cache must do",
+        "wall_ms": 391.69419999999997
+      }
     },
     {
       "regime": "cold-transfer",
@@ -109,7 +119,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 72.1188,
+          "value": 124.7392,
           "unit": "ms",
           "kind": "timing"
         },
@@ -143,7 +153,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "curl --output",
+        "does": "downloads the same object from the same server, hashing nothing, verifying nothing and publishing nothing",
+        "wall_ms": 32.2192
+      }
     },
     {
       "regime": "interrupted-transfer",
@@ -151,7 +166,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 390.1136,
+          "value": 403.267,
           "unit": "ms",
           "kind": "timing"
         },
@@ -185,7 +200,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "curl --output",
+        "does": "downloads the same object from the same server after its interruptions are spent, so it never resumes and never pays for one",
+        "wall_ms": 43.45
+      }
     },
     {
       "regime": "many-small-files",
@@ -193,7 +213,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 6663.9908,
+          "value": 9071.36,
           "unit": "ms",
           "kind": "timing"
         },
@@ -221,7 +241,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "powershell Copy-Item -Recurse",
+        "does": "copies the same 1024 files, hashing nothing and verifying nothing",
+        "wall_ms": 1290.836
+      }
     },
     {
       "regime": "one-large-file",
@@ -229,7 +254,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 872.4695,
+          "value": 1448.9821,
           "unit": "ms",
           "kind": "timing"
         },
@@ -254,6 +279,47 @@
         {
           "name": "file-operations",
           "value": 30.0,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ],
+      "alternative": {
+        "tool": "powershell Copy-Item -Recurse",
+        "does": "copies the same 256 MiB file, hashing nothing and verifying nothing",
+        "wall_ms": 486.2797
+      }
+    },
+    {
+      "regime": "many-hosts",
+      "iterations": 3,
+      "metrics": [
+        {
+          "name": "wall",
+          "value": 25092.3574,
+          "unit": "ms",
+          "kind": "timing"
+        },
+        {
+          "name": "bytes-read",
+          "value": 0.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 6292608.0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 40.0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 325.0,
           "unit": "operations",
           "kind": "deterministic"
         }

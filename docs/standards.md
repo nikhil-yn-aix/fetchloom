@@ -134,7 +134,7 @@ Optimization is a design constraint, not a later pass. These rules apply from th
 
 ### Measure
 
-No optimization merges without a benchmark in the harness showing the gain on a named regime. Regimes are: no-op run, cold cache, warm cache, cold transfer, interrupted transfer, many small files, and one large file. A slow disk and a constrained network are named nowhere in the harness, because neither can be produced on a machine in the verification lane without a fault injector this build does not have.
+No optimization merges without a benchmark in the harness showing the gain on a named regime. Regimes are: no-op run, cold cache, warm cache, cold transfer, interrupted transfer, many small files, one large file, and many hosts. The eighth was added in phase 6. The first seven predate the adaptive controller and none of them exercises it -- four make no network request at all, and the two that do make two and six -- so a controller with a politeness ceiling of four has nothing to decide in any of them, and a controller no regime exercises cannot be gated. The many-hosts regime serves many objects from two hosts and refuses to pass unless the controller decided something in it. A slow disk and a constrained network are named nowhere in the harness, because neither can be produced on a machine in the verification lane without a fault injector this build does not have.
 
 The no-op regime is a locked run against an unchanged destination. It measures startup, configuration discovery, and reconciliation, and it bounds how much a dependency may cost simply by existing.
 

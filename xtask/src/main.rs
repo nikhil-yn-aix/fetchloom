@@ -136,10 +136,15 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
         Ok(regimes) => regimes,
         Err(code) => return code,
     };
+    let hosts = match measure_hosts(&binary, iterations) {
+        Ok(regimes) => regimes,
+        Err(code) => return code,
+    };
     let mut regimes = vec![regime];
     regimes.extend(cache);
     regimes.extend(transfer);
     regimes.extend(shapes);
+    regimes.extend(hosts);
     let mut current = bench::Baseline {
         target: target_triple(),
         regimes,
@@ -313,6 +318,16 @@ fn measure_cache(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResu
 
 fn measure_transfer(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
     match bench::run_transfer(binary, iterations.min(3)) {
+        Ok(regimes) => Ok(regimes),
+        Err(error) => {
+            eprintln!("{error}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn measure_hosts(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeResult>, ExitCode> {
+    match bench::run_hosts(binary, iterations.min(3)) {
         Ok(regimes) => Ok(regimes),
         Err(error) => {
             eprintln!("{error}");

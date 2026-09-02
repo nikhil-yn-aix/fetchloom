@@ -99,6 +99,8 @@ pub enum BenchError {
     },
     /// A run's `--json` result could not be parsed.
     MalformedResult(serde_json::Error),
+    /// The regime ran but the adaptive controller decided nothing in it.
+    ControllerInert(String),
     /// A metric worsened by more than the gate allows.
     Regression {
         /// The regime the metric belongs to.
@@ -125,6 +127,9 @@ impl std::fmt::Display for BenchError {
                 f,
                 "{regime} carries {metric}, which the baseline does not, so record a baseline before gating on it"
             ),
+            Self::ControllerInert(reason) => {
+                write!(f, "the many-hosts regime decided nothing: {reason}")
+            }
             Self::MalformedResult(error) => {
                 write!(f, "the run's result could not be read: {error}")
             }
@@ -978,4 +983,168 @@ pub fn publish(baseline: &Baseline, lane: &str) -> String {
         );
     }
     page
+}
+
+/// How many objects each host serves in the many-hosts regime.
+///
+/// The controller starts a host it has measured nothing about at
+/// `FIRST_PER_HOST`, adds one after a clean transfer, and halves on a rate
+/// limit. Eight is the smallest count that exercises the whole cycle rather
+/// than one end of it: two clean transfers to climb from two to the politeness
+/// ceiling of four, a third to prove it holds there rather than climbing past
+/// it, a rate limit to halve it, and the rest to climb back. Anything smaller
+/// records a number that only proves the controller starts somewhere.
+const OBJECTS_PER_HOST: usize = 8;
+
+/// How many bytes each of those objects holds.
+const HOST_OBJECT_BYTES: usize = 128 * 1024;
+
+/// What one host answered, read back from the measurement the run recorded.
+#[derive(Debug, Deserialize)]
+struct RecordedHost {
+    host: String,
+    measurement: fetchloom_engine::tuning::HostMeasurement,
+}
+
+/// Returns what every host the run measured was recorded as, by host name.
+fn recorded_hosts(cache: &Path) -> Vec<RecordedHost> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(cache.join("meta").join("host")) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        if let Ok(text) = fs::read_to_string(entry.path())
+            && let Ok(record) = serde_json::from_str::<RecordedHost>(&text)
+        {
+            found.push(record);
+        }
+    }
+    found.sort_by(|left, right| left.host.cmp(&right.host));
+    found
+}
+
+/// Runs the many-hosts regime: many objects across two hosts, so the adaptive
+/// controller has something to decide and its decision can be read back.
+///
+/// # Errors
+///
+/// Fails when a server cannot be bound, when the run does not exit zero, when
+/// its `--json` result cannot be read, and when the controller did not decide
+/// anything, which is the whole point of the regime.
+pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
+    let mut times = Vec::with_capacity(iterations as usize);
+    let mut work = Work::default();
+
+    for round in 0..iterations {
+        let scratch = scratch_directory(round)?;
+        let cache = scratch.join("cache");
+
+        let mut servers = Vec::with_capacity(OBJECTS_PER_HOST * 2);
+        let mut artifacts = String::new();
+        for index in 0..OBJECTS_PER_HOST * 2 {
+            let body = non_repeating_bytes(index + 1, HOST_OBJECT_BYTES);
+            let script = Script::serving(body).tagged(vec![format!("\"object-{index}\"")]);
+            let script = if index % 2 == 1 {
+                script.replying(vec![Reply::Status {
+                    code: 429,
+                    retry_after: Some("0".to_owned()),
+                }])
+            } else {
+                script
+            };
+            let server = TestServer::start(script).map_err(BenchError::Process)?;
+            let origin = if index % 2 == 0 {
+                server.origin().replace("127.0.0.1", "localhost")
+            } else {
+                server.origin()
+            };
+            writeln!(
+                artifacts,
+                "  - id: object-{index}\n    sources: [{origin}/object-{index}]"
+            )
+            .map_err(|_| BenchError::MissingBinary(scratch.clone()))?;
+            servers.push(server);
+        }
+
+        let manifest = scratch.join("hosts.yaml");
+        fs::write(&manifest, format!("name: hosts\nartifacts:\n{artifacts}"))
+            .map_err(BenchError::Process)?;
+
+        let started = Instant::now();
+        let output = Command::new(binary)
+            .arg("get")
+            .arg(&manifest)
+            .arg("--output")
+            .arg(scratch.join("out"))
+            .arg("--lock")
+            .arg(scratch.join("fetchloom.lock"))
+            .arg("--json")
+            .env("FETCHLOOM_CACHE_DIR", &cache)
+            .output()
+            .map_err(BenchError::Process)?;
+        let elapsed = started.elapsed();
+        if !output.status.success() {
+            return Err(BenchError::NonZeroExit(output.status.code().unwrap_or(-1)));
+        }
+        let outcome: RunOutcome =
+            serde_json::from_slice(&output.stdout).map_err(BenchError::MalformedResult)?;
+        drop(servers);
+
+        let hosts = recorded_hosts(&cache);
+        decided(&hosts)?;
+
+        times.push(elapsed.as_secs_f64() * 1000.0);
+        work = outcome.work;
+    }
+
+    times.sort_by(f64::total_cmp);
+    Ok(vec![RegimeResult {
+        regime: "many-hosts".to_owned(),
+        iterations,
+        metrics: vec![Metric {
+            name: "wall".to_owned(),
+            value: times[times.len() / 2],
+            unit: "ms".to_owned(),
+            kind: MetricKind::Timing,
+        }]
+        .into_iter()
+        .chain(work_metrics(&work))
+        .collect(),
+        alternative: None,
+    }])
+}
+
+/// Refuses a run in which the controller decided nothing, because a regime that
+/// passes with the controller inert is not a regime.
+fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
+    if hosts.len() != 2 {
+        return Err(BenchError::ControllerInert(format!(
+            "the run recorded {} hosts rather than the two it was served by, so the measurement \
+             is not keyed by host",
+            hosts.len()
+        )));
+    }
+    if hosts[0].host == hosts[1].host {
+        return Err(BenchError::ControllerInert(format!(
+            "both records name {}, so the two hosts were not tracked apart",
+            hosts[0].host
+        )));
+    }
+    let cold = fetchloom_engine::tuning::FIRST_PER_HOST;
+    if hosts
+        .iter()
+        .all(|record| record.measurement.concurrency == cold)
+    {
+        return Err(BenchError::ControllerInert(format!(
+            "every host is recorded at {cold}, which is where a host nothing is known about \
+             starts, so nothing the controller does was measured"
+        )));
+    }
+    if hosts[0].measurement.concurrency == hosts[1].measurement.concurrency {
+        return Err(BenchError::ControllerInert(format!(
+            "{} and {} are both recorded at {}, though only one of them was ever rate limited, \n             so either a rate limit on one host moved the other or neither moved at all",
+            hosts[0].host, hosts[1].host, hosts[0].measurement.concurrency
+        )));
+    }
+    Ok(())
 }
