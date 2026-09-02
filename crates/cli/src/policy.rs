@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use fetchloom_engine::credential::{
+    Secrets, SigningKeys, host_variable,
     Credential, CredentialOrigin, Necessity, ProviderHelp, token_variable,
 };
 use fetchloom_engine::durability::DurabilityTier;
@@ -130,14 +131,112 @@ impl<'a> CommandLinePolicy<'a> {
         self.observer.emit(&Event::new(self.sequence, payload));
     }
 
-    fn found(host: &Host, origin: CredentialOrigin, value: String, from: &str) -> Credential {
-        eprintln!("using the credential for {host} from {from}");
+    fn found(host: &Host, origin: CredentialOrigin, secrets: Secrets, from: &str) -> Credential {
+        eprintln!(
+            "using {} for {host} from {from}",
+            secrets.label()
+        );
         Credential {
             host: host.clone(),
             origin,
-            value: Secret::new(value),
+            secrets,
         }
     }
+
+    /// Reads the signing keys the host-scoped variables hold, which is the
+    /// first tier and wins over every other.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `policy.credential_invalid` when an access key is set without
+    /// the region a signature is computed over.
+    fn host_scoped_keys(&self, host: &Host) -> Result<Option<SigningKeys>, Error> {
+        let Some(access_key) = self.environment.get(&host_variable("FETCHLOOM_ACCESS_KEY_", host))
+        else {
+            return Ok(None);
+        };
+        let Some(secret_key) = self.environment.get(&host_variable("FETCHLOOM_SECRET_KEY_", host))
+        else {
+            return Err(missing_half(
+                host,
+                &host_variable("FETCHLOOM_SECRET_KEY_", host),
+                "a secret key",
+            ));
+        };
+        let Some(region) = self.environment.get(&host_variable("FETCHLOOM_REGION_", host)) else {
+            return Err(missing_region(
+                host,
+                &host_variable("FETCHLOOM_REGION_", host),
+            ));
+        };
+        Ok(Some(SigningKeys {
+            access_key,
+            secret_key: Secret::new(secret_key),
+            session_token: self
+                .environment
+                .get(&host_variable("FETCHLOOM_SESSION_TOKEN_", host))
+                .map(Secret::new),
+            region,
+        }))
+    }
+
+    /// Reads the signing keys a provider's own convention holds, which is the
+    /// third tier and is asked only after the two above answered nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `policy.credential_invalid` when the provider's own variables
+    /// name a key without the region a signature is computed over.
+    fn helper_keys(&self, host: &Host) -> Result<Option<(SigningKeys, String)>, Error> {
+        if !fetchloom_sources::signs_requests(host.as_str()) {
+            return Ok(None);
+        }
+        let Some(access_key) = self.environment.get("AWS_ACCESS_KEY_ID") else {
+            return Ok(None);
+        };
+        let Some(secret_key) = self.environment.get("AWS_SECRET_ACCESS_KEY") else {
+            return Err(missing_half(host, "AWS_SECRET_ACCESS_KEY", "a secret key"));
+        };
+        let Some(region) = self
+            .environment
+            .get("AWS_REGION")
+            .or_else(|| self.environment.get("AWS_DEFAULT_REGION"))
+        else {
+            return Err(missing_region(host, "AWS_REGION"));
+        };
+        Ok(Some((
+            SigningKeys {
+                access_key,
+                secret_key: Secret::new(secret_key),
+                session_token: self.environment.get("AWS_SESSION_TOKEN").map(Secret::new),
+                region,
+            },
+            "the AWS environment variables".to_owned(),
+        )))
+    }
+}
+
+/// Returns the failure a half-set signing credential states.
+fn missing_half(host: &Host, variable: &str, what: &str) -> Error {
+    Error::new(
+        ErrorKind::PolicyCredentialInvalid,
+        format!(
+            "set {variable} as well, because {host} is reached with a signing credential and an access key without {what} signs nothing"
+        ),
+    )
+    .with_source(host.as_str())
+}
+
+/// Returns the failure a signing credential with no region states, which is
+/// never guessed because a signature is computed over one.
+fn missing_region(host: &Host, variable: &str) -> Error {
+    Error::new(
+        ErrorKind::PolicyCredentialInvalid,
+        format!(
+            "set {variable} to the region {host} serves from, because a signature is computed over a region and a guessed one is refused by the source with an error you cannot act on"
+        ),
+    )
+    .with_source(host.as_str())
 }
 
 /// This platform's own credential store, which is the second place a run looks.
@@ -234,16 +333,36 @@ impl Policy for CommandLinePolicy<'_> {
             return Ok(Some(Self::found(
                 host,
                 CredentialOrigin::Environment,
-                value,
+                Secrets::Bearer {
+                    value: Secret::new(value),
+                },
                 &token_variable(host),
+            )));
+        }
+        if let Some(keys) = self.host_scoped_keys(host)? {
+            return Ok(Some(Self::found(
+                host,
+                CredentialOrigin::Environment,
+                Secrets::Signing { keys },
+                &host_variable("FETCHLOOM_ACCESS_KEY_", host),
             )));
         }
         if let Some(value) = self.store.token(host)? {
             return Ok(Some(Self::found(
                 host,
                 CredentialOrigin::PlatformStore,
-                value,
+                Secrets::Bearer {
+                    value: Secret::new(value),
+                },
                 &self.store.describe(),
+            )));
+        }
+        if let Some((keys, from)) = self.helper_keys(host)? {
+            return Ok(Some(Self::found(
+                host,
+                CredentialOrigin::ProviderHelper,
+                Secrets::Signing { keys },
+                &from,
             )));
         }
         match necessity {

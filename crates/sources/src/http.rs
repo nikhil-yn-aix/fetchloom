@@ -122,7 +122,11 @@ impl HttpSource {
                 Method::Get => agent.get(&current),
             };
             if let Some(credential) = carried {
-                request = request.header("Authorization", credential.value.expose());
+                for (name, value) in
+                    authorizing_headers(credential, &current, here.host(), method)
+                {
+                    request = request.header(name, &value);
+                }
             }
             if let Some(range) = range {
                 request = request.header(
@@ -166,6 +170,61 @@ pub(crate) enum Method {
     Head,
     /// A request for bytes.
     Get,
+}
+
+/// Splits a location into the path and query a signature is computed over.
+fn path_and_query(location: &str) -> (String, String) {
+    let after_scheme = location
+        .split_once("://")
+        .map_or(location, |(_, rest)| rest);
+    let from_path = after_scheme.find('/').map_or("/", |at| &after_scheme[at..]);
+    let without_fragment = from_path.split('#').next().unwrap_or(from_path);
+    match without_fragment.split_once('?') {
+        Some((path, query)) => (path.to_owned(), query.to_owned()),
+        None => (without_fragment.to_owned(), String::new()),
+    }
+}
+
+/// Returns the headers whatever the credential's shape authorizes a request
+/// with, which is a value the credential supplies or a signature computed over
+/// the request itself.
+fn authorizing_headers(
+    credential: &Credential,
+    location: &str,
+    host: &str,
+    method: Method,
+) -> Vec<(&'static str, String)> {
+    if let Some(value) = credential.bearer() {
+        return vec![("Authorization", value.to_owned())];
+    }
+    let Some(keys) = credential.signing() else {
+        return Vec::new();
+    };
+    let (path, query) = path_and_query(location);
+    let signed = crate::signing::sign(
+        keys,
+        "s3",
+        &crate::signing::Request {
+            method: match method {
+                Method::Head => "HEAD",
+                Method::Get => "GET",
+            },
+            path: &path,
+            query: &query,
+            host,
+            payload: crate::signing::EMPTY_PAYLOAD,
+        },
+        &crate::signing::SigningTime::now(),
+    );
+    let mut headers = vec![
+        ("Authorization", signed.authorization),
+        ("x-amz-date", signed.date),
+        ("x-amz-content-sha256", signed.content_digest),
+    ];
+    if let Some(token) = signed.security_token {
+        headers.push(("x-amz-security-token", token));
+    }
+    headers
 }
 
 fn build_agent(limits: &Limits) -> ureq::Agent {

@@ -11,6 +11,8 @@ use ureq as _;
 
 use std::io::Read;
 
+use sha2 as _;
+
 use fetchloom_engine::credential::{Credential, CredentialOrigin};
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::limits::Limits;
@@ -449,7 +451,7 @@ fn a_credential_the_source_rejects_is_reported_as_the_credential_and_not_the_sta
         let credential = Credential {
             host: Host::new("127.0.0.1".to_owned()),
             origin: CredentialOrigin::Environment,
-            value: Secret::new("token".to_owned()),
+            secrets: fetchloom_engine::credential::Secrets::Bearer { value: Secret::new("token".to_owned()) },
         };
         let failure = source
             .fetch(

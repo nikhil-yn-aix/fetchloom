@@ -199,3 +199,25 @@ pub fn help_for(host: &str, necessity: Necessity) -> ProviderHelp {
         generic_object_storage(host, necessity)
     }
 }
+
+/// Reports whether a host is reached with a credential that signs a request
+/// rather than one that is sent.
+#[must_use]
+pub fn signs_requests(host: &str) -> bool {
+    let lowercase = host.to_ascii_lowercase();
+    lowercase.ends_with("amazonaws.com") || lowercase.ends_with("r2.cloudflarestorage.com")
+}
+
+#[cfg(test)]
+mod signing_tests {
+    use super::signs_requests;
+
+    #[test]
+    fn only_the_hosts_that_sign_are_named() {
+        assert!(signs_requests("bucket.s3.amazonaws.com"));
+        assert!(signs_requests("account.r2.cloudflarestorage.com"));
+        assert!(!signs_requests("storage.googleapis.com"));
+        assert!(!signs_requests("account.blob.core.windows.net"));
+        assert!(!signs_requests("lab.edu"));
+    }
+}
