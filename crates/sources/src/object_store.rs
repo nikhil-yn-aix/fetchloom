@@ -179,16 +179,6 @@ impl Source for ObjectStoreSource {
             .limit(limits.listing_bytes)
             .read_to_string()
             .map_err(|reason| crate::http::transport_failure(location, &reason))?;
-        if !index::is_object_store_list(&body) {
-            return Err(Error::new(
-                ErrorKind::ReferenceUnresolved,
-                format!(
-                    "name the objects instead of the container, because {} answered with something that is not an object store list response, which is what this adapter requires",
-                    SafeUrl::new(location)
-                ),
-            )
-            .with_source(location));
-        }
         let listed = index::parse(location, status, &body)?;
         let allowed = usize::try_from(limits.listing_entries).unwrap_or(usize::MAX);
         if listed.len() > allowed {

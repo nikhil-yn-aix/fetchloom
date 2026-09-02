@@ -92,7 +92,7 @@ fn an_index_in_no_recognized_format_never_repeats_the_secret_in_its_location() {
 #[test]
 fn an_object_store_refusing_a_body_never_repeats_the_secret_in_its_location() {
     let server = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Listing {
-        format: IndexFormat::GeneratedHtml,
+        format: IndexFormat::Unrecognized,
     }]))
     .unwrap();
     let location = format!("{}/set/?signature={SECRET}", server.origin());
@@ -100,7 +100,7 @@ fn an_object_store_refusing_a_body_never_repeats_the_secret_in_its_location() {
     let source = ObjectStoreSource::new(Limits::default(), Arc::new(WorkCounter::new()));
     let refused = source
         .list(&location, None)
-        .expect_err("a generated index was accepted as an object store listing");
+        .expect_err("an index in no recognized format was accepted");
 
     carries_no_secret(&everything(&refused), "an object store listing failure");
 }

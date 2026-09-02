@@ -170,32 +170,6 @@ fn an_object_store_listing_is_parsed_into_entries() {
 }
 
 #[test]
-fn a_webdav_listing_is_refused_as_not_an_object_store_response() {
-    let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Listing {
-        format: IndexFormat::WebDav,
-    }]))
-    .unwrap();
-    let failure = source()
-        .list(&format!("{}/set/", server.origin()), None)
-        .unwrap_err();
-
-    assert_eq!(failure.kind(), ErrorKind::ReferenceUnresolved);
-}
-
-#[test]
-fn a_generated_html_listing_is_refused_as_not_an_object_store_response() {
-    let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Listing {
-        format: IndexFormat::GeneratedHtml,
-    }]))
-    .unwrap();
-    let failure = source()
-        .list(&format!("{}/set/", server.origin()), None)
-        .unwrap_err();
-
-    assert_eq!(failure.kind(), ErrorKind::ReferenceUnresolved);
-}
-
-#[test]
 fn an_unrecognized_body_is_refused_as_not_an_object_store_response() {
     let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Listing {
         format: IndexFormat::Unrecognized,
@@ -227,4 +201,42 @@ fn a_listing_past_the_entry_bound_fails_as_a_resource_limit() {
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::ResourceLimit);
+}
+
+#[test]
+fn every_index_format_the_contract_recognizes_is_listed_and_only_an_unrecognized_one_is_refused() {
+    for format in [
+        IndexFormat::ObjectStore,
+        IndexFormat::WebDav,
+        IndexFormat::GeneratedHtml,
+    ] {
+        let server = TestServer::start(
+            Script::serving(Vec::new()).replying(vec![Reply::Listing { format }]),
+        )
+        .unwrap();
+        let source = source();
+        let listed = source.list(&format!("{}/set/", server.origin()), None);
+        assert!(
+            listed.is_ok(),
+            "{format:?} is a format the contract recognizes and it was refused: {listed:?}"
+        );
+        let listed = listed.unwrap_or_default();
+        assert_eq!(listed.len(), 2, "{format:?} did not list both entries");
+    }
+
+    let server = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Listing {
+        format: IndexFormat::Unrecognized,
+    }]))
+    .unwrap();
+    let source = source();
+    let refused = source.list(&format!("{}/set/", server.origin()), None);
+
+    assert!(
+        refused.is_err(),
+        "an index in no recognized format was listed: {refused:?}"
+    );
+    assert_eq!(
+        refused.err().map(|error| error.kind()),
+        Some(ErrorKind::ReferenceUnresolved)
+    );
 }

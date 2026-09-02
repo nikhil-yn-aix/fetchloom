@@ -56,3 +56,17 @@ pub struct ProviderHelp {
     /// The narrowest permissions that work.
     pub scope: String,
 }
+
+/// Returns the environment variable a host's credential is read from.
+#[must_use]
+pub fn token_variable(host: &Host) -> String {
+    let mut name = String::from("FETCHLOOM_TOKEN_");
+    for character in host.as_str().chars() {
+        if character.is_ascii_alphanumeric() {
+            name.push(character.to_ascii_uppercase());
+        } else {
+            name.push('_');
+        }
+    }
+    name
+}
