@@ -52,6 +52,9 @@ pub struct Limits {
     pub idle_timeout: Duration,
     /// Most separate ranges one repair may ask a source for.
     pub repair_spans: u64,
+    /// The length above which one object may be fetched as several ranges at
+    /// once.
+    pub split_threshold: u64,
     /// The share of an object, as a percentage, above which a repair fetches
     /// the whole of it rather than the damaged ranges.
     pub repair_whole_percent: u64,
@@ -79,6 +82,7 @@ impl Default for Limits {
             response_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(30),
             repair_spans: 64,
+            split_threshold: OUTBOARD_THRESHOLD,
             repair_whole_percent: 50,
         }
     }

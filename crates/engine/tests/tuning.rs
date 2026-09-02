@@ -440,3 +440,26 @@ fn a_rate_the_page_cache_absorbed_once_does_not_condemn_every_window_after_it() 
          peak the page cache absorbed once condemns every honest window after it"
     );
 }
+
+#[test]
+fn writes_shorter_than_one_window_are_gathered_rather_than_judged_one_at_a_time() {
+    let mut rate = WriteRate::default();
+    for _ in 0..8 {
+        assert!(
+            !rate.observed(1 << 13, Duration::from_micros(10)),
+            "a write shorter than one window was judged on its own"
+        );
+    }
+    let mut slow = WriteRate::default();
+    assert!(!slow.observed(1 << 20, Duration::from_millis(100)));
+    for _ in 0..15 {
+        assert!(
+            !slow.observed(1 << 16, Duration::from_millis(100)),
+            "half a window of a stalled volume was judged before the window was full"
+        );
+    }
+    assert!(
+        slow.observed(1 << 16, Duration::from_millis(100)),
+        "a full window a volume took sixteen times longer over was not read as a collapse"
+    );
+}

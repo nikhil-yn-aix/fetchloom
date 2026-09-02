@@ -431,6 +431,16 @@ A transient failure is retried with exponential backoff and full jitter, up to t
 
 `Retry-After` is a floor on the wait, never a replacement for it. The wait before the next attempt is the longer of the run's own computed backoff and the wait the source asked for, because politeness is never lowered by what a measurement or a source says. A `Retry-After` longer than the retry ceiling is not waited out: the source is left for the next candidate, and a run with none left fails with `network.status` reporting the wait that was asked for.
 
+## Splitting one object
+
+One object is fetched as several ranges at once only when four conditions hold together: the source states an immutable content address or version identity, it serves ranges, the object is longer than the split threshold, and this run has recorded a per-host concurrency above one for its host. That recorded count is the measurement, because the adaptive controller raises it only when the host answered more requests in flight cleanly, which is what makes a second stream to that host worth opening. The width is that count, bounded by what the politeness ceiling permits at the moment.
+
+The spans cover the missing bytes once, in order, with no gap and no overlap, and are written in the order they cover, so the digests taken as the bytes arrive are the digests of the object. A source that serves one span under a different identity than another fails with `source.identity_changed`.
+
+A split that was wanted and did not happen emits `degrade` naming the condition that failed. An object at or below the split threshold wants no split, so it reports nothing.
+
+Splitting may change timing. It may never change bytes or digests.
+
 ## Cache
 
 ```
@@ -1007,6 +1017,7 @@ Defaults. All configurable. None may be raised past a hard ceiling that would al
 | Outboard threshold | 64 MiB |
 | Outboard chunk group | 1 MiB |
 | Pack threshold | 1 MiB |
+| Split threshold | 64 MiB |
 | Repair spans | 64 |
 | Repair whole-refetch share | 50 percent |
 | Path length | the target platform's own maximum, queried per volume |

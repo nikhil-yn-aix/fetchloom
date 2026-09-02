@@ -692,18 +692,23 @@ struct CollapsingVolume<'a> {
     buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// A writer that delays before handing bytes to the real one.
+/// A writer that accepts bytes at speed and then collapses part way through,
+/// which is the shape a volume takes when something else starts using it.
 struct SlowWriter {
     inner: fetchloom_cache::store::PartialWriter,
     buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
+/// How many bytes this writer accepts before it collapses, chosen so that at
+/// least one whole window is judged at speed first.
+const BEFORE_THE_COLLAPSE: u64 = 2 * 1024 * 1024;
+
 impl std::io::Write for SlowWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let seen = self
             .buffers
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if seen > 0 {
+            .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        if seen > BEFORE_THE_COLLAPSE {
             std::thread::sleep(Duration::from_millis(40));
         }
         self.inner.write(bytes)

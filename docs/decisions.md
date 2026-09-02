@@ -7303,3 +7303,61 @@ their hosts on `::1`, so both had been measuring a host named `[` since phase 6.
 Sources: contracts.md Source selection, Credentials, Limits;
 `crates/engine/src/candidate.rs`; `crates/cli/tests/probe.rs`;
 `crates/engine/tests/candidate.rs`.
+
+## Phase 7.5. Splitting one object, and the two numbers that decide it
+
+Question: features.md says range requests split a single object only when the
+source is immutable, supports ranges, the object is large, and measurement showed
+a gain. Nothing implemented it. `repair.rs` fetches ranges, which is a different
+thing: it refetches spans of an object already held, against an outboard tree.
+
+The four conditions were written down; the two numbers behind them were not, and
+this phase decides both.
+
+The size threshold is 64 MiB, which is the outboard threshold's number. That is
+already where this project draws the line between an object and a large object,
+and drawing a second line at a different number would mean two answers to one
+question. It is given a name of its own, `Limits::split_threshold`, because it
+bounds a different decision and because a test has to be able to see it.
+
+The gain test is the per-host concurrency this run has already recorded. The
+adaptive controller raises that count only after a host answered more requests in
+flight cleanly and lowers it the moment the host asks to be left alone, so a
+recorded count above one is exactly the statement that a second stream to this
+host is worth opening. Nothing new is measured for splitting, which is the point:
+inventing a second measurement would mean a second thing to keep true. A host
+with no recorded measurement, and one recorded at one, both refuse the split and
+say so. The width is that recorded count bounded by what the politeness ceiling
+permits at the moment, so a split never opens a stream the ceiling would not.
+
+The spans are written in the order they cover the object, because both digests
+are taken as the bytes arrive and the interop digest is a SHA-256 that cannot be
+taken out of order at all. Each span streams into a channel bounded at two
+buffers, and the writer drains them in order and hands the buffers back, so
+memory is bounded at the span count times two buffers and no buffer is allocated
+per chunk. A span that runs ahead of the writer blocks, which is the backpressure
+standards asks for rather than a queue that grows.
+
+A source that serves one span under a different identity than another fails with
+`source.identity_changed`. The immutability condition is what makes a split safe,
+and checking it once at the probe would not catch a source that changed under the
+transfer.
+
+Over plain HTTPS no object is ever split, and that is correct rather than a gap.
+contracts.md's second resume rung is an immutable content address or a provider
+version identity; an entity tag is a strong validator and is the third rung. So
+splitting reaches only the object storage adapter today, and a large object from
+an ordinary web server records a `degrade` saying the source states no identity
+that cannot change under the same name.
+
+`WriteRate` was reading the socket, not the volume. It judged whichever length
+`read` happened to hand over, so on a loaded machine a 16 KiB write timed against
+a faster 16 KiB write read as a collapse, drove the host's count down, and made
+a phase 6 test fail about one run in three. It now gathers a whole buffer before
+judging anything. The test that proves a collapsing volume lowers concurrency was
+changed with it: its writer had been slow from its second write onward, which
+under the window rule is a volume that is uniformly slow rather than one that
+collapsed, and it now accepts two megabytes at speed before it stalls.
+
+Sources: contracts.md Splitting one object, Limits; `crates/engine/src/split.rs`;
+`crates/cli/tests/ranged.rs`; `crates/engine/tests/split.rs`.

@@ -1,6 +1,7 @@
 //! Moving bytes from a source into the store, once, with retry and resume.
 
 use std::io::{Read, Write};
+use std::num::NonZeroU32;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -22,10 +23,15 @@ use crate::seam::source::{
 };
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
+use crate::split::{Refused, parts_for, spans};
 use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate};
 
 /// How many bytes move between the source and the store at a time.
 const BUFFER: usize = 1 << 20;
+
+/// How many buffers one span of a split holds, which is what bounds how far
+/// ahead of the writer a span may run.
+const SPAN_BUFFERS: usize = 2;
 
 /// What one transfer did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -441,20 +447,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             Some(digest) => PartialKey::of_content(digest),
             None => PartialKey::of_source(&metadata),
         };
-        let recorded = self.store.recorded_source(key)?;
-        let on_disk = recorded.as_ref().map_or(0, |record| record.written);
-        let verified = match expected {
-            Some(digest) if arrived.is_none() => {
-                self.store.verified_prefix(key, digest, on_disk)?
-            }
-            _ => 0,
-        };
-        let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified)?;
-
-        if on_disk > keep {
-            self.report_the_partial_dropped(recorded.as_ref(), &metadata, rung);
-            self.store.discard_partial(key)?;
-        }
+        let (rung, keep) = self.where_it_starts(key, expected, &metadata, arrived.is_some())?;
 
         let lease = self.claim(key)?;
         if let Some(digest) = expected
@@ -473,29 +466,43 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             });
         }
 
-        let (served, body) = self.body_from(arrived, location, &metadata, keep)?;
+        let split = arrived
+            .is_none()
+            .then(|| self.split_into(&metadata, location))
+            .flatten();
+        let length = metadata.size.unwrap_or(0);
         self.store
             .record_source(key, &record_of(&metadata, rung, keep))?;
-
-        let length = metadata.size.unwrap_or(0);
         let mut writer = self.store.resume(&lease, length, keep)?;
 
         let started = Span::start();
         let mut moved = 0u64;
-        let arrived = copy(
-            body,
-            &mut writer,
-            location,
-            &mut moved,
-            buffer,
-            &Backpressure {
-                meter: self.meter,
-                pause: self.pause,
-                controller: &self
-                    .flights
-                    .controller(Host::of_location(location).as_str()),
-            },
-        );
+        let (served, arrived) = if let Some(width) = split {
+            let covered = spans(keep, length, width);
+            (
+                metadata.location.clone(),
+                self.copy_split(location, &metadata, &covered, &mut writer, &mut moved),
+            )
+        } else {
+            let (from, body) = self.body_from(arrived, location, &metadata, keep)?;
+            (
+                from,
+                copy(
+                    body,
+                    &mut writer,
+                    location,
+                    &mut moved,
+                    buffer,
+                    &Backpressure {
+                        meter: self.meter,
+                        pause: self.pause,
+                        controller: &self
+                            .flights
+                            .controller(Host::of_location(location).as_str()),
+                    },
+                ),
+            )
+        };
         self.store
             .record_source(key, &record_of(&metadata, rung, keep + moved))?;
         ended_early(&arrived, &metadata, location, keep + moved)?;
@@ -516,6 +523,34 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             served,
             chosen: None,
         })
+    }
+
+    /// Returns the rung a transfer stands on and how many bytes already on disk
+    /// it keeps, dropping a partial the source no longer identifies.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store cannot be read and when the source has served a
+    /// different immutable identity for the same location.
+    fn where_it_starts(
+        &self,
+        key: PartialKey,
+        expected: Option<ContentDigest>,
+        metadata: &SourceMetadata,
+        revalidated: bool,
+    ) -> Result<(ResumeRung, u64), Error> {
+        let recorded = self.store.recorded_source(key)?;
+        let on_disk = recorded.as_ref().map_or(0, |record| record.written);
+        let verified = match expected {
+            Some(digest) if !revalidated => self.store.verified_prefix(key, digest, on_disk)?,
+            _ => 0,
+        };
+        let (rung, keep) = rung_for(recorded.as_ref(), metadata, on_disk, verified)?;
+        if on_disk > keep {
+            self.report_the_partial_dropped(recorded.as_ref(), metadata, rung);
+            self.store.discard_partial(key)?;
+        }
+        Ok((rung, keep))
     }
 
     /// Records why the bytes already on disk were dropped rather than resumed
@@ -544,6 +579,160 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
+    /// Returns how many spans this run fetches one object as, recording a
+    /// degradation when a split was wanted and a condition failed.
+    ///
+    /// A split is wanted once the object is long enough for the extra requests
+    /// to pay for themselves; below that there is nothing to report, because
+    /// nothing was given up.
+    fn split_into(&self, metadata: &SourceMetadata, location: &str) -> Option<NonZeroU32> {
+        let measured = (self.measurement)(location).map_or(0, |found| found.concurrency);
+        let permitted = self
+            .flights
+            .controller(Host::of_location(location).as_str())
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .permitted();
+        match parts_for(metadata, self.limits, measured.min(permitted)) {
+            Ok(width) => Some(width),
+            Err(Refused::NotLarge) => None,
+            Err(refused) => {
+                self.degradations.record(
+                    "one object fetched as several ranges at once",
+                    "the object fetched whole, in one stream",
+                    refused.because(),
+                );
+                None
+            }
+        }
+    }
+
+    /// Fetches the missing bytes of one object as several spans at once and
+    /// writes them in order, so that the digests taken as the bytes arrive are
+    /// the digests of the object.
+    fn copy_split(
+        &self,
+        location: &str,
+        metadata: &SourceMetadata,
+        covered: &[ByteRange],
+        writer: &mut impl Write,
+        moved: &mut u64,
+    ) -> Result<(), Error> {
+        let failure = Mutex::new(None);
+        let controller = self
+            .flights
+            .controller(Host::of_location(location).as_str());
+        let mut rate = WriteRate::default();
+        std::thread::scope(|scope| {
+            let mut arriving = Vec::with_capacity(covered.len());
+            for span in covered {
+                let (full, taken) = std::sync::mpsc::sync_channel::<Vec<u8>>(SPAN_BUFFERS);
+                let (spent, reusable) = std::sync::mpsc::sync_channel::<Vec<u8>>(SPAN_BUFFERS);
+                for _ in 0..SPAN_BUFFERS {
+                    let _ = spent.send(vec![0u8; BUFFER]);
+                }
+                let held = &failure;
+                scope.spawn(move || {
+                    if let Err(reason) = self.fill(location, metadata, *span, &full, &reusable) {
+                        let mut kept = held.lock().unwrap_or_else(PoisonError::into_inner);
+                        if kept.is_none() {
+                            *kept = Some(reason);
+                        }
+                    }
+                });
+                arriving.push((taken, spent));
+            }
+            for (taken, spent) in arriving {
+                while let Ok(filled) = taken.recv() {
+                    let length = filled.len() as u64;
+                    let accepting = Instant::now();
+                    writer.write_all(&filled).map_err(|reason| {
+                        Error::new(
+                            ErrorKind::CacheCorrupt,
+                            format!(
+                                "make room in the cache, because the bytes could not be written: {reason}"
+                            ),
+                        )
+                    })?;
+                    if rate.observed(length, accepting.elapsed()) {
+                        controller
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .answered(Answer::Faltered);
+                    }
+                    *moved += length;
+                    let _ = spent.send(filled);
+                    if let Some(meter) = self.meter {
+                        let owed = meter.moved(length);
+                        if !owed.is_zero() {
+                            self.pause.sleep(owed);
+                        }
+                    }
+                }
+            }
+            Ok::<(), Error>(())
+        })?;
+        match failure.into_inner().unwrap_or_else(PoisonError::into_inner) {
+            Some(reason) => Err(reason),
+            None => Ok(()),
+        }
+    }
+
+    /// Streams one span into the channel the writer drains, reusing the buffers
+    /// it gets back rather than allocating one for every chunk.
+    fn fill(
+        &self,
+        location: &str,
+        metadata: &SourceMetadata,
+        span: ByteRange,
+        full: &std::sync::mpsc::SyncSender<Vec<u8>>,
+        reusable: &std::sync::mpsc::Receiver<Vec<u8>>,
+    ) -> Result<(), Error> {
+        let credential = self.credential_for(location)?;
+        let answered = self
+            .source
+            .fetch(location, Some(span), credential.as_ref())?;
+        if answered.metadata.identity != metadata.identity {
+            return Err(Error::new(
+                ErrorKind::SourceIdentityChanged,
+                "fetch this object whole, because the source served one span under a different \
+                 identity than another and the two may not be the same object",
+            )
+            .with_source(location));
+        }
+        let mut body = answered.body;
+        let mut left = span.length();
+        while left > 0 {
+            if crate::cancel::requested() {
+                return Ok(());
+            }
+            let Ok(mut buffer) = reusable.recv() else {
+                return Ok(());
+            };
+            buffer.resize(BUFFER, 0);
+            let wanted = usize::try_from(left).unwrap_or(BUFFER).min(BUFFER);
+            let filled = body
+                .read(&mut buffer[..wanted])
+                .map_err(|reason| body_failure(location, &reason))?;
+            if filled == 0 {
+                return Err(Error::new(
+                    ErrorKind::IntegrityTruncated,
+                    format!(
+                        "fetch the span again, because the source ended it {left} bytes before the \
+                         end it was asked for"
+                    ),
+                )
+                .with_source(location)
+                .with_retryable(true));
+            }
+            buffer.truncate(filled);
+            left -= filled as u64;
+            if full.send(buffer).is_err() {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
     /// Returns the location that answered and the bytes it answered with.
     fn body_from(
         &self,

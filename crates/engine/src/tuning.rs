@@ -217,6 +217,10 @@ pub const COLLAPSE_FRACTION: u64 = 4;
 /// there.
 pub const SUSTAINED_WINDOWS: usize = 8;
 
+/// How many bytes one window gathers before the rate it was accepted at is
+/// judged, which is the length of the buffer a transfer writes through.
+pub const WINDOW_BYTES: u64 = 1 << 20;
+
 /// The rate at which the store has been accepting bytes, and whether it has
 /// just collapsed.
 #[derive(Clone, Copy, Debug, Default)]
@@ -224,19 +228,32 @@ pub struct WriteRate {
     recent: [u64; SUSTAINED_WINDOWS],
     next: usize,
     seen: bool,
+    pending_bytes: u64,
+    pending_nanos: u64,
 }
 
 impl WriteRate {
-    /// Records one window of writing and reports whether the volume collapsed
-    /// under it, judged against the fastest of the recent windows rather than
-    /// against the fastest of the whole transfer. The first window never
-    /// collapses, because nothing has been sustained for it to fall away from.
+    /// Records bytes accepted by the store and reports whether the volume
+    /// collapsed under them, judged against the fastest of the recent windows
+    /// rather than against the fastest of the whole transfer.
+    ///
+    /// Bytes are gathered until a window is full before anything is judged. A
+    /// body arrives in whatever lengths the socket hands over, and timing one
+    /// of those measures the socket as much as the volume, so a window shorter
+    /// than the write buffer says nothing about the disk. The first full window
+    /// never collapses either, because nothing has been sustained for it to
+    /// fall away from.
     pub fn observed(&mut self, bytes: u64, elapsed: Duration) -> bool {
-        let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
-        if nanos == 0 {
+        self.pending_bytes = self.pending_bytes.saturating_add(bytes);
+        self.pending_nanos = self
+            .pending_nanos
+            .saturating_add(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX));
+        if self.pending_bytes < WINDOW_BYTES || self.pending_nanos == 0 {
             return false;
         }
-        let rate = bytes.saturating_mul(1_000_000_000) / nanos;
+        let rate = self.pending_bytes.saturating_mul(1_000_000_000) / self.pending_nanos;
+        self.pending_bytes = 0;
+        self.pending_nanos = 0;
         let sustained = self.recent.iter().copied().max().unwrap_or(0);
         self.recent[self.next] = rate;
         self.next = (self.next + 1) % SUSTAINED_WINDOWS;

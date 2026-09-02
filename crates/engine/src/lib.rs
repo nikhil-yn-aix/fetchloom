@@ -34,6 +34,7 @@ pub mod resume;
 pub mod seam;
 pub mod selection;
 pub mod source_record;
+pub mod split;
 pub mod threads;
 pub mod timestamp;
 pub mod transfer;
