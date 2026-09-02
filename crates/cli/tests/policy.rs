@@ -23,10 +23,11 @@ use toml as _;
 use windows_sys as _;
 
 use fetchloom_cli::config::Discovered;
-use fetchloom_cli::policy::{CommandLinePolicy, CredentialStore, token_variable};
+use fetchloom_cli::policy::{CommandLinePolicy, CredentialStore, Prompter};
 use fetchloom_cli::settings::{self, Environment};
 use fetchloom_cli::surface::{GlobalFlags, TransferFlags};
 use fetchloom_cli::terminal::Streams;
+use fetchloom_engine::credential::token_variable;
 use fetchloom_engine::credential::{Credential, CredentialOrigin};
 use fetchloom_engine::credential::{Necessity, ProviderHelp};
 use fetchloom_engine::durability::DurabilityTier;
@@ -69,6 +70,29 @@ const INTERACTIVE: Streams = Streams {
     stdin: true,
 };
 
+/// A prompter that fails the test if it is ever asked anything, for the runs
+/// that must never block on a question.
+struct PanicPrompter;
+
+impl Prompter for PanicPrompter {
+    #[expect(
+        clippy::panic,
+        reason = "the assertion this test makes is that this is never reached"
+    )]
+    fn confirm(&self, question: &str) -> bool {
+        panic!("a prompt was shown when none should have been: {question}");
+    }
+}
+
+/// A prompter that always answers the same way.
+struct FixedPrompter(bool);
+
+impl Prompter for FixedPrompter {
+    fn confirm(&self, _question: &str) -> bool {
+        self.0
+    }
+}
+
 fn accepting_license() -> License {
     License {
         spdx: Some("CC-BY-4.0".to_owned()),
@@ -91,6 +115,7 @@ fn a_required_prompt_in_a_non_interactive_run_is_a_policy_failure() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let error = policy.terms(&accepting_license()).unwrap_err();
@@ -112,6 +137,7 @@ fn asserting_acceptance_on_the_command_line_needs_no_prompt() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     assert_eq!(
@@ -134,6 +160,7 @@ fn a_license_needing_no_acceptance_never_prompts() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     assert_eq!(
@@ -156,6 +183,7 @@ fn a_missing_required_credential_is_a_policy_failure() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let host = Host::new("example.invalid");
@@ -178,6 +206,7 @@ fn a_missing_optional_credential_does_not_stop_the_run() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let host = Host::new("example.invalid");
@@ -203,6 +232,7 @@ fn a_credential_is_read_from_the_host_scoped_variable_and_never_reported() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let host = Host::new("example.invalid");
@@ -251,6 +281,7 @@ fn an_optional_credential_is_never_offered_without_a_terminal() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let help = ProviderHelp {
@@ -284,6 +315,7 @@ fn an_interactive_run_may_be_offered_a_credential() {
         &EmptyStore,
         &observer,
         &sequence,
+        &FixedPrompter(false),
     );
 
     let help = ProviderHelp {
@@ -299,6 +331,63 @@ fn an_interactive_run_may_be_offered_a_credential() {
         .offer_credential(&help, std::time::Duration::from_secs(600))
         .unwrap();
     assert!(observer.names().contains(&"credential.offer"));
+    assert!(
+        observer.names().contains(&"credential.declined"),
+        "declining the prompt did not report the decline"
+    );
+}
+
+#[test]
+fn a_declined_optional_credential_is_not_offered_a_second_time_in_the_same_run() {
+    let environment = FakeEnvironment::default();
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let policy = CommandLinePolicy::new(
+        settings_for(&GlobalFlags::default(), &environment),
+        &TransferFlags::default(),
+        INTERACTIVE,
+        false,
+        &environment,
+        &EmptyStore,
+        &observer,
+        &sequence,
+        &FixedPrompter(false),
+    );
+
+    let help = ProviderHelp {
+        provider: "Example".to_owned(),
+        unlocks: "faster transfers".to_owned(),
+        necessity: Necessity::Optional,
+        steps: vec!["open the page".to_owned()],
+        placement: "FETCHLOOM_TOKEN_EXAMPLE".to_owned(),
+        verification: "fetchloom doctor".to_owned(),
+        scope: "read".to_owned(),
+    };
+    policy
+        .offer_credential(&help, std::time::Duration::from_secs(600))
+        .unwrap();
+    assert_eq!(
+        observer
+            .names()
+            .iter()
+            .filter(|name| **name == "credential.offer")
+            .count(),
+        1,
+        "the first offer was not recorded once"
+    );
+
+    policy
+        .offer_credential(&help, std::time::Duration::from_secs(600))
+        .unwrap();
+    assert_eq!(
+        observer
+            .names()
+            .iter()
+            .filter(|name| **name == "credential.offer")
+            .count(),
+        1,
+        "a declined credential was offered a second time in the same run"
+    );
 }
 
 #[test]
@@ -319,6 +408,7 @@ fn settings_reach_the_policy() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     assert!(policy.offline());
@@ -339,6 +429,7 @@ fn a_gain_below_the_offer_threshold_produces_no_prompt_and_no_message() {
         &EmptyStore,
         &observer,
         &sequence,
+        &PanicPrompter,
     );
 
     let help = ProviderHelp {
@@ -509,6 +600,7 @@ fn policy_with<'a>(
         store,
         observer,
         sequence,
+        &PanicPrompter,
     )
 }
 

@@ -3,6 +3,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -239,4 +240,35 @@ fn every_index_format_the_contract_recognizes_is_listed_and_only_an_unrecognized
         refused.err().map(|error| error.kind()),
         Some(ErrorKind::ReferenceUnresolved)
     );
+}
+
+#[test]
+fn a_source_refusing_for_want_of_authorization_is_a_missing_credential_rather_than_a_status() {
+    for code in [401, 403] {
+        let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Status {
+            code,
+            retry_after: None,
+        }]))
+        .unwrap();
+        let source = source();
+        let refused = source
+            .probe(&format!("{}/object", server.origin()), None)
+            .expect_err("a source refusing for want of authorization answered");
+
+        assert_eq!(
+            refused.kind(),
+            ErrorKind::PolicyCredentialMissing,
+            "a {code} with no credential presented was reported as {:?}",
+            refused.kind()
+        );
+        assert!(
+            !refused.retryable(),
+            "a {code} with no credential presented was reported as retryable"
+        );
+        assert!(
+            refused.next_action().contains("FETCHLOOM_TOKEN_"),
+            "the failure does not say where to put a token: {}",
+            refused.next_action()
+        );
+    }
 }

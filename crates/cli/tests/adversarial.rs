@@ -123,6 +123,7 @@ impl Harness {
             sequence: &self.sequence,
             controller: &self.controller,
             meter: None,
+            credential: None,
         }
     }
 }

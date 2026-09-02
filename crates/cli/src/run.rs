@@ -9,6 +9,7 @@ use fetchloom_cache::Cache;
 use fetchloom_cache::ingest::Ingested;
 use fetchloom_engine::canonical;
 
+use fetchloom_engine::credential::{Credential, Necessity};
 use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
@@ -22,6 +23,7 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::receipt::{Receipt, RecordedFingerprint};
 use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
 use fetchloom_engine::redact::SafeUrl;
+use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::policy::Policy;
@@ -208,6 +210,35 @@ pub struct Materialization<'a> {
     pub verify: fetchloom_engine::verification::VerificationPolicy,
     /// What bounds the run's transfers, and whether they may move.
     pub tuning: &'a Tuning,
+    /// What this run is allowed to do, including which credential it may send.
+    pub policy: &'a dyn Policy,
+}
+
+/// Resolves the credential a transfer to a host may send, without requiring
+/// one, because a source that serves the bytes without one needs none.
+///
+/// # Errors
+///
+/// Fails when the credential store is present and cannot be read.
+fn resolve_credential(policy: &dyn Policy, host: &str) -> Result<Option<Credential>, Error> {
+    policy.credential(&Host::new(host.to_owned()), Necessity::Optional)
+}
+
+/// Turns a source's refusal for want of authorization into the policy failure
+/// that names the provider and prints its setup steps.
+///
+/// # Errors
+///
+/// Returns the failure it was given, or the policy's required-credential
+/// failure when the source refused for want of one.
+fn required_credential(policy: &dyn Policy, host: &str, failure: Error) -> Error {
+    if failure.kind() != ErrorKind::PolicyCredentialMissing {
+        return failure;
+    }
+    match policy.credential(&Host::new(host.to_owned()), Necessity::Required) {
+        Err(named) => named,
+        Ok(_) => failure,
+    }
 }
 
 /// What bounds a run's transfers, and whether measurement may move them.
@@ -1228,6 +1259,38 @@ fn apply_selection(
     })
 }
 
+/// Asserts, before any byte moves, that a manifest's recorded terms have been
+/// accepted.
+///
+/// Returns what to record in the receipt: `Some` when the manifest required
+/// acceptance and it was asserted, `None` when the manifest recorded nothing
+/// to accept.
+///
+/// # Errors
+///
+/// Fails with `policy.terms_required` when acceptance is required and was
+/// neither asserted with `--yes` nor confirmed interactively.
+pub fn assert_terms(
+    policy: &dyn Policy,
+    license: Option<&fetchloom_engine::license::License>,
+) -> Result<Option<fetchloom_engine::license::Acceptance>, Error> {
+    use fetchloom_engine::license::Acceptance;
+
+    let Some(license) = license else {
+        return Ok(None);
+    };
+    if !license.requires_acceptance {
+        return Ok(None);
+    }
+    match policy.terms(license)? {
+        Acceptance::Asserted => Ok(Some(Acceptance::Asserted)),
+        Acceptance::Withheld => Err(Error::new(
+            ErrorKind::PolicyTermsRequired,
+            "accept the recorded terms when asked, or run the command again with --yes, because this run declined them",
+        )),
+    }
+}
+
 /// Refuses a reference that would need the network while the network is
 /// forbidden.
 ///
@@ -1298,6 +1361,7 @@ pub fn materialize_remote(
     let controller = with.tuning.controller_for(&host, Some(cache));
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
+    let credential = resolve_credential(with.policy, &host)?;
     let transfer = Transfer {
         store: cache,
         source: &source,
@@ -1309,9 +1373,12 @@ pub fn materialize_remote(
         sequence,
         controller: &controller,
         meter: meter.as_ref(),
+        credential: credential.as_ref(),
     };
     let moving = std::time::Instant::now();
-    let transferred = transfer.run(pinned, &prior_from(cache), &[location.to_owned()])?;
+    let transferred = transfer
+        .run(pinned, &prior_from(cache), &[location.to_owned()])
+        .map_err(|failure| required_credential(with.policy, &host, failure))?;
     record_measurement(
         cache,
         with,
@@ -1415,7 +1482,12 @@ pub fn materialize_remote_container(
     emit(EventPayload::ListingStart {
         source: SafeUrl::new(location),
     });
-    let listed = selected_entries(location, source.list(location, None)?, selection)?;
+    let credential = resolve_credential(with.policy, &host_of(location))?;
+    let listed = selected_entries(
+        location,
+        source.list(location, credential.as_ref())?,
+        selection,
+    )?;
     emit(EventPayload::ListingEnd {
         entries: listed.len() as u64,
         duration_ms: listing_started.elapsed_ms(),
@@ -1552,6 +1624,7 @@ fn transfer_container_entries(
         let controller = with.tuning.controller_for(&host, Some(cache));
         let meter = with.tuning.meter();
         let measurement = |location: &str| cache.measurement(&host_of(location));
+        let credential = resolve_credential(with.policy, &host)?;
         let transfer = Transfer {
             store: cache,
             source,
@@ -1563,13 +1636,16 @@ fn transfer_container_entries(
             sequence,
             controller: &controller,
             meter: meter.as_ref(),
+            credential: credential.as_ref(),
         };
         let moving = std::time::Instant::now();
-        let transferred = transfer.run(
-            None,
-            &prior_from(cache),
-            std::slice::from_ref(&object_location),
-        )?;
+        let transferred = transfer
+            .run(
+                None,
+                &prior_from(cache),
+                std::slice::from_ref(&object_location),
+            )
+            .map_err(|failure| required_credential(with.policy, &host, failure))?;
         record_measurement(
             cache,
             with,
@@ -2134,6 +2210,7 @@ pub fn write_receipt(
     artifacts: &[ResolvedArtifact],
     result: &RunResult,
     verify: fetchloom_engine::verification::VerificationPolicy,
+    accepted_terms: Option<fetchloom_engine::license::Acceptance>,
 ) -> Result<TrustClass, Error> {
     let manifest_digest = manifest.digest()?;
     let run = run_identity(cache);
@@ -2177,7 +2254,7 @@ pub fn write_receipt(
         executable: result.executable.clone(),
         fingerprints: fingerprints_of(cache, &result.destination),
         destination: result.destination.clone(),
-        accepted_terms: None,
+        accepted_terms,
         fetchloom: env!("CARGO_PKG_VERSION").to_owned(),
         completed_at: fetchloom_engine::timestamp::Timestamp::now(),
     })?;
@@ -2589,6 +2666,7 @@ fn transfer_object(
     let controller = with.tuning.controller_for(&host, Some(cache));
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
+    let credential = resolve_credential(with.policy, &host)?;
     let transfer = Transfer {
         store: cache,
         source: &source,
@@ -2599,10 +2677,13 @@ fn transfer_object(
         observer,
         sequence,
         controller: &controller,
+        credential: credential.as_ref(),
         meter: meter.as_ref(),
     };
     let moving = std::time::Instant::now();
-    let transferred = transfer.run(expected, &prior_from(cache), locations)?;
+    let transferred = transfer
+        .run(expected, &prior_from(cache), locations)
+        .map_err(|failure| required_credential(with.policy, &host, failure))?;
     record_measurement(
         cache,
         with,

@@ -177,13 +177,7 @@ fn a_range_the_server_cannot_satisfy_is_refused_as_unsupported() {
 
 #[test]
 fn a_terminal_status_is_not_retryable_and_a_transient_one_is() {
-    for (code, retryable) in [
-        (403, false),
-        (404, false),
-        (500, true),
-        (503, true),
-        (429, true),
-    ] {
+    for (code, retryable) in [(404, false), (500, true), (503, true), (429, true)] {
         let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Status {
             code,
             retry_after: None,
@@ -475,7 +469,7 @@ fn a_credential_the_source_rejects_is_reported_as_the_credential_and_not_the_sta
 }
 
 #[test]
-fn a_status_a_run_carried_no_credential_for_stays_a_status() {
+fn a_status_a_run_carried_no_credential_for_is_a_missing_credential() {
     let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Status {
         code: 401,
         retry_after: None,
@@ -489,7 +483,11 @@ fn a_status_a_run_carried_no_credential_for_stays_a_status() {
         .fetch(&format!("{}/object", server.origin()), None, None)
         .unwrap_err();
 
-    assert_eq!(failure.kind(), ErrorKind::NetworkStatus);
+    assert_eq!(failure.kind(), ErrorKind::PolicyCredentialMissing);
+    assert!(
+        !failure.retryable(),
+        "a refusal for want of authorization was retryable"
+    );
 }
 
 #[test]

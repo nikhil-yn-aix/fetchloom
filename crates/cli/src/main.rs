@@ -223,6 +223,7 @@ fn run_repair(
         &policy::NativeCredentialStore,
         observer,
         sequence,
+        &policy::StdinPrompter,
     );
     if let Err(error) = run::allowed_offline(reference, &policy) {
         return reporter.report(&error);
@@ -453,6 +454,7 @@ fn run_verify(
         &policy::NativeCredentialStore,
         observer,
         sequence,
+        &policy::StdinPrompter,
     );
     let held = match open_cache(
         &root,
@@ -529,6 +531,10 @@ fn run_get(
         Err(error) => return reporter.report(&error),
     };
     let dataset = manifest.name.clone();
+    let accepted_terms = match run::assert_terms(&policy, manifest.license.as_ref()) {
+        Ok(accepted) => accepted,
+        Err(error) => return reporter.report(&error),
+    };
     let destination = match destination_for(named, &dataset) {
         Ok(destination) => destination,
         Err(error) => return reporter.report(&error),
@@ -576,6 +582,7 @@ fn run_get(
         extract: !transfer.no_extract,
         verify: policy.verification(),
         tuning: &tuning,
+        policy: &policy,
     };
     let produced = resolve_and_publish(
         &with,
@@ -605,6 +612,7 @@ fn run_get(
             cache: held.as_deref(),
             policy: &policy,
             json,
+            accepted_terms,
         },
         observer,
         sequence,
@@ -694,6 +702,9 @@ struct Recording<'a> {
     policy: &'a dyn fetchloom_engine::seam::policy::Policy,
     /// Whether the result is machine readable.
     json: bool,
+    /// Whether the manifest's recorded terms were asserted, when it recorded
+    /// any to assert.
+    accepted_terms: Option<fetchloom_engine::license::Acceptance>,
 }
 
 /// Records what a run resolved and reports what it did.
@@ -726,6 +737,7 @@ fn record(
             into.manifest,
             &produced.resolved,
             into.policy,
+            into.accepted_terms,
             &reporter,
         ),
         Err(error) => reporter.report(error),
@@ -767,6 +779,7 @@ fn run_plan(
         &policy::NativeCredentialStore,
         observer,
         sequence,
+        &policy::StdinPrompter,
     );
     let (source, named) = match resolve_places(reference, transfer, &policy) {
         Ok(places) => places,
@@ -864,6 +877,7 @@ fn run_apply(
         &policy::NativeCredentialStore,
         observer,
         sequence,
+        &policy::StdinPrompter,
     );
     let Opened {
         processor,
@@ -896,44 +910,24 @@ fn run_apply(
         extract: !transfer.no_extract,
         verify: policy.verification(),
         tuning: &tuning,
+        policy: &policy,
     };
     let selection = fetchloom_engine::selection::Selection {
         include: artifact.select.clone(),
         exclude: Vec::new(),
         layout: artifact.layout,
     };
-    let cached = held
-        .as_deref()
-        .is_some_and(|cache| cache.contains(artifact.digest).unwrap_or(false));
-    let produced = if cached {
-        run::materialize_cached(
-            &with,
-            artifact.digest,
-            artifact.size,
-            &plan.dataset,
-            &destination,
-            &selection,
-            transfer.force,
-            transfer.adopt,
-            &artifact.source,
-            observer,
-            sequence,
-        )
-    } else if let Err(error) = run::allowed_offline(artifact.source.as_str(), &policy) {
-        return reporter.report(&error);
-    } else {
-        run::materialize_remote(
-            &with,
-            artifact.source.as_str(),
-            &destination,
-            &selection,
-            transfer.force,
-            transfer.adopt,
-            Some(artifact.digest),
-            observer,
-            sequence,
-        )
-    };
+    let produced = apply_produce(
+        &with,
+        &policy,
+        &plan,
+        &artifact,
+        &destination,
+        &selection,
+        transfer,
+        observer,
+        sequence,
+    );
     let result = match produced {
         Ok(result) => result,
         Err(error) => return reporter.report(&error),
@@ -946,7 +940,57 @@ fn run_apply(
         &manifest,
         &resolved,
         &policy,
+        None,
         &reporter,
+    )
+}
+
+/// Produces the artifact a plan names, from the cache when it is already
+/// held, or from its source otherwise.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument names a piece of what applying a plan produces"
+)]
+fn apply_produce(
+    with: &run::Materialization<'_>,
+    policy: &dyn fetchloom_engine::seam::policy::Policy,
+    plan: &fetchloom_engine::plan::Plan,
+    artifact: &fetchloom_engine::plan::PlanArtifact,
+    destination: &Path,
+    selection: &fetchloom_engine::selection::Selection,
+    transfer: &surface::TransferFlags,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<run::RunResult, fetchloom_engine::error::Error> {
+    let cached = with
+        .cache
+        .is_some_and(|cache| cache.contains(artifact.digest).unwrap_or(false));
+    if cached {
+        return run::materialize_cached(
+            with,
+            artifact.digest,
+            artifact.size,
+            &plan.dataset,
+            destination,
+            selection,
+            transfer.force,
+            transfer.adopt,
+            &artifact.source,
+            observer,
+            sequence,
+        );
+    }
+    run::allowed_offline(artifact.source.as_str(), policy)?;
+    run::materialize_remote(
+        with,
+        artifact.source.as_str(),
+        destination,
+        selection,
+        transfer.force,
+        transfer.adopt,
+        Some(artifact.digest),
+        observer,
+        sequence,
     )
 }
 
@@ -1098,11 +1142,19 @@ fn finish_get(
     manifest: &fetchloom_engine::manifest::Manifest,
     artifacts: &[run::ResolvedArtifact],
     policy: &dyn fetchloom_engine::seam::policy::Policy,
+    accepted_terms: Option<fetchloom_engine::license::Acceptance>,
     reporter: &Reporter<'_>,
 ) -> ExitCode {
     let mut result = result.clone();
     if let Some(cache) = cache {
-        match run::write_receipt(cache, manifest, artifacts, &result, policy.verification()) {
+        match run::write_receipt(
+            cache,
+            manifest,
+            artifacts,
+            &result,
+            policy.verification(),
+            accepted_terms,
+        ) {
             Ok(trust) => result.trust = trust,
             Err(error) => return reporter.report(&error),
         }
@@ -1357,5 +1409,6 @@ fn get_policy<'a>(
         &policy::NativeCredentialStore,
         observer,
         sequence,
+        &policy::StdinPrompter,
     )
 }

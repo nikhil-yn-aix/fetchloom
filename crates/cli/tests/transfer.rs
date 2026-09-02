@@ -49,6 +49,10 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources::HttpSource;
 use tempfile::TempDir;
 
+mod support;
+
+use support::NoCredentialPolicy;
+
 /// A pause that records what it was asked to wait and never waits.
 #[derive(Debug, Default)]
 struct CountedPause {
@@ -124,6 +128,7 @@ impl Harness {
             sequence: &self.sequence,
             controller: &self.controller,
             meter: None,
+            credential: None,
         }
     }
 
@@ -438,6 +443,7 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
         sequence: &harness.sequence,
         controller: &harness.controller,
         meter: None,
+        credential: None,
     };
 
     let done = transfer
@@ -485,6 +491,7 @@ fn materialization<'a>(
     work: &'a std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
     tuning: &'a fetchloom_cli::run::Tuning,
+    policy: &'a NoCredentialPolicy,
 ) -> Materialization<'a> {
     Materialization {
         processor,
@@ -496,6 +503,7 @@ fn materialization<'a>(
         verify: fetchloom_engine::verification::VerificationPolicy::Fingerprint,
         digester,
         tuning,
+        policy,
     }
 }
 
@@ -529,7 +537,10 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
-    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let policy = NoCredentialPolicy::default();
+    let with = materialization(
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+    );
     let destination = root.path().join("dest").join("object");
 
     let first_observer = RecordingObserver::new();
@@ -625,7 +636,10 @@ fn a_container_reference_lists_and_materializes_every_entry() {
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
-    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let policy = NoCredentialPolicy::default();
+    let with = materialization(
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+    );
     let destination = root.path().join("dest");
 
     let observer = RecordingObserver::new();
@@ -873,6 +887,7 @@ fn a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_by
         sequence: &collapsing.sequence,
         controller: &controller,
         meter: None,
+        credential: None,
     }
     .run(Some(digest_of(&bytes)), &nothing_prior, &at(&slow))
     .unwrap();
@@ -928,7 +943,10 @@ fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
-    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let policy = NoCredentialPolicy::default();
+    let with = materialization(
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+    );
     let destination = root.path().join("dest");
     let observer = RecordingObserver::new();
     let sequence = Sequence::new();
@@ -1002,7 +1020,10 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
     let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
-    let with = materialization(&processor, &platform, &cache, &work, &digester, &tuning);
+    let policy = NoCredentialPolicy::default();
+    let with = materialization(
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+    );
     let destination = root.path().join("dest");
     let observer = RecordingObserver::new();
     let sequence = Sequence::new();

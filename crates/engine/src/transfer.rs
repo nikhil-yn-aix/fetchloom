@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::credential::Credential;
 use crate::degrade::DegradeQueue;
 use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
@@ -152,6 +153,8 @@ pub struct Transfer<'a, S, T, P> {
     pub controller: &'a Mutex<Controller>,
     /// The ceiling on how fast the run may move bytes, when one was set.
     pub meter: Option<&'a Meter>,
+    /// The credential resolved for this transfer's host, when one was found.
+    pub credential: Option<&'a Credential>,
 }
 
 impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
@@ -251,7 +254,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
         let metadata = match arrived.as_ref() {
             Some((metadata, _)) => metadata.clone(),
-            None => self.source.probe(location, None)?,
+            None => self.source.probe(location, self.credential)?,
         };
         let key = match expected {
             Some(digest) => PartialKey::of_content(digest),
@@ -356,7 +359,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             start: keep,
             end: metadata.size.unwrap_or(u64::MAX),
         });
-        let answered = self.source.fetch(location, range, None)?;
+        let answered = self.source.fetch(location, range, self.credential)?;
         Ok((answered.metadata.location, Either::Fetched(answered.body)))
     }
 
@@ -377,7 +380,10 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         if !prior.validator.can_be_asked_with() || !self.store.contains(prior.digest)? {
             return Ok(Asked::Silence);
         }
-        match self.source.revalidate(location, &prior.validator, None)? {
+        match self
+            .source
+            .revalidate(location, &prior.validator, self.credential)?
+        {
             Revalidated::Unchanged => Ok(Asked::Unchanged(prior.digest)),
             Revalidated::Changed(served) => {
                 self.degradations.record(

@@ -1,10 +1,14 @@
 //! What a run is allowed to do, decided by settings, streams, and terms.
 
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use fetchloom_engine::credential::{Credential, CredentialOrigin, Necessity, ProviderHelp};
+use fetchloom_engine::credential::{
+    Credential, CredentialOrigin, Necessity, ProviderHelp, token_variable,
+};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
@@ -21,18 +25,44 @@ use crate::settings::{Environment, Settings};
 use crate::surface::{DurabilityChoice, IoChoice, TransferFlags, VerifyChoice};
 use crate::terminal::Streams;
 
-/// Builds the environment variable name a host's credential is read from.
-#[must_use]
-pub fn token_variable(host: &Host) -> String {
-    let mut name = String::from("FETCHLOOM_TOKEN_");
-    for character in host.as_str().chars() {
-        if character.is_ascii_alphanumeric() {
-            name.push(character.to_ascii_uppercase());
-        } else {
-            name.push('_');
-        }
+/// Asks a yes or no question on the terminal a run is attached to.
+pub trait Prompter: Send + Sync {
+    /// Asks the question and reports whether the answer was yes.
+    fn confirm(&self, question: &str) -> bool;
+}
+
+/// A prompter that reads the answer from the process's own standard input.
+#[derive(Debug, Default)]
+pub struct StdinPrompter;
+
+impl Prompter for StdinPrompter {
+    fn confirm(&self, question: &str) -> bool {
+        eprint!("{question} ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).is_ok() && answer.trim().eq_ignore_ascii_case("y")
     }
-    name
+}
+
+/// Writes a provider's fixed help record to standard error, exactly as it is
+/// stated, never improvised.
+fn print_help(help: &ProviderHelp) {
+    eprintln!("{}: {}", help.provider, help.unlocks);
+    for (index, step) in help.steps.iter().enumerate() {
+        eprintln!("  {}. {step}", index + 1);
+    }
+    eprintln!("  put it in: {}", help.placement);
+    eprintln!("  verify with: {}", help.verification);
+    eprintln!("  scope: {}", help.scope);
+}
+
+/// Renders a duration the way a person reads it, in whole seconds or minutes.
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds} seconds")
+    } else {
+        format!("{} minutes", seconds / 60)
+    }
 }
 
 /// The Policy the command line resolves to.
@@ -47,6 +77,8 @@ pub struct CommandLinePolicy<'a> {
     store: &'a dyn CredentialStore,
     observer: &'a dyn Observer,
     sequence: &'a Sequence,
+    prompter: &'a dyn Prompter,
+    declined: Mutex<HashSet<String>>,
 }
 
 impl std::fmt::Debug for CommandLinePolicy<'_> {
@@ -64,7 +96,7 @@ impl<'a> CommandLinePolicy<'a> {
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
-        reason = "a policy is decided by its settings, its streams, whether terms were asserted, and each place a credential is looked for"
+        reason = "a policy is decided by its settings, its streams, whether terms were asserted, each place a credential is looked for, and what asks the user a question"
     )]
     pub fn new(
         settings: Settings,
@@ -75,6 +107,7 @@ impl<'a> CommandLinePolicy<'a> {
         store: &'a dyn CredentialStore,
         observer: &'a dyn Observer,
         sequence: &'a Sequence,
+        prompter: &'a dyn Prompter,
     ) -> Self {
         Self {
             settings,
@@ -87,6 +120,8 @@ impl<'a> CommandLinePolicy<'a> {
             store,
             observer,
             sequence,
+            prompter,
+            declined: Mutex::new(HashSet::new()),
         }
     }
 
@@ -216,6 +251,10 @@ impl Policy for CommandLinePolicy<'_> {
                 self.emit(EventPayload::CredentialRequired {
                     provider: host.to_string(),
                 });
+                print_help(&fetchloom_sources::help_for(
+                    host.as_str(),
+                    Necessity::Required,
+                ));
                 Err(Error::new(
                     ErrorKind::PolicyCredentialMissing,
                     format!(
@@ -236,18 +275,32 @@ impl Policy for CommandLinePolicy<'_> {
         if projected_gain <= self.limits.credential_offer_threshold {
             return Ok(None);
         }
+        if self.already_declined(&help.provider) {
+            return Ok(None);
+        }
         if !self.streams.can_prompt() {
             self.emit(EventPayload::CredentialDeclined {
                 provider: help.provider.clone(),
             });
+            self.remember_declined(&help.provider);
             return Ok(None);
         }
         self.emit(EventPayload::CredentialOffer {
             provider: help.provider.clone(),
         });
+        eprintln!(
+            "a credential for {} would save about {} on this transfer",
+            help.provider,
+            human_duration(projected_gain)
+        );
+        print_help(help);
+        if self.prompter.confirm("set this up now? [y/N]") {
+            return Ok(None);
+        }
         self.emit(EventPayload::CredentialDeclined {
             provider: help.provider.clone(),
         });
+        self.remember_declined(&help.provider);
         Ok(None)
     }
 
@@ -259,12 +312,38 @@ impl Policy for CommandLinePolicy<'_> {
             return Ok(Acceptance::Asserted);
         }
         if self.streams.can_prompt() {
+            if let Some(url) = license.url.as_deref() {
+                eprintln!("the recorded terms are at {url}");
+            }
+            if self.prompter.confirm("accept the recorded terms? [y/N]") {
+                return Ok(Acceptance::Asserted);
+            }
             return Ok(Acceptance::Withheld);
         }
         Err(Error::new(
             ErrorKind::PolicyTermsRequired,
             "run the command again with --yes to assert that you accept the recorded terms",
         ))
+    }
+}
+
+impl CommandLinePolicy<'_> {
+    /// Reports whether this provider's optional credential was already
+    /// declined earlier in this run.
+    fn already_declined(&self, provider: &str) -> bool {
+        self.declined
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(provider)
+    }
+
+    /// Records that this provider's optional credential was declined, so it
+    /// is never offered again in this run.
+    fn remember_declined(&self, provider: &str) {
+        self.declined
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(provider.to_owned());
     }
 }
 

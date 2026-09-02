@@ -5,7 +5,7 @@ use std::io::Read;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use fetchloom_engine::credential::Credential;
+use fetchloom_engine::credential::{Credential, Necessity};
 use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
@@ -461,6 +461,20 @@ pub(crate) fn status_failure(
             format!(
                 "renew the credential for {} or widen its scope, because the source answered {status} to the one it was given",
                 credential.host
+            ),
+        )
+        .with_source(location);
+    }
+    if matches!(status, 401 | 403) {
+        let host =
+            Origin::of(location).map_or_else(|_| String::new(), |origin| origin.host().to_owned());
+        let help = crate::help::help_for(&host, Necessity::Required);
+        return Error::new(
+            ErrorKind::PolicyCredentialMissing,
+            format!(
+                "{}, because {} answered {status} without one",
+                help.placement,
+                SafeUrl::new(location)
             ),
         )
         .with_source(location);
