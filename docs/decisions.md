@@ -7451,3 +7451,36 @@ carries the redacted form.
 
 Sources: contracts.md:768; `crates/cli/tests/credential_and_terms.rs`;
 `crates/engine/src/transfer.rs`.
+
+## Phase 7.5. The count rises while throughput improves, which it did not before
+
+features.md:63 says the connection count per host rises while throughput improves
+and falls when it does not. The controller rose on a clean answer and fell on a
+failure, and nothing anywhere compared what a host delivered at one count against
+what it delivered at another. The first half of that sentence was false.
+
+The controller now gathers what the host delivered at the count it is currently
+permitted, and a clean answer is judged against it. Below a window of bytes at the
+current count nothing has been measured, so a clean answer rises exactly as before:
+the second stream is what measures whether a second stream helps, and refusing to
+open it would mean never measuring anything. Once a window has been delivered, a
+clean answer rises only if the rate at this count beats the rate at the count
+below, and otherwise gives up this count for the run, falls back one, and never
+reaches it again.
+
+The rate compared is the host's, not one transfer's. Per-transfer rate falls as
+the count rises even when the host is delivering more in total, so judging on it
+would cap every host at two. Bytes and elapsed time from every transfer that
+completed at a count are summed, which is the aggregate the sentence is about.
+
+A count given up is given up for the run and not for the recorded measurement:
+what is written to the cache is the count the run settled at, which is what the
+next run starts from. A host whose capacity changed between runs starts at the old
+count and finds its own ceiling again from there.
+
+Rate limits and failures still halve and step down without consulting throughput.
+A host asking to be left alone is not a measurement of capacity and is not treated
+as one.
+
+Sources: features.md:63; `crates/engine/src/tuning.rs`;
+`crates/engine/tests/tuning.rs`.

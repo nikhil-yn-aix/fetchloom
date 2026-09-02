@@ -307,11 +307,14 @@ fn record_measurement(
     if !with.tuning.adapts || host.is_empty() {
         return;
     }
-    let permitted = flights
-        .controller(host)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .permitted();
+    let held = flights.controller(host);
+    let permitted = {
+        let mut controller = held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        controller.delivered(moved, took);
+        controller.permitted()
+    };
     let nanos = u64::try_from(took.as_nanos()).unwrap_or(u64::MAX);
     let throughput = moved
         .saturating_mul(1_000_000_000)

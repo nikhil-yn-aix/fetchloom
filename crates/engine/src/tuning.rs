@@ -148,6 +148,10 @@ pub struct Controller {
     permitted: u32,
     ceiling: u32,
     fixed: bool,
+    capped: u32,
+    bytes: u64,
+    nanos: u64,
+    before: Option<u64>,
 }
 
 impl Controller {
@@ -161,6 +165,10 @@ impl Controller {
             permitted,
             ceiling,
             fixed: false,
+            capped: ceiling,
+            bytes: 0,
+            nanos: 0,
+            before: None,
         }
     }
 
@@ -172,6 +180,10 @@ impl Controller {
             permitted: at.get(),
             ceiling: at.get(),
             fixed: true,
+            capped: at.get(),
+            bytes: 0,
+            nanos: 0,
+            before: None,
         }
     }
 
@@ -181,16 +193,69 @@ impl Controller {
         self.permitted
     }
 
+    /// Records what the host delivered at the count it is now permitted, which
+    /// is what the next clean answer is judged against.
+    pub fn delivered(&mut self, bytes: u64, took: Duration) {
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.nanos = self
+            .nanos
+            .saturating_add(u64::try_from(took.as_nanos()).unwrap_or(u64::MAX));
+    }
+
     /// Moves the count for what a host answered.
     pub fn answered(&mut self, answer: Answer) {
         if self.fixed {
             return;
         }
-        self.permitted = match answer {
-            Answer::Clean => self.permitted.saturating_add(1).min(self.ceiling),
-            Answer::RateLimited => (self.permitted / 2).max(1),
-            Answer::Faltered => self.permitted.saturating_sub(1).max(1),
+        match answer {
+            Answer::Clean => self.rise_while_it_helps(),
+            Answer::RateLimited => self.settle_at((self.permitted / 2).max(1)),
+            Answer::Faltered => self.settle_at(self.permitted.saturating_sub(1).max(1)),
+        }
+    }
+
+    /// Returns the rate the host delivered at the current count, and nothing
+    /// until it has delivered a window at it.
+    fn rate(&self) -> Option<u64> {
+        (self.bytes >= WINDOW_BYTES && self.nanos > 0)
+            .then(|| self.bytes.saturating_mul(1_000_000_000) / self.nanos)
+    }
+
+    /// Adds one to the count while the host is delivering more than it did at
+    /// the count below, and gives up the count that stopped helping.
+    fn rise_while_it_helps(&mut self) {
+        let Some(rate) = self.rate() else {
+            self.settle_at(self.next_up());
+            return;
         };
+        match self.before {
+            Some(before) if rate <= before => {
+                self.capped = self.permitted.saturating_sub(1).max(1);
+                self.settle_at(self.capped);
+            }
+            _ => {
+                self.before = Some(rate);
+                self.settle_at(self.next_up());
+            }
+        }
+    }
+
+    fn next_up(&self) -> u32 {
+        self.permitted
+            .saturating_add(1)
+            .min(self.ceiling)
+            .min(self.capped)
+    }
+
+    /// Moves to a count and starts measuring it, because what was delivered at
+    /// one count says nothing about another.
+    fn settle_at(&mut self, count: u32) {
+        if count == self.permitted {
+            return;
+        }
+        self.permitted = count;
+        self.bytes = 0;
+        self.nanos = 0;
     }
 }
 

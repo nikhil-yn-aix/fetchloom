@@ -463,3 +463,63 @@ fn writes_shorter_than_one_window_are_gathered_rather_than_judged_one_at_a_time(
         "a full window a volume took sixteen times longer over was not read as a collapse"
     );
 }
+
+/// A window's worth of bytes, which is the least a host must deliver at a count
+/// before that count's rate says anything.
+const A_WINDOW: u64 = fetchloom_engine::tuning::WINDOW_BYTES;
+
+#[test]
+fn a_count_that_did_not_deliver_more_is_given_up_and_never_reached_again() {
+    let mut controller = Controller::start(Some(1), count(8));
+    controller.delivered(A_WINDOW, Duration::from_millis(100));
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        2,
+        "a host that answered cleanly was not given a second stream"
+    );
+
+    controller.delivered(A_WINDOW, Duration::from_millis(200));
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        1,
+        "a second stream that delivered no more was kept"
+    );
+
+    controller.delivered(A_WINDOW, Duration::from_millis(50));
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        1,
+        "a count measured not to help was reached again"
+    );
+}
+
+#[test]
+fn a_count_that_delivered_more_is_kept_and_the_next_one_is_tried() {
+    let mut controller = Controller::start(Some(1), count(8));
+    controller.delivered(A_WINDOW, Duration::from_millis(200));
+    controller.answered(Answer::Clean);
+    assert_eq!(controller.permitted(), 2);
+
+    controller.delivered(A_WINDOW, Duration::from_millis(100));
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        3,
+        "a count that delivered twice as much was not built on"
+    );
+}
+
+#[test]
+fn a_host_that_has_delivered_less_than_a_window_rises_on_a_clean_answer() {
+    let mut controller = Controller::start(Some(1), count(8));
+    controller.delivered(A_WINDOW / 4, Duration::from_millis(100));
+    controller.answered(Answer::Clean);
+    assert_eq!(
+        controller.permitted(),
+        2,
+        "a run that has measured nothing yet refused to measure whether a second stream helps"
+    );
+}
