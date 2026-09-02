@@ -7073,3 +7073,56 @@ A credential is resolved once per transfer against the first candidate's host,
 so a failover to a second host sends none. That is correct under contracts --
 a credential is bound to the host it was resolved for -- and it means a manifest
 listing private sources on two hosts can authenticate only the first.
+
+## Phase 7. The verification run, and a baseline that was not re-recorded
+
+`cargo xtask verify` in full, once, at the end of the phase.
+
+```
+pass format 0.7 s
+pass lint x86_64-pc-windows-msvc 18.8 s
+pass lint x86_64-unknown-linux-musl 12.5 s
+pass build 0.3 s
+pass compile aarch64-pc-windows-msvc 17.1 s
+pass test x86_64-pc-windows-msvc 247.4 s
+pass comments 0.1 s
+pass network 15.6 s
+pass benchmark 162.9 s
+pass linux image 10.0 s
+pass linux suite 1482.2 s
+pass linux offline prepare 4.1 s
+pass linux offline apply 1.2 s
+13 of 13 steps passed, 0 skipped, 4 degradations
+```
+
+The four degradations are the ones every run on this machine reports: no ReFS,
+small volume or case-sensitive directory without an elevated shell and Hyper-V;
+the emulated aarch64 Linux lane runs only behind `--arm`; Windows on ARM compiles
+and is not run; and `arm64ec` is refused by the cryptography provider.
+
+The benchmark step gated and passed, which is the statement that matters: step 1
+injected 100 ms of latency into every request of the many-hosts regime and moved
+no deterministic metric. That regime still reads 40 requests, 6,292,608 bytes
+written and 325 file operations, byte for byte what the baseline holds.
+
+The timing baseline was not re-recorded, and the attempt to re-record it is worth
+writing down. many-hosts now takes about 12,700 ms where the baseline holds
+9,302 ms, and that difference is real: it is the 4,000 ms of injected latency the
+regime now pays. But a baseline recorded straight after a thirty-minute
+verification run, with the container lane's images and page cache still warm, put
+every regime up by half: no-op at 30 ms against a recorded 9.6, cold-cache at
+1,877 against 1,537, many-small-files at 11,494 against 7,162. A second run after
+a settle was worse rather than better. standards.md is explicit that a timing
+measurement that moves while the deterministic metrics are unchanged is evidence
+about the machine and is investigated rather than silenced by re-recording, so
+the re-record was reverted and the baseline still holds the old numbers.
+
+What that costs is one stale timing number, for a regime whose timing never
+gates. What re-recording would have cost is a baseline claiming this machine is
+half as fast as it is, which every later phase would then measure against.
+
+The three-configuration comparison in the delay injection record above is
+unaffected, because its point was never the absolute numbers. Defaults, a fixed
+one and one, and a fixed eight and eight were measured in the same conditions
+within minutes of each other, and they agreed within 0.4 percent. A noisy machine
+makes all three noisy together.
