@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::credential::Credential;
+use crate::degrade::Degradation;
 use crate::digest::{ContentDigest, InteropDigest};
 use crate::error::Error;
 use crate::redact::SafeUrl;
@@ -149,10 +150,27 @@ pub struct Served<B> {
     pub body: B,
 }
 
+/// What an adapter serves at a reference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Serves {
+    /// One object, whose bytes it fetches.
+    Object,
+    /// A container, whose entries it lists.
+    Container,
+}
+
 /// Somewhere bytes can be fetched from.
 pub trait Source {
     /// The bytes of an object, streamed.
     type Body: Read;
+
+    /// Reports what this adapter serves at a reference, and nothing at all when
+    /// the reference is not one it serves.
+    fn serves(&self, reference: &str) -> Option<Serves>;
+
+    /// Removes and returns every fallback this adapter performed since the last
+    /// call.
+    fn take_degradations(&self) -> Vec<Degradation>;
 
     /// Makes a bounded metadata request costing kilobytes.
     ///

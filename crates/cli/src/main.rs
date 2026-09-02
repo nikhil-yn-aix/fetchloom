@@ -20,6 +20,7 @@ use clap::{CommandFactory, Parser};
 use fetchloom_archive as _;
 use fetchloom_engine::cancel;
 use fetchloom_engine::durability::DurabilityTier;
+use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
@@ -516,17 +517,19 @@ fn run_get(
 ) -> ExitCode {
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
-    let remote = run::is_remote(reference);
+    let work = Arc::new(WorkCounter::new());
+    let adapters = run::adapters_for(&work);
+    let remote = run::is_served(&adapters, reference);
     let environment = ProcessEnvironment;
     let policy = get_policy(transfer, parsed, resolved, &environment, observer, sequence);
-    let (source, named) = match resolve_places(reference, transfer, &policy) {
+    let (source, named) = match resolve_places(&adapters, reference, transfer, &policy) {
         Ok(places) => places,
         Err(error) => {
             return reporter.report(&error);
         }
     };
 
-    let (manifest, is_dataset) = match resolve_manifest(reference, &source, remote) {
+    let (manifest, is_dataset) = match resolve_manifest(&adapters, reference, &source, remote) {
         Ok(found) => found,
         Err(error) => return reporter.report(&error),
     };
@@ -542,7 +545,6 @@ fn run_get(
 
     let Opened {
         processor,
-        work,
         platform,
         durability,
         scratch: _scratch,
@@ -550,6 +552,7 @@ fn run_get(
     } = match open_for(
         resolved,
         transfer,
+        &work,
         &destination,
         &policy,
         observer,
@@ -560,13 +563,8 @@ fn run_get(
         Err(code) => return code,
     };
 
-    let lock_path = match lock_path_of(transfer) {
-        Ok(path) => path,
-        Err(error) => return reporter.report(&error),
-    };
-    let selection = selection_of(transfer);
-    let pinned = match held_to_lock(&lock_path, &dataset, &manifest, &selection, transfer.locked) {
-        Ok(pinned) => pinned,
+    let (lock_path, selection, pinned) = match locked_selection(transfer, &dataset, &manifest) {
+        Ok(held) => held,
         Err(error) => return reporter.report(&error),
     };
 
@@ -583,6 +581,7 @@ fn run_get(
         verify: policy.verification(),
         tuning: &tuning,
         policy: &policy,
+        adapters: &adapters,
     };
     let produced = resolve_and_publish(
         &with,
@@ -769,6 +768,8 @@ fn run_plan(
     }
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
+    let work = Arc::new(WorkCounter::new());
+    let adapters = run::adapters_for(&work);
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(
         resolved.clone(),
@@ -781,11 +782,11 @@ fn run_plan(
         sequence,
         &policy::StdinPrompter,
     );
-    let (source, named) = match resolve_places(reference, transfer, &policy) {
+    let (source, named) = match resolve_places(&adapters, reference, transfer, &policy) {
         Ok(places) => places,
         Err(error) => return reporter.report(&error),
     };
-    let dataset = run::dataset_name(reference, &source);
+    let dataset = run::dataset_name(&adapters, reference, &source);
     let destination = match named {
         Some(named) => named,
         None => match run::resolve_path(&PathBuf::from(".").join(&dataset)) {
@@ -805,7 +806,6 @@ fn run_plan(
         Ok(root) => root,
         Err(error) => return reporter.report(&error),
     };
-    let work = Arc::new(WorkCounter::new());
     let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
@@ -867,6 +867,8 @@ fn run_apply(
         Ok(read) => read,
         Err(error) => return reporter.report(&error),
     };
+    let work = Arc::new(WorkCounter::new());
+    let adapters = run::adapters_for(&work);
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(
         resolved.clone(),
@@ -881,7 +883,6 @@ fn run_apply(
     );
     let Opened {
         processor,
-        work,
         platform,
         durability,
         scratch: _scratch,
@@ -889,6 +890,7 @@ fn run_apply(
     } = match open_for(
         resolved,
         transfer,
+        &work,
         &destination,
         &policy,
         observer,
@@ -911,6 +913,7 @@ fn run_apply(
         verify: policy.verification(),
         tuning: &tuning,
         policy: &policy,
+        adapters: &adapters,
     };
     let selection = fetchloom_engine::selection::Selection {
         include: artifact.select.clone(),
@@ -932,7 +935,7 @@ fn run_apply(
         Ok(result) => result,
         Err(error) => return reporter.report(&error),
     };
-    let manifest = run::synthesized_manifest(&plan.dataset, artifact.source.as_str());
+    let manifest = run::synthesized_manifest(&adapters, &plan.dataset, artifact.source.as_str());
     let resolved = run::resolved_object(&result, &selection);
     finish_get(
         &result,
@@ -1008,6 +1011,7 @@ fn lock_path_of(
 
 /// Returns the manifest a reference resolves from, and whether it named one.
 fn resolve_manifest(
+    adapters: &Adapters,
     reference: &str,
     source: &std::path::Path,
     remote: bool,
@@ -1019,7 +1023,11 @@ fn resolve_manifest(
     };
     let is_dataset = read.is_some();
     let manifest = read.unwrap_or_else(|| {
-        run::synthesized_manifest(&run::dataset_name(reference, source), reference)
+        run::synthesized_manifest(
+            adapters,
+            &run::dataset_name(adapters, reference, source),
+            reference,
+        )
     });
     Ok((manifest, is_dataset))
 }
@@ -1052,7 +1060,7 @@ fn materialize(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<run::RunResult, fetchloom_engine::error::Error> {
-    if remote && run::is_container(reference) {
+    if remote && run::is_container(with.adapters, reference) {
         return run::materialize_remote_container(
             with,
             reference,
@@ -1098,12 +1106,13 @@ fn materialize(
 
 /// Returns the source a reference names and the destination it materializes to.
 fn resolve_places(
+    adapters: &Adapters,
     reference: &str,
     transfer: &surface::TransferFlags,
     policy: &dyn Policy,
 ) -> Result<(PathBuf, Option<PathBuf>), fetchloom_engine::error::Error> {
     run::allowed_offline(reference, policy)?;
-    let source = if run::is_remote(reference) {
+    let source = if run::is_served(adapters, reference) {
         PathBuf::from(run::remote_name(reference))
     } else {
         run::local_path(reference)?
@@ -1309,17 +1318,21 @@ fn scratch_beside(destination: &Path) -> PathBuf {
 /// What every materializing command opens before it moves a byte.
 struct Opened {
     processor: Arc<Processor>,
-    work: Arc<WorkCounter>,
     platform: NativePlatform,
     held: Option<Box<fetchloom_cache::Cache<NativePlatform>>>,
     durability: DurabilityTier,
     scratch: Option<Scratch>,
 }
 
-/// Opens the pool, the counter, the platform, and the cache one run needs.
+/// Opens the pool, the platform, and the cache one run needs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the settings, the flags, the counter, and the two observers each name a piece of what a run opens"
+)]
 fn open_for(
     resolved: &settings::Settings,
     transfer: &surface::TransferFlags,
+    work: &Arc<WorkCounter>,
     destination: &Path,
     policy: &dyn fetchloom_engine::seam::policy::Policy,
     observer: &dyn Observer,
@@ -1334,8 +1347,7 @@ fn open_for(
         return Err(ExitCode::Resource);
     };
     let processor = Arc::new(processor);
-    let work = Arc::new(WorkCounter::new());
-    let platform = NativePlatform::new(Arc::clone(&work));
+    let platform = NativePlatform::new(Arc::clone(work));
     let mut scratch = None;
     let mut held = if transfer.no_cache {
         None
@@ -1344,7 +1356,7 @@ fn open_for(
             Ok(root) => root,
             Err(error) => return Err(reporter.report(&error)),
         };
-        match open_cache(&root, policy, &work, &processor, observer, sequence) {
+        match open_cache(&root, policy, work, &processor, observer, sequence) {
             Ok(held) => held,
             Err(refused) => return Err(reporter.report(&refused)),
         }
@@ -1352,7 +1364,7 @@ fn open_for(
     if held.is_none() {
         let root = scratch_beside(destination);
         let _ = std::fs::remove_dir_all(&root);
-        held = match open_cache(&root, policy, &work, &processor, observer, sequence) {
+        held = match open_cache(&root, policy, work, &processor, observer, sequence) {
             Ok(held) => held,
             Err(refused) => return Err(reporter.report(&refused)),
         };
@@ -1360,7 +1372,6 @@ fn open_for(
     }
     Ok(Opened {
         processor,
-        work,
         platform,
         held,
         durability,
@@ -1411,4 +1422,24 @@ fn get_policy<'a>(
         sequence,
         &policy::StdinPrompter,
     )
+}
+
+/// Returns the lock a run writes, the members it selects, and what the lock
+/// already pinned.
+fn locked_selection(
+    transfer: &surface::TransferFlags,
+    dataset: &str,
+    manifest: &fetchloom_engine::manifest::Manifest,
+) -> Result<
+    (
+        PathBuf,
+        fetchloom_engine::selection::Selection,
+        Option<fetchloom_engine::lock::LockedDataset>,
+    ),
+    fetchloom_engine::error::Error,
+> {
+    let lock_path = lock_path_of(transfer)?;
+    let selection = selection_of(transfer);
+    let pinned = held_to_lock(&lock_path, dataset, manifest, &selection, transfer.locked)?;
+    Ok((lock_path, selection, pinned))
 }

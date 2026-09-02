@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fetchloom_engine::credential::Credential;
+use fetchloom_engine::degrade::Degradation;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Serves, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 use fetchloom_engine::work::WorkCounter;
@@ -42,7 +43,7 @@ impl FileSource {
 
     /// Reports whether a reference names a path this source can serve.
     #[must_use]
-    pub fn serves(location: &str) -> bool {
+    pub fn names_a_file(location: &str) -> bool {
         !location.contains("://") && Path::new(location).is_file()
     }
 
@@ -79,6 +80,14 @@ impl FileSource {
 
 impl Source for FileSource {
     type Body = FileBody;
+
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        Self::names_a_file(reference).then_some(Serves::Object)
+    }
+
+    fn take_degradations(&self) -> Vec<Degradation> {
+        Vec::new()
+    }
 
     fn probe(
         &self,

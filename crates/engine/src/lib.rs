@@ -11,6 +11,7 @@ pub mod degrade;
 pub mod digest;
 pub mod document;
 pub mod durability;
+pub mod erased;
 pub mod error;
 pub mod event;
 pub mod flights;

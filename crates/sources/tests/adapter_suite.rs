@@ -21,7 +21,7 @@ use fetchloom_engine::limits::Limits;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Serves, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 use fetchloom_engine::work::WorkCounter;
@@ -157,6 +157,14 @@ struct LyingSource {
 impl Source for LyingSource {
     type Body = Cursor<Vec<u8>>;
 
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        reference.contains(":://").then_some(Serves::Object)
+    }
+
+    fn take_degradations(&self) -> Vec<fetchloom_engine::degrade::Degradation> {
+        Vec::new()
+    }
+
     fn probe(
         &self,
         location: &str,
@@ -272,6 +280,14 @@ struct InventingSource {
 
 impl Source for InventingSource {
     type Body = Cursor<Vec<u8>>;
+
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        reference.contains(":://").then_some(Serves::Object)
+    }
+
+    fn take_degradations(&self) -> Vec<fetchloom_engine::degrade::Degradation> {
+        Vec::new()
+    }
 
     fn probe(
         &self,

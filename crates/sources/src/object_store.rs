@@ -9,7 +9,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Serves, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 
@@ -42,12 +42,6 @@ impl ObjectStoreSource {
         Self {
             http: HttpSource::new(limits, work),
         }
-    }
-
-    /// Removes and returns every fallback performed since the last call.
-    #[must_use]
-    pub fn take_degradations(&self) -> Vec<Degradation> {
-        self.http.take_degradations()
     }
 }
 
@@ -89,6 +83,15 @@ fn metadata_of(
 
 impl Source for ObjectStoreSource {
     type Body = HttpBody;
+
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        (crate::http::is_over_http(reference) && reference.ends_with('/'))
+            .then_some(Serves::Container)
+    }
+
+    fn take_degradations(&self) -> Vec<Degradation> {
+        self.http.take_degradations()
+    }
 
     fn probe(
         &self,

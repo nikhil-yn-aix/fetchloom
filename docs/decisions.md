@@ -7361,3 +7361,64 @@ collapsed, and it now accepts two megabytes at speed before it stalls.
 
 Sources: contracts.md Splitting one object, Limits; `crates/engine/src/split.rs`;
 `crates/cli/tests/ranged.rs`; `crates/engine/tests/split.rs`.
+
+## Phase 7.5. Two counts the seam did not carry, and dispatch that named adapters
+
+contracts.md:832 has always said that links pointing outside the listed prefix
+are ignored and counted in the result. The count had nowhere to live: `list`
+returned a bare vector of entries, so `listing.skipped` was in the event registry
+with no caller anywhere in the build. `list` now returns a `Listing` carrying the
+entries and the count, and a run emits the count between `listing.start` and
+`listing.end`.
+
+A link that resolves to the container itself is not outside the prefix and is not
+counted. A relative escape and an absolute link to somewhere else both are. That
+distinction is the whole of the counting rule and it is the only thing the two
+parser tests assert.
+
+`run.rs` decided what to do with a reference by asking `is_remote(reference) &&
+reference.ends_with('/')` and then named `HttpSource` or `ObjectStoreSource` at
+five sites. roadmap.md:135 says a new adapter can be added by implementing the
+seam and passing the shared suite, with no change to the engine, and that was
+false: a third adapter would have had to be named in `run.rs` to be reached at
+all. The Source seam now carries `serves`, by which an adapter states whether it
+serves a reference and whether it serves it as one object or as a container to be
+listed, and `take_degradations`, which every adapter already had as an inherent
+method and which the "nothing degrades silently" rule makes seam behavior rather
+than an adapter's private business.
+
+Dispatch runs through an `Adapters` registry of `AnySource`, one adapter held with
+its body type forgotten behind `Box<dyn Read + Send>`. The registry is asked in
+order and the first adapter that claims a reference gets it, so registration order
+is the precedence rule and there is one place that states it. `Transfer` stays
+generic over the seam rather than taking the erased type, so nothing about the
+transfer path changed.
+
+This is internal shape and no portable artifact carries it, so it is a code
+decision and contracts.md is unchanged.
+
+`is_remote` is gone. It answered "does this start with http", which was never the
+question; the question is whether any adapter serves it. `is_served(adapters,
+reference)` and `is_container(adapters, reference)` ask the registry. `FileSource`
+is not registered, because a local path is read as a path rather than fetched
+through the Source seam, and putting it in the registry would have made
+`is_served` true for every file on the machine. Its inherent `serves` was renamed
+`names_a_file` so that one name does not mean two things.
+
+`open_for` no longer makes the work counter, because the registry is built from
+that counter and the registry has to exist before a reference can be classified,
+which happens before the cache is opened. The counter is made once at the top of
+each command and passed in.
+
+Proved by a third adapter that exists only in a test: `InventedSource` serves a
+scheme this build ships no adapter for, is registered ahead of the two real ones,
+and a manifest naming that scheme materializes through it with the right digest.
+`run.rs` names it nowhere. Before dispatch went through the registry that test
+failed with `reference.unresolved`, asking for a path that exists, which is
+exactly the old behavior: an unrecognized scheme fell through to being treated as
+a local file.
+
+Sources: contracts.md Listing; roadmap.md:135;
+`crates/engine/src/erased.rs`; `crates/engine/src/seam/source.rs`;
+`crates/cli/tests/adapters.rs`; `crates/cli/tests/contract.rs`;
+`crates/sources/src/index.rs`.

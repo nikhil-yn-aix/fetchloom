@@ -11,7 +11,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Serves, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 
@@ -66,12 +66,6 @@ impl HttpSource {
             limits,
             work,
         }
-    }
-
-    /// Removes and returns every fallback performed since the last call.
-    #[must_use]
-    pub fn take_degradations(&self) -> Vec<Degradation> {
-        self.degradations.take()
     }
 
     fn agent(&self, host: &str) -> ureq::Agent {
@@ -282,6 +276,14 @@ pub(crate) fn check_fetch_status(
 
 impl Source for HttpSource {
     type Body = HttpBody;
+
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        (is_over_http(reference) && !reference.ends_with('/')).then_some(Serves::Object)
+    }
+
+    fn take_degradations(&self) -> Vec<Degradation> {
+        self.degradations.take()
+    }
 
     fn probe(
         &self,
@@ -572,4 +574,9 @@ fn first_byte_of(value: &str) -> Option<u64> {
         .trim()
         .parse()
         .ok()
+}
+
+/// Reports whether a reference names a location reached over HTTP.
+pub(crate) fn is_over_http(reference: &str) -> bool {
+    reference.starts_with("http://") || reference.starts_with("https://")
 }

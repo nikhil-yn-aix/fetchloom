@@ -486,6 +486,10 @@ fn test_tuning() -> fetchloom_cli::run::Tuning {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument names one field of the materialization a test runs under"
+)]
 fn materialization<'a>(
     processor: &'a Processor,
     platform: &'a NativePlatform,
@@ -494,6 +498,7 @@ fn materialization<'a>(
     digester: &'a std::sync::Mutex<fetchloom_engine::hashing::Digester>,
     tuning: &'a fetchloom_cli::run::Tuning,
     policy: &'a NoCredentialPolicy,
+    adapters: &'a fetchloom_engine::erased::Adapters,
 ) -> Materialization<'a> {
     Materialization {
         processor,
@@ -506,6 +511,7 @@ fn materialization<'a>(
         digester,
         tuning,
         policy,
+        adapters,
     }
 }
 
@@ -540,8 +546,9 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
+    let adapters = fetchloom_cli::run::adapters_for(&work);
     let with = materialization(
-        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
     let destination = root.path().join("dest").join("object");
 
@@ -639,8 +646,9 @@ fn a_container_reference_lists_and_materializes_every_entry() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
+    let adapters = fetchloom_cli::run::adapters_for(&work);
     let with = materialization(
-        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
     let destination = root.path().join("dest");
 
@@ -963,8 +971,9 @@ fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
+    let adapters = fetchloom_cli::run::adapters_for(&work);
     let with = materialization(
-        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
     let destination = root.path().join("dest");
     let observer = RecordingObserver::new();
@@ -1040,8 +1049,9 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
     let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
+    let adapters = fetchloom_cli::run::adapters_for(&work);
     let with = materialization(
-        &processor, &platform, &cache, &work, &digester, &tuning, &policy,
+        &processor, &platform, &cache, &work, &digester, &tuning, &policy, &adapters,
     );
     let destination = root.path().join("dest");
     let observer = RecordingObserver::new();

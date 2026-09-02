@@ -13,6 +13,7 @@ use fetchloom_engine::credential::{Credential, Necessity};
 use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
+use fetchloom_engine::erased::{Adapters, AnySource};
 use fetchloom_engine::error::{Error, ErrorKind, Layer};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
@@ -28,7 +29,7 @@ use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::policy::Policy;
-use fetchloom_engine::seam::source::Source;
+use fetchloom_engine::seam::source::{Serves, Source};
 use fetchloom_engine::selection::{Candidate, Selection};
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
@@ -213,6 +214,17 @@ pub struct Materialization<'a> {
     pub tuning: &'a Tuning,
     /// What this run is allowed to do, including which credential it may send.
     pub policy: &'a dyn Policy,
+    /// Every adapter this run may dispatch a reference to.
+    pub adapters: &'a Adapters,
+}
+
+/// Returns the adapters a run dispatches to, asked in the order they are given.
+#[must_use]
+pub fn adapters_for(work: &Arc<WorkCounter>) -> Adapters {
+    Adapters::new(vec![
+        AnySource::new(ObjectStoreSource::new(Limits::default(), Arc::clone(work))),
+        AnySource::new(HttpSource::new(Limits::default(), Arc::clone(work))),
+    ])
 }
 
 /// Resolves the credential a transfer to a host may send, without requiring
@@ -1364,7 +1376,9 @@ pub fn materialize_remote(
 
     let resolving = Span::start();
     emit(EventPayload::ResolveStart);
-    let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
+    let Some((source, _)) = with.adapters.serving(location) else {
+        return Err(unserved(location));
+    };
     let pause = SleepingPause;
     let limits = Limits::default();
     emit(EventPayload::ResolveEnd {
@@ -1389,7 +1403,7 @@ pub fn materialize_remote(
     let offer = offers_for(with.policy);
     let transfer = Transfer {
         store: cache,
-        source: &source,
+        source,
         pause: &pause,
         limits: &limits,
         degradations: &degradations,
@@ -1502,7 +1516,9 @@ pub fn materialize_remote_container(
 
     let resolving = Span::start();
     emit(EventPayload::ResolveStart);
-    let source = ObjectStoreSource::new(Limits::default(), Arc::clone(with.work));
+    let Some((source, _)) = with.adapters.serving(location) else {
+        return Err(unserved(location));
+    };
 
     let listing_started = Span::start();
     emit(EventPayload::ListingStart {
@@ -1522,7 +1538,7 @@ pub fn materialize_remote_container(
     });
 
     let placements = transfer_container_entries(
-        with, cache, &source, location, &listed, observer, sequence, &emit,
+        with, cache, source, location, &listed, observer, sequence, &emit,
     )?;
     emit(EventPayload::ResolveEnd {
         duration_ms: resolving.elapsed_ms(),
@@ -1635,7 +1651,7 @@ fn container_tree(placements: &[(String, ContentDigest, u64)]) -> Result<Vec<Tre
 fn transfer_container_entries(
     with: &Materialization<'_>,
     cache: &Cache<NativePlatform>,
-    source: &ObjectStoreSource,
+    source: &AnySource,
     location: &str,
     listed: &[fetchloom_engine::seam::source::ListingEntry],
     observer: &dyn Observer,
@@ -2003,18 +2019,27 @@ fn object_name(location: &str) -> String {
     last.map_or_else(|| "object".to_owned(), str::to_owned)
 }
 
-/// Reports whether a reference names a location this build fetches over the
-/// network.
+/// Reports whether an adapter serves the reference, so that a run fetches it
+/// rather than reading it as a path on this machine.
 #[must_use]
-pub fn is_remote(reference: &str) -> bool {
-    reference.starts_with("http://") || reference.starts_with("https://")
+pub fn is_served(adapters: &Adapters, reference: &str) -> bool {
+    adapters.serving(reference).is_some()
 }
 
-/// Reports whether a remote reference names a container to be listed rather
-/// than one object.
+/// Reports whether the adapter serving a reference serves it as a container to
+/// be listed rather than as one object.
 #[must_use]
-pub fn is_container(reference: &str) -> bool {
-    is_remote(reference) && reference.ends_with('/')
+pub fn is_container(adapters: &Adapters, reference: &str) -> bool {
+    matches!(adapters.serving(reference), Some((_, Serves::Container)))
+}
+
+fn unserved(reference: &str) -> Error {
+    Error::new(
+        ErrorKind::ReferenceUnresolved,
+        format!(
+            "name a location an adapter of this build serves, because nothing here serves {reference}"
+        ),
+    )
 }
 
 /// Returns the name the object at a remote location is materialized under.
@@ -2217,10 +2242,11 @@ fn object_to_resolve(with: &Materialization<'_>, source: &Path) -> Result<Option
 /// Returns the manifest a run that was given no manifest resolved from.
 #[must_use]
 pub fn synthesized_manifest(
+    adapters: &Adapters,
     dataset: &str,
     reference: &str,
 ) -> fetchloom_engine::manifest::Manifest {
-    let sources = if is_remote(reference) {
+    let sources = if is_served(adapters, reference) {
         vec![reference.to_owned()]
     } else {
         Vec::new()
@@ -2340,8 +2366,8 @@ fn fingerprints_of(
 
 /// Returns the name a reference's dataset is recorded under.
 #[must_use]
-pub fn dataset_name(reference: &str, source: &Path) -> String {
-    if is_remote(reference) {
+pub fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> String {
+    if is_served(adapters, reference) {
         return remote_name(reference);
     }
     source.file_name().map_or_else(
@@ -2493,15 +2519,16 @@ pub fn materialize_manifest(
     let resolving = Span::start();
     emit(EventPayload::ResolveStart);
 
-    let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
     let flights = Flights::new(with.tuning.ceilings, |host: &str| {
         with.tuning.controller(host, with.cache)
     });
-    let hosts: Vec<String> = manifest.artifacts.iter().map(serving_host).collect();
+    let hosts: Vec<String> = manifest
+        .artifacts
+        .iter()
+        .map(|artifact| serving_host(with.adapters, artifact))
+        .collect();
     let produced = flights.each(&manifest.artifacts, &hosts, &|artifact| {
-        resolve_artifact(
-            with, &source, &flights, artifact, base, pinned, observer, sequence,
-        )
+        resolve_artifact(with, &flights, artifact, base, pinned, observer, sequence)
     });
     let resolved = produced.outputs;
     if let Some(error) = produced.failure {
@@ -2510,7 +2537,7 @@ pub fn materialize_manifest(
             outcome: Err(error.with_dataset(manifest.name.clone())),
         };
     }
-    for entry in source.take_degradations() {
+    for entry in with.adapters.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,
             used: entry.used,
@@ -2536,23 +2563,18 @@ pub fn materialize_manifest(
 
 /// Returns the host an artifact's first source names, and nothing for an
 /// artifact no host serves.
-fn serving_host(artifact: &fetchloom_engine::manifest::Artifact) -> String {
+fn serving_host(adapters: &Adapters, artifact: &fetchloom_engine::manifest::Artifact) -> String {
     artifact
         .sources
         .first()
-        .filter(|first| is_remote(first))
+        .filter(|first| is_served(adapters, first))
         .map(|first| host_of(first))
         .unwrap_or_default()
 }
 
 /// Puts one artifact's bytes in the cache and reports what they are.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument names a piece of what an artifact resolves against"
-)]
 fn resolve_artifact(
     with: &Materialization<'_>,
-    source: &HttpSource,
     flights: &Flights<'_>,
     artifact: &fetchloom_engine::manifest::Artifact,
     base: &Path,
@@ -2587,7 +2609,7 @@ fn resolve_artifact(
     let name = object_name(first);
     let declared = artifact.archive.as_ref().map(|spec| spec.format);
 
-    if is_remote(first) {
+    if let Some((source, _)) = with.adapters.serving(first) {
         let moved = transfer_object(
             with,
             source,
@@ -2750,7 +2772,7 @@ pub struct Moved {
 /// Moves one artifact's bytes from the source that scored best.
 fn transfer_object(
     with: &Materialization<'_>,
-    source: &HttpSource,
+    source: &AnySource,
     flights: &Flights<'_>,
     locations: &[String],
     expected: Option<ContentDigest>,

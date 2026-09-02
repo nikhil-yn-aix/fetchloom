@@ -53,7 +53,7 @@ impl Repair<'_> {
     /// Fails with `integrity.mismatch` when the repaired bytes still do not
     /// hash to the digest, and with whatever the source failed with.
     pub fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
-        if FileSource::serves(self.location) {
+        if FileSource::names_a_file(self.location) {
             let source = FileSource::new(Arc::clone(self.work));
             return self.against(digest, &source);
         }
@@ -227,7 +227,7 @@ pub fn digest_for(
     {
         return Ok(digest);
     }
-    if FileSource::serves(reference)
+    if FileSource::names_a_file(reference)
         && let Some(digest) = digest_of_file(cache, reference)
         && cache.locate(digest).is_some()
     {
