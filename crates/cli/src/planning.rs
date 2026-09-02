@@ -26,6 +26,9 @@ const STAGING: &str = "staging";
 /// with it.
 const DESTINATION: &str = "destination";
 
+/// The cost, which no source in this build states.
+const COST: &str = "cost";
+
 /// Builds the plan a reference resolves to, moving no bytes.
 ///
 /// # Errors
@@ -67,6 +70,7 @@ pub fn build(
             source: SafeUrl::new(reference),
             select: locked.select.clone(),
             layout: locked.layout,
+            cost: None,
         });
     }
 
@@ -114,6 +118,7 @@ pub fn build(
             EXPANDED.to_owned(),
             STAGING.to_owned(),
             DESTINATION.to_owned(),
+            COST.to_owned(),
         ],
     })
 }

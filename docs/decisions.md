@@ -2212,8 +2212,10 @@ random duration between zero and `min(2^(n-1) seconds, 60 seconds)`. Attempts
 stop at five, both of which are already in contracts.
 
 Server guidance wins where it exists. `Retry-After` is honored on 429, on 503
-and on any 3xx, in both its forms, and it replaces the computed backoff rather
-than adding to it. A `Retry-After` longer than the sixty second ceiling is not
+and on any 3xx, in both its forms, and it is a floor on the wait rather than a
+replacement for it: the wait is the longer of the computed backoff and the wait
+the source asked for, so a source asking for less than the run's own policy is
+not obeyed into being hammered. A `Retry-After` longer than the sixty second ceiling is not
 waited out: the source is left, the next source in order is tried, and if none
 remains the run fails with `network.status` reporting the wait that was asked
 for. Waiting an hour is a decision for a person, not for a program that was told
@@ -6447,3 +6449,414 @@ later. The record is the thing that is probably wrong. It is named here rather
 than quietly changed because which of the two moves is a decision about how
 Fetchloom treats a source that asks to be hammered, and that is not a decision to
 make while amending a benchmark.
+
+## Latency the harness can inject, and what it revealed instead
+
+Question: standards.md said a constrained network is named nowhere in the
+harness because it needs a fault injector this build does not have. Phase 6
+could not close its performance half for that reason. Build the injector and
+re-run the criterion.
+
+Options: shape the network from outside the process, with a platform traffic
+control facility; charge the wait inside the fault server.
+
+Chosen: inside the fault server. `Latency` charges a configurable wait per
+request and a further wait to requests naming one host, applied before any
+response head is written, so a loopback socket answers with the time to first
+byte of a remote one. A traffic control facility needs privileges the
+verification lane does not have on either platform and shapes every socket on
+the machine rather than the one under test.
+
+The many-hosts regime now serves all sixteen of its objects behind 100 ms of
+injected latency per request. That is 40 requests and 4000 ms of latency in a
+regime whose whole median was 9204 ms before it.
+
+Because: concurrency exists to hide latency. Without latency no per-host ceiling
+can pay for itself, which is exactly what the phase 6 gate concluded and what
+this was built to remove.
+
+What it found: the answer is still no, and the reason is not the one phase 6
+recorded. Medians of three, same machine, same regime:
+
+| Configuration | many-hosts |
+|---|---|
+| Settled defaults | 12696 ms |
+| Fixed one and one | 12751 ms |
+| Fixed eight and eight | 12725 ms |
+
+Three configurations whose per-host ceiling differs by a factor of eight agree
+within 0.4 percent, and every one of them paid all 4000 ms of injected latency.
+If any two requests had been in flight together, the ceiling of one would have
+cost seconds more than the ceiling of eight. None did.
+
+The cause is that no run issues two requests at once. `materialize_manifest`
+resolves artifacts in a `for` loop, one at a time, and the only parallelism
+anywhere under `crates/*/src` is the `rayon::join` in `hashing.rs` that runs the
+two digests of one stream beside each other. The adaptive controller computes a
+permitted count per host, records it, and moves it on what the host answers, and
+nothing ever runs that many transfers. `--concurrency` and `--per-host` bound
+nothing.
+
+That is a contract violation on its own terms. contracts.md Flags gives
+`--concurrency` the meaning "global in-flight transfers" and `--per-host`
+"in-flight transfers per host", and contracts.md Command surface says a flag
+exists in the binary only once it performs what is written there, because
+anything else is a placeholder. features.md Transfer says independent artifacts
+transfer concurrently inside global and per-host limits. Neither holds.
+
+So phase 6's performance half stays open, and its open half is now a specific
+missing behavior rather than a missing measurement: concurrent transfer of
+independent artifacts, bounded by the two ceilings the controller already
+computes. Delay injection was necessary to learn this and does not fix it. The
+regime was not adjusted until it passed.
+
+Costs: the many-hosts regime is 3.5 seconds slower than it was, on every run of
+the harness, buying a regime that can tell a working controller from an inert
+one once there is something for it to bound.
+
+Uncertain: nothing about the measurement. Whether concurrent transfer belongs to
+a re-opened phase 6 or to a later one is not decided here.
+
+Sources: standards.md Measure; contracts.md Flags and Command surface;
+features.md Transfer; `crates/cli/src/run.rs` `materialize_manifest`.
+
+## The disagreement at 2214, settled
+
+Question: This file said `Retry-After` "replaces the computed backoff rather
+than adding to it". The code takes the longer of the two. contracts.md was
+silent, so the last record left it open rather than deciding it while amending a
+benchmark.
+
+Options: obey the source exactly, whatever it asks; treat its wait as a floor.
+
+Chosen: a floor. The wait before the next attempt is the longer of the run's own
+jittered backoff and the wait the source asked for. The record at 2214 is
+amended to say so and contracts.md now carries the rule, under Retry.
+
+Because: contracts is unambiguous that politeness is never lowered by a
+measurement, and a source asking to be retried sooner than our own policy would
+have waited is asking for exactly that. Full jitter exists so that a rate-limit
+storm does not become a synchronized second storm, and a `Retry-After` of zero
+seconds from every host in a storm would defeat it precisely when it matters.
+Obeying a longer wait costs nothing and is what the source is really asking for.
+
+Costs: a source that genuinely recovers in one second is not asked again until
+our backoff is spent, which on a late attempt is up to a minute.
+
+Sources: contracts.md Retry; RFC 9110 section 10.2.3.
+
+## Phase 7. Which source is built, and why a grammar row was deleted for it
+
+Question: roadmap.md:129 asks which sources meet measured demand and in what
+order. contracts.md's reference grammar carried `s3://bucket/prefix/`,
+`hf:datasets/org/name@rev`, `zenodo:...` and `croissant:...`.
+
+Options: build the `s3://` scheme against a default endpoint; build it against a
+configured endpoint; build the object store protocol behind an HTTPS container
+reference and delete the `s3://` row.
+
+Chosen: one adapter, object storage, addressed as an HTTPS container reference
+whose endpoint answers the object store list API, and the `s3://` row is
+removed from the grammar rather than carried forward unresolved.
+
+A reference is an identity. The whole promise of a lock, a plan and an apply is
+that the reference one machine resolved names the same bytes on another.
+`s3://bucket/prefix/` structurally cannot carry an endpoint: the authority slot
+of the form is spent on the bucket name, and four vendors serve that protocol.
+It can therefore only be completed from local configuration, which means the
+same reference names different bytes on different machines. That is not a
+feature this build has yet to write; it is a form that cannot honor the promise
+the project is built on, and a configuration key would institutionalize the
+problem rather than solve it.
+
+Leaving it in the table unresolved would be the F1 defect deliberately: a
+contracted reference form that does not work. The audit has already cost this
+project once for exactly that shape. Removing surface that cannot honor the
+contract is the direction standards.md:19 points -- when a format changes the
+old one stops existing -- and before 1.0 there is nothing to preserve.
+
+Nothing is lost by it. Every S3-compatible store has an HTTPS endpoint:
+`https://s3.amazonaws.com/bucket/`, `https://minio.local:9000/bucket/`, and the
+same for R2 and Ceph. The endpoint travels inside the reference, which is what
+portability requires. Recognition is not sniffing either: contracts.md Directory
+listing already contracts object store listing APIs as recognized and
+`reference.unresolved` when they are not, so what makes a container an object
+store prefix is specified rather than guessed.
+
+Because: roadmap.md's purpose for this phase is that the contract is proven by
+one real implementation before more are added, and what proves it is that an
+adapter can be written against the seam and judged by the shared suite. Which
+scheme spells the reference does not bear on that.
+
+Costs: a user holding an `s3://` reference rewrites it as the endpoint that
+serves it, which is a mechanical change and the only form that travels.
+`ReferenceForm::ObjectStore` remains an enum variant nothing reads, as it was
+before this phase.
+
+Sources: contracts.md Reference grammar, Directory listing; standards.md One
+thing; roadmap.md:129 and :131.
+
+## Phase 7. How object storage maps onto the Source seam
+
+Question: roadmap.md:129 asks how each source maps to the Source seam,
+especially immutable identity and range support.
+
+Chosen, field by field, with nothing inferred that the store did not say:
+
+| Seam field | Where it comes from | When the store says nothing |
+|---|---|---|
+| `size` | `Content-Length` on the probe | absent, and the plan names it in `unknown` |
+| `supports_ranges` | `Accept-Ranges` naming `bytes` | false, and a run wanting a range emits `degrade` and transfers whole |
+| `identity` | the store's object version identifier, else the entity tag | `SourceIdentity::None`, so no rung above five is reachable |
+| `content`, `interop` | never; a store states no digest of ours | always absent |
+| `last_modified` | `Last-Modified` | absent |
+| `cost` | the store's requester-pays answer | unknown, and the plan names it |
+| listing | the list response, bounded by the listing entry and byte limits | `reference.unresolved`, never guessed |
+
+Immutable identity is the version identifier when the store returns one, because
+a versioned object identifier names bytes that cannot change under it, which is
+what `SourceIdentity::ImmutableVersion` means. An entity tag is read by the HTTP
+rule already in use: a `W/` prefix is weak, anything else is strong. A store
+returning neither exposes no identity, and the run says so rather than resuming
+against a name that proves nothing.
+
+Range support is read from the store's own answer and never assumed from the
+protocol. A store that does not advertise ranges degrades honestly: `degrade`
+names that a range was requested, that the whole object was used, and that the
+source does not serve ranges. Localized repair against such a source is
+unavailable rather than silently whole.
+
+Because: both are what the roadmap says contracts cares most about, and both are
+places where a wrong assumption stays invisible until it corrupts a resume.
+Reading them from the response and degrading when they are absent is the only
+form that cannot be quietly wrong.
+
+Sources: contracts.md Resume ladder, Source selection, Directory listing;
+roadmap.md:129.
+
+## Phase 7. Bearer only, and why SigV4 is the next adapter's job
+
+Question: contracts.md's credential model is one token per host, placed in
+`FETCHLOOM_TOKEN_<HOST>` and sent as `Authorization`. Real S3 uses SigV4 request
+signing, which contracts never mentions.
+
+Options: implement SigV4 now; pack a key and a secret into the one token string;
+send the credential as a bearer token and fail honestly where that is not
+enough.
+
+Chosen: bearer only.
+
+The decisive check is in the code rather than in an argument.
+`crates/engine/src/credential.rs:22` is `Credential { host, origin, value:
+Secret<String> }`: one opaque string. SigV4 needs an access key, a secret key and
+a region, and the secret never crosses the wire -- it is not a value that is
+sent, it is a value that is signed with. That is a different shape, and
+`Credential` lives in the engine.
+
+roadmap.md:135 is this phase's exit criterion: a new adapter can be added by
+implementing the seam and passing the shared suite, with no change to the engine.
+Implementing SigV4 now means widening an engine type to fit the first adapter,
+which is the precise failure that criterion exists to detect. It would be proving
+the seam by breaking it.
+
+Packing `key:secret` into the one string to avoid that is refused. It is
+stringly-typed and it is a second credential shape wearing the first one's type,
+and standards.md forbids both. It would also hide the signal the criterion is
+there to surface.
+
+Bearer is not a toy path. Google Cloud Storage and Azure Blob Storage both accept
+real bearer tokens for private containers, so the credential tiers, the offer
+flow and the redaction rules are exercised against actual private access rather
+than only against public buckets and presigned links.
+
+SigV4 is the deliberate carry-forward, and it is named as what it is: the second
+credential shape. The phase that adds it widens `Credential` on purpose, and that
+widening is itself the real test of whether this seam holds. A bucket needing it
+fails now with the provider help record naming exactly what it needs, per
+contracts.md Provider help records.
+
+Costs: a private AWS bucket reached with a long-lived key pair cannot be fetched
+by this build. It can be fetched through a presigned URL, which is one object at
+a time.
+
+Sources: contracts.md Credentials, Provider help records; roadmap.md:135;
+standards.md One thing and Failing; `crates/engine/src/credential.rs`.
+
+## Phase 7. Where a credential is looked for, on each platform
+
+Question: contracts.md fixes the order -- `FETCHLOOM_TOKEN_<HOST>`, then the
+platform credential store, then the provider-native helper. What each platform's
+store actually is was left to this phase.
+
+Options for the second tier: one abstraction with a platform flag; each
+platform's own store; a file on both.
+
+Chosen: each platform's own store, because they are different stores and not one
+store with a flag.
+
+Windows reads the Windows Credential Manager, a generic credential whose target
+name is `fetchloom:<host>`, through `CredReadW`. It is present on every Windows
+target, its secret is encrypted at rest under the user's own key, and it costs no
+dependency, because the platform crate already links `windows-sys`.
+
+Linux reads a file at the user configuration location, `credentials` beside
+`config.toml`, one `host = "token"` entry per line, and refuses it when any user
+but its owner can read it, naming the mode it found. The Secret Service was
+considered and rejected: it is a desktop daemon reached over a session bus, and
+Fetchloom's Linux users are on clusters, in containers and in continuous
+integration, where there is no session bus and no daemon, so the tier would be
+unavailable in exactly the places it is needed. Speaking D-Bus to reach it would
+add the largest dependency in the workspace to serve the machines least likely to
+have it.
+
+The third tier ships nothing this phase, because the one adapter built has no
+provider-native helper to call. It is asked and answers nothing. That is not a
+degradation and emits no `degrade`, because nothing was requested and nothing
+lower was used.
+
+The whole lookup is lazy, per standards.md Startup: a command needing no
+credential opens no store and reads no file.
+
+Because: first match wins and the source is reported without the secret, which
+contracts already fixes. What is decided here is only what the second match is,
+and the answer that keeps one behavior on both platforms is per-platform storage
+rather than a lowest common denominator that is wrong on both.
+
+Costs: two implementations to keep correct, and a Linux store that is a file
+rather than an encrypted vault. The file is refused when its mode is loose,
+which is the protection a file can offer.
+
+Uncertain: whether a Linux desktop user would rather have the Secret Service.
+They would; they are not who this is for, and nothing stops the environment
+variable tier from being fed by one.
+
+Sources: contracts.md Credentials, Configuration files, Environment;
+standards.md Startup; roadmap.md:129.
+
+## Phase 7. What redaction covers, and why it is a class rather than a list
+
+Question: roadmap.md:129 asks for the complete redaction target list.
+contracts.md already gives it.
+
+Chosen, implemented exactly as written and extended nowhere: bearer tokens, API
+keys, passwords, the `Authorization` and `Cookie` headers, the userinfo component
+of a URL, and the value of every query parameter. The replacement is the fixed
+text `[redacted]`. It applies identically to logs, events, receipts, plans and
+error messages, and it happens at construction, per standards.md Observability,
+so a secret never exists inside a record that could be written.
+
+Query parameter values are redacted as a class. Every value goes, whatever the
+parameter is called, because the alternative is a list of names known to be
+sensitive and a list is a thing that can be incomplete. A signed URL's signature
+parameter is not called the same thing by two stores, and the one that is missed
+is the one that leaks.
+
+Because: this is the one defect in the phase that is a breach rather than a bug.
+A rule that holds on the happy path and not under fault is not a rule, which is
+why the proving step exercises every stream under fault injection rather than
+asserting the redactor in isolation.
+
+Sources: contracts.md Credentials; standards.md Observability.
+
+## Phase 7. What makes an optional credential worth interrupting for
+
+Question: contracts.md sets the threshold at two minutes of projected transfer
+time, or a source supporting resume where the alternative does not. What was
+undecided is what projected means, given that contracts.md forbids estimating a
+field into a number.
+
+Options: project from the size alone; project from the size and the recorded
+throughput for the host; do not project and offer on the resume difference only.
+
+Chosen: project from the size the source stated and the throughput recorded for
+that host, and make no offer at all when either is missing. A host with no
+recorded throughput has no projection, so there is no prompt and no message,
+which is what contracts says happens below the threshold.
+
+A projection is not a plan field and is never written to one. It decides whether
+to interrupt a person and nothing else, which is why it may be computed at all:
+what contracts forbids is estimating a value the source did not supply into a
+field that will later be read as fact, and a decision discarded once made is not
+that.
+
+The resume half needs no projection. A source supporting resume where the
+alternative does not clears the threshold by itself, at any size, because the
+difference it makes is not a duration but whether an interrupted transfer starts
+again from zero.
+
+Because: two minutes is the point where a person would rather have been asked.
+Below it the interruption costs more than it saves, and contracts is explicit
+that below the threshold there is no prompt and no message rather than a quieter
+one.
+
+Costs: the first run against a host never offers, because nothing has been
+measured for it yet. That is the correct silence rather than a missed
+opportunity: the run has no evidence and would be guessing.
+
+Sources: contracts.md Credentials, Limits, Plan; roadmap.md:129.
+
+## Phase 7. Cost is two facts, and never a figure
+
+Question: roadmap.md:131 requires cost reporting in plans. The plan shape carried
+`credentials` and `terms` and no cost field, and contracts was silent.
+
+Options: a currency estimate; a rate; two facts.
+
+Chosen: an additive per-artifact `cost` field carrying two facts and no money.
+`egress_charged` says whether the source charges the requester for bytes leaving
+it. `requester_pays` says whether the source refuses to serve them until the
+requester accepts that charge. Neither is a currency figure, because contracts
+says a field is never estimated into a number and a sum of money is exactly that:
+it depends on a price list, a region, a tier and a billing account, none of which
+a transfer can read.
+
+A fact the source did not state is omitted. An artifact whose source stated
+neither omits `cost` entirely and names it in the plan's `unknown` list, like
+every other field a source could not supply.
+
+The seam widens for it. `SourceMetadata` gains a cost the adapter fills in, and
+the widening is justified the way a contract change is: contracts now carries the
+field, egress cost is already a scoring input at contracts.md Source selection,
+and that input had nothing to read. An adapter that knows nothing about cost
+states nothing, which is the honest answer rather than a default.
+
+Because: a plan is executed on another machine, possibly months later, and a
+figure written into one is wrong by the time it is read. A fact about who is
+billed stays true.
+
+Costs: a user who wants to know what a transfer will cost is told who pays and
+not how much. That is less than they wanted and all that can be said truthfully.
+
+Sources: contracts.md Plan, Source selection; roadmap.md:131.
+
+## Phase 7. Terms are asserted by a person and recorded, and never interpreted
+
+Question: roadmap.md:129 asks for the terms acceptance flow. contracts.md fixes
+it.
+
+Chosen, implemented exactly: a manifest recording `requires_acceptance` refuses
+to transfer until the user asserts acceptance, with `--yes` or with an
+interactive confirmation. The assertion is recorded in the receipt. Fetchloom
+makes no legal determination.
+
+The receipt records it as a `terms` list naming what was accepted, which is the
+shape the plan's `terms` already carries, so a plan naming terms and a receipt
+recording their acceptance say the same thing in the same form. contracts.md
+Receipt is amended in this change to carry it, because contracts already said the
+assertion is recorded there and did not say in what.
+
+A run that cannot prompt and was not given `--yes` fails with
+`policy.terms_required` and exit 40 before a byte moves, per contracts.md Output
+streams: prompts appear only when stdin and stderr are both terminals, and
+otherwise a required prompt is a policy failure.
+
+Because: acceptance is an assertion by a person about their own obligations.
+Fetchloom's part is to refuse to move bytes until the assertion exists and to
+record that it was made, which is what a receipt is for. Reading the license and
+deciding what it permits is not something a program can do and not something this
+one claims to.
+
+Costs: an automated pipeline against a dataset requiring acceptance must pass
+`--yes`, which is a person deciding once rather than a program deciding never.
+
+Sources: contracts.md Terms and licenses, Receipt, Output streams, Exit codes.

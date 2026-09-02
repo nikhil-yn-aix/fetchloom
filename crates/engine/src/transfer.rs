@@ -569,8 +569,7 @@ impl<P: Pause> Retry<'_, P> {
             let asked = failure
                 .retry_after()
                 .filter(|wait| honors(self.limits, *wait));
-            self.pause
-                .sleep(asked.unwrap_or(backing_off).max(backing_off));
+            self.pause.sleep(backing_off.max(asked.unwrap_or_default()));
         }
     }
 

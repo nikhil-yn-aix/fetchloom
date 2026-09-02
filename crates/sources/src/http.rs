@@ -11,7 +11,8 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata, Validator,
+    ByteRange, Cost, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    Validator,
 };
 
 use fetchloom_engine::limits::Limits;
@@ -219,6 +220,7 @@ impl Source for HttpSource {
             retry_after: header(&answer, "retry-after")
                 .as_deref()
                 .and_then(parse_retry_after),
+            cost: Cost::default(),
         })
     }
 
@@ -258,6 +260,7 @@ impl Source for HttpSource {
             retry_after: header(&answer, "retry-after")
                 .as_deref()
                 .and_then(parse_retry_after),
+            cost: Cost::default(),
         };
         Ok(Revalidated::Changed(Box::new(Served {
             metadata,
@@ -334,6 +337,7 @@ impl Source for HttpSource {
                 retry_after: header(&answer, "retry-after")
                     .as_deref()
                     .and_then(parse_retry_after),
+                cost: Cost::default(),
             },
             body: HttpBody {
                 reader: Box::new(answer.into_body().into_reader()),

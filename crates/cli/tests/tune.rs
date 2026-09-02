@@ -807,3 +807,52 @@ fn no_tuning_setting_changes_what_two_hosts_produce() {
         );
     }
 }
+
+#[test]
+fn a_plan_states_no_cost_when_no_source_stated_one_and_never_writes_a_figure() {
+    let workspace = Workspace::new();
+    let archive = workspace.write("sample.tar.gz", &gzip(&greeting_tar()));
+    let fetched = workspace.run(&[
+        "get",
+        archive.to_str().unwrap(),
+        "--output",
+        "out",
+        "--json",
+    ]);
+    assert_eq!(fetched.code(), 0, "{}", fetched.err());
+
+    let planned = workspace.run(&[
+        "plan",
+        archive.to_str().unwrap(),
+        "--output",
+        "out",
+        "--json",
+    ]);
+    assert_eq!(planned.code(), 0, "{}", planned.err());
+    let plan = planned.json();
+
+    let unknown: Vec<&str> = plan["unknown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(
+        unknown.contains(&"cost"),
+        "no source stated a cost, so it must be listed as unknown: {unknown:?}"
+    );
+    for artifact in plan["artifacts"].as_array().unwrap() {
+        assert!(
+            artifact["cost"].is_null(),
+            "cost was written as {} when nothing stated it",
+            artifact["cost"]
+        );
+    }
+    let rendered = serde_json::to_string(&plan).unwrap();
+    for currency in ['$', '\u{a3}', '\u{20ac}'] {
+        assert!(
+            !rendered.contains(currency),
+            "the plan carries {currency}, and a plan never states a sum of money: {rendered}"
+        );
+    }
+}

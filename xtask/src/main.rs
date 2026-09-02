@@ -42,7 +42,7 @@ fn main() -> ExitCode {
 const USAGE: &str = "\
 usage:
   cargo xtask check-comments
-  cargo xtask bench [--save-baseline] [--compare] [--publish] [--iterations <n>]
+  cargo xtask bench [--save-baseline] [--compare] [--publish] [--iterations <n>] [--regime <name>]
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
   cargo xtask profile [--rounds <n>]
@@ -109,6 +109,8 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
     let iterations = argument_value(arguments, "--iterations")
         .and_then(|value| value.parse().ok())
         .unwrap_or(9);
+    let only = argument_value(arguments, "--regime");
+    let wanted = |regime: &str| only.is_none_or(|named| named == regime);
 
     let binary = match bench::build_binary(workspace) {
         Ok(binary) => binary,
@@ -117,34 +119,41 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
             return ExitCode::from(1);
         }
     };
-    let regime = match bench::run_no_op(&binary, iterations) {
-        Ok(regime) => regime,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::from(1);
+    let mut regimes = Vec::new();
+    if wanted("no-op") {
+        match bench::run_no_op(&binary, iterations) {
+            Ok(regime) => regimes.push(regime),
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
         }
-    };
-    let cache = match measure_cache(&binary, iterations) {
-        Ok(regimes) => regimes,
-        Err(code) => return code,
-    };
-    let transfer = match measure_transfer(&binary, iterations) {
-        Ok(regimes) => regimes,
-        Err(code) => return code,
-    };
-    let shapes = match measure_shapes(&binary, iterations) {
-        Ok(regimes) => regimes,
-        Err(code) => return code,
-    };
-    let hosts = match measure_hosts(&binary, iterations) {
-        Ok(regimes) => regimes,
-        Err(code) => return code,
-    };
-    let mut regimes = vec![regime];
-    regimes.extend(cache);
-    regimes.extend(transfer);
-    regimes.extend(shapes);
-    regimes.extend(hosts);
+    }
+    if wanted("cold-cache") || wanted("warm-cache") {
+        match measure_cache(&binary, iterations) {
+            Ok(measured) => regimes.extend(measured),
+            Err(code) => return code,
+        }
+    }
+    if wanted("cold-transfer") || wanted("interrupted-transfer") {
+        match measure_transfer(&binary, iterations) {
+            Ok(measured) => regimes.extend(measured),
+            Err(code) => return code,
+        }
+    }
+    if wanted("many-small-files") || wanted("one-large-file") {
+        match measure_shapes(&binary, iterations) {
+            Ok(measured) => regimes.extend(measured),
+            Err(code) => return code,
+        }
+    }
+    if wanted("many-hosts") {
+        match measure_hosts(&binary, iterations) {
+            Ok(measured) => regimes.extend(measured),
+            Err(code) => return code,
+        }
+    }
+    regimes.retain(|regime| wanted(&regime.regime));
     let mut current = bench::Baseline {
         target: target_triple(),
         regimes,
@@ -171,6 +180,12 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
         println!("published to {}", page.display());
     }
 
+    if only.is_some() {
+        println!(
+            "one regime was measured, so nothing was recorded or compared, because a baseline states every regime"
+        );
+        return ExitCode::SUCCESS;
+    }
     let path = baseline_path(workspace, &current.target);
     record_and_gate(&mut current, &path, save, compare, gate_timing)
 }

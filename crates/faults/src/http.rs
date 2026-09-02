@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// What a server does with one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,41 @@ pub enum IndexFormat {
     Unrecognized,
 }
 
+/// The latency a server charges before it answers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Latency {
+    every: Duration,
+    hosts: Vec<(String, Duration)>,
+}
+
+impl Latency {
+    /// Returns the latency with this much charged to every request.
+    #[must_use]
+    pub fn every_request(mut self, waiting: Duration) -> Self {
+        self.every = waiting;
+        self
+    }
+
+    /// Returns the latency with this much charged to requests naming one host.
+    #[must_use]
+    pub fn host(mut self, host: impl Into<String>, waiting: Duration) -> Self {
+        self.hosts.push((host.into(), waiting));
+        self
+    }
+
+    /// Returns how long a request waits before it is answered.
+    #[must_use]
+    pub fn before(&self, request: &Received) -> Duration {
+        let named = request.header("host").unwrap_or_default().to_lowercase();
+        let host = self
+            .hosts
+            .iter()
+            .find(|(held, _)| held.to_lowercase() == named)
+            .map_or(Duration::ZERO, |(_, waiting)| *waiting);
+        self.every.saturating_add(host)
+    }
+}
+
 /// A TLS alert record carrying a fatal handshake failure.
 const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
 
@@ -101,6 +137,8 @@ pub struct Script {
     /// Whether the server answers a secured connection with a refusal instead
     /// of a handshake.
     pub refuses_tls: bool,
+    /// The latency charged before any answer is written.
+    pub latency: Latency,
 }
 
 impl Script {
@@ -116,6 +154,7 @@ impl Script {
             last_modified: None,
             honors_conditionals: true,
             refuses_tls: false,
+            latency: Latency::default(),
         }
     }
 
@@ -159,6 +198,13 @@ impl Script {
     #[must_use]
     pub fn ranges(mut self, accepts: bool) -> Self {
         self.accepts_ranges = accepts;
+        self
+    }
+
+    /// Returns the script with this latency charged before every answer.
+    #[must_use]
+    pub fn delayed(mut self, latency: Latency) -> Self {
+        self.latency = latency;
         self
     }
 }
@@ -298,6 +344,7 @@ fn serve(
         seen.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(request.clone());
+        std::thread::sleep(script.latency.before(&request));
 
         let serving_bytes = request.method != "HEAD";
         let index = counter.load(Ordering::SeqCst);

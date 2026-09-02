@@ -37,6 +37,7 @@ fn metadata(identity: SourceIdentity, supports_ranges: bool) -> SourceMetadata {
         supports_ranges,
         time_to_first_byte: Duration::from_millis(1),
         retry_after: None,
+        cost: fetchloom_engine::seam::source::Cost::default(),
     }
 }
 
@@ -267,4 +268,117 @@ fn a_source_that_stopped_stating_an_immutable_identity_restarts_rather_than_fail
 
     assert_eq!(rung, ResumeRung::NoValidator);
     assert_eq!(keep, 0);
+}
+
+/// A pause that never waits and records every wait it was asked for.
+#[derive(Debug, Default)]
+struct RecordingPause {
+    jitter: f64,
+    waits: std::sync::Mutex<Vec<Duration>>,
+}
+
+impl fetchloom_engine::transfer::Pause for RecordingPause {
+    fn fraction(&self) -> f64 {
+        self.jitter
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.waits
+            .lock()
+            .expect("the recorder was poisoned")
+            .push(duration);
+    }
+}
+
+fn waits_when_a_source_asks_for(asked: Option<Duration>) -> Vec<Duration> {
+    let limits = Limits::default();
+    let pause = RecordingPause {
+        jitter: 1.0,
+        waits: std::sync::Mutex::new(Vec::new()),
+    };
+    let observer = SilentObserver;
+    let sequence = fetchloom_engine::event::Sequence::new();
+    let controller = std::sync::Mutex::new(fetchloom_engine::tuning::Controller::fixed(
+        std::num::NonZeroU32::new(4).unwrap(),
+    ));
+    let retry = fetchloom_engine::transfer::Retry {
+        limits: &limits,
+        pause: &pause,
+        observer: &observer,
+        sequence: &sequence,
+        controller: &controller,
+    };
+    let outcome: Result<(), _> = retry.until_spent(|_| {
+        let mut failure = fetchloom_engine::error::Error::new(
+            ErrorKind::NetworkStatus,
+            "try the source again, because it answered 429",
+        )
+        .with_retryable(true);
+        if let Some(wait) = asked {
+            failure = failure.with_retry_after(wait);
+        }
+        Err(failure)
+    });
+    assert!(outcome.is_err(), "the attempt was supposed to run out");
+    let waits = pause.waits.lock().expect("the recorder was poisoned");
+    waits.clone()
+}
+
+#[test]
+fn a_retry_after_shorter_than_the_backoff_never_shortens_the_wait() {
+    let limits = Limits::default();
+    let asked = Duration::from_millis(1);
+    let waited = waits_when_a_source_asks_for(Some(asked));
+    let alone = waits_when_a_source_asks_for(None);
+
+    assert_eq!(
+        waited.len(),
+        alone.len(),
+        "a different number of attempts ran"
+    );
+    for (attempt, (with, without)) in waited.iter().zip(&alone).enumerate() {
+        assert_eq!(
+            with,
+            without,
+            "attempt {} waited {with:?} with a one millisecond Retry-After and {without:?} without one",
+            attempt + 1
+        );
+        assert!(
+            *with >= asked,
+            "attempt {} waited {with:?}, less than the source asked for",
+            attempt + 1
+        );
+    }
+    assert!(
+        waited.iter().any(|wait| *wait > asked),
+        "no attempt waited longer than the {asked:?} the source asked for, so the backoff was discarded"
+    );
+    assert!(
+        waited.iter().all(|wait| *wait <= limits.retry_ceiling),
+        "a wait passed the ceiling"
+    );
+}
+
+#[test]
+fn a_retry_after_longer_than_the_backoff_raises_the_wait_to_it() {
+    let asked = Duration::from_secs(30);
+    let waited = waits_when_a_source_asks_for(Some(asked));
+
+    assert!(!waited.is_empty(), "nothing waited at all");
+    for (attempt, wait) in waited.iter().enumerate() {
+        assert!(
+            *wait >= asked,
+            "attempt {} waited {wait:?}, sooner than the {asked:?} the source asked for",
+            attempt + 1
+        );
+    }
+}
+
+/// An observer a test hands the retry loop when the events are not what it is
+/// asserting on.
+#[derive(Debug)]
+struct SilentObserver;
+
+impl fetchloom_engine::seam::observer::Observer for SilentObserver {
+    fn emit(&self, _event: &fetchloom_engine::event::Event) {}
 }

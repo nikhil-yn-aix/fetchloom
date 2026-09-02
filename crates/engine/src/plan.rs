@@ -42,6 +42,10 @@ pub struct PlanArtifact {
     /// How member paths are rewritten.
     #[serde(default)]
     pub layout: crate::selection::Layout,
+    /// What the source said about who is billed for these bytes, absent when it
+    /// said nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<crate::seam::source::Cost>,
 }
 
 /// How much space one requirement needs, and on which volume.

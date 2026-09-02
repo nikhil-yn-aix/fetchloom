@@ -43,6 +43,30 @@ pub enum SourceIdentity {
     None,
 }
 
+/// What a source says about who is billed for the bytes it serves.
+///
+/// Both facts are absent when the source states nothing, which is what a plan
+/// reports as unknown. Neither is ever a sum of money.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cost {
+    /// Whether the source charges the requester for bytes leaving it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_charged: Option<bool>,
+    /// Whether the source refuses to serve until the requester accepts the
+    /// charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_pays: Option<bool>,
+}
+
+impl Cost {
+    /// Reports whether the source stated anything at all about cost.
+    #[must_use]
+    pub fn is_unknown(self) -> bool {
+        self.egress_charged.is_none() && self.requester_pays.is_none()
+    }
+}
+
 /// What a bounded metadata request learned about an object.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SourceMetadata {
@@ -66,6 +90,8 @@ pub struct SourceMetadata {
     pub time_to_first_byte: Duration,
     /// How long the source asked to be left alone for, when it asked.
     pub retry_after: Option<Duration>,
+    /// What the source said about who is billed for these bytes.
+    pub cost: Cost,
 }
 
 /// One entry a listing returned.

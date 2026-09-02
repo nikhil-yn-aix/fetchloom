@@ -79,7 +79,7 @@ refused wherever a document is read.
 | Remote manifest | `https://lab.edu/eeg.yaml` |
 | Direct file | `https://host/x.tar.zst` |
 | Local file or directory | `file:///data/raw` |
-| Object store | `s3://bucket/prefix/` |
+| Object store prefix | `https://s3.amazonaws.com/bucket/prefix/` |
 | Provider | `hf:datasets/org/name@rev`, `zenodo:10.5281/zenodo.1234567` |
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
@@ -187,6 +187,8 @@ artifacts:
 tree: blake3:...
 executable:
   - bin/run.sh
+terms:
+  - CC-BY-4.0
 destination: D:\data\silesia
 fetchloom: 0.1.0-dev
 completed_at: 2026-08-29T04:11:02Z
@@ -203,6 +205,10 @@ applies to a cache hit. It is never evidence of content, never appears in a lock
 and is never compared against another machine's. Recording one does not make the
 receipt an identity authority, because nothing is ever concluded from it except
 whether bytes have to be read.
+
+`terms` names what the user asserted acceptance of, and is present only when the
+manifest recorded `requires_acceptance`. It records that the assertion was made
+and states nothing about what the terms mean.
 
 `fetchloom` is provenance. It says which build produced a result and nothing ever
 branches on it.
@@ -237,6 +243,9 @@ artifacts:
     expanded: 211938583
     cached: false
     source: https://host/silesia.tar.zst
+    cost:
+      egress_charged: true
+      requester_pays: false
 trust: tofu
 credentials: []
 terms: []
@@ -252,6 +261,14 @@ unknown: [expanded, staging, destination]
 
 An artifact also carries `select` and `layout`, because selection is part of
 identity and apply must reproduce the tree the plan resolved.
+
+`cost` carries two facts and never a figure: `egress_charged` says whether the
+source charges the requester for the bytes leaving it, and `requester_pays` says
+whether the source refuses to serve them until the requester accepts that
+charge. Neither is a currency estimate, because a field is never estimated into a
+number and a sum of money is exactly that. An artifact whose source states
+neither omits `cost` and names it in `unknown`, like any other field a source
+could not supply.
 
 `plan` writes the plan to standard output, in the canonical text form or as JSON
 under `--json`. Both read back as the same plan. The plan is the result of the
@@ -408,6 +425,12 @@ A reference no digest pins names bytes that may change, so a warm run has to ask
 A `304` leaves the trust class unchanged, because it is the source restating the validator it already gave and states nothing new about the bytes.
 
 A run with no recorded validator for the reference cannot ask, and transfers. A run whose digest is pinned by a lock asks nothing at all, because the cache holding those bytes is already the answer.
+
+## Retry
+
+A transient failure is retried with exponential backoff and full jitter, up to the retry attempts limit and never past the retry ceiling.
+
+`Retry-After` is a floor on the wait, never a replacement for it. The wait before the next attempt is the longer of the run's own computed backoff and the wait the source asked for, because politeness is never lowered by what a measurement or a source says. A `Retry-After` longer than the retry ceiling is not waited out: the source is left for the next candidate, and a run with none left fails with `network.status` reporting the wait that was asked for.
 
 ## Cache
 

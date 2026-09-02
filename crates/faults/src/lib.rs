@@ -12,7 +12,7 @@ pub use archives::{
     TYPEFLAG_REGULAR, TYPEFLAG_SYMLINK, TarHeader, TarWriter, ZipCentralHeader, ZipLocalHeader,
     ZipMember, ZipWriter, crc32, pax_block, pax_record,
 };
-pub use http::{IndexFormat, Received, Reply, Script, TestServer};
+pub use http::{IndexFormat, Latency, Received, Reply, Script, TestServer};
 pub use observer::RecordingObserver;
 pub use platform::FaultyPlatform;
 pub use schedule::{Faults, Operation};

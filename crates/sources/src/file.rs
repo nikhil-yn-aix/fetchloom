@@ -10,7 +10,8 @@ use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata, Validator,
+    ByteRange, Cost, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    Validator,
 };
 use fetchloom_engine::work::WorkCounter;
 
@@ -68,6 +69,10 @@ impl FileSource {
             supports_ranges: true,
             time_to_first_byte: Duration::ZERO,
             retry_after: None,
+            cost: Cost {
+                egress_charged: Some(false),
+                requester_pays: Some(false),
+            },
         }
     }
 }

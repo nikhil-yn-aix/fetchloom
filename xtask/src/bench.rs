@@ -5,10 +5,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fetchloom_engine::work::Work;
-use fetchloom_faults::{Reply, Script, TestServer};
+use fetchloom_faults::{Latency, Reply, Script, TestServer};
 use serde::{Deserialize, Serialize};
 
 /// The fraction a metric may worsen by before the gate fails.
@@ -961,6 +961,9 @@ pub fn publish(baseline: &Baseline, lane: &str) -> String {
         );
     }
     page.push_str("\nA ratio above one is a regime where Fetchloom is slower than the tool beside it. Those rows are the honest ones: Fetchloom hashes every byte twice, writes an outboard tree, publishes through staging and records what it did, and none of the tools it is measured against do any of that. The comparison is published so the cost is visible, not because the tools are doing the same job.\n\n");
+    if let Some(cause) = hosts_cause(baseline) {
+        let _ = write!(page, "{cause}\n\n");
+    }
     page.push_str("## Deterministic counters\n\n");
     page.push_str("| Regime | bytes read | bytes written | requests | file operations |\n");
     page.push_str("|---|---|---|---|---|\n");
@@ -985,6 +988,35 @@ pub fn publish(baseline: &Baseline, lane: &str) -> String {
     page
 }
 
+/// States what the many-hosts ratio is made of, from the same run that produced
+/// it, so the largest loss on the page is published with its cause rather than
+/// bare.
+fn hosts_cause(baseline: &Baseline) -> Option<String> {
+    let regime = baseline
+        .regimes
+        .iter()
+        .find(|regime| regime.regime == "many-hosts")?;
+    let value = |name: &str| {
+        regime
+            .metrics
+            .iter()
+            .find(|metric| metric.name == name)
+            .map(|metric| metric.value)
+    };
+    let wall = value("wall")?;
+    let requests = value("requests")?;
+    let injected = requests * HOST_LATENCY.as_secs_f64() * 1000.0;
+    Some(format!(
+        "many-hosts carries the largest ratio on this page and most of it is not transfer cost. \
+         The regime injects {} ms of latency into every request so that a per-host ceiling has \
+         something to hide, and it issues {requests:.0} of them one after another, which is \
+         {injected:.0} ms of the {wall:.0} ms measured. Most of the remainder is the backoff its \
+         rate limited host asks for. The alternative pays the same injected latency and waits out \
+         none of the backoff.",
+        HOST_LATENCY.as_millis()
+    ))
+}
+
 /// How many objects each host serves in the many-hosts regime.
 ///
 /// The controller starts a host it has measured nothing about at
@@ -998,6 +1030,12 @@ const OBJECTS_PER_HOST: usize = 8;
 
 /// How many bytes each of those objects holds.
 const HOST_OBJECT_BYTES: usize = 128 * 1024;
+
+/// How long each host waits before answering anything.
+///
+/// Loopback has no latency, and concurrency exists to hide latency, so without
+/// an injected wait no per-host ceiling can pay for itself in this regime.
+const HOST_LATENCY: Duration = Duration::from_millis(100);
 
 /// What one host answered, read back from the measurement the run recorded.
 #[derive(Debug, Deserialize)]
@@ -1045,7 +1083,9 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         let mut artifacts = String::new();
         for index in 0..OBJECTS_PER_HOST * 2 {
             let body = non_repeating_bytes(index + 1, HOST_OBJECT_BYTES);
-            let script = Script::serving(body).tagged(vec![format!("\"object-{index}\"")]);
+            let script = Script::serving(body)
+                .tagged(vec![format!("\"object-{index}\"")])
+                .delayed(Latency::default().every_request(HOST_LATENCY));
             let script = if index % 2 == 1 {
                 script.replying(vec![Reply::Status {
                     code: 429,

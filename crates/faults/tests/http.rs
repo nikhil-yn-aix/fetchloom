@@ -9,18 +9,23 @@ use fetchloom_engine as _;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
-use fetchloom_faults::{IndexFormat, Reply, Script, TestServer};
+use fetchloom_faults::{IndexFormat, Latency, Reply, Script, TestServer};
 
 fn object() -> Vec<u8> {
     (0..64u8).collect()
 }
 
 fn ask(server: &TestServer, headers: &str) -> Vec<u8> {
+    ask_as(server, "test", headers)
+}
+
+fn ask_as(server: &TestServer, host: &str, headers: &str) -> Vec<u8> {
     let address = server.origin().replace("http://", "");
     let mut stream = TcpStream::connect(address).unwrap();
     let request =
-        format!("GET /object HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{headers}\r\n");
+        format!("GET /object HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}\r\n");
     stream.write_all(request.as_bytes()).unwrap();
     stream.flush().unwrap();
     let mut answer = Vec::new();
@@ -292,4 +297,73 @@ fn every_request_is_recorded_with_its_headers() {
     assert_eq!(received[0].header("range"), Some("bytes=16-"));
     assert_eq!(received[0].header("authorization"), Some("Bearer secret"));
     assert_eq!(received[0].header("if-range"), None);
+}
+
+#[test]
+fn a_request_delay_holds_every_answer_for_the_latency_it_was_given() {
+    let waiting = Duration::from_millis(200);
+    let server = TestServer::start(
+        Script::serving(object()).delayed(Latency::default().every_request(waiting)),
+    )
+    .unwrap();
+
+    let started = Instant::now();
+    let (head, body) = split(&ask(&server, ""));
+    let took = started.elapsed();
+
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "head was {head}");
+    assert_eq!(body, object());
+    assert!(
+        took >= waiting,
+        "the answer arrived after {took:?}, which is sooner than the {waiting:?} injected"
+    );
+}
+
+#[test]
+fn a_host_delay_holds_only_the_host_it_names() {
+    let waiting = Duration::from_millis(400);
+    let server = TestServer::start(
+        Script::serving(object()).delayed(Latency::default().host("slow.invalid", waiting)),
+    )
+    .unwrap();
+
+    let started = Instant::now();
+    let _ = ask_as(&server, "slow.invalid", "");
+    let named = started.elapsed();
+
+    let started = Instant::now();
+    let _ = ask_as(&server, "other.invalid", "");
+    let unnamed = started.elapsed();
+
+    assert!(
+        named >= waiting,
+        "the named host answered after {named:?}, sooner than the {waiting:?} injected"
+    );
+    assert!(
+        unnamed < waiting,
+        "the host nothing was injected for answered after {unnamed:?}"
+    );
+}
+
+#[test]
+fn a_request_delay_and_a_host_delay_are_both_charged() {
+    let each = Duration::from_millis(150);
+    let server = TestServer::start(
+        Script::serving(object()).delayed(
+            Latency::default()
+                .every_request(each)
+                .host("slow.invalid", each),
+        ),
+    )
+    .unwrap();
+
+    let started = Instant::now();
+    let _ = ask_as(&server, "slow.invalid", "");
+    let took = started.elapsed();
+
+    assert!(
+        took >= each * 2,
+        "the answer arrived after {took:?}, which is sooner than the {:?} injected",
+        each * 2
+    );
 }

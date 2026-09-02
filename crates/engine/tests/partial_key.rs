@@ -28,6 +28,7 @@ fn metadata(identity: SourceIdentity) -> SourceMetadata {
         supports_ranges: true,
         time_to_first_byte: Duration::from_millis(1),
         retry_after: None,
+        cost: fetchloom_engine::seam::source::Cost::default(),
     }
 }
 
