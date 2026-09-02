@@ -7532,3 +7532,45 @@ code getting faster and is published as such.
 
 Sources: roadmap.md:123; `docs/benchmarks.md`; `xtask/src/bench.rs`;
 `benchmarks/x86_64-pc-windows-msvc.json`.
+
+## Phase 7.5. features.md reconciled against the binary
+
+features.md describes the product to a reader in the present tense, and a reader
+had no way to tell which sentences the binary honors. Every claim was walked
+against the build. Where a claim is true it stands unmarked; where it is not, the
+sentence now says so and names the phase that owns it. The document states that
+convention at the top, so an unmarked sentence is a promise about today.
+
+Five of the six sentences named at the start of this phase are now true and were
+made true by it: independent artifacts transfer concurrently inside both limits;
+a single object splits only under all four conditions; several sources are probed
+in parallel and one is picked without racing; the count per host rises while
+throughput improves; and the credential offer names the two options with the
+measured difference, which it had been able to compute since the probe phase and
+had no caller for before it.
+
+The sixth was corrected rather than built. Credential sources are environment
+variables and platform credential stores. Provider-native helpers are not there,
+and phase 7 owns them.
+
+Three more claims failed the walk and were corrected. Protocol choice is not
+measured per host and cannot be: the HTTP client this binary is built on speaks
+HTTP/1.1 and offers no second protocol, so there is nothing to choose between and
+no phase owns making one. The post-run hint, and the `--no-hints` flag that turns
+it off, are in contracts.md and in no phase; the surface tests assert that the
+flag and the setting are refused rather than accepted and ignored, so the build is
+consistent with itself and the document was the thing that was wrong. The live
+display degrades to the plain view and says so, and `watch` does not exist, so the
+sentence promising a run rendered from another terminal was corrected too.
+
+Reference forms, listing formats, `init`, metadata absorption, and `doctor` were
+found overclaimed in the same way and marked with the phase that owns each. The
+binary was already honest about all of them at the point of refusal; only the
+document was not.
+
+Deliberately deferred with the reason recorded: SigV4 request signing, the
+provider-native helper tier, F21's measurement on a cloning volume, and F26's
+million-object measurement.
+
+Sources: `docs/features.md`; `docs/roadmap.md`; `crates/cli/src/terminal.rs`;
+`crates/cli/tests/contract.rs`; `crates/cli/tests/precedence.rs`.

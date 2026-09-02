@@ -2,15 +2,17 @@
 
 Each feature states what it does, what the user sees, and why it exists. Exact formats and values live in contracts.md.
 
+Every sentence here describes the build as it stands, except where it is followed by **Not built.** and the phase in roadmap.md that owns it. A reader can take an unmarked sentence as something the binary does today.
+
 ## References
 
-Accept every way a user might name data: bare names, namespaced names with releases, local manifest files, remote manifest URLs, direct file URLs, provider references, and pure content addresses.
+Accept every way a user might name data: bare names, namespaced names with releases, local manifest files, remote manifest URLs, direct file URLs, provider references, and pure content addresses. Every form is recognized and named back to the user. This build resolves local paths, local and remote manifests, direct file URLs, object store prefixes, and content addresses. Resolving a bare name, a namespaced release, a provider identifier, or a metadata document is **not built**: each is recognized and refused by name, phase 7 owns the provider references and phase 8 the metadata documents.
 
 The user never has to know which kind they have. One verb takes all of them.
 
-Moving aliases are resolved before transfer and the resolved identity is pinned into the lock.
+Moving aliases are resolved before transfer and the resolved identity is pinned into the lock, and a locked run whose alias moved fails as `alias.unstable` rather than fetching something else.
 
-A reference naming a folder is expanded by listing that folder: an object store prefix, a repository or record, a WebDAV or FTP directory, or a generated HTML index. Fetchloom lists what it was pointed at and never wanders outside it, follows links found inside files, or executes anything. An index it does not recognize is an error, never a guess.
+A reference naming a folder is expanded by listing that folder: an object store prefix, a repository or record, a WebDAV or FTP directory, or a generated HTML index. This build reads object store XML, WebDAV multi-status, and generated HTML. Listing a repository, a record, or an FTP directory is **not built**, and phase 7 owns it. Fetchloom lists what it was pointed at and never wanders outside it, follows links found inside files, or executes anything. An index it does not recognize is an error, never a guess.
 
 ## Manifest inference
 
@@ -18,9 +20,9 @@ Most data has no manifest. Fetchloom writes one instead of demanding one.
 
 `fetchloom get <url>` needs no manifest at all. It probes the source, transfers, verifies, extracts, and writes a lock.
 
-`fetchloom init <url|dir>` walks a listing, an API, or a local folder and emits a manifest with digests filled in. A lab publishes a dataset by running init and putting the file on their web server.
+`fetchloom init <url|dir>` walks a listing, an API, or a local folder and emits a manifest with digests filled in. A lab publishes a dataset by running init and putting the file on their web server. **Not built.** Phase 8 owns it.
 
-Existing truth is absorbed rather than retyped: checksum sidecar files, Croissant metadata, Frictionless data packages, pooch registries, DVC files, BagIt manifests, and torrent piece hashes.
+Existing truth is absorbed rather than retyped: checksum sidecar files, Croissant metadata, Frictionless data packages, pooch registries, DVC files, BagIt manifests, and torrent piece hashes. **Not built.** Phase 8 owns it.
 
 Manifests are declarative. No shell, no hooks, no generators.
 
@@ -60,7 +62,7 @@ Cancellation stops promptly and leaves resumable state.
 
 Fetchloom measures instead of asking the user to guess.
 
-Connection count per host rises while throughput improves and falls when it does not, and backs off on rate-limit responses. Protocol choice is measured per host rather than assumed, because the faster protocol depends on the network. Decisions are cached per host.
+Connection count per host rises while throughput improves and falls when it does not, and backs off on rate-limit responses. Decisions are cached per host. Measuring protocol choice per host is **not built** and no phase owns it: this build speaks HTTP/1.1 and nothing else, because the HTTP client it is built on offers nothing else, so there is no choice to measure.
 
 Adaptation may change timing. It may never change bytes, digests, or the resulting tree.
 
@@ -138,11 +140,11 @@ A structured event stream exposes timing and byte counts for resolution, cache l
 
 `explain` shows every effective setting and where it came from, including values chosen by measurement.
 
-`doctor` checks configuration, permissions, disk, cache health, certificates, and provider setup without changing anything.
+`doctor` checks configuration, permissions, disk, cache health, certificates, and provider setup without changing anything. **Not built.**
 
-Progress is plain by default. An opt-in live view shows what the run is actually doing: which source was chosen and why, throughput per host, retries, verification, cache hits, and rejected archive entries. It reads the event stream and nothing else, so it can never show something the machine-readable output does not already carry, and it can be turned off or removed without affecting a run. A run can be rendered from another terminal, including one placed in the background by the shell. Fetchloom never backgrounds itself and never runs a daemon.
+Progress is plain by default. An opt-in live view shows what the run is actually doing: which source was chosen and why, throughput per host, retries, verification, cache hits, and rejected archive entries. It reads the event stream and nothing else, so it can never show something the machine-readable output does not already carry, and it can be turned off or removed without affecting a run. The live view is **not built**: asking for it degrades to the plain view and says so. Rendering a run from another terminal with `watch` is **not built** either. Fetchloom never backgrounds itself and never runs a daemon.
 
-After a run, Fetchloom may print one hint about something the user could have done differently, such as a token that would have made the transfer far shorter. It never states facts about itself, never interrupts a transfer, never repeats itself, and is disabled by one flag.
+After a run, Fetchloom may print one hint about something the user could have done differently, such as a token that would have made the transfer far shorter. It never states facts about itself, never interrupts a transfer, never repeats itself, and is disabled by one flag. **Not built.** No phase owns it, and the surface tests assert that `--no-hints` and a `hints` setting are refused rather than accepted and ignored.
 
 Shell completion is supported. Telemetry does not exist.
 
@@ -160,7 +162,7 @@ Every optional optimization can be disabled without disabling any correctness ch
 
 Credentials are scoped to the host or provider they were issued for and are never sent elsewhere, including across redirects.
 
-Sources are environment variables, platform credential stores, and provider-native helpers. Secrets are never copied into project files.
+Sources are environment variables and platform credential stores. Secrets are never copied into project files. Provider-native helpers are **not built**, and phase 7 owns them.
 
 Fetchloom never asks for a token at startup and never presents a setup screen. It asks at the moment a token would change the outcome, and it says what the change is. When a token is required, the run stops and prints exact steps. When a token would only make things faster, Fetchloom names the two options with the measured difference, prints the steps, and continues without it if the user declines. Small differences produce no prompt at all.
 
