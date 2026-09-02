@@ -442,6 +442,7 @@ dependencies = [
  "fetchloom-faults",
  "rustls",
  "rustls-graviola",
+ "serde_json",
  "sha2",
  "ureq",
 ]

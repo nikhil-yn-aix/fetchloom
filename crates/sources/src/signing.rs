@@ -1,5 +1,7 @@
 //! Signing a request with a secret that is never sent.
 
+use std::fmt::Write as _;
+
 use fetchloom_engine::credential::SigningKeys;
 use sha2::{Digest, Sha256};
 
@@ -44,7 +46,7 @@ fn keyed_hash(key: &[u8], message: &[u8]) -> [u8; DIGEST_LEN] {
 fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        text.push_str(&format!("{byte:02x}"));
+        let _ = write!(text, "{byte:02x}");
     }
     text
 }
@@ -129,7 +131,7 @@ fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&s
     );
     let mut signed = String::from("host;x-amz-content-sha256;x-amz-date");
     if let Some(token) = token {
-        headers.push_str(&format!("x-amz-security-token:{token}\n"));
+        let _ = writeln!(headers, "x-amz-security-token:{token}");
         signed.push_str(";x-amz-security-token");
     }
     format!(

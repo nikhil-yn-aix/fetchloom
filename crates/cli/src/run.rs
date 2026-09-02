@@ -222,6 +222,14 @@ pub struct Materialization<'a> {
 #[must_use]
 pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
     Adapters::new(vec![
+        AnySource::new(fetchloom_sources::HuggingFaceSource::new(
+            limits.clone(),
+            Arc::clone(work),
+        )),
+        AnySource::new(fetchloom_sources::ZenodoSource::new(
+            limits.clone(),
+            Arc::clone(work),
+        )),
         AnySource::new(ObjectStoreSource::new(limits.clone(), Arc::clone(work))),
         AnySource::new(HttpSource::new(limits.clone(), Arc::clone(work))),
     ])

@@ -2,6 +2,9 @@
 //! selects one for an endpoint.
 
 use fetchloom_faults as _;
+use serde_json as _;
+use sha2 as _;
+
 use rustls as _;
 use rustls_graviola as _;
 use ureq as _;

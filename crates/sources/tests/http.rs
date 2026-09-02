@@ -5,6 +5,9 @@
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
+use serde_json as _;
+use sha2 as _;
+
 use rustls as _;
 use rustls_graviola as _;
 use ureq as _;
