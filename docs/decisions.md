@@ -6860,3 +6860,216 @@ Costs: an automated pipeline against a dataset requiring acceptance must pass
 `--yes`, which is a person deciding once rather than a program deciding never.
 
 Sources: contracts.md Terms and licenses, Receipt, Output streams, Exit codes.
+
+## Phase 7. F10 settled: arbitration runs beside Policy, not through it
+
+Question: The audit recorded that Policy is a settings carrier and that phase 7
+either widens it to arbitrate between candidates or admits it is one. That
+decision is due now.
+
+Options: move source scoring behind `Policy`; leave scoring where it is and say
+what Policy is.
+
+Chosen: scoring stays beside Policy, and Policy is what it is.
+
+Source selection at contracts.md Source selection scores on reachability, range
+support, immutable identity, recorded throughput, time to first byte, egress
+cost and remaining politeness headroom. Every one of those is a measurement or a
+statement by the source. None of them is something a user configures. Policy
+carries what the user is allowed to do and what they were asked: limits,
+verification, durability, the two ceilings, the write path, trust acceptance,
+credentials and terms. Routing measurements through it would make a settings
+carrier depend on the measurement cache and on a source's answers, which is a
+dependency pointing the wrong way under standards.md's rule that dependencies
+point inward.
+
+So Policy is a settings carrier and a gate on credentials and terms, and that is
+not a defect. Two of its three remaining un-called methods from the phase 6
+record now have production callers: `credential` is called on every remote
+transfer, and `terms` before any byte of a manifest recording
+`requires_acceptance` moves. Fourteen of fifteen methods are now reached by a
+run.
+
+`offer_credential` is the one that is not, and it is unreachable for a
+structural reason rather than for want of wiring. contracts.md offers an
+optional credential only when a source needing one scored better than every
+reachable alternative. Scoring two candidates against each other is the probe
+phase, and the probe phase does not exist, so no run can ever reach the state in
+which an offer is the right thing to do. It is carried forward with the probe
+phase and not with the credential work.
+
+Sources: contracts.md Source selection; standards.md Design; audit.md F10.
+
+## Phase 7. F19's probe limit cannot be wired, because there is no probe
+
+Question: The audit deferred the probed-candidates limit on the ground that
+there was one source until a later phase. This is that phase, so the limit
+should become readable.
+
+It does not, and the reason is worth more than the wiring would have been.
+
+contracts.md Source selection describes a probe phase: candidates are probed in
+parallel up to the probe limit, then scored on seven inputs in fixed priority.
+No such phase exists. `Transfer::run` calls `order_candidates`, which sorts the
+manifest's locations by two things -- recorded throughput and recorded time to
+first byte, both read from the measurement cache -- and then tries them in order
+with failover. `Source::probe` is called once, against the candidate already
+chosen, to learn what to resume against. It is never called to score.
+
+So five of the seven scoring inputs are read by nothing: reachability, range
+support, immutable identity, egress cost and politeness headroom. `Limits::
+probed_candidates` bounds a phase that does not run, and `source.probe` and
+`source.selected` are unemitted for the same reason rather than for want of a
+second source.
+
+It is also not buildable as written while transfers are sequential. contracts
+says candidates are probed in parallel, and nothing in this build runs two
+requests at once, which is the finding recorded earlier in this file. A
+sequential probe of four candidates would add four round trips before every
+transfer to produce a ranking that a parallel probe was supposed to make free.
+
+`probed_candidates` therefore stays unread, and it is carried forward with the
+concurrency work rather than with the source work, because probed in parallel
+and transfers in flight are the same missing capability.
+
+Sources: contracts.md Source selection, Limits; `crates/engine/src/tuning.rs`
+`order_candidates`; audit.md F19.
+
+## Phase 7. F8: which events a run now emits, and why the rest do not
+
+Question: Six of the thirty-four contracted events were emitted by no production
+code. Say which are now emitted and which genuinely belong to a later phase.
+
+One is closed by this phase's credential work. `credential.required` fires when
+a source refuses for want of authorization and the policy is re-asked as
+required, asserted from the real binary rather than from a policy in isolation.
+
+`credential.offer` and `credential.declined` are not closed. Both are produced
+only by `Policy::offer_credential`, which has no production caller and cannot
+have one until a run can score a credentialed source against a reachable
+alternative. That is the probe phase, and it does not exist. They are carried
+forward with it.
+
+Two are closed by the container path. `listing.start` and `listing.end` fire
+around an object store listing.
+
+One is not closed and is not a later phase's. `listing.skipped` should fire for
+every link an index holds that points outside the prefix, which contracts says
+are ignored and counted in the result. `crates/sources/src/index.rs` drops them
+silently in `relative`, which is a silent degradation of exactly the kind
+standards.md forbids. Reporting them needs the count to cross the Source seam,
+and `Source::list` returns a list of entries with nowhere to put it. That is a
+seam widening rather than a line of code, and it is named here rather than done
+quietly.
+
+`source.probe` and `source.selected` wait on the probe phase, per the record
+above. `resolve.alias` belongs to phase 8: it needs a moving alias, and nothing
+resolves one.
+
+So of the six, one is closed, two more were closed by the container listing, and
+three of the remaining five are blocked on one missing capability rather than on
+five separate pieces of work.
+
+Sources: contracts.md Events, Directory listing; standards.md Failing;
+audit.md F8.
+
+## Phase 7 gate
+
+Question: Does phase 7 meet its exit criterion, and what remains unproven.
+
+The criterion, from roadmap.md:135: a new adapter can be added by implementing
+the seam and passing the shared suite, with no change to the engine.
+
+The answer is yes for behavior and no for selection, and the distinction is the
+finding.
+
+**What holds.** `ObjectStoreSource` was written entirely against
+`fetchloom_engine::seam::source::Source`. `crates/engine` did not have to learn
+what an object store is: no engine type names it, no engine branch tests for it,
+and the one engine file the work touched is `transfer.rs`, where the resume
+decision now names missing range support as the reason it restarts instead of
+blaming the identity. That is the range-degradation rule from contracts.md,
+generic to every source, and it would have been equally wrong before the adapter
+existed.
+
+The shared suite is real and it can fail. `crates/engine/src/adapter.rs` is
+generic over the seam and names no concrete adapter anywhere in its 484 lines.
+It runs against three adapters of genuinely different kinds -- the local
+filesystem, HTTP, and object storage -- and against two deliberately wrong ones:
+a source that claims range support and serves the whole object, and a source
+that invents an identity it was never given. Both are caught by name.
+
+**What does not hold.** Adapter selection is not behind the seam. The
+composition root decides which adapter serves a reference with one hardcoded
+rule -- `is_container`, which is `is_remote(reference) && reference.ends_with('/')`
+-- and `crates/cli/src/run.rs` names `HttpSource` and `ObjectStoreSource`
+literally at five sites. A third adapter cannot be added by implementing the
+seam alone: someone must edit `run.rs` to say when it applies. The seam has no
+method by which an adapter states which references it serves, and nothing in
+contracts.md says it should, so this is reported rather than invented.
+
+That is a smaller defect than it sounds and a real one. Adapter *behavior* is
+behind the seam and is judged by one suite, which is what the phase set out to
+prove. Adapter *dispatch* is not, and the next adapter will pay for it.
+
+**Exit criteria, with evidence.**
+
+Every adapter satisfies the same contract test suite, including its degraded
+trust behavior. `crates/sources/tests/adapter_suite.rs`, three real adapters and
+two wrong ones, nine checks each, degraded trust asserted through `rung_for`
+rather than through a second implementation of the ladder.
+
+No adapter emits a secret in any output stream under fault injection.
+`crates/sources/tests/secrets.rs` fixes a value and searches the whole error, not
+the field that was already right. It found five leaks that a green suite had not:
+an unreachable scheme, an unfollowable redirect target, an unrecognized index, an
+object store listing refusal and a listing past the entry bound. Every failure
+already recorded its location through `SafeUrl`, and every one of them
+interpolated the raw location into the message beside it, so a signed URL's
+signature reached stderr and the event stream in full while the field one line
+away read `[redacted]`. All five are closed. The userinfo component, the value of
+every query parameter including one under a name no list would carry, and a
+credential dropped on cross-host redirect are each covered.
+
+Sources without range support degrade honestly and say so.
+`a_source_without_range_support_names_that_as_the_reason_it_restarts` in
+`crates/cli/tests/transfer.rs`, which failed before the change with the run
+blaming the identity.
+
+The credential flows work for a first-time user. A run against a source that
+refuses for want of authorization exits 40 with `policy.credential_missing`,
+emits `credential.required`, and prints the provider's numbered steps, asserted
+from the real binary in `crates/cli/tests/credential_and_terms.rs`. A declined
+optional credential is not re-offered in the same run. A manifest recording
+`requires_acceptance` moves no bytes without `--yes`, proven by asserting the
+test server received nothing.
+
+**What is carried forward.**
+
+Concurrent transfer of independent artifacts, which `--concurrency` and
+`--per-host` are contracted to bound and bound nothing. This blocks phase 6's
+performance half and the probe phase both.
+
+The probe phase, and with it `probed_candidates`, `source.probe`,
+`source.selected`, and five of the seven scoring inputs.
+
+`listing.skipped`, which needs the Source seam to carry a count of what a listing
+ignored.
+
+The optional credential offer, and with it `credential.offer` and
+`credential.declined`. The flow is implemented and unit tested and no run can
+reach it, because reaching it means comparing two candidates.
+
+Adapter dispatch, which is not behind the seam.
+
+SigV4 request signing, which is the second credential shape. The phase that adds
+it widens `Credential` on purpose, and that widening is the real test of whether
+this seam holds.
+
+The provider-native helper tier, which is asked and answers nothing because the
+one adapter built has no helper to call.
+
+A credential is resolved once per transfer against the first candidate's host,
+so a failover to a second host sends none. That is correct under contracts --
+a credential is bound to the host it was resolved for -- and it means a manifest
+listing private sources on two hosts can authenticate only the first.

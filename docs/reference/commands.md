@@ -167,10 +167,15 @@ terms: []
 trust: "verified"
 unknown:
   - "expanded"
+  - "staging"
+  - "destination"
+  - "cost"
 ```
 
 `unknown` lists what the source could not tell it. A field there is never turned
-into a number. `cached`, `disk`, `conflicts` and `destination` describe the
+into a number. `cost` is there because no source in this build states who is
+billed for its bytes; when one does, an artifact carries `egress_charged` and
+`requester_pays`, and never a sum of money. `cached`, `disk`, `conflicts` and `destination` describe the
 machine the plan was made on; `apply` reports them and acts on none of them.
 
 `plan` accepts `get`'s flags. `--force` and `--adopt` are among them and have

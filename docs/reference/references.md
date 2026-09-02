@@ -24,7 +24,7 @@ It is never guessed at.
 
 ## What this build resolves
 
-Four of those forms work today. The rest fail with `reference.unresolved`.
+Five of those forms work today. The rest fail with `reference.unresolved`.
 
 **A direct HTTPS file.**
 
@@ -56,6 +56,22 @@ decides it. A directory is never searched for one. See [files.md](files.md).
 $ fetchloom get ./data.yaml --output out --json
 {"status":"materialized","dataset":"sample","tree":"blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87","entries":2, ... }
 ```
+
+**An object store prefix.** A remote location ending in `/` is a container. It
+is listed rather than crawled, and every entry the listing holds is materialized
+into the destination. Four index formats are recognized: an object store list
+response, a WebDAV multi-status, a generated HTML index, and nothing else. An
+index in no recognized format fails with `reference.unresolved` and is never
+guessed at.
+
+```
+$ fetchloom get https://s3.amazonaws.com/bucket/prefix/ --output data --json
+{"status":"materialized","dataset":"prefix","entries":2, ... }
+```
+
+`--select` and `--exclude` filter the listing, and a selection that matches no
+listed entry fails before anything is published. Running it again against a
+destination it already holds reports `unchanged` and writes nothing.
 
 A bare name, a provider reference and a content address report that the string
 does not name a path that exists, which is true and is not the reason you want.

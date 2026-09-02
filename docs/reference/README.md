@@ -47,9 +47,15 @@ here is smaller than the finished product, and everything in it works.
 Today it fetches over HTTPS and from local paths, reads ten archive formats,
 keeps a content-addressed cache, writes and enforces locks, writes receipts,
 plans and applies offline, exports and imports bundles, repairs damaged byte
-ranges, and tunes its own concurrency and write path to what a host and a
-volume measure. It does not yet speak to object stores or dataset providers,
-does not list directories, and does not resolve a remote manifest.
+ranges, and lists an object store container and materializes every entry it
+holds. It resolves a credential from a host-scoped environment variable or from
+this platform's own credential store, and refuses a run that needs one it cannot
+find, with numbered steps for getting one.
+
+It does not yet resolve a dataset provider reference or a remote manifest, it
+signs no request so a private Amazon S3 bucket is out of reach, and it transfers
+one object at a time: `--concurrency` and `--per-host` are recorded and do not
+yet bound anything.
 
 ## This directory
 
@@ -63,6 +69,7 @@ does not list directories, and does not resolve a remote manifest.
 | [trust.md](trust.md) | What each trust class means |
 | [errors.md](errors.md) | Every exit code and error kind, and what to do about it |
 | [cache.md](cache.md) | Where the cache is, what it holds, how to control it |
+| [credentials.md](credentials.md) | Where a token goes, and the exact steps for each provider |
 
 Everything else under `docs/` is written for the people building Fetchloom:
 `contracts.md` is the exact specification, `decisions.md` is why each choice was

@@ -95,11 +95,8 @@ $ echo $?
 | `policy.offline` | The run needed the network and `--offline` was given | Drop `--offline`, or plan on a connected machine and carry a bundle |
 | `policy.terms_required` | A confirmation is needed and there is no terminal to ask on | Run again with `--yes` |
 | `policy.trust_refused` | A locked run found no lock entry for the dataset, or a plan found no pinned digest | Run once without `--locked` |
-
-`policy.credential_missing` and `policy.credential_invalid` are in the taxonomy
-and no run in this build produces either. Nothing here asks a source for a
-credential, so `FETCHLOOM_TOKEN_<HOST>` is read by nothing. Both arrive with the
-providers that need them.
+| `policy.credential_missing` | A source refused the request for want of authorization and no credential was found for its host | Follow the numbered steps the run printed, in [credentials.md](credentials.md) |
+| `policy.credential_invalid` | A credential was presented and the source refused it as expired, revoked or too narrowly scoped | Renew it or widen its scope, per [credentials.md](credentials.md) |
 
 ```
 $ fetchloom get https://host.example/x.tar --offline --json

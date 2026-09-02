@@ -1482,3 +1482,57 @@ Neither defect was reachable from a test. Both were found by asking what a
 number was made of and finding that no mechanism explained it: a regime that
 issues no network request cannot be responding to a network setting, and sixteen
 small objects over loopback cannot cost eighteen seconds.
+
+## Phase 7, against this table
+
+**F10 is closed as a decision rather than as an implementation.** The table
+routed Policy's arbitration half to phase 7. Phase 7 ruled that arbitration runs
+beside Policy and not through it, because every scoring input contracts names is
+a measurement or a statement by the source and none of them is something a user
+configures, so routing them through a settings carrier would point a dependency
+the wrong way. Policy is a settings carrier and a gate on credentials and terms,
+and that is not a defect. Fourteen of its fifteen methods now have a production
+caller: `credential` is asked on every remote transfer and `terms` before a byte
+of a manifest recording `requires_acceptance` moves. The fifteenth,
+`offer_credential`, is unreachable and the reason is structural, below.
+
+**F19's probed candidates limit does not become readable, and the reason changed.**
+The table deferred it on the ground that there was one source until a later
+phase. There are two sources now and the limit is still unread, because there is
+no probe phase at all: `order_candidates` sorts by two recorded numbers and
+`Source::probe` is only ever called against the candidate already chosen. Five of
+contracts' seven scoring inputs are read by nothing. The limit is carried forward
+with the concurrency work rather than with the source work, because contracts
+says candidates are probed in parallel and this build issues one request at a
+time.
+
+**F8's six remaining events: three closed, three carried.** `credential.required`
+is emitted by a real run that a source refused for want of authorization.
+`listing.start` and `listing.end` are emitted around a container listing.
+`credential.offer` and `credential.declined` are implemented, unit tested and
+unreachable, because offering an optional credential means having scored a
+credentialed source against a reachable alternative, which is the probe phase
+again. `source.probe` and `source.selected` wait on the same thing.
+`resolve.alias` is phase 8's.
+
+A seventh event is now named that this audit did not find. `listing.skipped` is
+contracted for every link an index holds that points outside the prefix, which
+contracts says are ignored and counted. `crates/sources/src/index.rs` drops them
+silently, which is the class of defect standards.md calls as severe as data
+corruption. Reporting them needs the count to cross the Source seam, which
+`Source::list` has nowhere to put.
+
+**Something this audit did not look for, found in phase 7.** Every error a source
+produced recorded its location through `SafeUrl` and interpolated the raw
+location into the message beside it. Five sites leaked the userinfo component and
+every query parameter value into stderr, the JSON result and the event stream
+while the field one line away read `[redacted]`. The audit checked that redaction
+existed; it did not check that the text beside it used it. All five are closed
+and a test now fixes a secret and searches the whole error rather than the field
+that was already right.
+
+**The largest finding of phase 7 belongs to phase 6.** No run issues two requests
+at once, so `--concurrency` and `--per-host` bound nothing, and contracts gives
+both flags meanings they do not have. This audit measured eight regimes and did
+not ask what the ceilings were doing, because every regime it measured was
+sequential by construction.
