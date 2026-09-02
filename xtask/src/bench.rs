@@ -1117,7 +1117,9 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         .collect(),
         alternative: Some(Alternative {
             tool: "curl".to_owned(),
-            does: "fetches the same sixteen objects from the same two servers one after \n                   another, hashing nothing, verifying nothing, and never backing off when a \n                   host asks it to"
+            does: "fetches the same sixteen objects from the same two servers one after \
+                   another, hashing nothing, verifying nothing, and never backing off when a \
+                   host asks it to"
                 .to_owned(),
             wall_ms: median(curls),
         }),

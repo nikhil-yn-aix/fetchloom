@@ -1454,3 +1454,31 @@ could have shipped it, `a9848c5`.
 
 **`cache-growth` measured `objects/` and called the answer the cache.** The same
 defect as F5, one placement reported as the whole. Fixed at `a9848c5`.
+
+## Phase 6, on how the numbers in this file were taken
+
+Two measurement defects were found in phase 6's own harness, both after the
+suite was green, and both are recorded here because every number in this file is
+only worth what the method behind it is worth.
+
+A regime reached half its objects by the name `localhost`. On Windows that
+resolves to `::1` first, the fault server bound only `127.0.0.1`, and every
+transfer so spelled stalled before falling back to IPv4. Sixteen objects took
+17,958 ms spelled that way and 831 ms reached as `127.0.0.1`, with the same bytes
+and the same thirty-two requests. Any number taken from that regime before
+`04785b9` is a measurement of name resolution. Fixed by giving both host keys a
+loopback address that exists on both platforms, `127.0.0.1` and `::1`.
+
+A configuration matrix ran its configurations in a fixed order inside each round
+and reported that measured defaults lost to a fixed ceiling on many-small-files
+by 775 ms against a spread of 307 ms. Re-run with the order rotated so each
+configuration sits in each position once, defaults are the fastest configuration
+on that regime by 1,383 ms. The first result was the cold page cache landing on
+whichever configuration ran first. No claim from the fixed-order matrix was
+carried into decisions.md, and the reversal is recorded there with the number
+that was wrong.
+
+Neither defect was reachable from a test. Both were found by asking what a
+number was made of and finding that no mechanism explained it: a regime that
+issues no network request cannot be responding to a network setting, and sixteen
+small objects over loopback cannot cost eighteen seconds.

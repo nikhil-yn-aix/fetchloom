@@ -7,7 +7,7 @@
       "metrics": [
         {
           "name": "startup",
-          "value": 8.7067,
+          "value": 9.5875,
           "unit": "ms",
           "kind": "timing"
         },
@@ -25,7 +25,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1571.5928999999999,
+          "value": 1537.2504000000001,
           "unit": "ms",
           "kind": "timing"
         },
@@ -63,7 +63,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files, hashing nothing and verifying nothing",
-        "wall_ms": 391.69419999999997
+        "wall_ms": 312.87690000000003
       }
     },
     {
@@ -72,7 +72,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 239.8107,
+          "value": 247.0506,
           "unit": "ms",
           "kind": "timing"
         },
@@ -110,7 +110,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files again, which is what a tool with no cache must do",
-        "wall_ms": 391.69419999999997
+        "wall_ms": 312.87690000000003
       }
     },
     {
@@ -119,7 +119,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 124.7392,
+          "value": 121.5907,
           "unit": "ms",
           "kind": "timing"
         },
@@ -157,7 +157,7 @@
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server, hashing nothing, verifying nothing and publishing nothing",
-        "wall_ms": 32.2192
+        "wall_ms": 27.369500000000002
       }
     },
     {
@@ -166,7 +166,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 403.267,
+          "value": 318.4611,
           "unit": "ms",
           "kind": "timing"
         },
@@ -204,7 +204,7 @@
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server after its interruptions are spent, so it never resumes and never pays for one",
-        "wall_ms": 43.45
+        "wall_ms": 22.865199999999998
       }
     },
     {
@@ -213,7 +213,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 9071.36,
+          "value": 7161.8632,
           "unit": "ms",
           "kind": "timing"
         },
@@ -245,7 +245,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 1024 files, hashing nothing and verifying nothing",
-        "wall_ms": 1290.836
+        "wall_ms": 1165.3393
       }
     },
     {
@@ -254,7 +254,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 1448.9821,
+          "value": 1114.5861,
           "unit": "ms",
           "kind": "timing"
         },
@@ -286,7 +286,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 256 MiB file, hashing nothing and verifying nothing",
-        "wall_ms": 486.2797
+        "wall_ms": 442.02979999999997
       }
     },
     {
@@ -295,7 +295,7 @@
       "metrics": [
         {
           "name": "wall",
-          "value": 25092.3574,
+          "value": 9301.9704,
           "unit": "ms",
           "kind": "timing"
         },
@@ -323,7 +323,12 @@
           "unit": "operations",
           "kind": "deterministic"
         }
-      ]
+      ],
+      "alternative": {
+        "tool": "curl",
+        "does": "fetches the same sixteen objects from the same two servers one after \n                   another, hashing nothing, verifying nothing, and never backing off when a \n                   host asks it to",
+        "wall_ms": 454.1243
+      }
     }
   ]
 }

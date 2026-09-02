@@ -6195,3 +6195,255 @@ not move, and the I/O mode is `buffered` regardless of what the volume can do.
 It is the switch that makes the timing-independent counters reproducible, and it
 exists so that "adaptation cannot change the bytes" is a claim with a test
 behind it rather than an argument.
+
+## Phase 6 gate
+
+Question: Does phase 6 meet its exit criterion, and what remains unproven.
+
+The criterion, from the roadmap: default settings beat hand-tuned fixed settings
+across the regime matrix, with no correctness difference in any run.
+
+The correctness half is met and is the stronger half. The performance half is
+met only in the weak sense that defaults are never beaten, and the matrix that
+was supposed to establish the strong sense cannot establish it. That is the
+finding of this gate and it is stated before anything else, because the honest
+outcome was to name the regime and the reason rather than to adjust the regime
+until it passed.
+
+What the correctness half rests on. `no_tuning_setting_changes_the_bytes_a_run_
+produces` in `crates/cli/tests/tune.rs` runs one eight-file corpus under ten
+configurations -- settled defaults, two concurrency and per-host pairs,
+`--aggressive`, a bandwidth ceiling, both explicit write paths,
+`--deterministic-io`, and two thread ceilings -- each in its own workspace so
+the cache is cold for every one of them, and asserts that all ten agree on the
+tree digest, on the content digest of every file that reached the disk, and on
+all four deterministic counters. It compares what was materialized rather than
+what the receipt said was materialized, because a receipt is the thing under
+test. Given its own corpus per configuration it also fails for the right reason:
+perturbing one configuration's input by a single file makes it name the
+configuration and print both tree digests.
+
+What the performance half rests on, and why it is weak. Three configurations --
+settled defaults, a fixed one-and-one, and a fixed four threads -- were run
+across all seven regimes, three rounds each, interleaved rather than blocked, so
+that thermal drift and background load fall on every configuration equally
+instead of on whichever ran last. Medians, in milliseconds, with the spread of
+the defaults column beside them:
+
+| Regime | Defaults | Fixed 1/1 | Threads 4 | Defaults spread |
+|---|---|---|---|---|
+| no-op | 14 | 14 | 13 | 4 |
+| cold-cache | 1482 | 1727 | 1413 | 227 |
+| warm-cache | 236 | 278 | 223 | 28 |
+| cold-transfer | 131 | 138 | 151 | 9 |
+| interrupted-transfer | 518 | 687 | 477 | 381 |
+| many-small-files | 7958 | 7867 | 7869 | 872 |
+| one-large-file | 1089 | 1269 | 1126 | 234 |
+
+Defaults beat the fixed one-and-one on five regimes and tie on two. Against four
+fixed threads the two are indistinguishable on six of seven, and the single
+regime where the difference clears the noise floor is cold-transfer, which
+defaults win. So defaults never lose. They also do not demonstrably win, and the
+reason is not that the controller is bad.
+
+The reason is that the matrix barely exercises it. Four of the seven regimes --
+cold-cache, warm-cache, many-small-files and one-large-file -- make zero network
+requests. Cold-transfer makes two and interrupted-transfer makes six. A per-host
+concurrency controller with a politeness ceiling of four has nothing to decide
+against two requests to one host, and nothing at all to decide against zero.
+Five sixths of the wall time in this matrix is local filesystem work that no
+tuning input touches, which is why every column looks alike. A benchmark suite
+inherited from phases that were about the store is not a benchmark suite for a
+phase about the network, and running it under six configurations does not make
+it one.
+
+So the correct statement is that the exit criterion as written is not yet
+provable on this harness, and the missing piece is a regime that holds many
+objects across more than one host with enough latency for concurrency to matter.
+That is the work, and phase 6 does not close until it exists. Calling the
+criterion met on a matrix where the controller is inert would be the same
+mistake as the interrupted regime a benchmark agent once derived from another
+regime's result rather than measuring.
+
+What the gate found that nothing else would have.
+
+The write rate filter never forgot. Backpressure judged each window against the
+fastest rate the transfer had ever reached, and the first writes into a new file
+are absorbed by the page cache at a rate no volume sustains. The consequence is
+not subtle: on the implementation as first written, sixty-four of sixty-four
+steady windows after one absorbed write answered the controller as a collapse,
+which drives concurrency to one and holds it there for the rest of the run --
+the exact opposite of what backpressure is for. This is the failure mode BBR
+names when it argues for a windowed max-filter over an all-time maximum, and the
+fix is the same one: judge against the fastest of the last eight windows, so an
+absorbed peak ages out. `a_rate_the_page_cache_absorbed_once_does_not_condemn_
+every_window_after_it` holds it, and fails at sixty-four when the window is
+removed. Every existing backpressure test passed both before and after, which is
+why this was found by reading rather than by the suite.
+
+The published page had to be generated rather than written. The comparison
+against `cp -r`, `curl` and the platform copy is produced by the harness from
+the same run that produces the gated counters, so a number on the page cannot
+drift from the number that was measured. Six of its seven rows are losses. That
+is the roadmap's requirement and it is also the accurate picture: Fetchloom
+hashes every byte twice, writes an outboard tree, publishes through staging and
+records what it did, and none of the tools beside it do any of that.
+
+What is carried forward, unclosed.
+
+The `--no-cache` floor is worse than the audit claimed and phase 6 does not fix
+it. Re-measured as a median of three against the same `cp -r` the original used,
+it is 8278 ms against 1190, which is 7.0x rather than the 1.39x on record, and
+it performs 3093 file operations against the warm cached path's 1027. The cost
+is the double write that was already deferred, not a tuning decision, so no
+setting reaches it. The retraction is in audit.md rather than an edit to the
+original claim, because a record that can be edited backwards is not a record.
+
+The many-small-files regime is bound by the same thing. Its 1 KiB files are far
+below the pack threshold and are packed, so the amplification is on the
+destination side: roughly three file operations per file against the one that
+`cp -r` pays. This is the write amplification that per-file metadata cost makes
+expensive on NTFS, and it is the largest single number on the published page.
+It is a store problem, named here so that phase 6 is not credited with it.
+
+F10's arbitration half goes to phase 7. The settings half is closed: the tuning
+surface is routed through the Policy seam and production code now calls eleven of
+the trait's fifteen methods. `offline`, `credential`, `offer_credential` and `terms` still
+have no production caller, and arbitration between sources cannot be exercised
+while there is one Source implementation to arbitrate between.
+
+Six events remain unemitted and go to phases 7 and 8. F19's two remaining limits
+are unenforced. F21's cloning volume and F26's million-object measurement both
+need hardware this machine does not have and are unmeasured rather than
+deferred by choice.
+
+One piece of seam surface had no production caller, and the fix was to route to
+it rather than to delete it. `Policy::offline` was the last settings-shaped
+method on the seam that nothing called: the offline check read the resolved
+settings directly while `verification`, `durability`, `cache_directory`,
+`concurrency`, `per_host` and `io` all went through the seam. Framing that as
+keep-versus-delete was the wrong reading. The duplication is not the method
+against the settings; it is the enforcement point disagreeing with its own
+siblings about where a setting is read. `allowed_offline` now takes a
+`&dyn Policy` and asks it, which removes the second way in the direction that
+keeps the shape consistent and satisfies the reason standards.md gives for the
+seams' exemption: the phase that adds the second implementation must not get to
+change the shape, which requires the shape to exist first. standards.md now says
+that the exemption covers the method surface too, so this is not re-opened.
+
+The behavior did not move. An offline run still refuses a network reference with
+`policy.offline` and exits 40 before any avoidable work, per contracts.md:923.
+`the_seam_is_what_refuses_a_network_reference_offline` asserts it against a
+policy carrying no settings at all, so nothing but the seam can have answered.
+Twelve of the trait's fifteen methods now have a production caller; `credential`,
+`offer_credential` and `terms` are the three that do not, and they wait on the
+credential work in a later phase.
+
+## What the eighth regime answered
+
+The finding above stands, and the regime built to settle it did settle it, in the
+other direction from the one that was hoped for.
+
+many-hosts exists because the first seven regimes could not exercise the
+controller. It does exercise it: eight objects from each of two loopback hosts,
+one host rate limited and the other not, and the run records `127.0.0.1` at a
+concurrency of one and `::1` at four. A host that was pushed back sits at the
+floor, a host that was not sits at the politeness ceiling, and the two were
+tracked apart. Stub `Controller::answered` to ignore every answer and the regime
+refuses the run naming that every host is recorded at two. That is the half of
+the exit criterion about adaptation happening at all, and it is met.
+
+The half about defaults winning is still not met, and the reason is now specific
+rather than circumstantial. Concurrency exists to hide latency. Every source
+this harness can build is a loopback socket or a local directory, and neither has
+any latency to hide, so no number of transfers in flight can pay for itself. The
+matrix says exactly that. Across eight regimes and four configurations -- settled
+defaults, a fixed one and one, a fixed eight and four, and a fixed eight and two
+that was chosen because it is what a careful person would actually pick -- run
+four rounds in a rotation so that each configuration sits in each position once,
+no configuration beats another by more than the run-to-run spread of a single
+configuration on the same regime.
+
+Medians in milliseconds over four rotated rounds, with the lowest and highest
+single reading of the defaults column beside them, because that range is what any
+difference has to clear to mean anything:
+
+| Regime | Defaults | Fixed 1/1 | Fixed 8/4 | Fixed 8/2 | Defaults low | Defaults high |
+|---|---|---|---|---|---|---|
+| no-op | 15 | 18 | 16 | 14 | 14 | 33 |
+| cold-cache | 1538 | 1561 | 1499 | 1484 | 1483 | 1610 |
+| warm-cache | 228 | 204 | 182 | 196 | 183 | 258 |
+| cold-transfer | 113 | 120 | 102 | 111 | 113 | 123 |
+| interrupted-transfer | 466 | 352 | 438 | 303 | 432 | 926 |
+| many-small-files | 5118 | 6568 | 6758 | 6501 | 4993 | 8843 |
+| one-large-file | 937 | 934 | 878 | 930 | 934 | 4779 |
+| many-hosts | 9204 | 8612 | 8617 | 8636 | 8618 | 10649 |
+
+The correctness half is asserted separately and it holds everywhere.
+`no_tuning_setting_changes_the_bytes_a_run_produces` runs ten configurations over
+one corpus and `no_tuning_setting_changes_what_two_hosts_produce` runs five over a
+manifest spanning both hosts, each configuration in its own workspace so every
+cache is cold, and both assert one tree digest, one content digest per file that
+reached the disk, and identical deterministic counters. Perturb a single
+configuration's input by one byte and the second names the configuration and
+prints both tree digests.
+
+That is not a measurement failure to be re-run on a quieter machine. It is
+structural. Seven of the eight regimes have no mechanism by which a per-host
+concurrency ceiling could change their time: five make no network request at all,
+and cold transfer and interrupted transfer each move a single object, for which a
+per-host ceiling is meaningless whatever it is set to. The eighth has the
+mechanism and no latency for it to act on. standards.md:137 already says a
+constrained network is named nowhere in the harness because it cannot be produced
+in the verification lane without a fault injector this build does not have. That
+sentence, written before this phase, is the reason phase 6 cannot close, and the
+missing piece is delay injection in the fault server rather than anything about
+the controller.
+
+So: the controller is built, it decides, its decisions are per host, it never
+changes a byte, and no setting a user can pass changes a byte either. What is
+absent is a source slow enough for any of it to show up on a clock.
+
+## What the gate found that the tests did not
+
+Two defects survived a green suite and were found by asking what a number was
+made of, which is worth recording because neither was reachable from a test.
+
+The many-hosts regime spent ninety-five percent of its wall time resolving a
+name. Reached with half the objects spelled `localhost`, sixteen objects took
+17,958 ms; reached entirely as `127.0.0.1`, the same sixteen objects with the
+same thirty-two requests took 831 ms. Windows resolves `localhost` to `::1`
+first, the fault server bound only `127.0.0.1`, and every transfer so spelled
+stalled before falling back. The regime was measuring name resolution, and it
+had already been committed. Both host keys are now loopback addresses that exist
+on both platforms by default, and the regime costs 9,195 ms of which 8,400 ms is
+the retry backoff it exists to provoke.
+
+The first version of this matrix ran the configurations in a fixed order within
+each round, and reported that defaults lost on many-small-files by 775 ms against
+a spread of 307. Re-run in a rotation, defaults are the fastest configuration on
+that regime by 1,383 ms. The first result was the cold page cache landing on
+whichever configuration ran first, every round. It was reported as a named losing
+regime in the draft of this record, and it was wrong. What caught it was not a
+test but the question of how a regime that issues no network request could be
+responding to a network setting.
+
+Both have the same shape. A number was plausible, the suite was green, and the
+mechanism made no sense. The mechanism is the check.
+
+## One disagreement between the code and this file
+
+decisions.md:2214 says `Retry-After` "replaces the computed backoff rather than
+adding to it". `crates/engine/src/transfer.rs` sleeps
+`asked.unwrap_or(backing_off).max(backing_off)`, which takes the longer of the
+two, so a `Retry-After` shorter than the computed backoff is discarded and the
+computed one runs instead. It replaces only when the source asks for longer.
+
+contracts.md is silent on `Retry-After` entirely, so this is not a contract
+violation, and it is left as it is rather than decided here. The code is very
+likely the right behavior: honoring a wait shorter than our own jittered backoff
+defeats the stampede protection that the same paragraph argues for two sentences
+later. The record is the thing that is probably wrong. It is named here rather
+than quietly changed because which of the two moves is a decision about how
+Fetchloom treats a source that asks to be hammered, and that is not a decision to
+make while amending a benchmark.
