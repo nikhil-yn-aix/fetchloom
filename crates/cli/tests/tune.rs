@@ -767,15 +767,12 @@ fn no_tuning_setting_changes_what_two_hosts_produce() {
         let mut servers = Vec::new();
         let mut artifacts = String::new();
         for (index, object) in objects.iter().enumerate() {
-            let server = TestServer::start(Script::serving(object.clone())).unwrap();
-            let origin = if index % 2 == 0 {
-                server.origin().replace("127.0.0.1", "localhost")
-            } else {
-                server.origin()
-            };
+            let loopback = if index % 2 == 0 { "::1" } else { "127.0.0.1" };
+            let server = TestServer::start_on(loopback, Script::serving(object.clone())).unwrap();
+            let origin = server.origin();
             writeln!(
                 artifacts,
-                "  - id: object-{index}\n    sources: [{origin}/object-{index}]"
+                "  - id: object-{index}\n    sources: [\"{origin}/object-{index}\"]"
             )
             .unwrap();
             servers.push(server);
