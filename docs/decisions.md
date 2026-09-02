@@ -7422,3 +7422,32 @@ Sources: contracts.md Listing; roadmap.md:135;
 `crates/engine/src/erased.rs`; `crates/engine/src/seam/source.rs`;
 `crates/cli/tests/adapters.rs`; `crates/cli/tests/contract.rs`;
 `crates/sources/src/index.rs`.
+
+## Phase 7.5. Per-candidate credentials, and the sixth leak site there was not
+
+contracts.md:768 forbids sending host A's credential to host B. That is the
+drop-on-redirect rule and it stands. It does not forbid resolving host B's own
+credential when a transfer moves to host B, and a run that failed over to a
+second candidate without doing so would fail on a host it holds a credential for.
+
+Resolution was already per candidate: `Transfer::credential_for` takes the
+location it is about to request and asks the host of that location, at the moment
+the request is built, so there is no point at which one host's credential is in
+hand while another host's request is being made. Nothing was rebuilt for this.
+What was missing was the assertion.
+
+A run now fails over from a host it holds a secret for to a host it holds nothing
+for, under a source that answers the probe and then serves wrong bytes, and the
+test asserts four things: that the first host did receive the secret, so that the
+test can fail at all; that no request to the second host carried it in any header;
+that it reached neither the event stream, the result stream, nor the progress
+stream; and that it reached no receipt.
+
+Phase 7 found five leak sites, each a redacted field one line from a raw
+interpolation. There is no sixth of that shape: `Secret::expose` is called at
+exactly one place in the build, `crates/sources/src/http.rs:125`, where it becomes
+the `Authorization` header of a request already bound to a host. Every other path
+carries the redacted form.
+
+Sources: contracts.md:768; `crates/cli/tests/credential_and_terms.rs`;
+`crates/engine/src/transfer.rs`.

@@ -451,3 +451,109 @@ fn a_credential_worth_more_than_the_offer_threshold_is_offered_and_the_run_finis
         "a run that cannot prompt did not report the offer as unused: {stream}"
     );
 }
+
+/// The secret one host is given, which no request to the other host and no
+/// output stream may ever carry.
+const HOST_A_SECRET: &str = "a-secret-only-the-first-host-was-given";
+
+#[test]
+fn a_credential_for_one_host_never_reaches_the_host_a_transfer_fails_over_to() {
+    let bytes = object(64 * 1024);
+    let failing = TestServer::start_on(
+        "::1",
+        Script::serving(bytes.clone()).replying(vec![Reply::Flipped { offset: 0 }; 8]),
+    )
+    .unwrap();
+    let sound = TestServer::start_on("127.0.0.1", Script::serving(bytes.clone())).unwrap();
+
+    let cache = TempDir::new().unwrap();
+    let destination = TempDir::new().unwrap();
+    let events = destination.path().join("events.ndjson");
+    seed_measurement(cache.path(), "::1", 1_000_000_000);
+    seed_measurement(cache.path(), "127.0.0.1", 1);
+
+    let manifest = destination.path().join("dataset.yaml");
+    std::fs::write(
+        &manifest,
+        format!(
+            "name: mirrored\nartifacts:\n  - id: object\n    sources: [\"{}/object\", \"{}/object\"]\n    digest:\n      blake3: \"{}\"\n",
+            failing.origin(),
+            sound.origin(),
+            fetchloom_engine::hashing::hash_bytes(&bytes)
+        ),
+    )
+    .unwrap();
+
+    let run = run_with(
+        cache.path(),
+        &[(&token_variable_for("::1"), HOST_A_SECRET)],
+        &[
+            "get",
+            manifest.to_str().unwrap(),
+            "--output",
+            destination.path().join("out").to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+            "--json",
+        ],
+    );
+
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the run did not fail over to the sound host: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let carried = failing
+        .received()
+        .iter()
+        .any(|request| request.header("authorization") == Some(HOST_A_SECRET));
+    assert!(
+        carried,
+        "the host the credential was given for never received it, so this test proves nothing"
+    );
+
+    let leaked: Vec<_> = sound
+        .received()
+        .into_iter()
+        .filter(|request| {
+            request
+                .headers
+                .iter()
+                .any(|(_, value)| value.contains(HOST_A_SECRET))
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "one host's credential reached the host a transfer failed over to: {leaked:?}"
+    );
+
+    let stream = std::fs::read_to_string(&events).unwrap();
+    assert!(
+        !stream.contains(HOST_A_SECRET),
+        "a credential reached the event stream"
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stdout).contains(HOST_A_SECRET),
+        "a credential reached the result stream"
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stderr).contains(HOST_A_SECRET),
+        "a credential reached the progress stream"
+    );
+
+    let receipts = cache.path().join("receipts");
+    let recorded: String = std::fs::read_dir(&receipts)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+        .collect();
+    assert!(
+        !recorded.contains(HOST_A_SECRET),
+        "a credential reached a receipt"
+    );
+}
