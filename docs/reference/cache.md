@@ -278,5 +278,5 @@ or a source.
 
 ```
 $ fetchloom cache clear --yes
-removed ...che
+removed 0 objects from C:\Users\you\AppData\Local\Fetchloom\Cache
 ```

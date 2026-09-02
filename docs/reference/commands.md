@@ -19,6 +19,9 @@ was run to produce the output shown. `fetchloom --help` lists the same surface.
 | `--threads <n>` | Ceiling on threads used for processor work |
 | `--yes` | Answer every confirmation with yes |
 
+`--threads` is one of the settings [tuning.md](tuning.md) covers in depth,
+including the environment variable and the measured default.
+
 A display mode never changes bytes, digests, exit codes or the JSON result. When
 the terminal cannot carry the one you asked for, the run says so rather than
 quietly switching:
@@ -61,6 +64,17 @@ means `--adopt` was given and the reported tree is the one already on disk.
 | `--force` | off | Overwrite modified destination entries and remove foreign ones |
 | `--adopt` | off | Accept the destination as it stands and report that tree |
 | `--durability <strict\|normal\|fast>` | `normal` | How far a write is pushed before publication |
+| `--concurrency <n>` | measured | Ceiling on transfers in flight across every host |
+| `--per-host <n>` | measured | Ceiling on transfers in flight for one host |
+| `--bandwidth <rate>` | unlimited | Ceiling on transfer rate |
+| `--io <auto\|buffered\|uncached>` | `auto` | Which write path the run takes |
+| `--aggressive` | off | Raise politeness ceilings |
+| `--deterministic-io` | off | Disable adaptation, so two runs do identical work |
+
+`get`, `plan` and `apply` share these six. See [tuning.md](tuning.md) for the
+syntax of `--bandwidth`, what each one does, the four environment variables
+that also set them, and the precedence between command line, environment,
+configuration file and measurement.
 
 Selection is part of identity: changing `--select` or `--layout` changes what
 the lock records, not the dataset's name.
@@ -267,10 +281,22 @@ offline = false (default)
 threads = 16 (measured)
 display = plain (default)
 cache.dir = C:\Users\you\AppData\Local\Fetchloom\Cache (default)
+concurrency = 8 (measured)
+per-host = 4 (measured)
+bandwidth = ? (default)
+io = auto (default)
+aggressive = false (default)
+deterministic-io = false (default)
 
 $ fetchloom --threads 3 explain threads
 threads = 3 (command line)
 ```
+
+This build reports ten settings: `offline`, `threads`, `display`, `cache.dir`,
+`concurrency`, `per-host`, `bandwidth`, `io`, `aggressive` and
+`deterministic-io`. `measured` means no level named a value and the number was
+taken from this machine or this cache. See [tuning.md](tuning.md) for what each
+of the six tuning settings means and what its measurement is.
 
 Under `--json` the same answer is one object, with the config files it found and
 every setting:
@@ -279,12 +305,22 @@ every setting:
 $ fetchloom --json explain
 {"files":[{"level":"project","path":null},{"level":"user","path":null}],
  "settings":[{"key":"offline","value":"false","origin":"default"},
-             {"key":"threads","value":"16","origin":"measured"}, ...]}
+             {"key":"threads","value":"16","origin":"measured","measurement":{"found":"16","taken":"this run, from the platform"}},
+             {"key":"display","value":"plain","origin":"default"},
+             {"key":"cache.dir","value":"C:\\Users\\you\\AppData\\Local\\Fetchloom\\Cache","origin":"default"},
+             {"key":"concurrency","value":"8","origin":"measured","measurement":{"found":"8","taken":"this run, from the thread budget and the politeness ceiling"}},
+             {"key":"per-host","value":"4","origin":"measured","measurement":{"found":"4","taken":"this run, from the politeness ceiling, because no host has a recorded measurement"}},
+             {"key":"bandwidth","value":"?","origin":"default"},
+             {"key":"io","value":"auto","origin":"default"},
+             {"key":"aggressive","value":"false","origin":"default"},
+             {"key":"deterministic-io","value":"false","origin":"default"}]}
 ```
 
-This build reports those four settings and no others. `measured` means no level
-named a value and the number was taken from this machine, which for `threads` is
-the parallelism the hardware reports.
+Every command-line tuning flag documented in [tuning.md](tuning.md) belongs to
+`get`, `plan` and `apply`; `explain` does not carry them, so it can only ever
+report a tuning setting from the environment, a configuration file, a
+measurement, or the built-in default, never from a flag on the `explain`
+invocation itself.
 
 ## completions
 
@@ -304,7 +340,6 @@ $ fetchloom completions powershell > fetchloom.ps1
 
 `init`, `watch`, `doctor` and `why` are part of the finished command surface and
 are not in this binary. Neither are `--verbose`, `--color`, `--no-hints`,
-`--concurrency`, `--per-host`, `--bandwidth`, `--retries`, `--timeout`, `--io`,
-`--aggressive`, or `--deterministic-io`. Nothing that cannot perform what it
-promises is present, so their absence is the honest answer rather than a stub
-that accepts the flag and ignores it.
+`--retries`, or `--timeout`. Nothing that cannot perform what it promises is
+present, so their absence is the honest answer rather than a stub that accepts
+the flag and ignores it.

@@ -46,9 +46,10 @@ here is smaller than the finished product, and everything in it works.
 
 Today it fetches over HTTPS and from local paths, reads ten archive formats,
 keeps a content-addressed cache, writes and enforces locks, writes receipts,
-plans and applies offline, exports and imports bundles, and repairs damaged byte
-ranges. It does not yet speak to object stores or dataset providers, does not
-list directories, does not resolve a remote manifest, and does not tune itself.
+plans and applies offline, exports and imports bundles, repairs damaged byte
+ranges, and tunes its own concurrency and write path to what a host and a
+volume measure. It does not yet speak to object stores or dataset providers,
+does not list directories, and does not resolve a remote manifest.
 
 ## This directory
 
@@ -56,6 +57,7 @@ list directories, does not resolve a remote manifest, and does not tune itself.
 |---|---|
 | [getting-started.md](getting-started.md) | How to build it and run a first real command |
 | [commands.md](commands.md) | Every command and flag, with a run of each |
+| [tuning.md](tuning.md) | The concurrency, bandwidth and I/O flags, the environment variables, and the precedence between them |
 | [references.md](references.md) | The ways to name data, and which this build resolves |
 | [files.md](files.md) | The manifest, lock, receipt and plan formats |
 | [trust.md](trust.md) | What each trust class means |
