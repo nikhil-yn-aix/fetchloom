@@ -1509,11 +1509,13 @@ pub fn materialize_remote_container(
         source: SafeUrl::new(location),
     });
     let credential = resolve_credential(with.policy, &host_of(location))?;
-    let listed = selected_entries(
-        location,
-        source.list(location, credential.as_ref())?,
-        selection,
-    )?;
+    let listing = source.list(location, credential.as_ref())?;
+    if listing.skipped > 0 {
+        emit(EventPayload::ListingSkipped {
+            count: listing.skipped,
+        });
+    }
+    let listed = selected_entries(location, listing.entries, selection)?;
     emit(EventPayload::ListingEnd {
         entries: listed.len() as u64,
         duration_ms: listing_started.elapsed_ms(),

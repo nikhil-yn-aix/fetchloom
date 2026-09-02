@@ -236,7 +236,11 @@ fn every_recognized_index_is_listed_and_an_unrecognized_one_is_unresolved() {
         let listed = source
             .list(&format!("{}/set/", server.origin()), None)
             .unwrap();
-        let names: Vec<&str> = listed.iter().map(|entry| entry.path.as_str()).collect();
+        let names: Vec<&str> = listed
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
         assert_eq!(names, vec!["one", "two"], "{format:?} listed {names:?}");
     }
 

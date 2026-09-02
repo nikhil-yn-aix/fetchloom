@@ -105,6 +105,15 @@ pub struct ListingEntry {
     pub size: Option<u64>,
 }
 
+/// What one listing of a container returned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// The entries at or below the prefix, in the order the index gave them.
+    pub entries: Vec<ListingEntry>,
+    /// How many links pointed outside the prefix and were ignored.
+    pub skipped: u64,
+}
+
 /// What a run recorded that a conditional request can be built from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Validator {
@@ -190,9 +199,5 @@ pub trait Source {
     ///
     /// Fails when the container is unreachable, when its index is one Fetchloom
     /// does not recognize, and when the listing exceeds its limit.
-    fn list(
-        &self,
-        location: &str,
-        credential: Option<&Credential>,
-    ) -> Result<Vec<ListingEntry>, Error>;
+    fn list(&self, location: &str, credential: Option<&Credential>) -> Result<Listing, Error>;
 }

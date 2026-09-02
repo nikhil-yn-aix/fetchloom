@@ -369,6 +369,61 @@ fn the_event_stream_is_newline_delimited_json_with_a_monotonic_sequence() {
 }
 
 #[test]
+fn a_listing_with_a_link_outside_the_prefix_reports_it_skipped_between_start_and_end() {
+    let temporary = TempDir::new().unwrap();
+    let server =
+        TestServer::start(
+            Script::serving(b"object".to_vec()).replying(vec![Reply::Listing {
+                format: fetchloom_faults::IndexFormat::GeneratedHtml,
+            }]),
+        )
+        .unwrap();
+    let location = format!("{}/set/", server.origin());
+    let destination = temporary.path().join("destination");
+    let events_path = temporary.path().join("events.ndjson");
+
+    let output = run(&[
+        "get",
+        &location,
+        "--output",
+        destination.to_str().unwrap(),
+        "--events",
+        events_path.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = std::fs::read_to_string(&events_path).unwrap();
+    let events: Vec<serde_json::Value> = body
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    let start = events
+        .iter()
+        .position(|event| event["event"] == "listing.start")
+        .expect("no listing.start event");
+    let end = events
+        .iter()
+        .position(|event| event["event"] == "listing.end")
+        .expect("no listing.end event");
+    let skipped = events
+        .iter()
+        .position(|event| event["event"] == "listing.skipped")
+        .expect("a listing with a link outside the prefix did not report listing.skipped");
+
+    assert!(
+        start < skipped && skipped < end,
+        "listing.skipped must land between listing.start and listing.end: {events:?}"
+    );
+    assert_eq!(events[skipped]["count"], 1);
+}
+
+#[test]
 fn a_fallback_is_reported_as_a_degradation_naming_what_was_used() {
     let temporary = corpus();
     let events = temporary.path().join("events.ndjson");

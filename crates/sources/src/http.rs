@@ -11,7 +11,7 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 
@@ -389,11 +389,7 @@ impl Source for HttpSource {
         })
     }
 
-    fn list(
-        &self,
-        location: &str,
-        credential: Option<&Credential>,
-    ) -> Result<Vec<ListingEntry>, Error> {
+    fn list(&self, location: &str, credential: Option<&Credential>) -> Result<Listing, Error> {
         let (answer, _served) = self.send(Method::Get, location, None, credential)?;
         let status = answer.status().as_u16();
         if !(200..300).contains(&status) {
@@ -410,9 +406,9 @@ impl Source for HttpSource {
             .limit(self.limits.listing_bytes)
             .read_to_string()
             .map_err(|reason| transport_failure(location, &reason))?;
-        let listed = index::parse(location, status, &body)?;
+        let listing = index::parse(location, status, &body)?;
         let allowed = usize::try_from(self.limits.listing_entries).unwrap_or(usize::MAX);
-        if listed.len() > allowed {
+        if listing.entries.len() > allowed {
             return Err(Error::new(
                 ErrorKind::ResourceLimit,
                 format!(
@@ -423,7 +419,7 @@ impl Source for HttpSource {
             )
             .with_source(location));
         }
-        Ok(listed)
+        Ok(listing)
     }
 }
 

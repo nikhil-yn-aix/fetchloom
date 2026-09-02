@@ -362,7 +362,11 @@ fn check_listing_supported<S: Source>(
 ) {
     match source.list(container, credential) {
         Ok(listed) => {
-            let mut found: Vec<&str> = listed.iter().map(|entry| entry.path.as_str()).collect();
+            let mut found: Vec<&str> = listed
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect();
             found.sort_unstable();
             let mut expected: Vec<&str> = entries.to_vec();
             expected.sort_unstable();
@@ -373,7 +377,7 @@ fn check_listing_supported<S: Source>(
                     format!("{found:?}"),
                 ));
             }
-            for entry in &listed {
+            for entry in &listed.entries {
                 let escapes =
                     entry.path.starts_with('/') || entry.path.split('/').any(|part| part == "..");
                 if escapes {
@@ -405,7 +409,7 @@ fn check_listing_not_supported<S: Source>(
             "listing the object's own location to fail, because the fixture names no container",
             format!(
                 "a listing that returned {} entries instead of failing",
-                listed.len()
+                listed.entries.len()
             ),
         ));
     }

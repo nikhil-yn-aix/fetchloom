@@ -166,7 +166,11 @@ fn an_object_store_listing_is_parsed_into_entries() {
     let listed = source()
         .list(&format!("{}/set/", server.origin()), None)
         .unwrap();
-    let names: Vec<&str> = listed.iter().map(|entry| entry.path.as_str()).collect();
+    let names: Vec<&str> = listed
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
     assert_eq!(names, vec!["one", "two"]);
 }
 
@@ -222,7 +226,11 @@ fn every_index_format_the_contract_recognizes_is_listed_and_only_an_unrecognized
             "{format:?} is a format the contract recognizes and it was refused: {listed:?}"
         );
         let listed = listed.unwrap_or_default();
-        assert_eq!(listed.len(), 2, "{format:?} did not list both entries");
+        assert_eq!(
+            listed.entries.len(),
+            2,
+            "{format:?} did not list both entries"
+        );
     }
 
     let server = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Listing {

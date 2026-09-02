@@ -2,7 +2,7 @@
 
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
-use fetchloom_engine::seam::source::ListingEntry;
+use fetchloom_engine::seam::source::{Listing, ListingEntry};
 
 /// The namespace an object store's list response carries.
 const OBJECT_STORE_NAMESPACE: &str = "http://s3.amazonaws.com/doc/2006-03-01/";
@@ -22,7 +22,7 @@ const GENERATED_HEADING: &str = "<h1>Index of ";
 ///
 /// Fails with `reference.unresolved` when the body matches no recognized
 /// signature.
-pub fn parse(location: &str, status: u16, body: &str) -> Result<Vec<ListingEntry>, Error> {
+pub fn parse(location: &str, status: u16, body: &str) -> Result<Listing, Error> {
     if body.contains(OBJECT_STORE_ROOT) && body.contains(OBJECT_STORE_NAMESPACE) {
         return Ok(entries(location, &between_all(body, "<Key>", "</Key>")));
     }
@@ -87,17 +87,32 @@ fn links(body: &str) -> Vec<String> {
     between_all(body, "<a href=\"", "\"")
 }
 
-fn entries(location: &str, raw: &[String]) -> Vec<ListingEntry> {
+fn entries(location: &str, raw: &[String]) -> Listing {
     let prefix = prefix_of(location);
-    raw.iter()
-        .filter_map(|name| relative(&prefix, name))
-        .filter(|name| !name.is_empty() && !name.contains(".."))
-        .map(|path| ListingEntry {
+    let mut kept = Vec::new();
+    let mut skipped = 0u64;
+    for name in raw {
+        let Some(path) = relative(&prefix, name) else {
+            skipped += 1;
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        if path.contains("..") {
+            skipped += 1;
+            continue;
+        }
+        kept.push(ListingEntry {
             location: SafeUrl::new(&format!("{location}{path}")),
             path,
             size: None,
-        })
-        .collect()
+        });
+    }
+    Listing {
+        entries: kept,
+        skipped,
+    }
 }
 
 fn prefix_of(location: &str) -> String {
@@ -124,4 +139,50 @@ fn relative(prefix: &str, name: &str) -> Option<String> {
         return None;
     }
     Some(without_prefix.to_owned())
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions, where the parse that failed is the message"
+)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn a_relative_escape_and_an_absolute_link_are_both_counted_as_skipped() {
+        let body = concat!(
+            "<html><body><h1>Index of /set/</h1><pre>",
+            r#"<a href="../">../</a>"#,
+            r#"<a href="one">one</a>"#,
+            r#"<a href="http://elsewhere/object">elsewhere</a>"#,
+            "</pre></body></html>"
+        );
+        let listing = parse("http://host/set/", 200, body).unwrap();
+        let paths: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["one"]);
+        assert_eq!(listing.skipped, 2);
+    }
+
+    #[test]
+    fn a_link_resolving_to_the_container_itself_is_not_counted_as_skipped() {
+        let body = concat!(
+            "<html><body><h1>Index of /set/</h1><pre>",
+            r#"<a href="/set/">/set/</a>"#,
+            r#"<a href="one">one</a>"#,
+            "</pre></body></html>"
+        );
+        let listing = parse("http://host/set/", 200, body).unwrap();
+        let paths: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["one"]);
+        assert_eq!(listing.skipped, 0);
+    }
 }

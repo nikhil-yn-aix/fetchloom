@@ -21,7 +21,7 @@ use fetchloom_engine::limits::Limits;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
 use fetchloom_engine::seam::source::{
-    ByteRange, Cost, ListingEntry, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
+    ByteRange, Cost, Listing, Revalidated, Served, Source, SourceIdentity, SourceMetadata,
     Validator,
 };
 use fetchloom_engine::work::WorkCounter;
@@ -200,11 +200,7 @@ impl Source for LyingSource {
         )))
     }
 
-    fn list(
-        &self,
-        location: &str,
-        _credential: Option<&Credential>,
-    ) -> Result<Vec<ListingEntry>, Error> {
+    fn list(&self, location: &str, _credential: Option<&Credential>) -> Result<Listing, Error> {
         Err(Error::new(
             ErrorKind::ReferenceUnresolved,
             format!("name an object, because {location} lists nothing"),
@@ -326,11 +322,7 @@ impl Source for InventingSource {
         )))
     }
 
-    fn list(
-        &self,
-        location: &str,
-        _credential: Option<&Credential>,
-    ) -> Result<Vec<ListingEntry>, Error> {
+    fn list(&self, location: &str, _credential: Option<&Credential>) -> Result<Listing, Error> {
         Err(Error::new(
             ErrorKind::ReferenceUnresolved,
             format!("name an object, because {location} lists nothing"),
