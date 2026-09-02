@@ -24,8 +24,8 @@ use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::timestamp::Timestamp;
 use fetchloom_engine::tuning::{
-    Answer, Ceilings, Controller, FIRST_PER_HOST, HostMeasurement, TRANSFERS_CEILING, WriteRate,
-    debt, order_candidates, resolve_io_mode,
+    Answer, Ceilings, Controller, FIRST_PER_HOST, HostMeasurement, SUSTAINED_WINDOWS,
+    TRANSFERS_CEILING, WriteRate, debt, order_candidates, resolve_io_mode,
 };
 
 fn budget(threads: usize) -> ThreadBudget {
@@ -418,5 +418,25 @@ fn a_collapsed_write_rate_never_raises_the_ceiling() {
         controller.permitted(),
         2,
         "clean answers pushed past the ceiling a measurement may not raise"
+    );
+}
+
+#[test]
+fn a_rate_the_page_cache_absorbed_once_does_not_condemn_every_window_after_it() {
+    let mut rate = WriteRate::default();
+    assert!(
+        !rate.observed(64 << 20, Duration::from_millis(1)),
+        "the first window is never a collapse"
+    );
+    let mut collapses = 0;
+    for _ in 0..64 {
+        if rate.observed(1 << 20, Duration::from_millis(4)) {
+            collapses += 1;
+        }
+    }
+    assert!(
+        collapses <= SUSTAINED_WINDOWS,
+        "a volume writing at one steady rate answered the controller {collapses} times, so a \
+         peak the page cache absorbed once condemns every honest window after it"
     );
 }

@@ -210,26 +210,39 @@ pub fn debt(rate: u64, moved: u64, elapsed: Duration) -> Duration {
 /// before the volume counts as having collapsed under it.
 pub const COLLAPSE_FRACTION: u64 = 4;
 
+/// How many recent windows the rate a run is judged against is taken over. The
+/// first writes into a new file are absorbed by the page cache at a rate no
+/// volume sustains, so a peak taken over the whole transfer would read every
+/// honest rate after it as a collapse and drive concurrency to one and leave it
+/// there.
+pub const SUSTAINED_WINDOWS: usize = 8;
+
 /// The rate at which the store has been accepting bytes, and whether it has
 /// just collapsed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WriteRate {
-    best: u64,
+    recent: [u64; SUSTAINED_WINDOWS],
+    next: usize,
+    seen: bool,
 }
 
 impl WriteRate {
     /// Records one window of writing and reports whether the volume collapsed
-    /// under it. The first window never collapses, because nothing has been
-    /// sustained for it to fall away from.
+    /// under it, judged against the fastest of the recent windows rather than
+    /// against the fastest of the whole transfer. The first window never
+    /// collapses, because nothing has been sustained for it to fall away from.
     pub fn observed(&mut self, bytes: u64, elapsed: Duration) -> bool {
         let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
         if nanos == 0 {
             return false;
         }
         let rate = bytes.saturating_mul(1_000_000_000) / nanos;
-        let sustained = self.best;
-        self.best = self.best.max(rate);
-        sustained > 0 && rate < sustained / COLLAPSE_FRACTION
+        let sustained = self.recent.iter().copied().max().unwrap_or(0);
+        self.recent[self.next] = rate;
+        self.next = (self.next + 1) % SUSTAINED_WINDOWS;
+        let judged = self.seen;
+        self.seen = true;
+        judged && rate < sustained / COLLAPSE_FRACTION
     }
 }
 

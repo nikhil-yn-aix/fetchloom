@@ -6135,11 +6135,24 @@ throughput is below the measured link rate.
 
 Through the same controller, as a fourth answer rather than a second mechanism.
 The write path reports the rate at which the store accepted bytes. When that
-rate falls below a fraction of what the same run had been sustaining, the
-transfer answers the controller as though the host had faltered, which
+rate falls below a fraction of what the same run had recently been sustaining,
+the transfer answers the controller as though the host had faltered, which
 subtracts one. There is no separate disk controller and no separate ceiling.
 This keeps one number in charge of how many transfers are in flight, which is
 the only way the politeness ceiling can remain a ceiling.
+
+Recently is the operative word, and it is the second thing this was written as.
+The rate a window is judged against is the fastest of the last eight windows,
+not the fastest of the transfer. A peak taken over the whole transfer is wrong
+here for the reason BBR gives for using a windowed max-filter rather than an
+all-time maximum: an estimator that never forgets stays locked to a capacity
+that is no longer available. The concrete case is not exotic. The first writes
+into a new file are absorbed by the page cache at a rate no volume sustains, so
+an all-time peak makes every honest window after it a collapse, and concurrency
+ratchets to one and stays there for the rest of the run. Measured on the
+implementation before the window was added, sixty-four of sixty-four steady
+windows after one absorbed write answered the controller. With the window, at
+most eight do, which is the time it takes for the absorbed peak to age out.
 
 ### Which I/O mode is chosen per platform and volume
 
