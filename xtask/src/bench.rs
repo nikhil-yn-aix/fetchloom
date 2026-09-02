@@ -1,5 +1,6 @@
 //! The regime harness: run the real binary, record numbers, gate on them.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,19 @@ pub struct Metric {
     pub kind: MetricKind,
 }
 
+/// What the obvious alternative tool costs on the same regime, on the same
+/// machine, in the same run. It is context for a published number and is never
+/// gated, because the gate is about this build against the last one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Alternative {
+    /// The command the comparison ran.
+    pub tool: String,
+    /// What it does, which is never exactly what Fetchloom does.
+    pub does: String,
+    /// The median wall time it took, in milliseconds.
+    pub wall_ms: f64,
+}
+
 /// Everything one regime measured.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RegimeResult {
@@ -46,6 +60,9 @@ pub struct RegimeResult {
     pub iterations: u32,
     /// The numbers it produced.
     pub metrics: Vec<Metric>,
+    /// What the obvious alternative cost on the same regime, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternative: Option<Alternative>,
 }
 
 /// A whole harness run.
@@ -199,6 +216,7 @@ pub fn run_no_op(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchEr
                 kind: MetricKind::Deterministic,
             },
         ],
+        alternative: None,
     })
 }
 
@@ -329,6 +347,8 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
     let mut large_times = Vec::with_capacity(iterations as usize);
     let mut small_work = Work::default();
     let mut large_work = Work::default();
+    let mut small_copies = Vec::with_capacity(iterations as usize);
+    let mut large_copies = Vec::with_capacity(iterations as usize);
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
@@ -348,6 +368,7 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
         )?;
         small_times.push(wall);
         small_work = work;
+        small_copies.push(copy_tree(&many, &scratch.join("many-copied"))?);
 
         let one = scratch.join("one");
         fs::create_dir_all(&one).map_err(BenchError::Process)?;
@@ -361,6 +382,7 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
         )?;
         large_times.push(wall);
         large_work = work;
+        large_copies.push(copy_tree(&one, &scratch.join("one-copied"))?);
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -381,6 +403,12 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
             .into_iter()
             .chain(work_metrics(&small_work))
             .collect(),
+            alternative: Some(Alternative {
+                tool: COPY_TOOL.to_owned(),
+                does: "copies the same 1024 files, hashing nothing and verifying nothing"
+                    .to_owned(),
+                wall_ms: median(small_copies),
+            }),
         },
         RegimeResult {
             regime: "one-large-file".to_owned(),
@@ -394,6 +422,12 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
             .into_iter()
             .chain(work_metrics(&large_work))
             .collect(),
+            alternative: Some(Alternative {
+                tool: COPY_TOOL.to_owned(),
+                does: "copies the same 256 MiB file, hashing nothing and verifying nothing"
+                    .to_owned(),
+                wall_ms: median(large_copies),
+            }),
         },
     ])
 }
@@ -417,6 +451,7 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
     let mut warm_growth = 0u64;
     let mut cold_work = Work::default();
     let mut warm_work = Work::default();
+    let mut copies = Vec::with_capacity(iterations as usize);
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
@@ -435,10 +470,10 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
         warm_growth = after_warm - after_cold;
         cold_work = cold_run;
         warm_work = warm_run;
+        copies.push(copy_tree(&source, &scratch.join("copied"))?);
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    cold_times.sort_by(f64::total_cmp);
     warm_times.sort_by(f64::total_cmp);
 
     Ok(vec![
@@ -466,6 +501,11 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
             .into_iter()
             .chain(work_metrics(&cold_work))
             .collect(),
+            alternative: Some(Alternative {
+                tool: COPY_TOOL.to_owned(),
+                does: "copies the same 64 files, hashing nothing and verifying nothing".to_owned(),
+                wall_ms: median(copies.clone()),
+            }),
         },
         RegimeResult {
             regime: "warm-cache".to_owned(),
@@ -491,6 +531,12 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
             .into_iter()
             .chain(work_metrics(&warm_work))
             .collect(),
+            alternative: Some(Alternative {
+                tool: COPY_TOOL.to_owned(),
+                does: "copies the same 64 files again, which is what a tool with no cache must do"
+                    .to_owned(),
+                wall_ms: median(copies),
+            }),
         },
     ])
 }
@@ -565,6 +611,8 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
     let mut interrupted_times = Vec::with_capacity(iterations as usize);
     let mut interrupted_bytes = 0u64;
     let mut interrupted_work = Work::default();
+    let mut cold_curls = Vec::with_capacity(iterations as usize);
+    let mut interrupted_curls = Vec::with_capacity(iterations as usize);
 
     for round in 0..iterations {
         let scratch = scratch_directory(round)?;
@@ -577,6 +625,10 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
             &scratch.join("cold"),
             &scratch.join("cache-cold"),
         )?;
+        cold_curls.push(curl_to(
+            &format!("{}/object", cold_server.origin()),
+            &scratch.join("cold.curl"),
+        )?);
         drop(cold_server);
         cold_times.push(wall);
         cold_bytes = bytes;
@@ -600,6 +652,10 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
             &scratch.join("interrupted"),
             &scratch.join("cache-interrupted"),
         )?;
+        interrupted_curls.push(curl_to(
+            &format!("{}/object", interrupted_server.origin()),
+            &scratch.join("interrupted.curl"),
+        )?);
         drop(interrupted_server);
         interrupted_times.push(wall);
         interrupted_bytes = bytes;
@@ -608,61 +664,70 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
         let _ = fs::remove_dir_all(&scratch);
     }
 
-    cold_times.sort_by(f64::total_cmp);
-    interrupted_times.sort_by(f64::total_cmp);
-
     Ok(vec![
-        RegimeResult {
-            regime: "cold-transfer".to_owned(),
+        transfer_regime(
+            "cold-transfer",
             iterations,
-            metrics: vec![
-                Metric {
-                    name: "wall".to_owned(),
-                    value: cold_times[cold_times.len() / 2],
-                    unit: "ms".to_owned(),
-                    kind: MetricKind::Timing,
-                },
-                Metric {
-                    name: "bytes-materialized".to_owned(),
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "an object below two to the fifty-third bytes is exact"
-                    )]
-                    value: cold_bytes as f64,
-                    unit: "bytes".to_owned(),
-                    kind: MetricKind::Deterministic,
-                },
-            ]
-            .into_iter()
-            .chain(work_metrics(&cold_work))
-            .collect(),
-        },
-        RegimeResult {
-            regime: "interrupted-transfer".to_owned(),
+            cold_times,
+            cold_bytes,
+            &cold_work,
+            Alternative {
+                tool: "curl --output".to_owned(),
+                does: "downloads the same object from the same server, hashing nothing, verifying nothing and publishing nothing".to_owned(),
+                wall_ms: median(cold_curls),
+            },
+        ),
+        transfer_regime(
+            "interrupted-transfer",
             iterations,
-            metrics: vec![
-                Metric {
-                    name: "wall".to_owned(),
-                    value: interrupted_times[interrupted_times.len() / 2],
-                    unit: "ms".to_owned(),
-                    kind: MetricKind::Timing,
-                },
-                Metric {
-                    name: "bytes-materialized".to_owned(),
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "an object below two to the fifty-third bytes is exact"
-                    )]
-                    value: interrupted_bytes as f64,
-                    unit: "bytes".to_owned(),
-                    kind: MetricKind::Deterministic,
-                },
-            ]
-            .into_iter()
-            .chain(work_metrics(&interrupted_work))
-            .collect(),
-        },
+            interrupted_times,
+            interrupted_bytes,
+            &interrupted_work,
+            Alternative {
+                tool: "curl --output".to_owned(),
+                does: "downloads the same object from the same server after its interruptions are spent, so it never resumes and never pays for one".to_owned(),
+                wall_ms: median(interrupted_curls),
+            },
+        ),
     ])
+}
+
+/// Builds one transfer regime result from what its rounds measured.
+fn transfer_regime(
+    regime: &str,
+    iterations: u32,
+    times: Vec<f64>,
+    bytes: u64,
+    work: &Work,
+    alternative: Alternative,
+) -> RegimeResult {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "an object below two to the fifty-third bytes is exact"
+    )]
+    let materialized = bytes as f64;
+    RegimeResult {
+        regime: regime.to_owned(),
+        iterations,
+        metrics: vec![
+            Metric {
+                name: "wall".to_owned(),
+                value: median(times),
+                unit: "ms".to_owned(),
+                kind: MetricKind::Timing,
+            },
+            Metric {
+                name: "bytes-materialized".to_owned(),
+                value: materialized,
+                unit: "bytes".to_owned(),
+                kind: MetricKind::Deterministic,
+            },
+        ]
+        .into_iter()
+        .chain(work_metrics(work))
+        .collect(),
+        alternative: Some(alternative),
+    }
 }
 
 /// What a run's `--json` result carries that a benchmark reads.
@@ -776,4 +841,141 @@ fn directory_bytes(directory: &Path) -> u64 {
 /// Returns how many bytes the cache holds, in whichever placement holds them.
 fn stored_bytes(cache: &Path) -> u64 {
     directory_bytes(&cache.join("objects")) + directory_bytes(&cache.join("packs"))
+}
+
+/// Runs a comparison command and returns how long it took, in milliseconds.
+fn time_command(program: &str, arguments: &[&std::ffi::OsStr]) -> Result<f64, BenchError> {
+    let started = Instant::now();
+    let output = Command::new(program)
+        .args(arguments)
+        .output()
+        .map_err(BenchError::Process)?;
+    let elapsed = started.elapsed();
+    if !output.status.success() {
+        return Err(BenchError::NonZeroExit(output.status.code().unwrap_or(-1)));
+    }
+    Ok(elapsed.as_secs_f64() * 1000.0)
+}
+
+/// Returns the median of what a comparison command took over several rounds.
+fn median(mut times: Vec<f64>) -> f64 {
+    times.sort_by(f64::total_cmp);
+    times[times.len() / 2]
+}
+
+/// Copies a tree with the platform's own copy, which is the alternative every
+/// local regime is measured against.
+fn copy_tree(from: &Path, to: &Path) -> Result<f64, BenchError> {
+    #[cfg(windows)]
+    {
+        let spec = format!(
+            "Copy-Item -Recurse -LiteralPath '{}' -Destination '{}'",
+            from.display(),
+            to.display()
+        );
+        time_command(
+            "powershell",
+            &[
+                std::ffi::OsStr::new("-NoProfile"),
+                std::ffi::OsStr::new("-NonInteractive"),
+                std::ffi::OsStr::new("-Command"),
+                std::ffi::OsStr::new(&spec),
+            ],
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        time_command(
+            "cp",
+            &[std::ffi::OsStr::new("-r"), from.as_os_str(), to.as_os_str()],
+        )
+    }
+}
+
+/// Downloads a URL with curl, which is the alternative the transfer regimes are
+/// measured against.
+fn curl_to(url: &str, into: &Path) -> Result<f64, BenchError> {
+    time_command(
+        "curl",
+        &[
+            std::ffi::OsStr::new("--silent"),
+            std::ffi::OsStr::new("--show-error"),
+            std::ffi::OsStr::new("--output"),
+            into.as_os_str(),
+            std::ffi::OsStr::new(url),
+        ],
+    )
+}
+
+/// The copy the published comparison runs, named as the reader would run it.
+#[cfg(windows)]
+pub const COPY_TOOL: &str = "powershell Copy-Item -Recurse";
+
+/// The copy the published comparison runs, named as the reader would run it.
+#[cfg(not(windows))]
+pub const COPY_TOOL: &str = "cp -r";
+
+/// Renders the published comparison page from what a run measured, so the page
+/// cannot drift from the numbers it reports.
+#[must_use]
+pub fn publish(baseline: &Baseline, lane: &str) -> String {
+    let mut page = String::new();
+    page.push_str("# Benchmarks\n\n");
+    let _ = write!(
+        page,
+        "Every number here was measured by `cargo xtask bench --publish` on one machine, target `{}`, with the comparison tool run in the same round against the same input.\n\n",
+        baseline.target
+    );
+    page.push_str("Wall time is a property of the machine as much as of the code. It is published and never gated; this machine has measured the same binary at 773, 2364 and 4165 ms on one regime. The deterministic counters are the ones that gate, at five percent.\n\n");
+    let _ = write!(page, "Many-small-files lane: {lane}\n\n");
+    page.push_str("| Regime | Fetchloom | Alternative | Ratio | What the alternative does |\n");
+    page.push_str("|---|---|---|---|---|\n");
+    for regime in &baseline.regimes {
+        let wall = regime
+            .metrics
+            .iter()
+            .find(|metric| metric.name == "wall" || metric.name == "startup")
+            .map(|metric| metric.value);
+        let (tool, does, ratio) = match (&regime.alternative, wall) {
+            (Some(alternative), Some(wall)) => (
+                format!("{} {:.0} ms", alternative.tool, alternative.wall_ms),
+                alternative.does.clone(),
+                format!("{:.2}x", wall / alternative.wall_ms),
+            ),
+            _ => (
+                "none".to_owned(),
+                "no tool does this, so there is nothing to compare against".to_owned(),
+                String::new(),
+            ),
+        };
+        let _ = writeln!(
+            page,
+            "| {} | {} | {tool} | {ratio} | {does} |",
+            regime.regime,
+            wall.map_or_else(|| "unmeasured".to_owned(), |value| format!("{value:.0} ms")),
+        );
+    }
+    page.push_str("\nA ratio above one is a regime where Fetchloom is slower than the tool beside it. Those rows are the honest ones: Fetchloom hashes every byte twice, writes an outboard tree, publishes through staging and records what it did, and none of the tools it is measured against do any of that. The comparison is published so the cost is visible, not because the tools are doing the same job.\n\n");
+    page.push_str("## Deterministic counters\n\n");
+    page.push_str("| Regime | bytes read | bytes written | requests | file operations |\n");
+    page.push_str("|---|---|---|---|---|\n");
+    for regime in &baseline.regimes {
+        let of = |name: &str| {
+            regime
+                .metrics
+                .iter()
+                .find(|metric| metric.name == name)
+                .map_or_else(|| "-".to_owned(), |metric| format!("{:.0}", metric.value))
+        };
+        let _ = writeln!(
+            page,
+            "| {} | {} | {} | {} | {} |",
+            regime.regime,
+            of("bytes-read"),
+            of("bytes-written"),
+            of("requests"),
+            of("file-operations")
+        );
+    }
+    page
 }

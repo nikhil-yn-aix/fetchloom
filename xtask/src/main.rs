@@ -42,7 +42,7 @@ fn main() -> ExitCode {
 const USAGE: &str = "\
 usage:
   cargo xtask check-comments
-  cargo xtask bench [--save-baseline] [--compare] [--iterations <n>]
+  cargo xtask bench [--save-baseline] [--compare] [--publish] [--iterations <n>]
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
   cargo xtask profile [--rounds <n>]
@@ -105,6 +105,7 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
         .iter()
         .any(|argument| argument == "--save-baseline");
     let compare = arguments.iter().any(|argument| argument == "--compare");
+    let publish = arguments.iter().any(|argument| argument == "--publish");
     let iterations = argument_value(arguments, "--iterations")
         .and_then(|value| value.parse().ok())
         .unwrap_or(9);
@@ -151,12 +152,31 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
             );
         }
     }
-    match bench::scanner_lane(&std::env::temp_dir().join("fetchloom-bench-lane")) {
-        Ok(lane) => println!("many-small-files {lane}"),
-        Err(error) => println!("many-small-files lane unknown: {}", error.next_action()),
+    let lane = match bench::scanner_lane(&std::env::temp_dir().join("fetchloom-bench-lane")) {
+        Ok(lane) => lane,
+        Err(error) => format!("lane unknown: {}", error.next_action()),
+    };
+    println!("many-small-files {lane}");
+    if publish {
+        let page = workspace.join("docs").join("benchmarks.md");
+        if let Err(error) = std::fs::write(&page, bench::publish(&current, &lane)) {
+            eprintln!("could not write {}: {error}", page.display());
+            return ExitCode::from(1);
+        }
+        println!("published to {}", page.display());
     }
 
     let path = baseline_path(workspace, &current.target);
+    record_and_gate(&mut current, &path, save, compare, gate_timing)
+}
+
+fn record_and_gate(
+    current: &mut bench::Baseline,
+    path: &Path,
+    save: bool,
+    compare: bool,
+    gate_timing: bool,
+) -> ExitCode {
     if save {
         if !gate_timing {
             current.regimes.iter_mut().for_each(|regime| {
@@ -168,7 +188,7 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
                 "timing metrics were not recorded, because a timing baseline is only valid from the machine it was measured on, under cargo xtask verify"
             );
         }
-        if let Err(error) = bench::save(&current, &path) {
+        if let Err(error) = bench::save(current, path) {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
@@ -176,7 +196,7 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
     }
     if compare {
         if !path.exists() {
-            if let Err(error) = bench::save(&current, &path) {
+            if let Err(error) = bench::save(current, path) {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
@@ -186,14 +206,14 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
             );
             return ExitCode::SUCCESS;
         }
-        let baseline = match bench::load(&path) {
+        let baseline = match bench::load(path) {
             Ok(baseline) => baseline,
             Err(error) => {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
         };
-        if let Err(error) = bench::compare(&baseline, &current) {
+        if let Err(error) = bench::compare(&baseline, current) {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
