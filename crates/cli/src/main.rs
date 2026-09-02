@@ -24,7 +24,7 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
-use fetchloom_engine::seam::policy::{IoMode, Policy as _};
+use fetchloom_engine::seam::policy::{IoMode, Policy};
 use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::work::WorkCounter;
@@ -213,7 +213,17 @@ fn run_repair(
     sequence: &Sequence,
 ) -> ExitCode {
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
-    if let Err(error) = run::allowed_offline(reference, resolved.offline.value) {
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    if let Err(error) = run::allowed_offline(reference, &policy) {
         return reporter.report(&error);
     }
     let root = match run::resolve_path(&resolved.cache_dir.value) {
@@ -503,7 +513,17 @@ fn run_get(
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     let remote = run::is_remote(reference);
-    let (source, named) = match resolve_places(reference, transfer, resolved) {
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    let (source, named) = match resolve_places(reference, transfer, &policy) {
         Ok(places) => places,
         Err(error) => {
             return reporter.report(&error);
@@ -520,16 +540,6 @@ fn run_get(
         Err(error) => return reporter.report(&error),
     };
 
-    let environment = ProcessEnvironment;
-    let policy = policy::CommandLinePolicy::new(
-        resolved.clone(),
-        transfer,
-        Streams::detect(),
-        parsed.global.yes,
-        &environment,
-        observer,
-        sequence,
-    );
     let Opened {
         processor,
         work,
@@ -753,7 +763,17 @@ fn run_plan(
     }
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
-    let (source, named) = match resolve_places(reference, transfer, resolved) {
+    let environment = ProcessEnvironment;
+    let policy = policy::CommandLinePolicy::new(
+        resolved.clone(),
+        transfer,
+        Streams::detect(),
+        parsed.global.yes,
+        &environment,
+        observer,
+        sequence,
+    );
+    let (source, named) = match resolve_places(reference, transfer, &policy) {
         Ok(places) => places,
         Err(error) => return reporter.report(&error),
     };
@@ -773,16 +793,6 @@ fn run_plan(
         Ok(pinned) => pinned,
         Err(error) => return reporter.report(&error),
     };
-    let environment = ProcessEnvironment;
-    let policy = policy::CommandLinePolicy::new(
-        resolved.clone(),
-        transfer,
-        Streams::detect(),
-        parsed.global.yes,
-        &environment,
-        observer,
-        sequence,
-    );
     let root = match run::resolve_path(policy.cache_directory().unwrap_or(Path::new("."))) {
         Ok(root) => root,
         Err(error) => return reporter.report(&error),
@@ -913,9 +923,7 @@ fn run_apply(
             observer,
             sequence,
         )
-    } else if let Err(error) =
-        run::allowed_offline(artifact.source.as_str(), resolved.offline.value)
-    {
+    } else if let Err(error) = run::allowed_offline(artifact.source.as_str(), &policy) {
         return reporter.report(&error);
     } else {
         run::materialize_remote(
@@ -1040,9 +1048,9 @@ fn materialize(
 fn resolve_places(
     reference: &str,
     transfer: &surface::TransferFlags,
-    resolved: &settings::Settings,
+    policy: &dyn Policy,
 ) -> Result<(PathBuf, Option<PathBuf>), fetchloom_engine::error::Error> {
-    run::allowed_offline(reference, resolved.offline.value)?;
+    run::allowed_offline(reference, policy)?;
     let source = if run::is_remote(reference) {
         PathBuf::from(run::remote_name(reference))
     } else {

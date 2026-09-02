@@ -28,14 +28,21 @@ use fetchloom_cli::policy::{CommandLinePolicy, token_variable};
 use fetchloom_cli::settings::{self, Environment};
 use fetchloom_cli::surface::{GlobalFlags, TransferFlags};
 use fetchloom_cli::terminal::Streams;
+use fetchloom_engine::credential::Credential;
 use fetchloom_engine::credential::{Necessity, ProviderHelp};
+use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::license::{Acceptance, License};
+use fetchloom_engine::limits::{Bandwidth, Limits};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::reference::Host;
-use fetchloom_engine::seam::policy::Policy;
+use fetchloom_engine::seam::policy::{IoMode, Policy};
+use fetchloom_engine::trust::TrustClass;
+use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_faults::RecordingObserver;
+use std::num::NonZeroU32;
+use std::path::Path;
 
 mod support;
 
@@ -343,5 +350,94 @@ fn a_gain_below_the_offer_threshold_produces_no_prompt_and_no_message() {
         observer.names().is_empty(),
         "a gain below the threshold produced {:?}",
         observer.names()
+    );
+}
+
+/// A policy that answers `offline` from itself and carries no settings at all,
+/// so a refusal under it can only have come from the seam.
+#[derive(Debug)]
+struct SeamOnly {
+    offline: bool,
+    limits: Limits,
+}
+
+impl Policy for SeamOnly {
+    fn offline(&self) -> bool {
+        self.offline
+    }
+    fn limits(&self) -> &Limits {
+        &self.limits
+    }
+    fn verification(&self) -> VerificationPolicy {
+        VerificationPolicy::Fingerprint
+    }
+    fn durability(&self) -> DurabilityTier {
+        DurabilityTier::Normal
+    }
+    fn cache_directory(&self) -> Option<&Path> {
+        None
+    }
+    fn concurrency(&self) -> Option<NonZeroU32> {
+        None
+    }
+    fn per_host(&self) -> Option<NonZeroU32> {
+        None
+    }
+    fn bandwidth(&self) -> Option<Bandwidth> {
+        None
+    }
+    fn aggressive(&self) -> bool {
+        false
+    }
+    fn adapts(&self) -> bool {
+        true
+    }
+    fn io(&self) -> IoMode {
+        IoMode::Auto
+    }
+    fn accepts(&self, _class: TrustClass) -> bool {
+        true
+    }
+    fn credential(
+        &self,
+        _host: &Host,
+        _necessity: Necessity,
+    ) -> Result<Option<Credential>, fetchloom_engine::error::Error> {
+        Ok(None)
+    }
+    fn offer_credential(
+        &self,
+        _help: &ProviderHelp,
+        _projected_gain: std::time::Duration,
+    ) -> Result<Option<Credential>, fetchloom_engine::error::Error> {
+        Ok(None)
+    }
+    fn terms(&self, _license: &License) -> Result<Acceptance, fetchloom_engine::error::Error> {
+        Ok(Acceptance::Asserted)
+    }
+}
+
+#[test]
+fn the_seam_is_what_refuses_a_network_reference_offline() {
+    let refusing = SeamOnly {
+        offline: true,
+        limits: Limits::default(),
+    };
+    let failed = fetchloom_cli::run::allowed_offline("https://example.invalid/object", &refusing)
+        .expect_err("an offline policy let a network reference through");
+    assert_eq!(failed.kind(), ErrorKind::PolicyOffline);
+    assert_eq!(ExitCode::from(failed.kind().layer()), ExitCode::Policy);
+
+    let permitting = SeamOnly {
+        offline: false,
+        limits: Limits::default(),
+    };
+    assert!(
+        fetchloom_cli::run::allowed_offline("https://example.invalid/object", &permitting).is_ok(),
+        "a policy that permits the network still refused"
+    );
+    assert!(
+        fetchloom_cli::run::allowed_offline("file:///tmp/object", &refusing).is_ok(),
+        "an offline policy refused a reference that needs no network"
     );
 }

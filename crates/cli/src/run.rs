@@ -24,6 +24,7 @@ use fetchloom_engine::reconcile::{ReconcileOutcome, Reconciled, reconcile};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
+use fetchloom_engine::seam::policy::Policy;
 use fetchloom_engine::selection::{Candidate, Selection};
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
@@ -1233,8 +1234,8 @@ fn apply_selection(
 ///
 /// Fails with a policy failure when the reference names a network location and
 /// the run forbids network activity.
-pub fn allowed_offline(reference: &str, offline: bool) -> Result<(), Error> {
-    if !offline {
+pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error> {
+    if !policy.offline() {
         return Ok(());
     }
     let network = reference.contains("://") && !reference.starts_with("file://");
