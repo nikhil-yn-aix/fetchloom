@@ -374,6 +374,8 @@ If never fixed: the event stream carries no timing at all, so the live view and
 
 **Disposition.** Deferred with a statement, at `ad5cd0b`. Policy is asked for the cache directory, the verification and durability settings, and whether it accepts a trust class, and all four are read. What it does not do is arbitrate between two candidates, which is what phase 7 needs it for. It is a settings carrier today, and phase 7 either widens it or admits it is one.
 
+**Widened at `aa19f31`.** `crates/cli/src/main.rs` now builds a `CommandLinePolicy` in every command that touches a run (`main.rs:436,524,777,853`), where before nothing built one outside `crates/cli/tests/policy.rs`. Production code reads eleven of the trait's fifteen methods off it: `cache_directory`, `verification`, `durability`, `accepts`, `limits`, `concurrency`, `per_host`, `bandwidth`, `aggressive`, `adapts` and `io` all have a call site in `main.rs`. `offline`, `credential`, `offer_credential` and `terms` still have none outside `policy.rs`'s own tests, so `policy.credential_missing`, `credential.required`, `credential.offer` and `credential.declined` remain unreached in a run, as F8 already says. The commit's own description names what changed: `--concurrency`, `--per-host` and `--bandwidth` are resolved through the seam and given a per-host controller that adapts from what the cache recorded, which is the seam's first arbitrating caller and the thing this finding said was missing. What is not closed is candidate arbitration in the sense phase 7 needs -- choosing between two sources -- because there is still one source until phase 7 ships it. The settings half of this finding is closed; the arbitration half is confirmed still open and is phase 7's, not phase 6's.
+
 `crates/cli/src/policy.rs:92` is the only implementation of
 `fetchloom_engine::seam::policy::Policy`. `CommandLinePolicy` is constructed
 nowhere but `crates/cli/tests/policy.rs`, nine times. Every one of the trait's
@@ -479,6 +481,8 @@ happens, and scripts branching on 130 never see it.
 ### F14. Disk accounting is contracted before the transfer and happens during it. MEDIUM
 
 **Disposition.** Deferred. `plan` states the requirement per volume from the size the lock pins, which is what contracts.md asks, and no sentence requires `get` to check free space first. What is wrong is smaller: the plan reports `staging` and `destination` as zero for an archive whose expanded size is unknown, while listing `expanded` under `unknown`, and contracts.md:265 says a field is never estimated into a number. Clearing it changes the shape of a portable artifact, which is additive-only, so it is a decision rather than an edit.
+
+**Fixed at `c83a6a8`.** The decision was made and the shape changed. `crates/cli/src/planning.rs` now leaves `staging` and `destination` without a `bytes` field, and `PlanArtifact::unknown` names both alongside `expanded`, exactly as it names `expanded` alone today. `partial` and `cache` still state a number, because they come from the size the lock pins rather than from the expanded length. contracts.md:270 was amended in the same commit to say so. `crates/cli/tests/tune.rs:466 a_plan_lists_every_field_no_source_stated_and_reports_none_of_them_as_zero` asserts `disk.staging.bytes` and `disk.destination.bytes` are `null` and both names appear in `unknown`, and that `partial` and `cache` are still numbers. The pre-flight check this finding also named is still nowhere; that half stays open, and nothing in phase 6 claimed it.
 
 contracts.md Disk accounting: "Four requirements are computed separately ...
 Requirements on a shared volume are summed and checked against that volume.
@@ -682,6 +686,8 @@ reflinks, and no benchmark regime names it.
 ### F22. Six error kinds are produced by no test, and six contract rows have none. MEDIUM
 
 **Disposition.** Fixed at `b7a8224`. Six of the seven kinds with no test have one, including `policy.credential_invalid`, which is now produced where contracts.md says it should be. `source.identity_changed` is still produced by nothing and needs a human: the seam is never given the identity it would compare against, and clearing it needs either a contract sentence or a widened seam.
+
+**The seventh closed at `f5dc98d`.** `source.identity_changed` is now produced by `crates/engine/src/transfer.rs rung_for`, and the ruling is the rung the transfer stood on. Rungs three, four and five treat a validator that no longer matches as ordinary: the partial is discarded, the transfer restarts from zero, and a `degrade` names the rung it stood on and the rung it fell to (`transfer.rs:268-276`). Rung two is different by construction: it is reached only when the source stated an immutable content address or an immutable version identity, and if the current response states a *different* one under that same immutable promise, the promise itself was false, so the transfer fails with `source.identity_changed`, is not retryable, and exits 20. A source that has simply stopped stating an immutable identity has broken no promise and falls to `NoValidator` like any other rung, which restarts rather than fails. `crates/engine/tests/transfer.rs an_immutable_identity_that_moved_is_terminal_rather_than_a_restart` and `a_content_address_that_moved_is_terminal_rather_than_a_restart` hold the terminal case and assert `ErrorKind::SourceIdentityChanged`, `!retryable()`, and exit code 20 (`ExitCode::Network`, `outcome.rs:40`); `a_source_that_stopped_stating_an_immutable_identity_restarts_rather_than_failing` holds the non-promise case. `crates/cli/tests/transfer.rs` exercises the same shape at the command surface.
 
 `crates/engine/tests/contracts.rs:102`,
 `every_error_kind_is_reachable_and_carries_the_required_fields`, constructs each
@@ -928,6 +934,39 @@ Fetchloom on the same 1024-file corpus, all 1024 distinct:
 Without the cache Fetchloom is at the floor: 1,159 ms against 834 ms for `cp -r`,
 1.39x, for a run that also hashes every byte with two algorithms and publishes
 through staging. There is nothing to find there.
+
+**Retracted in phase 6.** That `--no-cache` run was the one the finding below
+describes: it skipped extraction, and its file operations were uncounted, so
+1,159 ms is the cost of a run that did not do the work. Re-measured at `f5dc98d`
+on the corrected binary, same volume, same 1024-file corpus all distinct, median
+of three runs each:
+
+| | wall | file operations |
+|---|---|---|
+| `cp -r` of the tree | 1,190 ms | |
+| `tar -cf` of the tree | 2,801 ms | |
+| `--no-cache` | 8,278 ms | 3,093 |
+| cache cold | 9,011 ms | |
+| cache warm | 1,815 ms | 1,027 |
+
+So the floor comparison is 7.0x, not 1.39x, and the conclusion that there is
+nothing to find there does not survive it. What the corrected number exposes is
+not new: a `--no-cache` run now takes the same path a cached run takes, which
+means three file operations per file against `cp -r`'s one, and 12,720 bytes
+written for 6,144 read. That is the double write already recorded under "Every
+cold local fetch writes the bytes twice", deferred with its reason at
+decisions.md:5976. This measurement is its cost on this regime.
+
+It is not a tuning problem and phase 6 does not close it. No concurrency,
+protocol, or write-path choice removes a write that the store performs by
+design; closing it means the store publishing to the destination directly for a
+local source, which is a Store change and a contract question about what
+`--no-cache` guarantees. Phase 6 records the number and leaves the finding open.
+
+Note also that the cached warm path at 1,027 operations is now cheaper per file
+than `--no-cache` at 3,093, which inverts the framing this section was written
+under. The packing work at `b12d66d` is what moved it: cache cold is 9,011 ms
+here against the 18,882 ms recorded below.
 
 With the cache it costs **18.4 ms per object** for **five file operations each**.
 The operation count is exact and linear: 5n + 18 for every n measured (1 object
@@ -1345,6 +1384,22 @@ plan shape, F22's `source.identity_changed`), two need a later phase (F10's
 arbitration, part of F8 and F19), and two need a measurement or a machine this
 matrix does not have (F21, F26).
 
+**Phase 6, against this table.** Both human decisions this table lists as owed
+got made. F14's plan shape: `c83a6a8` leaves `staging` and `destination` without
+a `bytes` field and lists both in `unknown`, and contracts.md:270 was amended in
+the same commit. F22's `source.identity_changed`: `f5dc98d` rules that rung two
+alone is terminal, ruled by `rung_for` in `crates/engine/src/transfer.rs`, and
+the seven-of-seven producing-test set F22 was one short of is now complete. Of
+F10, the settings half is closed at `aa19f31` -- `CommandLinePolicy` is now built
+by every run in `crates/cli/src/main.rs` rather than by tests alone, and eleven of
+its fifteen methods have a production caller -- and the arbitration half this
+table already routed to phase 7 is confirmed still open there: there is one
+Source implementation until phase 7 ships a second, so nothing exists yet for
+Policy to arbitrate between. Twenty-four fixed or closed, four deferred, as of
+`f5dc98d`: F8's remaining six events and F19's two limits still wait on phases 7
+and 8, F10's arbitration waits on phase 7, and F21 and F26 still wait on a
+measurement or a machine this matrix does not have.
+
 Two things were done that no finding asked for. Packing, which the audit's
 closing section said the measurement had settled, is at `a9848c5` along with the
 one lookup that keeps it one way. Windows on ARM compiles at `80c5253`, which
@@ -1378,7 +1433,15 @@ impossible.
 **`--threads 0` is silently ignored and `--threads 99999` clamps without
 saying.** `NonZeroUsize::new(0)` returns `None`, which reads as "not requested"
 rather than as an error, and contracts.md says a ceiling above the detected
-budget is clamped and the clamp reported. Not fixed.
+budget is clamped and the clamp reported. Fixed at `aa19f31`. The flag's own
+`clap::value_parser!(u32).range(1..)` at `crates/cli/src/surface.rs:69` now
+rejects `0` before it ever reaches a `NonZeroUsize`, which is a usage error and
+exits 2 naming `--threads`. A value above the detected budget still clamps, and
+now says so twice: a `degrade` names the requested ceiling and the budget it was
+held to, and `explain threads` reports the result as clamped rather than as the
+plain number. `crates/cli/tests/tune.rs a_thread_ceiling_of_zero_is_a_usage_error`
+and `a_thread_ceiling_above_the_detected_budget_is_clamped_and_says_so` hold both
+halves.
 
 **`resource.limit` was produced only where `Processor::new` fails,** which is
 effectively unreachable. Now produced by the redirect limit and the listing
