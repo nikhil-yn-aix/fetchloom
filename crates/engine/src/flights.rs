@@ -10,7 +10,7 @@ use crate::tuning::{Ceilings, Controller};
 /// controller each host's count moves with.
 pub struct Flights<'a> {
     ceilings: Ceilings,
-    start: &'a (dyn Fn(&str) -> Controller + Sync),
+    start: Box<dyn Fn(&str) -> Controller + Sync + 'a>,
     state: Mutex<State>,
     room: Condvar,
 }
@@ -31,10 +31,10 @@ impl<'a> Flights<'a> {
     /// Holds every transfer inside these ceilings, starting each host's
     /// controller with what `start` returns for it.
     #[must_use]
-    pub fn new(ceilings: Ceilings, start: &'a (dyn Fn(&str) -> Controller + Sync)) -> Self {
+    pub fn new(ceilings: Ceilings, start: impl Fn(&str) -> Controller + Sync + 'a) -> Self {
         Self {
             ceilings,
-            start,
+            start: Box::new(start),
             state: Mutex::new(State {
                 in_flight: 0,
                 hosts: HashMap::new(),
@@ -202,4 +202,24 @@ pub struct Produced<Out> {
     pub outputs: Vec<Out>,
     /// The failure of the first item in order that failed.
     pub failure: Option<Error>,
+}
+
+impl Flights<'_> {
+    /// Returns how many more transfers this run may hold in flight for a host,
+    /// which is what source selection reads as its politeness headroom.
+    #[must_use]
+    pub fn headroom(&self, host: &str) -> u32 {
+        let mut state = self.locked();
+        let permitted = {
+            let held = self.entry(&mut state, host);
+            let count = held.count;
+            let permitted = held
+                .controller
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .permitted();
+            permitted.saturating_sub(count)
+        };
+        permitted.min(self.ceilings.global.get().saturating_sub(state.in_flight))
+    }
 }

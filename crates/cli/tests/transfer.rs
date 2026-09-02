@@ -32,6 +32,7 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::event::{EventPayload, Sequence};
+use fetchloom_engine::flights::Flights;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::pool::Processor;
@@ -84,7 +85,7 @@ struct Harness {
     degradations: DegradeQueue,
     observer: RecordingObserver,
     sequence: Sequence,
-    controller: Mutex<Controller>,
+    flights: Flights<'static>,
 }
 
 impl Harness {
@@ -112,7 +113,9 @@ impl Harness {
             degradations: DegradeQueue::new(),
             observer: RecordingObserver::new(),
             sequence: Sequence::new(),
-            controller: Mutex::new(Controller::start(None, NonZeroU32::MIN)),
+            flights: Flights::new(one_at_a_time(), |_: &str| {
+                Controller::fixed(NonZeroU32::MIN)
+            }),
         }
     }
 
@@ -126,9 +129,10 @@ impl Harness {
             measurement: &|_location: &str| None,
             observer: &self.observer,
             sequence: &self.sequence,
-            controller: &self.controller,
+            flights: &self.flights,
             meter: None,
-            credential: None,
+            credential: &|_: &str| Ok(None),
+            offer: &|_: &str, _: std::time::Duration| {},
         }
     }
 
@@ -251,20 +255,18 @@ fn a_terminal_status_is_not_retried() {
         "it waited before giving up"
     );
 }
-
 #[test]
-fn a_transfer_leaves_a_dead_source_for_the_next_one() {
+fn a_transfer_leaves_a_source_that_served_the_wrong_bytes_for_the_next_one() {
     let bytes = object(4096);
-    let dead = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Status {
-        code: 403,
-        retry_after: None,
-    }]))
+    let wrong = TestServer::start(
+        Script::serving(bytes.clone()).replying(vec![Reply::Flipped { offset: 0 }]),
+    )
     .unwrap();
     let alive = TestServer::start(Script::serving(bytes.clone())).unwrap();
     let harness = Harness::new();
 
     let locations = vec![
-        format!("{}/object", dead.origin()),
+        format!("{}/object", wrong.origin()),
         format!("{}/object", alive.origin()),
     ];
     let done = harness
@@ -283,17 +285,16 @@ fn a_transfer_leaves_a_dead_source_for_the_next_one() {
 #[test]
 fn a_failover_records_a_degradation_naming_both_sources_and_the_reason() {
     let bytes = object(4096);
-    let dead = TestServer::start(Script::serving(Vec::new()).replying(vec![Reply::Status {
-        code: 403,
-        retry_after: None,
-    }]))
+    let wrong = TestServer::start(
+        Script::serving(bytes.clone()).replying(vec![Reply::Flipped { offset: 0 }]),
+    )
     .unwrap();
     let alive = TestServer::start(Script::serving(bytes.clone())).unwrap();
     let harness = Harness::new();
 
-    let dead_location = format!("{}/object", dead.origin());
+    let wrong_location = format!("{}/object", wrong.origin());
     let alive_location = format!("{}/object", alive.origin());
-    let locations = vec![dead_location.clone(), alive_location.clone()];
+    let locations = vec![wrong_location.clone(), alive_location.clone()];
     let done = harness
         .transfer()
         .run(Some(digest_of(&bytes)), &nothing_prior, &locations)
@@ -301,12 +302,12 @@ fn a_failover_records_a_degradation_naming_both_sources_and_the_reason() {
     assert_eq!(done.bytes_transferred, bytes.len() as u64);
 
     let fell = harness.degradations.take();
-    let dead_safe = SafeUrl::new(&dead_location).to_string();
+    let wrong_safe = SafeUrl::new(&wrong_location).to_string();
     let alive_safe = SafeUrl::new(&alive_location).to_string();
     assert!(
         fell.iter()
-            .any(|entry| entry.requested.contains(&dead_safe) && entry.used.contains(&alive_safe)),
-        "no degradation named the source left ({dead_safe}) and the source taken ({alive_safe}): {fell:?}"
+            .any(|entry| entry.requested.contains(&wrong_safe) && entry.used.contains(&alive_safe)),
+        "no degradation named the source left ({wrong_safe}) and the source taken ({alive_safe}): {fell:?}"
     );
 }
 
@@ -441,9 +442,10 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
         measurement: &|_location: &str| None,
         observer: &harness.observer,
         sequence: &harness.sequence,
-        controller: &harness.controller,
+        flights: &harness.flights,
         meter: None,
-        credential: None,
+        credential: &|_: &str| Ok(None),
+        offer: &|_: &str, _: std::time::Duration| {},
     };
 
     let done = transfer
@@ -874,7 +876,13 @@ fn a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_by
         inner: &collapsing.cache,
         buffers: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
-    let controller = Mutex::new(Controller::start(Some(4), NonZeroU32::new(8).unwrap()));
+    let flights = Flights::new(
+        fetchloom_engine::tuning::Ceilings {
+            global: NonZeroU32::new(8).unwrap(),
+            per_host: NonZeroU32::new(8).unwrap(),
+        },
+        |_: &str| Controller::start(Some(4), NonZeroU32::new(8).unwrap()),
+    );
     let slow = TestServer::start(Script::serving(bytes.clone())).unwrap();
     let done = Transfer {
         store: &volume,
@@ -885,15 +893,21 @@ fn a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_by
         measurement: &|_location| None,
         observer: &collapsing.observer,
         sequence: &collapsing.sequence,
-        controller: &controller,
+        flights: &flights,
         meter: None,
-        credential: None,
+        credential: &|_: &str| Ok(None),
+        offer: &|_: &str, _: std::time::Duration| {},
     }
     .run(Some(digest_of(&bytes)), &nothing_prior, &at(&slow))
     .unwrap();
 
     assert!(
-        controller.lock().unwrap().permitted() < 4,
+        flights
+            .controller(fetchloom_engine::reference::Host::of_location(&at(&slow)[0]).as_str())
+            .lock()
+            .unwrap()
+            .permitted()
+            < 4,
         "a volume that collapsed under the transfer did not reduce what is in flight"
     );
     assert_eq!(
@@ -1052,4 +1066,13 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
         !destination.exists(),
         "a destination was published for a selection that matched nothing"
     );
+}
+
+/// Ceilings that hold one transfer in flight, which is what a harness driving
+/// one transfer directly is bounded by.
+fn one_at_a_time() -> fetchloom_engine::tuning::Ceilings {
+    fetchloom_engine::tuning::Ceilings {
+        global: std::num::NonZeroU32::MIN,
+        per_host: std::num::NonZeroU32::MIN,
+    }
 }

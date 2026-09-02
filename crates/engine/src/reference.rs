@@ -79,3 +79,25 @@ impl fmt::Display for Host {
         f.write_str(&self.0)
     }
 }
+
+impl Host {
+    /// Returns the host a location names, which is what a measurement, a
+    /// credential, and an in-flight count are all filed under.
+    #[must_use]
+    pub fn of_location(location: &str) -> Self {
+        let Some(after) = location.split_once("://") else {
+            return Self(String::new());
+        };
+        let authority = after.1.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = authority.rsplit('@').next().unwrap_or_default();
+        if let Some(literal) = host.strip_prefix('[') {
+            return Self(
+                literal
+                    .split_once(']')
+                    .map_or(literal, |(address, _)| address)
+                    .to_owned(),
+            );
+        }
+        Self(host.split(':').next().unwrap_or_default().to_owned())
+    }
+}

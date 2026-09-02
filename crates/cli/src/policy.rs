@@ -278,13 +278,6 @@ impl Policy for CommandLinePolicy<'_> {
         if self.already_declined(&help.provider) {
             return Ok(None);
         }
-        if !self.streams.can_prompt() {
-            self.emit(EventPayload::CredentialDeclined {
-                provider: help.provider.clone(),
-            });
-            self.remember_declined(&help.provider);
-            return Ok(None);
-        }
         self.emit(EventPayload::CredentialOffer {
             provider: help.provider.clone(),
         });
@@ -293,6 +286,18 @@ impl Policy for CommandLinePolicy<'_> {
             help.provider,
             human_duration(projected_gain)
         );
+        if !self.streams.can_prompt() {
+            eprintln!(
+                "this run cannot ask, so it is using the alternative source instead. To take the \
+                 faster one next time:"
+            );
+            print_help(help);
+            self.emit(EventPayload::CredentialDeclined {
+                provider: help.provider.clone(),
+            });
+            self.remember_declined(&help.provider);
+            return Ok(None);
+        }
         print_help(help);
         if self.prompter.confirm("set this up now? [y/N]") {
             return Ok(None);

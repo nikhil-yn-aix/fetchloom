@@ -268,7 +268,7 @@ fn the_token_variable_is_named_for_the_host() {
 }
 
 #[test]
-fn an_optional_credential_is_never_offered_without_a_terminal() {
+fn an_optional_credential_without_a_terminal_is_reported_as_unused_rather_than_asked_about() {
     let environment = FakeEnvironment::default();
     let observer = RecordingObserver::new();
     let sequence = Sequence::new();
@@ -297,8 +297,14 @@ fn an_optional_credential_is_never_offered_without_a_terminal() {
         .offer_credential(&help, std::time::Duration::from_secs(600))
         .unwrap();
     assert!(offered.is_none());
-    assert!(observer.names().contains(&"credential.declined"));
-    assert!(!observer.names().contains(&"credential.offer"));
+    assert!(
+        observer.names().contains(&"credential.offer"),
+        "a run that cannot ask never said the opportunity existed"
+    );
+    assert!(
+        observer.names().contains(&"credential.declined"),
+        "a run that cannot ask did not record the opportunity as unused"
+    );
 }
 
 #[test]

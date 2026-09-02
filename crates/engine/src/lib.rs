@@ -2,6 +2,7 @@
 
 pub mod adapter;
 pub mod cancel;
+pub mod candidate;
 pub mod canonical;
 pub mod capability;
 pub mod conformance;

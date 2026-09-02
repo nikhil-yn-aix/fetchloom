@@ -56,8 +56,7 @@ fn fixed(at: u32) -> impl Fn(&str) -> Controller + Sync {
 
 #[test]
 fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
-    let start = fixed(3);
-    let flights = Flights::new(ceilings(8, 3), &start);
+    let flights = Flights::new(ceilings(8, 3), fixed(3));
     let seen = Watermark::default();
     let items: Vec<u32> = (0..16).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
@@ -87,8 +86,7 @@ fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
 
 #[test]
 fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
-    let start = fixed(4);
-    let flights = Flights::new(ceilings(2, 4), &start);
+    let flights = Flights::new(ceilings(2, 4), fixed(4));
     let seen = Watermark::default();
     let items: Vec<u32> = (0..12).collect();
     let hosts: Vec<String> = items
@@ -113,8 +111,7 @@ fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
 
 #[test]
 fn one_ceiling_admits_one_job_at_a_time() {
-    let start = fixed(1);
-    let flights = Flights::new(ceilings(1, 1), &start);
+    let flights = Flights::new(ceilings(1, 1), fixed(1));
     let seen = Watermark::default();
     let items: Vec<u32> = (0..6).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
@@ -135,8 +132,7 @@ fn one_ceiling_admits_one_job_at_a_time() {
 
 #[test]
 fn the_failure_reported_is_the_first_in_order_however_the_jobs_finished() {
-    let start = fixed(8);
-    let flights = Flights::new(ceilings(8, 8), &start);
+    let flights = Flights::new(ceilings(8, 8), fixed(8));
     let items: Vec<u32> = (0..8).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
@@ -166,8 +162,7 @@ fn the_failure_reported_is_the_first_in_order_however_the_jobs_finished() {
 
 #[test]
 fn nothing_after_the_first_failure_is_attempted() {
-    let start = fixed(1);
-    let flights = Flights::new(ceilings(1, 1), &start);
+    let flights = Flights::new(ceilings(1, 1), fixed(1));
     let attempted = Arc::new(Mutex::new(Vec::new()));
     let items: Vec<u32> = (0..8).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();

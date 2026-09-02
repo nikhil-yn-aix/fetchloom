@@ -29,6 +29,7 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{ErrorKind, Layer};
 use fetchloom_engine::event::Sequence;
+use fetchloom_engine::flights::Flights;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::outcome::ExitCode;
@@ -75,7 +76,7 @@ struct Harness {
     degradations: DegradeQueue,
     observer: RecordingObserver,
     sequence: Sequence,
-    controller: std::sync::Mutex<Controller>,
+    flights: Flights<'static>,
 }
 
 impl Harness {
@@ -103,7 +104,9 @@ impl Harness {
             degradations: DegradeQueue::new(),
             observer: RecordingObserver::new(),
             sequence: Sequence::new(),
-            controller: std::sync::Mutex::new(Controller::start(None, std::num::NonZeroU32::MIN)),
+            flights: Flights::new(one_at_a_time(), |_: &str| {
+                Controller::fixed(std::num::NonZeroU32::MIN)
+            }),
         }
     }
 
@@ -121,9 +124,10 @@ impl Harness {
             measurement: &|_location: &str| None,
             observer: &self.observer,
             sequence: &self.sequence,
-            controller: &self.controller,
+            flights: &self.flights,
             meter: None,
-            credential: None,
+            credential: &|_: &str| Ok(None),
+            offer: &|_: &str, _: std::time::Duration| {},
         }
     }
 }
@@ -401,4 +405,13 @@ fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
         None,
     );
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
+}
+
+/// Ceilings that hold one transfer in flight, which is what a harness driving
+/// one transfer directly is bounded by.
+fn one_at_a_time() -> fetchloom_engine::tuning::Ceilings {
+    fetchloom_engine::tuning::Ceilings {
+        global: std::num::NonZeroU32::MIN,
+        per_host: std::num::NonZeroU32::MIN,
+    }
 }

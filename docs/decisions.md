@@ -7220,3 +7220,86 @@ and never starts a second transfer.
 Sources: contracts.md Flags, Determinism, Partial success, Cancellation;
 `crates/engine/src/flights.rs`; `crates/cache/src/pack.rs`;
 `crates/cli/tests/concurrent.rs`; `crates/cache/tests/concurrency.rs`.
+
+## Phase 7.5. The probe phase, and the four readings it needed
+
+Question: contracts.md Source selection describes probing candidates in parallel
+up to the probe limit and scoring them on seven inputs in fixed priority. No such
+phase existed: `order_candidates` sorted on two recorded measurements and the run
+tried the result in order. Five of the seven inputs were read by nothing,
+`probed_candidates` bounded nothing, and `source.probe`, `source.selected`,
+`credential.offer` and `credential.declined` were emitted by no production code.
+
+`fetchloom_engine::candidate` scores, and `Transfer::select` probes. The order is
+the contract's order and nothing was added to it or moved within it.
+
+Four things contracts does not state, decided here.
+
+A source that stated nothing about cost is neither preferred nor refused. Cost
+separates two candidates only when both stated it; otherwise neither scores and
+selection falls through to politeness headroom. The other absent-input rule
+contracts does write down, that a host with no measurement never goes ahead of
+one with a measurement, does not transfer: applying it to cost would rank a
+source known to charge the requester ahead of one that said nothing, and reading
+silence as evidence in either direction is a claim contracts does not make. This
+one was put to the user rather than chosen.
+
+A run with one candidate spends no probe on it. contracts says the chosen source
+and the reason are recorded, and they are, with the reason that the manifest
+named one source. What it does not say is that a request must be spent deciding
+between one thing. Probing anyway would double the requests of every
+single-source fetch and decide nothing, and the deterministic request counts the
+benchmark gates would have moved for no gain.
+
+The probe limit bounds how many candidates are probed, not how many probes run at
+once. Candidates past the limit keep their manifest order behind the probed ones
+and are still available to failover. `Limits::probed_candidates` already carried
+the docstring "Most candidate sources probed in parallel", which reads the same
+way.
+
+The optional credential offer is projected from the two hosts, over the length
+the taken candidate stated. A probe refused for want of a credential says nothing
+about the object, so there is nothing to compare on ranges or on identity, and
+under the fixed scoring a candidate that did not answer can never score better
+than one that did. The only difference there is to measure is between what this
+run has recorded about the two hosts. With no measurement behind either, or no
+stated length, nothing is projected and nothing is offered, which is what
+contracts means by no prompt and no message below the threshold.
+
+Two consequences worth naming.
+
+A source that answers nothing is no longer failed over to. It is scored
+unreachable and the reachable candidate is taken, which is what the fixed
+priority says and which spends fewer requests than trying a dead source first.
+`source.failover` and its degradation are still reached, by a source that answers
+the probe and then serves bytes that do not hash to what was stated. The two
+tests that asserted failover were rewritten around that, because they had been
+asserting the sequential order rather than the contract.
+
+A non-interactive run now emits `credential.offer` before `credential.declined`.
+contracts says an optional credential is reported as an unused opportunity and
+the alternative is used. Reporting only the decline says an opportunity was
+refused without ever saying one existed, which is not a report. The run still
+never blocks, and the test proving that drives a prompter that panics if asked.
+
+The seam bound moved. `Transfer` now requires `S: Source + Sync`, because probing
+in parallel means the adapter is used from more than one thread. That is a bound
+at the use site rather than a method on the seam, so no adapter implements
+anything new, and every adapter this build has already satisfies it. It is a
+requirement on implementors all the same and it is named here rather than left to
+be discovered.
+
+`Transfer::credential` is now a resolver keyed by host rather than one credential
+resolved for the first candidate's host. contracts.md:768 forbids sending host
+A's credential to host B; it does not forbid resolving host B's own when the
+transfer moves to host B, and features.md's promise that credentials are scoped
+to the host they were issued for is what resolving per host honors.
+
+`Host::of_location` returned `[` for a bracketed IPv6 literal. Every measurement,
+credential and in-flight count for an IPv6 host was filed under that. The
+two-host benchmark regime and the two-host determinism test both serve one of
+their hosts on `::1`, so both had been measuring a host named `[` since phase 6.
+
+Sources: contracts.md Source selection, Credentials, Limits;
+`crates/engine/src/candidate.rs`; `crates/cli/tests/probe.rs`;
+`crates/engine/tests/candidate.rs`.

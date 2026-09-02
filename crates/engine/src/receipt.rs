@@ -22,6 +22,10 @@ pub struct ReceiptArtifact {
     pub digest: ContentDigest,
     /// The source the bytes came from, redacted when it was recorded.
     pub source_used: SafeUrl,
+    /// Why that source was taken over the alternatives, when a run selected
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_reason: Option<String>,
     /// What was known about the bytes.
     pub trust: TrustClass,
 }

@@ -288,14 +288,15 @@ fn record_measurement(
     cache: &Cache<NativePlatform>,
     with: &Materialization<'_>,
     host: &str,
-    controller: &std::sync::Mutex<fetchloom_engine::tuning::Controller>,
+    flights: &Flights<'_>,
     moved: u64,
     took: std::time::Duration,
 ) {
     if !with.tuning.adapts || host.is_empty() {
         return;
     }
-    let permitted = controller
+    let permitted = flights
+        .controller(host)
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .permitted();
@@ -315,16 +316,29 @@ fn record_measurement(
     );
 }
 
-/// Returns the host a location names, which is what a measurement is filed
-/// under.
+/// Returns the resolver a transfer finds each host's own credential through, so
+/// that a transfer moving to a second host authenticates against that host.
+fn credentials_for(
+    policy: &dyn Policy,
+) -> impl Fn(&str) -> Result<Option<Credential>, Error> + Sync + '_ {
+    move |host: &str| resolve_credential(policy, host)
+}
+
+/// Returns the hook a transfer offers an optional credential through, which
+/// names the provider from the host and lets the policy decide whether the
+/// saving is worth interrupting for.
+fn offers_for(policy: &dyn Policy) -> impl Fn(&str, std::time::Duration) + Sync + '_ {
+    move |host: &str, saved: std::time::Duration| {
+        let help = fetchloom_sources::help_for(host, Necessity::Optional);
+        let _ = policy.offer_credential(&help, saved);
+    }
+}
+
+/// Returns the host a location names, which is what a measurement, a credential
+/// and an in-flight count are all filed under.
 #[must_use]
 pub fn host_of(location: &str) -> String {
-    let Some(after) = location.split_once("://") else {
-        return String::new();
-    };
-    let authority = after.1.split(['/', '?', '#']).next().unwrap_or_default();
-    let host = authority.rsplit('@').next().unwrap_or_default();
-    host.split(':').next().unwrap_or_default().to_owned()
+    Host::of_location(location).as_str().to_owned()
 }
 
 /// Materializes a local source tree into a destination.
@@ -1364,13 +1378,15 @@ pub fn materialize_remote(
             "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
-
     let degradations = DegradeQueue::new();
     let host = host_of(location);
-    let controller = std::sync::Mutex::new(with.tuning.controller(&host, Some(cache)));
+    let flights = Flights::new(with.tuning.ceilings, |host: &str| {
+        with.tuning.controller(host, Some(cache))
+    });
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
-    let credential = resolve_credential(with.policy, &host)?;
+    let credential = credentials_for(with.policy);
+    let offer = offers_for(with.policy);
     let transfer = Transfer {
         store: cache,
         source: &source,
@@ -1380,9 +1396,10 @@ pub fn materialize_remote(
         measurement: &measurement,
         observer,
         sequence,
-        controller: &controller,
+        flights: &flights,
         meter: meter.as_ref(),
-        credential: credential.as_ref(),
+        credential: &credential,
+        offer: &offer,
     };
     let moving = std::time::Instant::now();
     let transferred = transfer
@@ -1392,7 +1409,7 @@ pub fn materialize_remote(
         cache,
         with,
         &host,
-        &controller,
+        &flights,
         transferred.bytes_transferred,
         moving.elapsed(),
     );
@@ -1630,16 +1647,17 @@ fn transfer_container_entries(
         .map(|entry| format!("{location}{}", entry.path))
         .collect();
     let hosts: Vec<String> = locations.iter().map(|one| host_of(one)).collect();
-    let start = |host: &str| with.tuning.controller(host, Some(cache));
-    let flights = Flights::new(with.tuning.ceilings, &start);
+    let flights = Flights::new(with.tuning.ceilings, |host: &str| {
+        with.tuning.controller(host, Some(cache))
+    });
 
     let produced = flights.each(&locations, &hosts, &|object_location: &String| {
         let degradations = DegradeQueue::new();
         let host = host_of(object_location);
-        let controller = flights.controller(&host);
         let meter = with.tuning.meter();
         let measurement = |location: &str| cache.measurement(&host_of(location));
-        let credential = resolve_credential(with.policy, &host)?;
+        let credential = credentials_for(with.policy);
+        let offer = offers_for(with.policy);
         let transfer = Transfer {
             store: cache,
             source,
@@ -1649,9 +1667,10 @@ fn transfer_container_entries(
             measurement: &measurement,
             observer,
             sequence,
-            controller: &controller,
+            flights: &flights,
             meter: meter.as_ref(),
-            credential: credential.as_ref(),
+            credential: &credential,
+            offer: &offer,
         };
         let moving = std::time::Instant::now();
         let transferred = transfer
@@ -1665,7 +1684,7 @@ fn transfer_container_entries(
             cache,
             with,
             &host,
-            &controller,
+            &flights,
             transferred.bytes_transferred,
             moving.elapsed(),
         );
@@ -2265,6 +2284,7 @@ pub fn write_receipt(
             fetchloom_engine::receipt::ReceiptArtifact {
                 digest: artifact.digest,
                 source_used: artifact.source.clone(),
+                source_reason: artifact.reason.clone(),
                 trust: class,
             },
         );
@@ -2414,6 +2434,9 @@ pub struct ResolvedArtifact {
     /// The origin that served the bytes, present only when this run transferred
     /// them in full and verified them as they arrived.
     pub observed: Option<String>,
+    /// Why the source that served it was taken over the alternatives, when a
+    /// run selected one.
+    pub reason: Option<String>,
 }
 
 /// What a run against a manifest produced.
@@ -2469,8 +2492,9 @@ pub fn materialize_manifest(
     emit(EventPayload::ResolveStart);
 
     let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
-    let start = |host: &str| with.tuning.controller(host, with.cache);
-    let flights = Flights::new(with.tuning.ceilings, &start);
+    let flights = Flights::new(with.tuning.ceilings, |host: &str| {
+        with.tuning.controller(host, with.cache)
+    });
     let hosts: Vec<String> = manifest.artifacts.iter().map(serving_host).collect();
     let produced = flights.each(&manifest.artifacts, &hosts, &|artifact| {
         resolve_artifact(
@@ -2576,12 +2600,16 @@ fn resolve_artifact(
             digest: moved.digest,
             interop: moved.interop,
             size: moved.size,
-            source: SafeUrl::new(first),
+            source: moved
+                .chosen
+                .as_ref()
+                .map_or_else(|| SafeUrl::new(first), |taken| taken.source.clone()),
             name,
             selection,
             declared,
             prior: expected,
             observed: moved.observed,
+            reason: moved.chosen.map(|taken| taken.reason),
         });
     }
 
@@ -2597,6 +2625,7 @@ fn resolve_artifact(
         declared,
         prior: expected,
         observed: None,
+        reason: None,
     })
 }
 
@@ -2712,9 +2741,11 @@ pub struct Moved {
     pub size: u64,
     /// The origin that served the bytes, present only when this run moved them.
     pub observed: Option<String>,
+    /// The source this run took and why, when it selected one.
+    pub chosen: Option<fetchloom_engine::transfer::Chosen>,
 }
 
-/// Moves one artifact's bytes from the first source that can serve them.
+/// Moves one artifact's bytes from the source that scored best.
 fn transfer_object(
     with: &Materialization<'_>,
     source: &HttpSource,
@@ -2737,10 +2768,10 @@ fn transfer_object(
         .first()
         .map(|first| host_of(first))
         .unwrap_or_default();
-    let controller = flights.controller(&host);
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
-    let credential = resolve_credential(with.policy, &host)?;
+    let credential = credentials_for(with.policy);
+    let offer = offers_for(with.policy);
     let transfer = Transfer {
         store: cache,
         source,
@@ -2750,8 +2781,9 @@ fn transfer_object(
         measurement: &measurement,
         observer,
         sequence,
-        controller: &controller,
-        credential: credential.as_ref(),
+        flights,
+        credential: &credential,
+        offer: &offer,
         meter: meter.as_ref(),
     };
     let moving = std::time::Instant::now();
@@ -2762,7 +2794,7 @@ fn transfer_object(
         cache,
         with,
         &host,
-        &controller,
+        flights,
         transferred.bytes_transferred,
         moving.elapsed(),
     );
@@ -2803,6 +2835,7 @@ fn transfer_object(
         interop,
         size,
         observed: observation(&transferred),
+        chosen: transferred.chosen.clone(),
     })
 }
 
@@ -2998,6 +3031,7 @@ pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<Resolve
         declared: None,
         prior: artifact.prior,
         observed: artifact.observed.clone(),
+        reason: None,
     }]
 }
 

@@ -365,3 +365,89 @@ fn a_source_refusing_without_a_credential_stops_the_run_with_steps_a_first_time_
         "the run did not print numbered steps: {printed}"
     );
 }
+
+/// Records what a run would have measured about a host, so that a test can put
+/// two hosts a measurable distance apart without waiting for the distance.
+fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
+    let work = Arc::new(WorkCounter::new());
+    let processor = Arc::new(
+        Processor::new(ThreadBudget::resolve(
+            std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+            None,
+        ))
+        .unwrap(),
+    );
+    let held: Cache<NativePlatform> =
+        cache_cli::require(cache, work, processor).expect("the cache could not be opened");
+    held.record_measurement(
+        host,
+        &fetchloom_engine::tuning::HostMeasurement {
+            concurrency: 1,
+            throughput,
+            time_to_first_byte_ms: 1,
+            observed_at: fetchloom_engine::timestamp::Timestamp::now(),
+        },
+    )
+    .expect("the measurement could not be recorded");
+}
+
+#[test]
+fn a_credential_worth_more_than_the_offer_threshold_is_offered_and_the_run_finishes_without_it() {
+    let bytes = object(4096);
+    let gated = TestServer::start_on(
+        "::1",
+        Script::serving(Vec::new()).replying(vec![Reply::Status {
+            code: 401,
+            retry_after: None,
+        }]),
+    )
+    .unwrap();
+    let open = TestServer::start_on("127.0.0.1", Script::serving(bytes.clone())).unwrap();
+
+    let cache = TempDir::new().unwrap();
+    let destination = TempDir::new().unwrap();
+    let events = destination.path().join("events.ndjson");
+    seed_measurement(cache.path(), "::1", 1_000_000_000);
+    seed_measurement(cache.path(), "127.0.0.1", 1);
+
+    let manifest = destination.path().join("dataset.yaml");
+    std::fs::write(
+        &manifest,
+        format!(
+            "name: mirrored\nartifacts:\n  - id: object\n    sources: [\"{}/object\", \"{}/object\"]\n    digest:\n      blake3: \"{}\"\n",
+            gated.origin(),
+            open.origin(),
+            fetchloom_engine::hashing::hash_bytes(&bytes)
+        ),
+    )
+    .unwrap();
+
+    let run = run_with(
+        cache.path(),
+        &[],
+        &[
+            "get",
+            manifest.to_str().unwrap(),
+            "--output",
+            destination.path().join("out").to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the run did not finish with the alternative: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stream = std::fs::read_to_string(&events).unwrap();
+    assert!(
+        stream.contains("credential.offer"),
+        "a credential worth more than the threshold was not offered: {stream}"
+    );
+    assert!(
+        stream.contains("credential.declined"),
+        "a run that cannot prompt did not report the offer as unused: {stream}"
+    );
+}

@@ -4,14 +4,17 @@ use std::io::{Read, Write};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::candidate::{Probed, Separator, score};
 use crate::credential::Credential;
 use crate::degrade::DegradeQueue;
 use crate::digest::ContentDigest;
 use crate::error::{Error, ErrorKind};
 use crate::event::{Event, EventPayload, Sequence, Span};
+use crate::flights::Flights;
 use crate::limits::Limits;
 use crate::partial_key::PartialKey;
 use crate::redact::SafeUrl;
+use crate::reference::Host;
 use crate::resume::ResumeRung;
 use crate::seam::observer::Observer;
 use crate::seam::source::{
@@ -19,7 +22,7 @@ use crate::seam::source::{
 };
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
-use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate, order_candidates};
+use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate};
 
 /// How many bytes move between the source and the store at a time.
 const BUFFER: usize = 1 << 20;
@@ -45,6 +48,8 @@ pub struct Transferred {
     /// The location that answered with the bytes, which is where the chain of
     /// redirects ended and not where it started.
     pub served: SafeUrl,
+    /// The source this transfer took and why, when a run selected one.
+    pub chosen: Option<Chosen>,
 }
 
 /// The two impure things a retry needs: a random fraction and a wait.
@@ -143,22 +148,48 @@ pub struct Transfer<'a, S, T, P> {
     pub degradations: &'a DegradeQueue,
     /// What this run has measured about a candidate's host, when it has
     /// measured anything.
-    pub measurement: &'a dyn Fn(&str) -> Option<HostMeasurement>,
+    pub measurement: &'a (dyn Fn(&str) -> Option<HostMeasurement> + Sync),
     /// Where the event stream is written.
     pub observer: &'a dyn Observer,
     /// The numbers the events are ordered by.
     pub sequence: &'a Sequence,
-    /// How many transfers this run permits for one host, moved as the host
-    /// answers.
-    pub controller: &'a Mutex<Controller>,
+    /// The in-flight counts and per-host controllers this run is held inside.
+    pub flights: &'a Flights<'a>,
     /// The ceiling on how fast the run may move bytes, when one was set.
     pub meter: Option<&'a Meter>,
-    /// The credential resolved for this transfer's host, when one was found.
-    pub credential: Option<&'a Credential>,
+    /// Finds the credential a request to a host may carry, so that a transfer
+    /// moving to a second host resolves that host's own.
+    pub credential: &'a (dyn Fn(&str) -> Result<Option<Credential>, Error> + Sync),
+    /// Names a host whose credential the run does not hold, and how much time
+    /// holding it would have saved, so that the policy may offer it.
+    pub offer: &'a (dyn Fn(&str, Duration) + Sync),
 }
 
-impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
-    /// Moves one object from the first source that can serve it into the store.
+/// The source a transfer took, and why it took that one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chosen {
+    /// The source the bytes came from.
+    pub source: SafeUrl,
+    /// Why it was chosen over the alternatives.
+    pub reason: String,
+}
+
+/// Returns a candidate no probe was spent on, which is scored on what the run
+/// already knows about its host and nothing the source said.
+fn unprobed(index: usize, location: &str, headroom: u32) -> Probed {
+    Probed {
+        index,
+        location: location.to_owned(),
+        metadata: None,
+        throughput: None,
+        time_to_first_byte_ms: None,
+        refused: false,
+        headroom,
+    }
+}
+
+impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
+    /// Moves one object from the source that scored best into the store.
     ///
     /// # Errors
     ///
@@ -170,22 +201,37 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         prior: &dyn Fn(&str) -> Option<Prior>,
         locations: &[String],
     ) -> Result<Transferred, Error> {
-        let ordered = order_candidates(locations, self.measurement);
+        let (ordered, separator) = self.select(locations);
         let mut last = None;
-        for (index, location) in ordered.iter().enumerate() {
-            match self.attempt_until_spent(expected, prior, location) {
-                Ok(done) => return Ok(done),
+        for (index, candidate) in ordered.iter().enumerate() {
+            let already = candidate.metadata.clone();
+            match self.attempt_until_spent(expected, prior, &candidate.location, already) {
+                Ok(mut done) => {
+                    done.chosen = Some(Chosen {
+                        source: SafeUrl::new(&candidate.location),
+                        reason: if index == 0 {
+                            separator.because().to_owned()
+                        } else {
+                            "every source ahead of it was exhausted".to_owned()
+                        },
+                    });
+                    return Ok(done);
+                }
                 Err(error) => {
                     if let Some(next) = ordered.get(index + 1) {
                         self.degradations.record(
-                            SafeUrl::new(location).to_string(),
-                            SafeUrl::new(next).to_string(),
+                            SafeUrl::new(&candidate.location).to_string(),
+                            SafeUrl::new(&next.location).to_string(),
                             error.next_action().to_owned(),
                         );
                         self.emit(EventPayload::SourceFailover {
-                            from: SafeUrl::new(location),
-                            to: SafeUrl::new(next),
+                            from: SafeUrl::new(&candidate.location),
+                            to: SafeUrl::new(&next.location),
                             reason: error.next_action().to_owned(),
+                        });
+                        self.emit(EventPayload::SourceSelected {
+                            source: SafeUrl::new(&next.location),
+                            reason: "every source ahead of it was exhausted".to_owned(),
                         });
                     }
                     last = Some(error);
@@ -200,27 +246,158 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         }))
     }
 
+    /// Probes the candidates this run may probe, scores every candidate, and
+    /// reports which input decided.
+    fn select(&self, locations: &[String]) -> (Vec<Probed>, Separator) {
+        let Some(first) = locations.first() else {
+            return (Vec::new(), Separator::TheOnlyOne);
+        };
+        if locations.len() == 1 {
+            self.emit(EventPayload::SourceSelected {
+                source: SafeUrl::new(first),
+                reason: Separator::TheOnlyOne.because().to_owned(),
+            });
+            return (
+                vec![unprobed(0, first, self.headroom(first))],
+                Separator::TheOnlyOne,
+            );
+        }
+        let limit = usize::try_from(self.limits.probed_candidates)
+            .unwrap_or(usize::MAX)
+            .max(1);
+        let probing = locations.len().min(limit);
+        let mut probed = self.probe_all(&locations[..probing]);
+        let separator = score(&mut probed);
+        probed.extend(
+            locations[probing..]
+                .iter()
+                .enumerate()
+                .map(|(offset, location)| {
+                    unprobed(probing + offset, location, self.headroom(location))
+                }),
+        );
+        if let Some(taken) = probed.first() {
+            self.emit(EventPayload::SourceSelected {
+                source: SafeUrl::new(&taken.location),
+                reason: separator.because().to_owned(),
+            });
+            self.offer_what_a_credential_would_save(taken, &probed);
+        }
+        (probed, separator)
+    }
+
+    /// Offers a credential for a candidate the run could not read, when what
+    /// that candidate's host has been measured at would save more time than the
+    /// offer threshold allows to pass in silence.
+    ///
+    /// A refused probe says nothing about the object, so the only difference
+    /// there is to measure is between the two hosts, over the length the taken
+    /// candidate stated. With no measurement behind either host, or no stated
+    /// length, nothing is projected and nothing is offered.
+    fn offer_what_a_credential_would_save(&self, taken: &Probed, probed: &[Probed]) {
+        let Some(length) = taken.metadata.as_ref().and_then(|found| found.size) else {
+            return;
+        };
+        let Some(here) = taken.throughput.filter(|rate| *rate > 0) else {
+            return;
+        };
+        for gated in probed.iter().filter(|one| one.refused) {
+            let Some(there) = gated.throughput.filter(|rate| *rate > 0) else {
+                continue;
+            };
+            if there <= here {
+                continue;
+            }
+            let saved = taking(length, here).saturating_sub(taking(length, there));
+            (self.offer)(Host::of_location(&gated.location).as_str(), saved);
+        }
+    }
+
+    /// Makes one bounded metadata request against each candidate at once, so
+    /// that scoring costs one round trip rather than one for every candidate.
+    fn probe_all(&self, locations: &[String]) -> Vec<Probed> {
+        let mut found: Vec<Probed> = std::thread::scope(|scope| {
+            let asked: Vec<_> = locations
+                .iter()
+                .enumerate()
+                .map(|(index, location)| {
+                    scope.spawn(move || {
+                        self.emit(EventPayload::SourceProbe {
+                            source: SafeUrl::new(location),
+                        });
+                        let host = Host::of_location(location);
+                        let credential = (self.credential)(host.as_str()).ok().flatten();
+                        let answered = self.source.probe(location, credential.as_ref());
+                        let refused = answered.as_ref().err().is_some_and(|failure| {
+                            failure.kind() == ErrorKind::PolicyCredentialMissing
+                        });
+                        let metadata = answered.ok();
+                        let measured = (self.measurement)(location);
+                        Probed {
+                            index,
+                            location: location.clone(),
+                            metadata,
+                            throughput: measured.map(|found| found.throughput),
+                            time_to_first_byte_ms: measured
+                                .map(|found| found.time_to_first_byte_ms),
+                            refused,
+                            headroom: self.flights.headroom(host.as_str()),
+                        }
+                    })
+                })
+                .collect();
+            asked
+                .into_iter()
+                .filter_map(|one| one.join().ok())
+                .collect()
+        });
+        found.sort_by_key(|one| one.index);
+        found
+    }
+
+    fn headroom(&self, location: &str) -> u32 {
+        self.flights.headroom(Host::of_location(location).as_str())
+    }
+
     fn attempt_until_spent(
         &self,
         expected: Option<ContentDigest>,
         prior: &dyn Fn(&str) -> Option<Prior>,
         location: &str,
+        already: Option<SourceMetadata>,
     ) -> Result<Transferred, Error> {
+        let controller = self
+            .flights
+            .controller(Host::of_location(location).as_str());
         let retry = Retry {
             limits: self.limits,
             pause: self.pause,
             observer: self.observer,
             sequence: self.sequence,
-            controller: self.controller,
+            controller: &controller,
         };
         let mut buffer = vec![0u8; BUFFER];
+        let probed = Mutex::new(already);
         retry.until_spent(|attempt| {
-            self.attempt_once(expected, prior, location, &mut buffer)
+            let already = probed.lock().unwrap_or_else(PoisonError::into_inner).take();
+            self.attempt_once(expected, prior, location, already, &mut buffer)
                 .map(|mut done| {
                     done.attempts = attempt;
                     done
                 })
         })
+    }
+
+    /// Makes a bounded metadata request carrying whatever credential this run
+    /// resolved for the location's own host.
+    fn probe(&self, location: &str) -> Result<SourceMetadata, Error> {
+        let credential = self.credential_for(location)?;
+        self.source.probe(location, credential.as_ref())
+    }
+
+    /// Returns the credential a request to a location's host may carry.
+    fn credential_for(&self, location: &str) -> Result<Option<Credential>, Error> {
+        (self.credential)(Host::of_location(location).as_str())
     }
 
     /// Takes the single-writer claim on a key, reporting a wait for another
@@ -238,6 +415,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         expected: Option<ContentDigest>,
         prior: &dyn Fn(&str) -> Option<Prior>,
         location: &str,
+        already: Option<SourceMetadata>,
         buffer: &mut [u8],
     ) -> Result<Transferred, Error> {
         if let Some(digest) = expected
@@ -254,7 +432,10 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
 
         let metadata = match arrived.as_ref() {
             Some((metadata, _)) => metadata.clone(),
-            None => self.source.probe(location, self.credential)?,
+            None => match already {
+                Some(found) => found,
+                None => self.probe(location)?,
+            },
         };
         let key = match expected {
             Some(digest) => PartialKey::of_content(digest),
@@ -271,22 +452,7 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         let (rung, keep) = rung_for(recorded.as_ref(), &metadata, on_disk, verified)?;
 
         if on_disk > keep {
-            if metadata.supports_ranges {
-                self.degradations.record(
-                    format!(
-                        "a resume on rung {}",
-                        recorded.as_ref().map_or(5, |record| record.rung.number())
-                    ),
-                    format!("rung {}, a transfer from zero", rung.number()),
-                    "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
-                );
-            } else {
-                self.degradations.record(
-                    "a resume by range",
-                    "the whole object, transferred again from zero",
-                    "the source does not serve ranges",
-                );
-            }
+            self.report_the_partial_dropped(recorded.as_ref(), &metadata, rung);
             self.store.discard_partial(key)?;
         }
 
@@ -325,7 +491,9 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             &Backpressure {
                 meter: self.meter,
                 pause: self.pause,
-                controller: self.controller,
+                controller: &self
+                    .flights
+                    .controller(Host::of_location(location).as_str()),
             },
         );
         self.store
@@ -346,7 +514,34 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             attempts: 0,
             validator: validator_for(&metadata),
             served,
+            chosen: None,
         })
+    }
+
+    /// Records why the bytes already on disk were dropped rather than resumed
+    /// from.
+    fn report_the_partial_dropped(
+        &self,
+        recorded: Option<&SourceRecord>,
+        metadata: &SourceMetadata,
+        rung: ResumeRung,
+    ) {
+        if metadata.supports_ranges {
+            self.degradations.record(
+                format!(
+                    "a resume on rung {}",
+                    recorded.map_or(5, |record| record.rung.number())
+                ),
+                format!("rung {}, a transfer from zero", rung.number()),
+                "the source no longer identifies the bytes the partial recorded, so appending to it would join two different objects",
+            );
+        } else {
+            self.degradations.record(
+                "a resume by range",
+                "the whole object, transferred again from zero",
+                "the source does not serve ranges",
+            );
+        }
     }
 
     /// Returns the location that answered and the bytes it answered with.
@@ -364,7 +559,8 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
             start: keep,
             end: metadata.size.unwrap_or(u64::MAX),
         });
-        let answered = self.source.fetch(location, range, self.credential)?;
+        let credential = self.credential_for(location)?;
+        let answered = self.source.fetch(location, range, credential.as_ref())?;
         Ok((answered.metadata.location, Either::Fetched(answered.body)))
     }
 
@@ -385,9 +581,10 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         if !prior.validator.can_be_asked_with() || !self.store.contains(prior.digest)? {
             return Ok(Asked::Silence);
         }
+        let credential = self.credential_for(location)?;
         match self
             .source
-            .revalidate(location, &prior.validator, self.credential)?
+            .revalidate(location, &prior.validator, credential.as_ref())?
         {
             Revalidated::Unchanged => Ok(Asked::Unchanged(prior.digest)),
             Revalidated::Changed(served) => {
@@ -443,6 +640,7 @@ fn held(digest: ContentDigest) -> Transferred {
         attempts: 0,
         validator: Validator::default(),
         served: SafeUrl::new(""),
+        chosen: None,
     }
 }
 
@@ -674,4 +872,10 @@ fn ended_early(
         Ok(()) => Ok(()),
         Err(failure) => Err(failure.clone()),
     }
+}
+
+/// Returns how long a length takes to move at a rate in bytes per second.
+fn taking(length: u64, rate: u64) -> Duration {
+    let nanos = u128::from(length) * 1_000_000_000 / u128::from(rate.max(1));
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
