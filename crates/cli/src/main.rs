@@ -571,7 +571,7 @@ fn run_get(
     };
 
     let tuning = tuning_for(resolved, &policy);
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
         processor: processor.as_ref(),
         digester: &digester,
@@ -899,7 +899,7 @@ fn run_apply(
         Err(code) => return code,
     };
     let tuning = tuning_for(resolved, &policy);
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let with = run::Materialization {
         processor: processor.as_ref(),
         digester: &digester,

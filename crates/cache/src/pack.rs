@@ -47,6 +47,10 @@ impl<P: Platform> Cache<P> {
         interop: InteropDigest,
         bytes: &[u8],
     ) -> Result<Entry, Error> {
+        let _appending = self
+            .appending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.own_pack();
         let mut file = std::fs::File::options()
             .append(true)

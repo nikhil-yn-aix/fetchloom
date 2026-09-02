@@ -1,6 +1,7 @@
 //! The records the cache writes beside its entries.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::{Fingerprint, VolumeId};
@@ -82,7 +83,11 @@ pub fn write<T: Serialize>(
     })?;
 
     let mut beside = path.as_os_str().to_owned();
-    beside.push(format!(".{}.writing", std::process::id()));
+    beside.push(format!(
+        ".{}.{}.writing",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
     let beside = std::path::PathBuf::from(beside);
 
     std::fs::write(&beside, rendered)
@@ -128,3 +133,7 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
 pub fn read_owner(path: &Path) -> Result<Option<OwnerToken>, Error> {
     read(path)
 }
+
+/// Numbers the file a record is written through, so that two writers in one
+/// process never write the same one.
+static WRITES: AtomicU64 = AtomicU64::new(0);

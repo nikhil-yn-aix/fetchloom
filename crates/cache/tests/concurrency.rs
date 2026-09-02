@@ -310,3 +310,44 @@ fn recovery_leaves_an_entry_another_machine_wrote() {
         "recovery removed an entry another machine wrote, which is not this machine's to recover"
     );
 }
+
+/// How many objects small enough to be packed are published at once.
+const PACKED: usize = 64;
+
+/// How many bytes each of those objects holds, which is under the threshold
+/// above which an object gets a file of its own.
+const PACKED_LENGTH: usize = 4096;
+
+#[test]
+fn objects_published_at_once_by_one_process_each_read_back_as_themselves() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let cache = cache_in(scratch.path());
+    let wanted: Vec<Vec<u8>> = (0..PACKED)
+        .map(|seed| bytes_of(PACKED_LENGTH, u8::try_from(seed + 1).unwrap_or(1)))
+        .collect();
+
+    std::thread::scope(|scope| {
+        for bytes in &wanted {
+            scope.spawn(|| {
+                let digest = hash_bytes(bytes);
+                let lease = cache.lease(PartialKey::of_content(digest)).unwrap();
+                let mut writer = cache.begin(&lease, bytes.len() as u64).unwrap();
+                writer.write_all(bytes).unwrap();
+                cache.commit(lease, writer).unwrap();
+            });
+        }
+    });
+
+    for bytes in &wanted {
+        let digest = hash_bytes(bytes);
+        let mut reader = cache.open(digest).unwrap();
+        let mut found = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut found).unwrap();
+        assert_eq!(
+            hash_bytes(&found),
+            digest,
+            "an object published beside others read back as different bytes, so two writers \
+             recorded one place in the pack"
+        );
+    }
+}

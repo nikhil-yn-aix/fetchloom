@@ -65,6 +65,9 @@ pub struct Cache<P: Platform> {
     token: OwnerToken,
     work: Arc<WorkCounter>,
     processor: Arc<Processor>,
+    /// Held across an append to this process's pack, so that two appends never
+    /// record the same offset.
+    appending: std::sync::Mutex<()>,
     packed: std::sync::Mutex<
         Option<
             std::collections::BTreeMap<
@@ -118,6 +121,7 @@ impl<P: Platform> Cache<P> {
             token,
             work,
             processor,
+            appending: std::sync::Mutex::new(()),
             packed: std::sync::Mutex::new(None),
         };
         cache.recover()?;

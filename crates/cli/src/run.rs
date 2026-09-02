@@ -15,6 +15,7 @@ use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Layer};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
+use fetchloom_engine::flights::Flights;
 use fetchloom_engine::hashing;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::ArchiveFormat;
@@ -204,7 +205,7 @@ pub struct Materialization<'a> {
     /// Whether a recognized archive is extracted or kept as a file.
     pub extract: bool,
     /// The one buffer every stream this run hashes is read through.
-    pub digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
+    pub digester: &'a std::sync::Mutex<fetchloom_engine::hashing::Digester>,
     /// What a destination entry and a cache hit are both checked against before
     /// they are reused.
     pub verify: fetchloom_engine::verification::VerificationPolicy,
@@ -253,27 +254,25 @@ pub struct Tuning {
 }
 
 impl Tuning {
-    /// Returns the controller a transfer to a host starts with: what the cache
-    /// recorded for that host, or a count that never moves when the run was
-    /// told not to adapt.
+    /// Returns the controller a run starts a host at: what the cache recorded
+    /// for that host, a count that never moves when the run was told not to
+    /// adapt, and one transfer at a time for an artifact no host serves.
     #[must_use]
-    pub fn controller_for(
+    pub fn controller(
         &self,
         host: &str,
         cache: Option<&Cache<NativePlatform>>,
-    ) -> std::sync::Mutex<fetchloom_engine::tuning::Controller> {
+    ) -> fetchloom_engine::tuning::Controller {
+        if host.is_empty() {
+            return fetchloom_engine::tuning::Controller::fixed(std::num::NonZeroU32::MIN);
+        }
         if !self.adapts {
-            return std::sync::Mutex::new(fetchloom_engine::tuning::Controller::fixed(
-                self.ceilings.per_host,
-            ));
+            return fetchloom_engine::tuning::Controller::fixed(self.ceilings.per_host);
         }
         let recorded = cache
             .and_then(|cache| cache.measurement(host))
             .map(|found| found.concurrency);
-        std::sync::Mutex::new(fetchloom_engine::tuning::Controller::start(
-            recorded,
-            self.ceilings.per_host,
-        ))
+        fetchloom_engine::tuning::Controller::start(recorded, self.ceilings.per_host)
     }
 
     /// Returns the meter a run's transfers share, when a rate was set.
@@ -823,14 +822,20 @@ fn place_file(
     let usable = cache.filter(|_| !gave_up.get());
     match usable {
         None => materialize::copy_file(
-            &mut with.digester.borrow_mut(),
+            &mut with
+                .digester
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             processor,
             with.work,
             from,
             to,
         ),
         Some(held) => match through_cache(
-            &mut with.digester.borrow_mut(),
+            &mut with
+                .digester
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             held,
             processor,
             with.work,
@@ -851,7 +856,10 @@ fn place_file(
                 });
                 let _ = std::fs::remove_file(to);
                 materialize::copy_file(
-                    &mut with.digester.borrow_mut(),
+                    &mut with
+                        .digester
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
                     processor,
                     with.work,
                     from,
@@ -920,7 +928,7 @@ pub fn verify_tree(
         )
     })?;
     let work = WorkCounter::new();
-    let digester = std::cell::RefCell::new(hashing::Digester::new());
+    let digester = std::sync::Mutex::new(hashing::Digester::new());
     let walked = materialize::walk(path)?;
     let mut entries = walked.entries.clone();
     entries.extend(hash_files(
@@ -989,7 +997,7 @@ fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
 ///
 /// Fails when a file cannot be opened or read.
 fn hash_files(
-    digester: &std::cell::RefCell<hashing::Digester>,
+    digester: &std::sync::Mutex<hashing::Digester>,
     root: &Path,
     files: &[materialize::SourceFile],
     processor: &Processor,
@@ -1009,7 +1017,8 @@ fn hash_files(
             work,
         };
         let digests = digester
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .hash(processor, counted)
             .map_err(|reason| failure(ErrorKind::IntegrityMismatch, &full, &reason))?;
         entries.push(TreeEntry::File {
@@ -1358,7 +1367,7 @@ pub fn materialize_remote(
 
     let degradations = DegradeQueue::new();
     let host = host_of(location);
-    let controller = with.tuning.controller_for(&host, Some(cache));
+    let controller = std::sync::Mutex::new(with.tuning.controller(&host, Some(cache)));
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
     let credential = resolve_credential(with.policy, &host)?;
@@ -1598,7 +1607,8 @@ fn container_tree(placements: &[(String, ContentDigest, u64)]) -> Result<Vec<Tre
         .collect()
 }
 
-/// Transfers every listed entry of a container into the cache.
+/// Transfers every listed entry of a container into the cache, holding the run
+/// inside its global and per-host in-flight bounds.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument names a piece of the transfer a container's entries share"
@@ -1611,17 +1621,22 @@ fn transfer_container_entries(
     listed: &[fetchloom_engine::seam::source::ListingEntry],
     observer: &dyn Observer,
     sequence: &Sequence,
-    emit: &dyn Fn(EventPayload),
+    emit: &(dyn Fn(EventPayload) + Sync),
 ) -> Result<Vec<(String, ContentDigest, u64)>, Error> {
     let limits = Limits::default();
     let pause = SleepingPause;
-    let mut placements = Vec::with_capacity(listed.len());
+    let locations: Vec<String> = listed
+        .iter()
+        .map(|entry| format!("{location}{}", entry.path))
+        .collect();
+    let hosts: Vec<String> = locations.iter().map(|one| host_of(one)).collect();
+    let start = |host: &str| with.tuning.controller(host, Some(cache));
+    let flights = Flights::new(with.tuning.ceilings, &start);
 
-    for entry in listed {
-        let object_location = format!("{location}{}", entry.path);
+    let produced = flights.each(&locations, &hosts, &|object_location: &String| {
         let degradations = DegradeQueue::new();
-        let host = host_of(&object_location);
-        let controller = with.tuning.controller_for(&host, Some(cache));
+        let host = host_of(object_location);
+        let controller = flights.controller(&host);
         let meter = with.tuning.meter();
         let measurement = |location: &str| cache.measurement(&host_of(location));
         let credential = resolve_credential(with.policy, &host)?;
@@ -1643,7 +1658,7 @@ fn transfer_container_entries(
             .run(
                 None,
                 &prior_from(cache),
-                std::slice::from_ref(&object_location),
+                std::slice::from_ref(object_location),
             )
             .map_err(|failure| required_credential(with.policy, &host, failure))?;
         record_measurement(
@@ -1654,14 +1669,7 @@ fn transfer_container_entries(
             transferred.bytes_transferred,
             moving.elapsed(),
         );
-        remember(cache, &object_location, &transferred)?;
-        for degradation in source.take_degradations() {
-            emit(EventPayload::Degrade {
-                requested: degradation.requested,
-                used: degradation.used,
-                reason: degradation.reason,
-            });
-        }
+        remember(cache, object_location, &transferred)?;
         for degradation in degradations.take() {
             emit(EventPayload::Degrade {
                 requested: degradation.requested,
@@ -1674,9 +1682,24 @@ fn transfer_container_entries(
         } else {
             cache.size_of(transferred.digest).unwrap_or_default()
         };
-        placements.push((entry.path.clone(), transferred.digest, size));
+        Ok((transferred.digest, size))
+    });
+
+    for degradation in source.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: degradation.requested,
+            used: degradation.used,
+            reason: degradation.reason,
+        });
     }
-    Ok(placements)
+    if let Some(failure) = produced.failure {
+        return Err(failure);
+    }
+    Ok(listed
+        .iter()
+        .zip(produced.outputs)
+        .map(|(entry, (digest, size))| (entry.path.clone(), digest, size))
+        .collect())
 }
 
 /// Builds a fresh staging directory holding every transferred entry, at its
@@ -2445,17 +2468,28 @@ pub fn materialize_manifest(
     let resolving = Span::start();
     emit(EventPayload::ResolveStart);
 
-    let mut resolved = Vec::new();
-    for artifact in &manifest.artifacts {
-        match resolve_artifact(with, artifact, base, pinned, observer, sequence) {
-            Ok(found) => resolved.push(found),
-            Err(error) => {
-                return DatasetRun {
-                    resolved,
-                    outcome: Err(error.with_dataset(manifest.name.clone())),
-                };
-            }
-        }
+    let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
+    let start = |host: &str| with.tuning.controller(host, with.cache);
+    let flights = Flights::new(with.tuning.ceilings, &start);
+    let hosts: Vec<String> = manifest.artifacts.iter().map(serving_host).collect();
+    let produced = flights.each(&manifest.artifacts, &hosts, &|artifact| {
+        resolve_artifact(
+            with, &source, &flights, artifact, base, pinned, observer, sequence,
+        )
+    });
+    let resolved = produced.outputs;
+    if let Some(error) = produced.failure {
+        return DatasetRun {
+            resolved,
+            outcome: Err(error.with_dataset(manifest.name.clone())),
+        };
+    }
+    for entry in source.take_degradations() {
+        emit(EventPayload::Degrade {
+            requested: entry.requested,
+            used: entry.used,
+            reason: entry.reason,
+        });
     }
     emit(EventPayload::ResolveEnd {
         duration_ms: resolving.elapsed_ms(),
@@ -2474,16 +2508,32 @@ pub fn materialize_manifest(
     DatasetRun { resolved, outcome }
 }
 
+/// Returns the host an artifact's first source names, and nothing for an
+/// artifact no host serves.
+fn serving_host(artifact: &fetchloom_engine::manifest::Artifact) -> String {
+    artifact
+        .sources
+        .first()
+        .filter(|first| is_remote(first))
+        .map(|first| host_of(first))
+        .unwrap_or_default()
+}
+
 /// Puts one artifact's bytes in the cache and reports what they are.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument names a piece of what an artifact resolves against"
+)]
 fn resolve_artifact(
     with: &Materialization<'_>,
+    source: &HttpSource,
+    flights: &Flights<'_>,
     artifact: &fetchloom_engine::manifest::Artifact,
     base: &Path,
     pinned: Option<&fetchloom_engine::lock::LockedDataset>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<ResolvedArtifact, Error> {
-    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
     let Some(first) = artifact.sources.first() else {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
@@ -2512,7 +2562,15 @@ fn resolve_artifact(
     let declared = artifact.archive.as_ref().map(|spec| spec.format);
 
     if is_remote(first) {
-        let moved = transfer_object(with, &artifact.sources, expected, observer, sequence)?;
+        let moved = transfer_object(
+            with,
+            source,
+            flights,
+            &artifact.sources,
+            expected,
+            observer,
+            sequence,
+        )?;
         return Ok(ResolvedArtifact {
             id: artifact.id.clone(),
             digest: moved.digest,
@@ -2527,6 +2585,32 @@ fn resolve_artifact(
         });
     }
 
+    let ingested = ingest_artifact(with, artifact, base, first, expected, observer, sequence)?;
+    Ok(ResolvedArtifact {
+        id: artifact.id.clone(),
+        digest: ingested.digest,
+        interop: ingested.interop,
+        size: ingested.size,
+        source: SafeUrl::new(&resolve_source_path(base, first).to_string_lossy()),
+        name,
+        selection,
+        declared,
+        prior: expected,
+        observed: None,
+    })
+}
+
+/// Puts the bytes an artifact names on this machine into the cache.
+fn ingest_artifact(
+    with: &Materialization<'_>,
+    artifact: &fetchloom_engine::manifest::Artifact,
+    base: &Path,
+    first: &str,
+    expected: Option<ContentDigest>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Ingested, Error> {
+    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
     let path = resolve_source_path(base, first);
     let Some(cache) = with.cache else {
         return Err(Error::new(
@@ -2569,18 +2653,7 @@ fn resolve_artifact(
             digest: ingested.digest,
         });
     }
-    Ok(ResolvedArtifact {
-        id: artifact.id.clone(),
-        digest: ingested.digest,
-        interop: ingested.interop,
-        size: ingested.size,
-        source: SafeUrl::new(&path.to_string_lossy()),
-        name,
-        selection,
-        declared,
-        prior: expected,
-        observed: None,
-    })
+    Ok(ingested)
 }
 
 /// Returns the path a manifest's source names, relative to the manifest.
@@ -2644,6 +2717,8 @@ pub struct Moved {
 /// Moves one artifact's bytes from the first source that can serve them.
 fn transfer_object(
     with: &Materialization<'_>,
+    source: &HttpSource,
+    flights: &Flights<'_>,
     locations: &[String],
     expected: Option<ContentDigest>,
     observer: &dyn Observer,
@@ -2655,7 +2730,6 @@ fn transfer_object(
             "make a directory Fetchloom can write to, because a run streams an object through a store and neither the cache nor a scratch store beside the destination could be opened",
         ));
     };
-    let source = HttpSource::new(Limits::default(), Arc::clone(with.work));
     let pause = SleepingPause;
     let limits = Limits::default();
     let degradations = DegradeQueue::new();
@@ -2663,13 +2737,13 @@ fn transfer_object(
         .first()
         .map(|first| host_of(first))
         .unwrap_or_default();
-    let controller = with.tuning.controller_for(&host, Some(cache));
+    let controller = flights.controller(&host);
     let meter = with.tuning.meter();
     let measurement = |location: &str| cache.measurement(&host_of(location));
     let credential = resolve_credential(with.policy, &host)?;
     let transfer = Transfer {
         store: cache,
-        source: &source,
+        source,
         pause: &pause,
         limits: &limits,
         degradations: &degradations,

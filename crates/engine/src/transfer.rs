@@ -291,6 +291,11 @@ impl<S: Source, T: Store, P: Pause> Transfer<'_, S, T, P> {
         }
 
         let lease = self.claim(key)?;
+        if let Some(digest) = expected
+            && self.store.contains(digest)?
+        {
+            return Ok(held(digest));
+        }
         self.emit(EventPayload::TransferStart {
             source: metadata.location.clone(),
             expected_bytes: metadata.size,

@@ -12,6 +12,7 @@ pub mod document;
 pub mod durability;
 pub mod error;
 pub mod event;
+pub mod flights;
 pub mod hashing;
 pub mod identity;
 pub mod license;

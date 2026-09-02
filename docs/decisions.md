@@ -7126,3 +7126,97 @@ unaffected, because its point was never the absolute numbers. Defaults, a fixed
 one and one, and a fixed eight and eight were measured in the same conditions
 within minutes of each other, and they agreed within 0.4 percent. A noisy machine
 makes all three noisy together.
+
+## Phase 7.5. The machine was loaded, and the injector does not leak
+
+Question: The phase 7 baseline re-record put every regime up by half, four of
+which make no network request at all. Either the delay injector reaches paths it
+has no business reaching, which would make every number phase 7 measured suspect,
+or the machine was busy. Reverting the re-record was right and leaving the cause
+undetermined was not.
+
+One full run on a quiet machine separates them, and it did.
+
+| Regime | Baseline | Quiet | |
+|---|---|---|---|
+| no-op | 9.6 ms | 13.3 ms | |
+| cold-cache | 1537 ms | 1169 ms | zero requests |
+| warm-cache | 247 ms | 208 ms | zero requests |
+| cold-transfer | 122 ms | 100 ms | |
+| interrupted-transfer | 318 ms | 466 ms | |
+| many-small-files | 7162 ms | 6776 ms | zero requests |
+| one-large-file | 1115 ms | 3563 ms | zero requests |
+| many-hosts | 9302 ms | 12669 ms | pays 4000 ms of injected latency |
+
+No deterministic metric moved. Three of the four regimes that issue no request
+came in below the baseline, and a wait charged per request cannot make a regime
+issuing none of them faster. So the injector does not leak, and the phase 7
+uniform inflation was the machine.
+
+one-large-file is the one row that reads like a leak and is not. Measured alone
+on the same quiet machine it takes 679 ms and 718 ms, both under the 1115 ms
+baseline. Its 3563 ms is where it sits in the sequence: it writes 268 MiB
+straight after many-small-files has filled the page cache and paid a scanner
+ratio of 37 to 47 times. That is a property of running eight regimes back to
+back, which the baseline was also recorded under, and it is why a timing number
+is published and never gated.
+
+## Phase 7.5. Independent artifacts transfer at once, and what that broke
+
+Question: `--concurrency` and `--per-host` are contracted as in-flight transfer
+ceilings and bounded nothing, because no run issued two requests at once. Phase 6
+built a controller correct in every unit test and attached it to a loop with one
+transfer in it, which is why three configurations whose per-host ceiling differs
+eight times over agreed within 0.4 percent.
+
+`fetchloom_engine::flights::Flights` holds a run inside both ceilings. It carries
+one controller per host, shared by every transfer to that host, so the count the
+controller moves is a count something obeys. It admits the first pending item
+whose host has room rather than the next one in order, so a worker never idles
+against a busy host while another host's work waits. The global ceiling is the
+worker count and the per-host ceiling is what the controller permits at that
+moment, which is the pair contracts.md Flags names.
+
+Three decisions inside it that contracts does not state.
+
+The failure reported is the first in index order, whichever finished first. A run
+one transfer at a time always reports the failure of the earliest artifact that
+fails, because everything before it had already succeeded. Reporting whichever
+thread lost first would make the error a property of the clock, and
+contracts.md Determinism is a promise about what a run produces.
+
+Nothing at an index above the first failure is attempted, and everything below it
+still runs. That is the same set a sequential run reaches, so concurrency changes
+no artifact's fate. contracts.md Partial success says objects that verified are
+kept in the cache, and they are.
+
+An artifact no host serves is admitted under a per-host count of one. A local
+file is not a transfer, so the network ceiling has no business widening it, and
+the global ceiling still bounds the run as a whole.
+
+Two real defects were behind this, both of which a sequential run could never
+reach and neither of which any existing test could have found.
+
+`Cache::append_to_pack` read the end of this process's pack to learn the offset
+it was about to write at, then wrote. Two threads read the same offset, both
+appended, and the second recorded an entry pointing into the first one's bytes.
+An object then read back as different bytes than it was published with. This is
+the corruption the whole project exists to prevent, it survived the eight racing
+writers and the thousand-kill loop because both of those race across processes
+and each process has its own pack, and it was found by the two-host determinism
+test producing two artifacts with one digest.
+
+`record::write` named the file it writes through by process id alone, so two
+writers in one process wrote the same temporary name and one of them renamed a
+file the other was still writing. `Cache::scratch_path` had the same shape. Both
+are now numbered per writer.
+
+The lease already held the single-writer claim per digest, but a second wanter
+that had passed the `contains` check before the first committed went on to
+transfer the object again after the wait. The check is now taken again after the
+claim, which is what contracts.md's wait and reuse says: the second wanter waits
+and never starts a second transfer.
+
+Sources: contracts.md Flags, Determinism, Partial success, Cancellation;
+`crates/engine/src/flights.rs`; `crates/cache/src/pack.rs`;
+`crates/cli/tests/concurrent.rs`; `crates/cache/tests/concurrency.rs`.

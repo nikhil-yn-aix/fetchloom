@@ -489,7 +489,7 @@ fn materialization<'a>(
     platform: &'a NativePlatform,
     cache: &'a Cache<NativePlatform>,
     work: &'a std::sync::Arc<fetchloom_engine::work::WorkCounter>,
-    digester: &'a std::cell::RefCell<fetchloom_engine::hashing::Digester>,
+    digester: &'a std::sync::Mutex<fetchloom_engine::hashing::Digester>,
     tuning: &'a fetchloom_cli::run::Tuning,
     policy: &'a NoCredentialPolicy,
 ) -> Materialization<'a> {
@@ -535,7 +535,7 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
     ));
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
     let with = materialization(
@@ -634,7 +634,7 @@ fn a_container_reference_lists_and_materializes_every_entry() {
     ));
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
     let with = materialization(
@@ -941,7 +941,7 @@ fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
     ));
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
     let with = materialization(
@@ -1018,7 +1018,7 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
     ));
     let processor =
         Processor::new(ThreadBudget::resolve(NonZeroUsize::new(2).unwrap(), None)).unwrap();
-    let digester = std::cell::RefCell::new(fetchloom_engine::hashing::Digester::new());
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
     let tuning = test_tuning();
     let policy = NoCredentialPolicy::default();
     let with = materialization(

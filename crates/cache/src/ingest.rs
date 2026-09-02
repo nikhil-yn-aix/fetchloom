@@ -123,12 +123,13 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Returns a name inside the cache that only this process writes.
+    /// Returns a name inside the cache that only this writer writes.
     pub(crate) fn scratch_path(&self) -> std::path::PathBuf {
         self.layout().partial().join(format!(
-            "{}-{}.ingest",
+            "{}-{}-{}.ingest",
             self.token().pid,
-            self.token().start
+            self.token().start,
+            SCRATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ))
     }
 
@@ -246,3 +247,7 @@ impl<P: Platform> Cache<P> {
         Ok(())
     }
 }
+
+/// Numbers the scratch name a writer takes, so that two writers in one process
+/// never take the same one.
+static SCRATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

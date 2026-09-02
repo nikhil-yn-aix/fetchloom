@@ -20,7 +20,7 @@ use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_cli as _;
 use fetchloom_engine as _;
-use fetchloom_faults as _;
+
 use fetchloom_platform as _;
 use fetchloom_sources as _;
 use flate2 as _;
@@ -236,5 +236,99 @@ fn a_second_interrupt_aborts_and_the_cache_still_holds_only_what_it_verified() {
     assert!(
         every_object_is_its_own_name(&scene.cache),
         "a run aborted mid-write left an object that does not hash to its name"
+    );
+}
+
+/// How long each request to a delayed server waits before it is answered, so
+/// that an interrupt lands while transfers are still in flight.
+const CHARGED: Duration = Duration::from_millis(400);
+
+/// How many objects the interrupted concurrent run transfers.
+const IN_FLIGHT: usize = 12;
+
+/// Waits until the run has said it is transferring, which is where an interrupt
+/// with several transfers in flight has to land.
+fn wait_until_transferring(events: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(events).is_ok_and(|stream| stream.contains("transfer.start")) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the run said nothing about transferring within thirty seconds");
+}
+
+#[test]
+fn an_interrupt_with_several_transfers_in_flight_stops_within_two_seconds() {
+    let scratch = TempDir::new().unwrap();
+    let events = scratch.path().join("events.ndjson");
+    let mut servers = Vec::with_capacity(IN_FLIGHT);
+    let mut artifacts = String::new();
+    for index in 0..IN_FLIGHT {
+        let bytes: Vec<u8> = (0..1 << 16_usize)
+            .map(|offset| u8::try_from((offset + index * 41) % 251).unwrap_or(0))
+            .collect();
+        let server = fetchloom_faults::TestServer::start(
+            fetchloom_faults::Script::serving(bytes)
+                .delayed(fetchloom_faults::Latency::default().every_request(CHARGED)),
+        )
+        .unwrap();
+        std::fmt::Write::write_fmt(
+            &mut artifacts,
+            format_args!(
+                "  - id: object-{index}\n    sources: [\"{}/object-{index}\"]\n",
+                server.origin()
+            ),
+        )
+        .unwrap();
+        servers.push(server);
+    }
+    let manifest = scratch.path().join("dataset.yaml");
+    std::fs::write(&manifest, format!("name: delayed\nartifacts:\n{artifacts}")).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+    command
+        .arg("get")
+        .arg(&manifest)
+        .arg("--output")
+        .arg(scratch.path().join("out"))
+        .arg("--cache-dir")
+        .arg(scratch.path().join("cache"))
+        .arg("--events")
+        .arg(&events)
+        .arg("--concurrency")
+        .arg("8")
+        .arg("--per-host")
+        .arg("8")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    interruptible(&mut command);
+    let mut child = command.spawn().unwrap();
+    wait_until_transferring(&events);
+
+    let asked = Instant::now();
+    interrupt(&child);
+    let status = child.wait().unwrap();
+    let took = asked.elapsed();
+
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "a run interrupted with several transfers in flight did not exit as cancelled"
+    );
+    assert!(
+        took < Duration::from_secs(2),
+        "a run interrupted with several transfers in flight took {took:?} to stop, where the \
+         contract allows two seconds"
+    );
+    assert!(
+        every_object_is_its_own_name(&scratch.path().join("cache")),
+        "an interrupted concurrent run left an object that does not hash to its name"
+    );
+    assert!(
+        every_packed_object_is_its_own_name(&scratch.path().join("cache")),
+        "an interrupted concurrent run left a packed object that does not hash to its name"
     );
 }
