@@ -1574,3 +1574,52 @@ rather than what a document promises. features.md now marks every unbuilt claim
 and states that convention at the top, so an unmarked sentence is a promise about
 today. Nothing enforces that mechanically, which is the shape of defect this
 audit exists to find and the next audit should look for again.
+
+## Phase 8, against this document
+
+**F8 is closed completely.** `resolve.alias`, the last of the ten events this
+audit found emitted only by a test, is emitted by a real run: inference names
+what a reference resolved to, and a bare name resolving through the configured
+sources names the base that answered. All thirty-four contracted events now have
+a production emitter.
+
+**F19's two remaining limits.** `listing_entries` is read by inference and by both
+provider adapters, which refuse a container holding more than it permits.
+`probed_candidates` is read by the probe phase phase 7.5 built. Neither is
+carried further.
+
+**A finding this document made about itself, now acted on.** Its closing section
+said it had checked that features.md agreed with contracts.md and had not checked
+that either agreed with the binary, and that nothing enforced the marker
+convention mechanically. Phase 8 did that walk again and found four more
+sentences that were false, none of which any test could see: configuration was
+said to cover proxy, TLS, resource, integrity and extraction policy and covers
+none of them; FTP listing was contracted and nothing in the tree speaks FTP; the
+reference said the JSON result carries no trust class, which stopped being true
+before this phase; and it said a provider reference and a remote manifest do not
+resolve. Still nothing enforces the convention mechanically, and that remains the
+shape of defect the next audit should look for first.
+
+**What phase 8 found that this document did not look for.** Six defects in work
+that already existed and that a green suite had passed, listed in the phase 8
+gate record. Two are worth naming here because they are the audit's own kind. A
+manifest's `sha256` was compared against nothing, so a publisher's claim was
+parsed, written back out, and never checked -- invisible because nothing in the
+tree had ever written a manifest stating a SHA-256 and no BLAKE3. And no
+free-space primitive existed on either platform, so contracts' rule that
+insufficient space fails before transfer begins had never been implementable by
+anything; the rule read as satisfied because nothing called it.
+
+**Still deferred, unchanged.** F21's cold local fetch writing twice needs a
+cloning volume this matrix does not have. F26's seams holding whole lists needs
+the million-object measurement. Phase 6's performance half is carried here in
+full: defaults tie with hand-tuned settings, six of the eight regimes issue no
+request, and that is a harness problem this audit owns rather than something
+building features could close.
+
+**One new item for the audit.** The many-hosts concurrency test is a wall-clock
+assertion that competes with every other test binary when the whole suite runs at
+once. It passes alone and fails under that load, which standards.md would call a
+property of the machine rather than of the code. It wants either a serialized
+lane or a gate that only fires under `cargo xtask verify`, the way timing metrics
+already do.

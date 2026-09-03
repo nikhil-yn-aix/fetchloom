@@ -8129,3 +8129,187 @@ softer.
 
 Sources: docs/contracts.md Manifest, Trust classes, Verification and repair,
 Plan; docs/roadmap.md.
+
+## Phase 8 gate
+
+Question: Does phase 8 meet its exit criterion, and what remains unproven.
+
+The criterion is not roadmap.md's old line. It is this: features.md contains no
+unbuilt marker except for distribution, and every unmarked sentence is true of
+the binary.
+
+**The answer is yes, with two markers rather than one, and both were ruled
+before the phase began.** Distribution is marked and is phase 9's. Protocol
+choice is marked and no phase owns it. Everything else features.md says, the
+binary does.
+
+**The three decisions the roadmap asked for.**
+
+Which metadata formats map onto the manifest model. Five do and are read:
+checksum sidecars, Croissant, Frictionless data packages, pooch registries, and
+BagIt payload manifests. Two do not and are refused by name, each with a test
+for the refusal. Torrent piece hashes are refused for two independent reasons --
+version 1 hashes pieces that span file boundaries under SHA-1, version 2's
+per-file root is a merkle root over 16 KiB blocks and is not the SHA-256 of the
+file, and either way a torrent names a swarm rather than a location. DVC files
+are refused because `outs[].hash` is MD5 or an ETag, and contracts already rules
+that an ETag is supporting evidence and never content identity. Every format was
+read against its own current specification during this phase rather than from
+memory.
+
+How inference handles listings, APIs, and local directories. One walk, three
+things it can be pointed at, because all three answer the same question and
+`Source::list` already is that question. A local directory goes through the same
+code by way of the local adapter, and its manifest holds no absolute path, so it
+is publishable by putting it beside the data.
+
+What inference records when a source supplies no digest. It reads the bytes and
+records what they hashed to, and records nothing at all when it did not read
+them. No digest is ever taken from a metadata request, because an entity tag is
+not a digest and writing one into a digest field would launder a validator into
+an identity. The init run is therefore `tofu` and says so: it had no prior digest
+and recorded its own first observation, which is exactly the class definition.
+
+**The four rulings, carried out.**
+
+The five interface features moved to this phase and are built. SigV4 is built.
+Protocol choice stayed unbuilt and its claim was re-verified against ureq 3.4.0's
+own documentation rather than carried on phase 7.5's word: the crate exposes no
+protocol selection and names HTTP/2 nowhere. Phase 6's performance half is still
+open and is carried to the audit, unchanged and unclaimed.
+
+**Exit criteria, with evidence.**
+
+Round-trip from each supported metadata format to a manifest.
+`crates/engine/tests/metadata.rs` holds what no single format's tests could: that
+no reader ever emits an artifact naming no source, that each refuses a digest it
+cannot represent by name, that each is deterministic over one document, and that
+each is bounded. The first of those found a real defect -- a Croissant
+`FileObject` carrying only a `containedIn` produced an artifact with an empty
+source list, which would have resolved to nothing at fetch time.
+
+Inference over a directory reproduces that directory exactly.
+`init_over_a_directory_reproduces_that_directory_exactly` in
+`crates/cli/tests/inference.rs` walks a three-level tree, emits a manifest, fetches
+it back, and compares every file's bytes.
+
+Formats that cannot be represented fail with a named reason.
+`every_reader_refuses_a_digest_it_cannot_represent_by_name`, plus the per-format
+refusals in each reader's own tests.
+
+A dataset with published metadata is fetched with no hand-written manifest.
+`a_metadata_document_resolves_to_the_files_it_describes`.
+
+A local directory becomes a publishable manifest in one command.
+`init_writes_the_manifest_to_standard_output_by_default` and the round-trip above.
+
+Adding two real provider adapters changed no engine code. Stated plainly below,
+because it is the phase 7 criterion tested a third time.
+
+`doctor` leaves the state it inspects byte-identical.
+`crates/cli/tests/diagnose.rs` snapshots every path and every file's bytes before
+and after, against a healthy cache, a cache whose format does not match, a cache
+directory that is not there, and a read-only one. The property was confirmed
+capable of failing by making `doctor` write one extra file.
+
+Identical runs under every display mode produce identical results, exit codes and
+event streams. `crates/cli/tests/display.rs`. The streams are compared with one
+event excluded, and the exclusion is itself contracted: a mode the terminal
+cannot carry is forced, and forcing it silently is forbidden, so the run that
+asked for the live view under a pipe emits a `degrade` the other two do not. That
+degradation has its own test.
+
+**The live view reads only events, and this is the answer to the thing worth
+watching for.** It is not "inspected the code and it only uses events". The
+renderer is `crates/view`, a crate whose sole dependency is the engine's event
+types. Two tests read the crate's own manifest and its own source:
+`the_view_depends_on_the_event_types_and_on_nothing_else` fails if any other
+dependency appears, and `the_view_reaches_no_filesystem_no_network_and_no_process`
+fails if `std::fs`, `std::net`, `std::process`, `std::env`, a file open, a
+`TcpStream` or an `include_str!` appears anywhere in it. Both were confirmed to
+fail by adding `fetchloom-cache` as a dependency and a `std::fs::read_to_string`
+call, and both named the breach in their failure message. The dependency graph is
+what enforces the property; the tests are what make a breach loud.
+
+**Answering the three questions directly.**
+
+*Does features.md still say "not built" anywhere except distribution?* Yes,
+once. Protocol choice per host, and no phase owns it, because there is one
+protocol to speak and nothing to measure. That was ruled before the phase and the
+claim behind it was re-checked against the client's current documentation this
+phase rather than carried.
+
+*Are all twelve contracted commands present and acting?* Yes.
+`the_surface_holds_every_command_the_contract_names` asserts the twelve are in the
+help, and `every_contracted_command_acts_rather_than_being_a_usage_error` asserts
+the four new ones act rather than exiting 2.
+
+*Did adding two real provider adapters require any change to the engine?* No.
+`git diff --stat -- crates/engine/` across the commit that added
+`HuggingFaceSource` and `ZenodoSource` is empty. Both are written entirely against
+`fetchloom_engine::seam::source::Source` and reach a run through the `serves`
+dispatch phase 7.5 added, so `run.rs` names them only in the list of adapters it
+constructs. That is roadmap.md:135 tested a third time and for the first time with
+two real adapters rather than one and a stub.
+
+The one engine change this phase makes to `Credential` was made deliberately and
+separately, for the second credential shape, which is the widening phase 7 said
+would be the real test of whether the seam holds. It did not come from the
+adapters; it came from the credential model, and the adapters would have been
+identical without it.
+
+**Defects this phase found in work that already existed.**
+
+A plain artifact landed under the basename of whichever source served it, so a
+manifest could not name two artifacts whose sources shared one, and no nested
+tree could round-trip through a manifest. An artifact now lands under its own
+identifier, validated by exactly the rules an archive member passes.
+
+A manifest's `sha256` was compared to nothing. A publisher could state one and
+the run would serve bytes that disagreed with it without a word. It has been true
+since manifests existed and was invisible because nothing in the tree wrote a
+manifest with a SHA-256 and no BLAKE3 until this phase did.
+
+`fetchloom <command> --help` exited 2, because clap's help display was treated as
+a usage error.
+
+The `watch` positional argument and the global `--events` flag shared one clap
+argument id, so `watch <path>` bound to `--events` and the run wrote its event
+stream to the path instead of reading it -- exiting 0 having overwritten the file
+it was asked to display. Found by a test asserting that watching a stream that is
+not there is a usage error.
+
+The event stream carried no host, so the per-host throughput features.md promises
+could not have been shown by a view that reads only events.
+
+No free-space primitive existed on either platform, so contracts' rule that
+insufficient space fails before transfer begins had never been implementable, and
+`doctor` could not have checked disk.
+
+**What is carried forward.**
+
+Phase 6's performance half. Defaults tie with hand-tuned settings; six of eight
+regimes issue no request. That is a benchmark harness problem, it belongs to the
+audit, and building features did not close it.
+
+F21 and F26 from the audit, which still need a cloning volume and a
+million-object measurement this matrix does not have.
+
+`eight_artifacts_behind_a_charged_wait_finish_in_far_less_than_eight_one_at_a_time`
+fails under whole-suite parallelism and passes alone. It is a wall-clock
+assertion competing with every other test binary for the machine, which is the
+class of measurement standards.md says is a property of the machine as much as
+the code. It is reported rather than silenced.
+
+FTP listing was contracted and never built. contracts.md no longer names it,
+because a contract that describes something nothing implements is the defect the
+last audit existed to find.
+
+Naming a certificate authority or a proxy in configuration. TLS verification is
+on and not configurable, which is a stronger promise than the one that was
+written, and proxies are read from the standard variables by the client.
+
+Sources: `docs/features.md`; `docs/contracts.md`; `crates/view`;
+`crates/engine/src/metadata/`; `crates/sources/src/provider.rs`;
+`crates/sources/src/signing.rs`; `crates/cli/tests/diagnose.rs`;
+`crates/cli/tests/display.rs`; `crates/cli/tests/inference.rs`.
