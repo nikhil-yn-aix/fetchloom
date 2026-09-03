@@ -740,3 +740,143 @@ fn no_secret_appears_in_anything_the_credential_lookup_writes() {
         );
     }
 }
+
+#[test]
+fn a_signing_credential_is_read_from_the_host_scoped_variables() {
+    let environment = FakeEnvironment::with(&[
+        ("FETCHLOOM_ACCESS_KEY_EXAMPLE_INVALID", "AKIAEXAMPLE"),
+        ("FETCHLOOM_SECRET_KEY_EXAMPLE_INVALID", "the-secret-key"),
+        ("FETCHLOOM_REGION_EXAMPLE_INVALID", "us-east-1"),
+    ]);
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let store = EmptyStore;
+    let policy = policy_with(&environment, &store, &observer, &sequence);
+
+    let found = policy
+        .credential(&Host::new("example.invalid"), Necessity::Required)
+        .expect("the lookup failed")
+        .expect("no credential was found");
+
+    let keys = found.signing().expect("the credential was not a signing one");
+    assert_eq!(keys.access_key, "AKIAEXAMPLE");
+    assert_eq!(keys.region, "us-east-1");
+    assert!(keys.session_token.is_none());
+
+    let written = format!(
+        "{:?}{}",
+        found.secrets,
+        serde_json::to_string(&found).expect("the credential could not be serialized")
+    );
+    assert!(
+        !written.contains("the-secret-key"),
+        "the secret key reached an output: {written}"
+    );
+}
+
+#[test]
+fn an_access_key_without_a_region_is_refused_rather_than_guessed() {
+    let environment = FakeEnvironment::with(&[
+        ("FETCHLOOM_ACCESS_KEY_EXAMPLE_INVALID", "AKIAEXAMPLE"),
+        ("FETCHLOOM_SECRET_KEY_EXAMPLE_INVALID", "the-secret-key"),
+    ]);
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let store = EmptyStore;
+    let policy = policy_with(&environment, &store, &observer, &sequence);
+
+    let refused = policy
+        .credential(&Host::new("example.invalid"), Necessity::Optional)
+        .expect_err("an access key with no region was accepted");
+
+    assert_eq!(refused.kind(), ErrorKind::PolicyCredentialInvalid);
+    let said = refused.next_action().to_owned();
+    assert!(
+        said.contains("FETCHLOOM_REGION_EXAMPLE_INVALID"),
+        "the refusal did not name the variable to set: {said}"
+    );
+    assert!(
+        !said.contains("the-secret-key"),
+        "the refusal carried the secret: {said}"
+    );
+}
+
+#[test]
+fn an_access_key_without_a_secret_key_is_refused_by_name() {
+    let environment =
+        FakeEnvironment::with(&[("FETCHLOOM_ACCESS_KEY_EXAMPLE_INVALID", "AKIAEXAMPLE")]);
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let store = EmptyStore;
+    let policy = policy_with(&environment, &store, &observer, &sequence);
+
+    let refused = policy
+        .credential(&Host::new("example.invalid"), Necessity::Optional)
+        .expect_err("an access key with no secret key was accepted");
+
+    assert_eq!(refused.kind(), ErrorKind::PolicyCredentialInvalid);
+    assert!(
+        refused
+            .next_action()
+            .contains("FETCHLOOM_SECRET_KEY_EXAMPLE_INVALID"),
+        "the refusal did not name the variable to set: {}",
+        refused.next_action()
+    );
+}
+
+#[test]
+fn a_bearer_token_wins_over_a_signing_key_pair_for_the_same_host() {
+    let environment = FakeEnvironment::with(&[
+        ("FETCHLOOM_TOKEN_EXAMPLE_INVALID", "the-bearer"),
+        ("FETCHLOOM_ACCESS_KEY_EXAMPLE_INVALID", "AKIAEXAMPLE"),
+        ("FETCHLOOM_SECRET_KEY_EXAMPLE_INVALID", "the-secret-key"),
+        ("FETCHLOOM_REGION_EXAMPLE_INVALID", "us-east-1"),
+    ]);
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let store = EmptyStore;
+    let policy = policy_with(&environment, &store, &observer, &sequence);
+
+    let found = policy
+        .credential(&Host::new("example.invalid"), Necessity::Required)
+        .expect("the lookup failed")
+        .expect("no credential was found");
+
+    assert_eq!(
+        found.bearer(),
+        Some("the-bearer"),
+        "the first tier did not win"
+    );
+}
+
+#[test]
+fn the_provider_helper_is_asked_only_for_a_host_that_signs() {
+    let environment = FakeEnvironment::with(&[
+        ("AWS_ACCESS_KEY_ID", "AKIAFROMAWS"),
+        ("AWS_SECRET_ACCESS_KEY", "the-aws-secret"),
+        ("AWS_REGION", "eu-west-1"),
+    ]);
+    let observer = RecordingObserver::new();
+    let sequence = Sequence::new();
+    let store = EmptyStore;
+    let policy = policy_with(&environment, &store, &observer, &sequence);
+
+    let signing_host = policy
+        .credential(&Host::new("bucket.s3.amazonaws.com"), Necessity::Optional)
+        .expect("the lookup failed")
+        .expect("the helper answered nothing for a host that signs");
+    assert_eq!(
+        signing_host
+            .signing()
+            .map(|keys| keys.access_key.as_str()),
+        Some("AKIAFROMAWS")
+    );
+
+    let other = policy
+        .credential(&Host::new("lab.edu"), Necessity::Optional)
+        .expect("the lookup failed");
+    assert!(
+        other.is_none(),
+        "the AWS variables were sent to a host that does not sign with them"
+    );
+}
