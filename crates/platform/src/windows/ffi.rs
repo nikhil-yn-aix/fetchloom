@@ -28,9 +28,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateSymbolicLinkW, FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
-    GetDiskFreeSpaceExW,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileAllocationInfo, FileBasicInfo, FileEndOfFileInfo,
-    FileIdInfo, FlushFileBuffers, GetDriveTypeW, GetFileInformationByHandleEx,
+    FileIdInfo, FlushFileBuffers, GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx,
     GetVolumeInformationByHandleW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     SYMBOLIC_LINK_FLAG_DIRECTORY, SetFileInformationByHandle,
 };

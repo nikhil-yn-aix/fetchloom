@@ -89,7 +89,11 @@ impl HuggingFaceSource {
             .strip_prefix("hf:")
             .ok_or_else(|| unreadable("hf", reference, wanted))?;
         let held = identifier_of(rest);
-        let segments: Vec<&str> = held.path.split('/').filter(|part| !part.is_empty()).collect();
+        let segments: Vec<&str> = held
+            .path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         let owned = if segments.first() == Some(&"datasets") {
             3
         } else {
@@ -227,7 +231,9 @@ macro_rules! delegating_source {
             type Body = HttpBody;
 
             fn serves(&self, reference: &str) -> Option<Serves> {
-                reference.starts_with(concat!($scheme, ":")).then_some($serves)
+                reference
+                    .starts_with(concat!($scheme, ":"))
+                    .then_some($serves)
             }
 
             fn take_degradations(&self) -> Vec<Degradation> {
@@ -241,8 +247,7 @@ macro_rules! delegating_source {
             ) -> Result<SourceMetadata, Error> {
                 let resolved = self.located(location)?;
                 let started = Instant::now();
-                let (answer, served) =
-                    self.http.send(Method::Head, &resolved, None, credential)?;
+                let (answer, served) = self.http.send(Method::Head, &resolved, None, credential)?;
                 let elapsed = started.elapsed();
                 let status = answer.status().as_u16();
                 if !(200..300).contains(&status) {
@@ -517,7 +522,7 @@ mod tests {
         reason = "test assertions, where the value that was absent is the message"
     )]
 
-    use super::{Identifier, HuggingFaceSource, ZenodoSource, identifier_of, record_entries};
+    use super::{HuggingFaceSource, Identifier, ZenodoSource, identifier_of, record_entries};
 
     #[test]
     fn a_revision_is_read_from_the_reference_and_defaults_to_none() {
@@ -543,7 +548,10 @@ mod tests {
             ZenodoSource::record_of("zenodo:10.5281/zenodo.1234567").unwrap(),
             "1234567"
         );
-        assert_eq!(ZenodoSource::record_of("zenodo:1234567").unwrap(), "1234567");
+        assert_eq!(
+            ZenodoSource::record_of("zenodo:1234567").unwrap(),
+            "1234567"
+        );
         assert!(ZenodoSource::record_of("zenodo:no-digits-at-all").is_err());
         assert!(ZenodoSource::record_of("hf:datasets/org/name").is_err());
     }
@@ -566,16 +574,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].path, "a.csv", "entries are ordered by path bytes");
+        assert_eq!(
+            entries[0].path, "a.csv",
+            "entries are ordered by path bytes"
+        );
         assert_eq!(entries[0].size, Some(10));
 
         assert!(
             record_entries("https://zenodo.org/api/records/1", r#"{"no_files":[]}"#).is_err(),
             "a record naming no files was read as an empty one"
         );
-        assert!(
-            record_entries("https://zenodo.org/api/records/1", "not json at all").is_err()
-        );
+        assert!(record_entries("https://zenodo.org/api/records/1", "not json at all").is_err());
     }
 
     #[test]
@@ -597,6 +606,9 @@ mod tests {
             r#"{"files":[{"key":"a.csv","links":{"self":"https://zenodo.org/x"}}]}"#,
         )
         .unwrap();
-        assert_eq!(entries[0].size, None, "an unstated size was written as a number");
+        assert_eq!(
+            entries[0].size, None,
+            "an unstated size was written as a number"
+        );
     }
 }

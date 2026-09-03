@@ -20,12 +20,14 @@ fn signing() -> Credential {
     Credential {
         host: Host::new("bucket.example"),
         origin: CredentialOrigin::Environment,
-        secrets: Secrets::Signing { keys: SigningKeys {
-            access_key: "AKIAIOSFODNN7EXAMPLE".to_owned(),
-            secret_key: Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_owned()),
-            session_token: None,
-            region: "us-east-1".to_owned(),
-        } },
+        secrets: Secrets::Signing {
+            keys: SigningKeys {
+                access_key: "AKIAIOSFODNN7EXAMPLE".to_owned(),
+                secret_key: Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_owned()),
+                session_token: None,
+                region: "us-east-1".to_owned(),
+            },
+        },
     }
 }
 
@@ -63,7 +65,10 @@ fn an_access_key_is_not_a_secret_and_the_session_token_is() {
     if let Secrets::Signing { keys } = &mut credential.secrets {
         keys.session_token = Some(Secret::new("a-session-token-value".to_owned()));
     }
-    let written = format!("{credential:?}{}", serde_json::to_string(&credential).unwrap());
+    let written = format!(
+        "{credential:?}{}",
+        serde_json::to_string(&credential).unwrap()
+    );
     assert!(
         !written.contains("a-session-token-value"),
         "the session token reached an output: {written}"
@@ -75,7 +80,9 @@ fn a_bearer_credential_never_renders_its_value() {
     let credential = Credential {
         host: Host::new("host.example"),
         origin: CredentialOrigin::PlatformStore,
-        secrets: Secrets::Bearer { value: Secret::new("super-secret-bearer".to_owned()) },
+        secrets: Secrets::Bearer {
+            value: Secret::new("super-secret-bearer".to_owned()),
+        },
     };
     let written = format!(
         "{credential:?}{}",
@@ -92,7 +99,9 @@ fn the_two_shapes_are_distinguishable_without_reading_a_secret() {
     let bearer = Credential {
         host: Host::new("host.example"),
         origin: CredentialOrigin::Environment,
-        secrets: Secrets::Bearer { value: Secret::new("value".to_owned()) },
+        secrets: Secrets::Bearer {
+            value: Secret::new("value".to_owned()),
+        },
     };
     assert!(matches!(bearer.secrets, Secrets::Bearer { .. }));
     assert!(matches!(signing().secrets, Secrets::Signing { .. }));

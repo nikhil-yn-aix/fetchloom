@@ -4,7 +4,7 @@ use crate::digest::InteropDigest;
 use crate::error::{Error, ErrorKind};
 use crate::manifest::{Artifact, DigestClaims, Manifest};
 
-use super::{malformed, unrepresentable, Context, MetadataFormat, MetadataReader};
+use super::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 
 fn is_hex(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -120,7 +120,9 @@ impl MetadataReader for PoochRegistry {
     }
 
     fn recognizes(&self, name: &str, _bytes: &[u8]) -> bool {
-        name == "registry.txt" || name.ends_with(".registry") || name.ends_with("pooch-registry.txt")
+        name == "registry.txt"
+            || name.ends_with(".registry")
+            || name.ends_with("pooch-registry.txt")
     }
 
     fn read(&self, bytes: &[u8], context: &Context<'_>) -> Result<Manifest, Error> {
@@ -160,18 +162,15 @@ mod tests {
     use crate::limits::Limits;
 
     fn context<'a>(base: &'a str, name: &'a str, limits: &'a Limits) -> Context<'a> {
-        Context {
-            base,
-            name,
-            limits,
-        }
+        Context { base, name, limits }
     }
 
     #[test]
     fn reads_a_well_formed_registry() {
         let limits = Limits::default();
         let ctx = context("https://data.host/", "corpus", &limits);
-        let text = b"data/z.csv sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n\
+        let text =
+            b"data/z.csv sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n\
 data/a.csv 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n";
         let manifest = PoochRegistry.read(text, &ctx).unwrap();
         assert_eq!(manifest.name, "corpus");

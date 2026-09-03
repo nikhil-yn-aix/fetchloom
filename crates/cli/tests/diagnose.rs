@@ -331,7 +331,12 @@ fn why_after_a_real_get_reports_the_recorded_source_and_trust() {
         String::from_utf8_lossy(&got.stderr)
     );
 
-    let output = run_in(temporary.path(), &cache, &[], &["why", &reference, "--json"]);
+    let output = run_in(
+        temporary.path(),
+        &cache,
+        &[],
+        &["why", &reference, "--json"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -341,7 +346,11 @@ fn why_after_a_real_get_reports_the_recorded_source_and_trust() {
     let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(body["source"]["recorded"], serde_json::json!(true));
     assert_eq!(body["trust"]["recorded"], serde_json::json!(true));
-    assert!(body["source"]["source"].as_str().is_some_and(|found| found.contains("object")));
+    assert!(
+        body["source"]["source"]
+            .as_str()
+            .is_some_and(|found| found.contains("object"))
+    );
 }
 
 #[test]

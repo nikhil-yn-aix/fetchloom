@@ -2,22 +2,20 @@
 
 use std::path::Path;
 
+use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::EventPayload;
 use fetchloom_engine::hashing::Digester;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::{Artifact, DigestClaims, Manifest};
 use fetchloom_engine::pool::Processor;
-use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 
 /// Returns the dataset name a reference carries, which is the last named part
 /// of it.
 #[must_use]
 pub fn dataset_name(reference: &str) -> String {
     let trimmed = reference.trim_end_matches('/');
-    let after_scheme = trimmed
-        .split_once("://")
-        .map_or(trimmed, |(_, rest)| rest);
+    let after_scheme = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest);
     let last = after_scheme
         .rsplit(['/', '\\'])
         .find(|part| !part.is_empty() && *part != ".");
@@ -77,7 +75,12 @@ pub fn from_directory(
             layout: fetchloom_engine::selection::Layout::default(),
         });
     }
-    finish(dataset_name(&root.display().to_string()), artifacts, limits, emit)
+    finish(
+        dataset_name(&root.display().to_string()),
+        artifacts,
+        limits,
+        emit,
+    )
 }
 
 /// What one entry of a container hashed to when inference read its bytes.

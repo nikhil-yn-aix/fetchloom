@@ -143,7 +143,12 @@ fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&s
 /// Returns the headers that authorize one request, signing with a secret that
 /// never leaves this process.
 #[must_use]
-pub fn sign(keys: &SigningKeys, service: &str, request: &Request<'_>, time: &SigningTime) -> Signed {
+pub fn sign(
+    keys: &SigningKeys,
+    service: &str,
+    request: &Request<'_>,
+    time: &SigningTime,
+) -> Signed {
     let token = keys
         .session_token
         .as_ref()
@@ -208,7 +213,10 @@ mod tests {
             "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
         );
 
-        let long = keyed_hash(&[0xaa; 131], b"Test Using Larger Than Block-Size Key - Hash Key First");
+        let long = keyed_hash(
+            &[0xaa; 131],
+            b"Test Using Larger Than Block-Size Key - Hash Key First",
+        );
         assert_eq!(
             hex(&long),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
@@ -359,9 +367,9 @@ mod tests {
             "a temporary credential's token was not carried"
         );
         assert!(
-            signed
-                .authorization
-                .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"),
+            signed.authorization.contains(
+                "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+            ),
             "the token was carried without being signed over: {}",
             signed.authorization
         );

@@ -4,7 +4,7 @@ use crate::digest::InteropDigest;
 use crate::error::{Error, ErrorKind};
 use crate::manifest::{Artifact, DigestClaims, Manifest};
 
-use super::{malformed, unrepresentable, Context, MetadataFormat, MetadataReader};
+use super::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 
 fn is_hex(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -177,11 +177,7 @@ mod tests {
     use crate::limits::Limits;
 
     fn context<'a>(base: &'a str, name: &'a str, limits: &'a Limits) -> Context<'a> {
-        Context {
-            base,
-            name,
-            limits,
-        }
+        Context { base, name, limits }
     }
 
     #[test]

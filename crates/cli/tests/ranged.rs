@@ -9,7 +9,6 @@ use clap as _;
 use clap_complete as _;
 use ctrlc as _;
 use fetchloom_archive as _;
-use fetchloom_view as _;
 use fetchloom_cache::Cache;
 use fetchloom_cli::cache as cache_cli;
 use fetchloom_engine::degrade::DegradeQueue;
@@ -26,6 +25,7 @@ use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform as _;
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources::ObjectStoreSource;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;

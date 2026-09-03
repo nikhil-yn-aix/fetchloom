@@ -139,11 +139,11 @@ fn a_pinned_revision_reaches_a_different_location_than_an_unpinned_one() {
 
 #[test]
 fn a_provider_answering_something_else_is_refused_and_never_guessed_at() {
-    let server = TestServer::start(
-        Script::serving(b"not a record".to_vec()).replying(vec![Reply::Listing {
+    let server = TestServer::start(Script::serving(b"not a record".to_vec()).replying(vec![
+        Reply::Listing {
             format: IndexFormat::GeneratedHtml,
-        }]),
-    )
+        },
+    ]))
     .unwrap();
     let host = server.origin();
     let source = ZenodoSource::reaching(host, Limits::default(), counter());

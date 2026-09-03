@@ -143,7 +143,7 @@ impl Observer for Log {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogLevel, Log};
+    use super::{Log, LogLevel};
     use fetchloom_engine::event::{Event, EventPayload, Sequence};
     use fetchloom_engine::seam::observer::Observer;
 

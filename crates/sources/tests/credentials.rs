@@ -29,7 +29,9 @@ fn credential() -> Credential {
     Credential {
         host: Host::new("credential-test-host"),
         origin: CredentialOrigin::Environment,
-        secrets: fetchloom_engine::credential::Secrets::Bearer { value: Secret::new(SECRET.to_owned()) },
+        secrets: fetchloom_engine::credential::Secrets::Bearer {
+            value: Secret::new(SECRET.to_owned()),
+        },
     }
 }
 

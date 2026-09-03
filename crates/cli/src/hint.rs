@@ -181,9 +181,7 @@ mod tests {
                 );
             }
             assert!(
-                said.contains("would have")
-                    || said.contains("set ")
-                    || said.contains("can resume"),
+                said.contains("would have") || said.contains("set ") || said.contains("can resume"),
                 "the hint names no action the user could take: {said}"
             );
         }
@@ -213,7 +211,9 @@ mod tests {
         let hint = everything.hint();
         assert!(hint.is_some());
         assert!(
-            hint.unwrap_or_else(|| unreachable!()).key.starts_with("credential:"),
+            hint.unwrap_or_else(|| unreachable!())
+                .key
+                .starts_with("credential:"),
             "the run did not return the one hint that could have changed it most"
         );
     }

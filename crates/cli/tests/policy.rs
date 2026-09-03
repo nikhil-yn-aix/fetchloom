@@ -758,7 +758,9 @@ fn a_signing_credential_is_read_from_the_host_scoped_variables() {
         .expect("the lookup failed")
         .expect("no credential was found");
 
-    let keys = found.signing().expect("the credential was not a signing one");
+    let keys = found
+        .signing()
+        .expect("the credential was not a signing one");
     assert_eq!(keys.access_key, "AKIAEXAMPLE");
     assert_eq!(keys.region, "us-east-1");
     assert!(keys.session_token.is_none());
@@ -866,9 +868,7 @@ fn the_provider_helper_is_asked_only_for_a_host_that_signs() {
         .expect("the lookup failed")
         .expect("the helper answered nothing for a host that signs");
     assert_eq!(
-        signing_host
-            .signing()
-            .map(|keys| keys.access_key.as_str()),
+        signing_host.signing().map(|keys| keys.access_key.as_str()),
         Some("AKIAFROMAWS")
     );
 

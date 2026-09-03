@@ -122,8 +122,7 @@ impl HttpSource {
                 Method::Get => agent.get(&current),
             };
             if let Some(credential) = carried {
-                for (name, value) in
-                    authorizing_headers(credential, &current, here.host(), method)
+                for (name, value) in authorizing_headers(credential, &current, here.host(), method)
                 {
                     request = request.header(name, &value);
                 }

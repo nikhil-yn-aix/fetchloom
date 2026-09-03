@@ -211,7 +211,10 @@ fn disk_check(cache_root: &Path, platform: &NativePlatform) -> Check {
         Some(Ok(free)) => Check::new(
             "disk",
             Status::Ok,
-            format!("{free} bytes free on the volume holding {}", cache_root.display()),
+            format!(
+                "{free} bytes free on the volume holding {}",
+                cache_root.display()
+            ),
         ),
         Some(Err(reason)) => Check::new(
             "disk",

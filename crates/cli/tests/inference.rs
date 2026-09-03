@@ -122,8 +122,10 @@ fn a_manifest_places_a_plain_artifact_under_its_own_identifier() {
     let origin = server.origin();
     workspace.write(
         "dataset.yaml",
-        format!("name: named\nartifacts:\n  - id: corpus\n    sources: [\"{origin}/whatever.bin\"]\n")
-            .as_bytes(),
+        format!(
+            "name: named\nartifacts:\n  - id: corpus\n    sources: [\"{origin}/whatever.bin\"]\n"
+        )
+        .as_bytes(),
     );
     let output = workspace.run(&["get", "dataset.yaml", "--output", "out", "--json"]);
     assert_eq!(output.status.code(), Some(0));
@@ -145,8 +147,10 @@ fn an_identifier_that_escapes_the_destination_is_refused() {
     let origin = server.origin();
     workspace.write(
         "dataset.yaml",
-        format!("name: escaping\nartifacts:\n  - id: \"../outside\"\n    sources: [\"{origin}/x\"]\n")
-            .as_bytes(),
+        format!(
+            "name: escaping\nartifacts:\n  - id: \"../outside\"\n    sources: [\"{origin}/x\"]\n"
+        )
+        .as_bytes(),
     );
     let output = workspace.run(&["get", "dataset.yaml", "--output", "out", "--json"]);
     assert_eq!(
@@ -172,7 +176,13 @@ fn init_over_a_directory_reproduces_that_directory_exactly() {
         String::from_utf8_lossy(&written.stderr)
     );
 
-    let got = workspace.run(&["get", "source/dataset.yaml", "--output", "rebuilt", "--json"]);
+    let got = workspace.run(&[
+        "get",
+        "source/dataset.yaml",
+        "--output",
+        "rebuilt",
+        "--json",
+    ]);
     assert_eq!(
         got.status.code(),
         Some(0),
@@ -207,7 +217,11 @@ fn init_writes_the_manifest_to_standard_output_by_default() {
         "init wrote no manifest to standard output: {text}"
     );
     assert!(
-        !workspace.path().join("source").join("dataset.yaml").exists(),
+        !workspace
+            .path()
+            .join("source")
+            .join("dataset.yaml")
+            .exists(),
         "init wrote a file when it was asked for nothing but standard output"
     );
 }

@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use fetchloom_engine::credential::{
-    Secrets, SigningKeys, host_variable,
-    Credential, CredentialOrigin, Necessity, ProviderHelp, token_variable,
+    Credential, CredentialOrigin, Necessity, ProviderHelp, Secrets, SigningKeys, host_variable,
+    token_variable,
 };
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
@@ -132,10 +132,7 @@ impl<'a> CommandLinePolicy<'a> {
     }
 
     fn found(host: &Host, origin: CredentialOrigin, secrets: Secrets, from: &str) -> Credential {
-        eprintln!(
-            "using {} for {host} from {from}",
-            secrets.label()
-        );
+        eprintln!("using {} for {host} from {from}", secrets.label());
         Credential {
             host: host.clone(),
             origin,
@@ -151,11 +148,15 @@ impl<'a> CommandLinePolicy<'a> {
     /// Fails with `policy.credential_invalid` when an access key is set without
     /// the region a signature is computed over.
     fn host_scoped_keys(&self, host: &Host) -> Result<Option<SigningKeys>, Error> {
-        let Some(access_key) = self.environment.get(&host_variable("FETCHLOOM_ACCESS_KEY_", host))
+        let Some(access_key) = self
+            .environment
+            .get(&host_variable("FETCHLOOM_ACCESS_KEY_", host))
         else {
             return Ok(None);
         };
-        let Some(secret_key) = self.environment.get(&host_variable("FETCHLOOM_SECRET_KEY_", host))
+        let Some(secret_key) = self
+            .environment
+            .get(&host_variable("FETCHLOOM_SECRET_KEY_", host))
         else {
             return Err(missing_half(
                 host,
@@ -163,7 +164,10 @@ impl<'a> CommandLinePolicy<'a> {
                 "a secret key",
             ));
         };
-        let Some(region) = self.environment.get(&host_variable("FETCHLOOM_REGION_", host)) else {
+        let Some(region) = self
+            .environment
+            .get(&host_variable("FETCHLOOM_REGION_", host))
+        else {
             return Err(missing_region(
                 host,
                 &host_variable("FETCHLOOM_REGION_", host),

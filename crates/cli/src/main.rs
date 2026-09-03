@@ -858,17 +858,8 @@ fn run_init(
     let processor = Arc::new(processor);
     let inferred = if run::is_served(&adapters, reference) {
         infer_over_the_network(
-            reference,
-            &adapters,
-            &policy,
-            &work,
-            &processor,
-            resolved,
-            &limits,
-            &emit,
-            observer,
-            sequence,
-            &reporter,
+            reference, &adapters, &policy, &work, &processor, resolved, &limits, &emit, observer,
+            sequence, &reporter,
         )
     } else {
         match run::local_path(reference) {
@@ -948,7 +939,8 @@ fn infer_over_the_network(
     observer: &dyn Observer,
     sequence: &Sequence,
     reporter: &Reporter<'_>,
-) -> Result<Result<fetchloom_engine::manifest::Manifest, fetchloom_engine::error::Error>, ExitCode> {
+) -> Result<Result<fetchloom_engine::manifest::Manifest, fetchloom_engine::error::Error>, ExitCode>
+{
     if !run::is_container(adapters, reference) {
         return Ok(Err(fetchloom_engine::error::Error::new(
             fetchloom_engine::error::ErrorKind::ReferenceUnresolved,

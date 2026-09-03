@@ -136,11 +136,7 @@ pub fn resolve_color(
 /// Reports whether a hint may be printed at all, which contracts settles before
 /// any hint is chosen.
 #[must_use]
-pub fn hints_permitted(
-    disabled: bool,
-    streams: Streams,
-    environment: &dyn Environment,
-) -> bool {
+pub fn hints_permitted(disabled: bool, streams: Streams, environment: &dyn Environment) -> bool {
     !disabled && streams.stderr && streams.stdin && !continuous_integration(environment)
 }
 
@@ -183,7 +179,11 @@ mod tests {
 
     #[test]
     fn color_is_forced_on_and_off_by_the_flag_whatever_the_stream_is() {
-        assert!(resolve_color(Some(ColorChoice::Always), piped(), &nothing()));
+        assert!(resolve_color(
+            Some(ColorChoice::Always),
+            piped(),
+            &nothing()
+        ));
         assert!(!resolve_color(
             Some(ColorChoice::Never),
             terminal(),

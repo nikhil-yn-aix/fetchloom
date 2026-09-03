@@ -6,7 +6,7 @@ use crate::digest::InteropDigest;
 use crate::error::{Error, ErrorKind};
 use crate::manifest::{Artifact, DigestClaims, Manifest};
 
-use super::{malformed, unrepresentable, Context, MetadataFormat, MetadataReader};
+use super::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 
 fn is_hex(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -70,9 +70,8 @@ fn parse_fetch(bytes: &[u8], context: &Context<'_>) -> Result<BTreeMap<String, F
             ),
         ));
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| {
-        malformed(MetadataFormat::BagIt, "fetch.txt is not valid UTF-8 text")
-    })?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| malformed(MetadataFormat::BagIt, "fetch.txt is not valid UTF-8 text"))?;
     let mut entries = BTreeMap::new();
     for line in text.lines() {
         if line.is_empty() || line.starts_with('#') {
@@ -253,7 +252,10 @@ impl MetadataReader for BagIt {
     fn recognizes(&self, name: &str, _bytes: &[u8]) -> bool {
         matches!(
             name,
-            "manifest-sha256.txt" | "manifest-sha512.txt" | "manifest-md5.txt" | "manifest-sha1.txt"
+            "manifest-sha256.txt"
+                | "manifest-sha512.txt"
+                | "manifest-md5.txt"
+                | "manifest-sha1.txt"
         )
     }
 
@@ -272,11 +274,7 @@ mod tests {
     use crate::limits::Limits;
 
     fn context<'a>(base: &'a str, name: &'a str, limits: &'a Limits) -> Context<'a> {
-        Context {
-            base,
-            name,
-            limits,
-        }
+        Context { base, name, limits }
     }
 
     #[test]
@@ -377,15 +375,23 @@ mod tests {
     fn fetch_file_supplies_source_and_size_and_dash_omits_size() {
         let limits = Limits::default();
         let ctx = context(".", "corpus", &limits);
-        let manifest_text = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 data/a.bin\n\
+        let manifest_text =
+            b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 data/a.bin\n\
 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 data/b.bin\n";
         let fetch_text = b"https://host/a.bin - data/a.bin\nhttps://host/b.bin 128 data/b.bin\n";
-        let manifest =
-            BagIt::read_with_fetch(manifest_text, Some(fetch_text), &ctx).unwrap();
-        let a = manifest.artifacts.iter().find(|a| a.id == "data/a.bin").unwrap();
+        let manifest = BagIt::read_with_fetch(manifest_text, Some(fetch_text), &ctx).unwrap();
+        let a = manifest
+            .artifacts
+            .iter()
+            .find(|a| a.id == "data/a.bin")
+            .unwrap();
         assert_eq!(a.sources, vec!["https://host/a.bin".to_string()]);
         assert_eq!(a.size, None);
-        let b = manifest.artifacts.iter().find(|a| a.id == "data/b.bin").unwrap();
+        let b = manifest
+            .artifacts
+            .iter()
+            .find(|a| a.id == "data/b.bin")
+            .unwrap();
         assert_eq!(b.sources, vec!["https://host/b.bin".to_string()]);
         assert_eq!(b.size, Some(128));
     }

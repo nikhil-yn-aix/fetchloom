@@ -63,13 +63,15 @@ fn readers() -> Vec<(Box<dyn MetadataReader>, &'static [u8], &'static [u8])> {
 fn no_reader_ever_emits_an_artifact_naming_no_source() {
     let limits = Limits::default();
     for (reader, good, _) in readers() {
-        let manifest = reader.read(good, &context(&limits)).unwrap_or_else(|error| {
-            panic!(
-                "{} did not read its own well-formed document: {}",
-                reader.format().label(),
-                error.next_action()
-            )
-        });
+        let manifest = reader
+            .read(good, &context(&limits))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} did not read its own well-formed document: {}",
+                    reader.format().label(),
+                    error.next_action()
+                )
+            });
         for artifact in &manifest.artifacts {
             assert!(
                 !artifact.sources.is_empty(),
@@ -95,12 +97,15 @@ fn no_reader_ever_emits_an_artifact_naming_no_source() {
 fn every_reader_refuses_a_digest_it_cannot_represent_by_name() {
     let limits = Limits::default();
     for (reader, _, refused) in readers() {
-        let error = reader.read(refused, &context(&limits)).err().unwrap_or_else(|| {
-            panic!(
-                "{} accepted a document stating a digest it does not carry",
-                reader.format().label()
-            )
-        });
+        let error = reader
+            .read(refused, &context(&limits))
+            .err()
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} accepted a document stating a digest it does not carry",
+                    reader.format().label()
+                )
+            });
         let said = error.next_action().to_lowercase();
         assert!(
             said.contains("md5"),

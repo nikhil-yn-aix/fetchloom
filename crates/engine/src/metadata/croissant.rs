@@ -8,7 +8,7 @@ use crate::digest::InteropDigest;
 use crate::document::{self, Syntax};
 use crate::error::{Error, ErrorKind};
 use crate::manifest::{Artifact, DigestClaims, Manifest};
-use crate::metadata::{malformed, unrepresentable, Context, MetadataFormat, MetadataReader};
+use crate::metadata::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 use crate::selection::{Glob, Layout};
 
 /// Reads a Croissant JSON-LD dataset description into a manifest.
@@ -49,12 +49,15 @@ impl MetadataReader for Croissant {
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let distribution = root.get("distribution").and_then(Value::as_array).ok_or_else(|| {
-            malformed(
-                self.format(),
-                "name a distribution array of file objects and file sets",
-            )
-        })?;
+        let distribution = root
+            .get("distribution")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                malformed(
+                    self.format(),
+                    "name a distribution array of file objects and file sets",
+                )
+            })?;
 
         let mut artifacts: Vec<Artifact> = Vec::new();
         let mut object_index: HashMap<String, usize> = HashMap::new();
@@ -62,7 +65,10 @@ impl MetadataReader for Croissant {
 
         for node in distribution {
             let Value::Object(fields) = node else {
-                return Err(malformed(self.format(), "each distribution entry is a JSON object"));
+                return Err(malformed(
+                    self.format(),
+                    "each distribution entry is a JSON object",
+                ));
             };
             let node_type = fields.get("@type");
             let is_file_object = node_type.is_some_and(|value| type_matches(value, "FileObject"));
@@ -119,7 +125,10 @@ impl MetadataReader for Croissant {
             ));
         }
         if artifacts.is_empty() {
-            return Err(malformed(self.format(), "name at least one file object with a location"));
+            return Err(malformed(
+                self.format(),
+                "name at least one file object with a location",
+            ));
         }
 
         Ok(Manifest {
@@ -157,7 +166,12 @@ fn read_file_object(fields: &Map<String, Value>) -> Result<Artifact, Error> {
         .get("@id")
         .and_then(Value::as_str)
         .or_else(|| fields.get("name").and_then(Value::as_str))
-        .ok_or_else(|| malformed(MetadataFormat::Croissant, "give each FileObject an @id or a name"))?
+        .ok_or_else(|| {
+            malformed(
+                MetadataFormat::Croissant,
+                "give each FileObject an @id or a name",
+            )
+        })?
         .to_owned();
 
     if fields.get("md5").is_some() {
@@ -238,7 +252,10 @@ fn read_content_size(value: Option<&Value>) -> Result<Option<u64>, Error> {
             })?;
             Ok(Some(bytes))
         }
-        Some(_) => Err(malformed(MetadataFormat::Croissant, "contentSize is a number or a string")),
+        Some(_) => Err(malformed(
+            MetadataFormat::Croissant,
+            "contentSize is a number or a string",
+        )),
     }
 }
 
@@ -249,12 +266,14 @@ fn read_globs(value: Option<&Value>) -> Result<Vec<Glob>, Error> {
         Some(Value::Array(items)) => items
             .iter()
             .map(|item| {
-                item.as_str().map(|text| Glob::new(text.to_owned())).ok_or_else(|| {
-                    malformed(
-                        MetadataFormat::Croissant,
-                        "includes is a glob string or an array of glob strings",
-                    )
-                })
+                item.as_str()
+                    .map(|text| Glob::new(text.to_owned()))
+                    .ok_or_else(|| {
+                        malformed(
+                            MetadataFormat::Croissant,
+                            "includes is a glob string or an array of glob strings",
+                        )
+                    })
             })
             .collect(),
         Some(_) => Err(malformed(
@@ -278,10 +297,17 @@ mod tests {
     use crate::selection::Layout;
 
     fn context() -> (Limits, String, String) {
-        (Limits::default(), "https://example.org/".to_owned(), "fallback".to_owned())
+        (
+            Limits::default(),
+            "https://example.org/".to_owned(),
+            "fallback".to_owned(),
+        )
     }
 
-    fn read(reader: Croissant, bytes: &[u8]) -> Result<crate::manifest::Manifest, crate::error::Error> {
+    fn read(
+        reader: Croissant,
+        bytes: &[u8],
+    ) -> Result<crate::manifest::Manifest, crate::error::Error> {
         let (limits, base, name) = context();
         reader.read(
             bytes,
@@ -318,7 +344,10 @@ mod tests {
         assert_eq!(manifest.artifacts.len(), 1);
         let artifact = &manifest.artifacts[0];
         assert_eq!(artifact.id, "ml-25m.zip");
-        assert_eq!(artifact.sources, vec!["https://files.grouplens.org/ml-25m.zip".to_owned()]);
+        assert_eq!(
+            artifact.sources,
+            vec!["https://files.grouplens.org/ml-25m.zip".to_owned()]
+        );
         assert_eq!(artifact.size, Some(261_978_986));
         assert_eq!(artifact.media_type.as_deref(), Some("application/zip"));
         let digest = artifact.digest.as_ref().unwrap();
@@ -341,7 +370,11 @@ mod tests {
         let reader = Croissant;
         let error = read(reader, document).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ManifestInvalid);
-        assert!(error.next_action().contains("no contentUrl and no containedIn"));
+        assert!(
+            error
+                .next_action()
+                .contains("no contentUrl and no containedIn")
+        );
     }
 
     #[test]
@@ -410,7 +443,10 @@ mod tests {
         assert_eq!(manifest.artifacts.len(), 1);
         let artifact = &manifest.artifacts[0];
         assert_eq!(artifact.id, "archive.zip");
-        assert_eq!(artifact.sources, vec!["https://host/archive.zip".to_owned()]);
+        assert_eq!(
+            artifact.sources,
+            vec!["https://host/archive.zip".to_owned()]
+        );
         assert_eq!(artifact.media_type.as_deref(), Some("application/zip"));
         assert_eq!(artifact.select.len(), 1);
         assert_eq!(artifact.select[0].as_str(), "*.csv");
@@ -527,7 +563,11 @@ mod tests {
         let first = read(reader, document).unwrap();
         let second = read(reader, document).unwrap();
         assert_eq!(first, second);
-        let ids: Vec<&str> = first.artifacts.iter().map(|artifact| artifact.id.as_str()).collect();
+        let ids: Vec<&str> = first
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect();
         assert_eq!(ids, vec!["b.bin", "a.bin", "c.bin"]);
     }
 

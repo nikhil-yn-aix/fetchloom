@@ -454,7 +454,9 @@ fn a_credential_the_source_rejects_is_reported_as_the_credential_and_not_the_sta
         let credential = Credential {
             host: Host::new("127.0.0.1".to_owned()),
             origin: CredentialOrigin::Environment,
-            secrets: fetchloom_engine::credential::Secrets::Bearer { value: Secret::new("token".to_owned()) },
+            secrets: fetchloom_engine::credential::Secrets::Bearer {
+                value: Secret::new("token".to_owned()),
+            },
         };
         let failure = source
             .fetch(

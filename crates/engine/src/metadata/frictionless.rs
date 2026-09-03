@@ -7,7 +7,7 @@ use crate::document::{self, Syntax};
 use crate::error::{Error, ErrorKind};
 use crate::license::License;
 use crate::manifest::{Artifact, DigestClaims, Manifest};
-use crate::metadata::{malformed, unrepresentable, Context, MetadataFormat, MetadataReader};
+use crate::metadata::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 use crate::selection::Layout;
 
 /// Reads a Frictionless data package descriptor into a manifest.
@@ -48,9 +48,10 @@ impl MetadataReader for FrictionlessPackage {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let license = read_license(root)?;
-        let resources = root.get("resources").and_then(Value::as_array).ok_or_else(|| {
-            malformed(self.format(), "name a resources array")
-        })?;
+        let resources = root
+            .get("resources")
+            .and_then(Value::as_array)
+            .ok_or_else(|| malformed(self.format(), "name a resources array"))?;
 
         if resources.len() as u64 > context.limits.listing_entries {
             return Err(Error::new(
@@ -96,8 +97,14 @@ fn read_license(root: &Map<String, Value>) -> Result<Option<License>, Error> {
             "each license is a JSON object",
         ));
     };
-    let spdx = fields.get("name").and_then(Value::as_str).map(str::to_owned);
-    let url = fields.get("path").and_then(Value::as_str).map(str::to_owned);
+    let spdx = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let url = fields
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Ok(Some(License {
         spdx,
         url,
@@ -109,7 +116,12 @@ fn read_resource(fields: &Map<String, Value>) -> Result<Artifact, Error> {
     let id = fields
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| malformed(MetadataFormat::FrictionlessPackage, "give each resource a name"))?
+        .ok_or_else(|| {
+            malformed(
+                MetadataFormat::FrictionlessPackage,
+                "give each resource a name",
+            )
+        })?
         .to_owned();
 
     let path = fields.get("path");
@@ -145,7 +157,10 @@ fn read_resource(fields: &Map<String, Value>) -> Result<Artifact, Error> {
     let size = match fields.get("bytes") {
         None => None,
         Some(value) => Some(value.as_u64().ok_or_else(|| {
-            malformed(MetadataFormat::FrictionlessPackage, "bytes is a whole number")
+            malformed(
+                MetadataFormat::FrictionlessPackage,
+                "bytes is a whole number",
+            )
         })?),
     };
 
@@ -371,7 +386,11 @@ mod tests {
         let first = read(reader, document).unwrap();
         let second = read(reader, document).unwrap();
         assert_eq!(first, second);
-        let ids: Vec<&str> = first.artifacts.iter().map(|artifact| artifact.id.as_str()).collect();
+        let ids: Vec<&str> = first
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect();
         assert_eq!(ids, vec!["b", "a", "c"]);
     }
 

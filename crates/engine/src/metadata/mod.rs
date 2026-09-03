@@ -60,7 +60,9 @@ pub struct Context<'a> {
 pub fn unrepresentable(what: &str, why: &str) -> Error {
     Error::new(
         ErrorKind::ManifestInvalid,
-        format!("{why}, so {what} cannot be read as a manifest without inventing what it does not state"),
+        format!(
+            "{why}, so {what} cannot be read as a manifest without inventing what it does not state"
+        ),
     )
 }
 

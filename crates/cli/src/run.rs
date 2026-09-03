@@ -3141,8 +3141,9 @@ fn fill_dataset_staging(
             }
             place_object(with, artifact.digest, &at)?;
             entries.push(TreeEntry::File {
-                path: EntryPath::new(&placement)
-                    .map_err(|reason| Error::new(ErrorKind::ReferenceUnresolved, reason.to_string()))?,
+                path: EntryPath::new(&placement).map_err(|reason| {
+                    Error::new(ErrorKind::ReferenceUnresolved, reason.to_string())
+                })?,
                 size: artifact.size,
                 mode: Mode::ReadWrite,
                 content: artifact.digest,

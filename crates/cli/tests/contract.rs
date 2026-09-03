@@ -577,8 +577,18 @@ fn the_surface_holds_every_command_the_contract_names() {
     let output = run(&["--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
     for present in [
-        "get", "init", "plan", "apply", "verify", "repair", "cache", "watch", "completions",
-        "explain", "doctor", "why",
+        "get",
+        "init",
+        "plan",
+        "apply",
+        "verify",
+        "repair",
+        "cache",
+        "watch",
+        "completions",
+        "explain",
+        "doctor",
+        "why",
     ] {
         assert!(help.contains(present), "{present} is missing from {help}");
     }
