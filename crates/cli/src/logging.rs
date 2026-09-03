@@ -101,7 +101,9 @@ pub struct Log {
 
 impl std::fmt::Debug for Log {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Log").field("level", &self.level).finish()
+        f.debug_struct("Log")
+            .field("level", &self.level)
+            .finish_non_exhaustive()
     }
 }
 
@@ -169,23 +171,26 @@ mod tests {
         assert_eq!(LogLevel::Error.raised(0), (LogLevel::Error, false));
     }
 
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Shared {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            #[expect(
+                clippy::unwrap_used,
+                reason = "a poisoned mutex in a test is the assertion"
+            )]
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn a_level_renders_only_what_it_admits() {
         let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Shared {
-            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-                #[expect(
-                    clippy::unwrap_used,
-                    reason = "a poisoned mutex in a test is the assertion"
-                )]
-                self.0.lock().unwrap().extend_from_slice(buffer);
-                Ok(buffer.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         let log = Log::writing(
             LogLevel::Error,
             Box::new(Shared(std::sync::Arc::clone(&written))),

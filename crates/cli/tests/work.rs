@@ -18,6 +18,7 @@ use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 #[cfg(unix)]
 use rustix as _;
 use serde as _;

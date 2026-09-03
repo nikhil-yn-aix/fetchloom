@@ -223,15 +223,15 @@ pub struct Materialization<'a> {
 pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
     Adapters::new(vec![
         AnySource::new(fetchloom_sources::HuggingFaceSource::new(
-            limits.clone(),
+            *limits,
             Arc::clone(work),
         )),
         AnySource::new(fetchloom_sources::ZenodoSource::new(
-            limits.clone(),
+            *limits,
             Arc::clone(work),
         )),
-        AnySource::new(ObjectStoreSource::new(limits.clone(), Arc::clone(work))),
-        AnySource::new(HttpSource::new(limits.clone(), Arc::clone(work))),
+        AnySource::new(ObjectStoreSource::new(*limits, Arc::clone(work))),
+        AnySource::new(HttpSource::new(*limits, Arc::clone(work))),
     ])
 }
 
@@ -787,6 +787,7 @@ fn fill_staging(
     let moving = Span::start();
     emit(EventPayload::TransferStart {
         source: fetchloom_engine::redact::SafeUrl::new(&source.to_string_lossy()),
+        host: fetchloom_engine::reference::Host::new(""),
         expected_bytes: Some(walked.bytes),
     });
 
@@ -835,6 +836,7 @@ fn fill_staging(
     }
 
     emit(EventPayload::TransferEnd {
+        host: fetchloom_engine::reference::Host::new(""),
         bytes: copied,
         duration_ms: moving.elapsed_ms(),
     });
@@ -1391,7 +1393,7 @@ pub fn materialize_remote(
         return Err(unserved(location));
     };
     let pause = SleepingPause;
-    let limits = with.policy.limits().clone();
+    let limits = *with.policy.limits();
     emit(EventPayload::ResolveEnd {
         duration_ms: resolving.elapsed_ms(),
     });
@@ -1557,6 +1559,10 @@ pub fn infer_remote(
 ///
 /// Fails when the container cannot be listed, when an entry cannot be
 /// transferred, and when the destination cannot be published.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a container materialization is decided by what it runs under, where it reads, where it writes, what it selects, the two flags that govern an existing destination, and both observers"
+)]
 pub fn materialize_remote_container(
     with: &Materialization<'_>,
     location: &str,
@@ -1721,7 +1727,7 @@ fn transfer_container_entries(
     sequence: &Sequence,
     emit: &(dyn Fn(EventPayload) + Sync),
 ) -> Result<Vec<(String, ContentDigest, u64)>, Error> {
-    let limits = with.policy.limits().clone();
+    let limits = *with.policy.limits();
     let pause = SleepingPause;
     let locations: Vec<String> = listed
         .iter()
@@ -2849,7 +2855,7 @@ fn transfer_object(
         ));
     };
     let pause = SleepingPause;
-    let limits = with.policy.limits().clone();
+    let limits = *with.policy.limits();
     let degradations = DegradeQueue::new();
     let host = locations
         .first()

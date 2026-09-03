@@ -317,22 +317,7 @@ pub fn resolve_all(
         Sourced::new(default_cache_dir(environment), Origin::Default)
     };
 
-    let (log, log_clamped) = if flags.verbose > 0 {
-        let (level, clamped) = LogLevel::default().raised(u32::from(flags.verbose));
-        (Sourced::new(level, Origin::CommandLine), clamped)
-    } else if let Some(level) = from_environment::<LogLevel>(environment, "FETCHLOOM_LOG", "log")? {
-        (Sourced::new(level, Origin::Environment), false)
-    } else if let Some((level, origin)) = from_files(
-        &levels,
-        |file| file.log.clone(),
-        |text| text.parse::<LogLevel>().ok(),
-        "log",
-    )? {
-        (Sourced::new(level, origin), false)
-    } else {
-        (Sourced::new(LogLevel::default(), Origin::Default), false)
-    };
-
+    let (log, log_clamped) = resolve_log(flags, &levels, environment)?;
     let defaults = Limits::default();
     let retries = resolve(
         transfer.retries.and_then(NonZeroU32::new),
@@ -341,18 +326,7 @@ pub fn resolve_all(
         |file| file.retries,
         NonZeroU32::new(defaults.retry_attempts).unwrap_or(NonZeroU32::MIN),
     );
-    let timeout = if let Some(span) = transfer.timeout {
-        Sourced::new(span.0, Origin::CommandLine)
-    } else if let Some((span, origin)) = from_files(
-        &levels,
-        |file| file.timeout.clone(),
-        |text| text.parse::<DurationArg>().ok().map(|span| span.0),
-        "timeout",
-    )? {
-        Sourced::new(span, origin)
-    } else {
-        Sourced::new(defaults.idle_timeout, Origin::Default)
-    };
+    let timeout = resolve_timeout(transfer, &levels, defaults)?;
     let sources = match levels.pick(|file| file.sources.clone()) {
         Some((bases, origin)) => Sourced::new(bases, origin),
         None => Sourced::new(Vec::new(), Origin::Default),
@@ -455,4 +429,57 @@ fn resolve_tuning(
         aggressive,
         deterministic_io,
     })
+}
+
+/// Resolves the log level and reports whether the request was clamped to the
+/// highest one.
+///
+/// # Errors
+///
+/// Fails when a level supplied names something this build does not take.
+fn resolve_log(
+    flags: &GlobalFlags,
+    levels: &Levels<'_>,
+    environment: &dyn Environment,
+) -> Result<(Sourced<LogLevel>, bool), Refused> {
+    if flags.verbose > 0 {
+        let (level, clamped) = LogLevel::default().raised(u32::from(flags.verbose));
+        return Ok((Sourced::new(level, Origin::CommandLine), clamped));
+    }
+    if let Some(level) = from_environment::<LogLevel>(environment, "FETCHLOOM_LOG", "log")? {
+        return Ok((Sourced::new(level, Origin::Environment), false));
+    }
+    if let Some((level, origin)) = from_files(
+        levels,
+        |file| file.log.clone(),
+        |text| text.parse::<LogLevel>().ok(),
+        "log",
+    )? {
+        return Ok((Sourced::new(level, origin), false));
+    }
+    Ok((Sourced::new(LogLevel::default(), Origin::Default), false))
+}
+
+/// Resolves the idle timeout a connection is held to.
+///
+/// # Errors
+///
+/// Fails when a level supplied a value that is not a duration.
+fn resolve_timeout(
+    transfer: &TransferFlags,
+    levels: &Levels<'_>,
+    defaults: Limits,
+) -> Result<Sourced<Duration>, Refused> {
+    if let Some(span) = transfer.timeout {
+        return Ok(Sourced::new(span.0, Origin::CommandLine));
+    }
+    if let Some((span, origin)) = from_files(
+        levels,
+        |file| file.timeout.clone(),
+        |text| text.parse::<DurationArg>().ok().map(|span| span.0),
+        "timeout",
+    )? {
+        return Ok(Sourced::new(span, origin));
+    }
+    Ok(Sourced::new(defaults.idle_timeout, Origin::Default))
 }

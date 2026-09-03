@@ -18,6 +18,7 @@ use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;
@@ -572,49 +573,39 @@ fn completions_are_written_for_every_shell() {
 }
 
 #[test]
-fn the_surface_holds_exactly_the_commands_this_build_performs() {
+fn the_surface_holds_every_command_the_contract_names() {
     let output = run(&["--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
     for present in [
-        "get",
-        "plan",
-        "apply",
-        "verify",
-        "completions",
-        "explain",
-        "cache",
-        "repair",
+        "get", "init", "plan", "apply", "verify", "repair", "cache", "watch", "completions",
+        "explain", "doctor", "why",
     ] {
         assert!(help.contains(present), "{present} is missing from {help}");
     }
-    for absent in ["init", "watch", "doctor", "why"] {
-        assert!(
-            !help.contains(absent),
-            "{absent} is in the surface and performs nothing: {help}"
+}
+
+#[test]
+fn every_contracted_command_acts_rather_than_being_a_usage_error() {
+    for named in ["doctor", "why", "init", "watch"] {
+        let output = run(&[named, "--help"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{named} is present and cannot act: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
 
 #[test]
-fn a_command_this_build_does_not_perform_is_not_accepted() {
-    for absent in ["init", "watch", "doctor", "why"] {
-        let output = run(&[absent]);
+fn every_contracted_global_flag_is_accepted() {
+    for flag in ["--color=never", "--no-hints", "--verbose"] {
+        let output = run(&["explain", flag]);
         assert_eq!(
             output.status.code(),
-            Some(2),
-            "{absent} was accepted by the parser"
-        );
-    }
-}
-
-#[test]
-fn a_flag_this_build_does_not_act_on_is_not_accepted() {
-    for absent in ["--color=never", "--no-hints"] {
-        let output = run(&["explain", absent]);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{absent} was accepted and does nothing"
+            Some(0),
+            "{flag} was refused: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

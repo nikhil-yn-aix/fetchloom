@@ -177,6 +177,10 @@ impl Platform for NativePlatform {
         imp::volume_id(path)
     }
 
+    fn free_space(&self, path: &Path) -> Result<u64, Error> {
+        imp::free_space(path)
+    }
+
     fn file_id(&self, path: &Path) -> Result<FileId, Error> {
         imp::file_id(path)
     }

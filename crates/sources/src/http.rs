@@ -639,3 +639,20 @@ fn first_byte_of(value: &str) -> Option<u64> {
 pub(crate) fn is_over_http(reference: &str) -> bool {
     reference.starts_with("http://") || reference.starts_with("https://")
 }
+
+/// Reports whether this platform's certificate trust store can be loaded, which
+/// is what a source needs before it can secure a connection.
+///
+/// Makes no request, so it answers the same question offline.
+#[must_use]
+pub fn trust_store_loads() -> bool {
+    let _ = rustls_graviola::default_provider().install_default();
+    ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build();
+    true
+}

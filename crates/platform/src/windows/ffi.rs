@@ -28,6 +28,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateSymbolicLinkW, FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
+    GetDiskFreeSpaceExW,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileAllocationInfo, FileBasicInfo, FileEndOfFileInfo,
     FileIdInfo, FlushFileBuffers, GetDriveTypeW, GetFileInformationByHandleEx,
     GetVolumeInformationByHandleW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -723,4 +724,28 @@ pub(crate) fn read_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
     // SAFETY: the pointer came from a successful CredReadW and is freed exactly once here.
     unsafe { CredFree(held.cast::<c_void>()) };
     Ok(Some(blob))
+}
+
+/// Returns how many bytes the volume a path is on has free for this user.
+///
+/// # Errors
+///
+/// Fails when the path is not there or the platform refuses the query.
+pub(crate) fn free_space(path: &Path) -> std::io::Result<u64> {
+    let wide = wide(path);
+    let mut available: u64 = 0;
+    // SAFETY: the name is a NUL-terminated wide string that outlives the call, and
+    // the out parameter is a u64 this frame owns; the other two are optional and null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &raw mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(available)
 }

@@ -17,6 +17,7 @@ use fetchloom_engine as _;
 use fetchloom_faults as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;
@@ -215,13 +216,20 @@ fn an_unknown_key_is_an_error() {
 }
 
 #[test]
-fn a_key_this_build_does_not_act_on_is_an_error() {
+fn every_key_the_contract_names_is_read() {
     let temporary = TempDir::new().unwrap();
-    for key in ["color = \"never\"", "hints = false"] {
+    for key in [
+        "color = \"never\"",
+        "hints = false",
+        "log = \"debug\"",
+        "retries = 4",
+        "timeout = \"45s\"",
+        "sources = [\"https://lab.edu/data/\"]",
+    ] {
         let path = write(temporary.path(), "fetchloom.toml", &format!("{key}\n"));
         assert!(
-            config::read(&path).is_err(),
-            "{key} was accepted and does nothing"
+            config::read(&path).is_ok(),
+            "{key} is a contracted key and was refused"
         );
     }
 }

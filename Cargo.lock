@@ -395,6 +395,7 @@ dependencies = [
  "fetchloom-faults",
  "fetchloom-platform",
  "fetchloom-sources",
+ "fetchloom-view",
  "flate2",
  "mimalloc",
  "rustix",
@@ -445,6 +446,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+]
+
+[[package]]
+name = "fetchloom-view"
+version = "0.1.0"
+dependencies = [
+ "fetchloom-engine",
 ]
 
 [[package]]

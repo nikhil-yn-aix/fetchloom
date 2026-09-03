@@ -385,3 +385,12 @@ fn decode(blob: &[u8], target: &str) -> Result<String, Error> {
         .trim_end_matches(char::from(0))
         .to_owned())
 }
+
+/// Returns how many bytes the volume a path is on has free for this user.
+///
+/// # Errors
+///
+/// Fails when the path is not there or the platform refuses the query.
+pub(crate) fn free_space(path: &Path) -> Result<u64, Error> {
+    ffi::free_space(path).map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
+}

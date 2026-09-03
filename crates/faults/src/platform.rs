@@ -53,6 +53,11 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
         self.inner.volume_id(path)
     }
 
+    fn free_space(&self, path: &Path) -> Result<u64, Error> {
+        self.gate(Operation::VolumeId)?;
+        self.inner.free_space(path)
+    }
+
     fn file_id(&self, path: &Path) -> Result<FileId, Error> {
         self.gate(Operation::FileId)?;
         self.inner.file_id(path)

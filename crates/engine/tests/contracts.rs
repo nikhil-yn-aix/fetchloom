@@ -122,6 +122,10 @@ fn every_error_kind_is_reachable_and_carries_the_required_fields() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one payload per contracted event name, and the contract lists thirty-four"
+)]
 fn every_event_name_the_contract_lists_is_produced_by_a_payload() {
     let listed: BTreeSet<&str> = EVENT_NAMES.iter().copied().collect();
     assert_eq!(listed.len(), EVENT_NAMES.len());
@@ -172,11 +176,13 @@ fn every_event_name_the_contract_lists_is_produced_by_a_payload() {
             reason: "stalled".to_owned(),
         },
         EventPayload::TransferStart {
+            host: fetchloom_engine::reference::Host::new("host.example"),
             source: source.clone(),
             expected_bytes: None,
         },
         EventPayload::TransferProgress { bytes: 1 },
         EventPayload::TransferRetry {
+            host: fetchloom_engine::reference::Host::new("host.example"),
             attempt: 1,
             reason: "timeout".to_owned(),
         },
@@ -185,6 +191,7 @@ fn every_event_name_the_contract_lists_is_produced_by_a_payload() {
             bytes_kept: 1,
         },
         EventPayload::TransferEnd {
+            host: fetchloom_engine::reference::Host::new("host.example"),
             bytes: 1,
             duration_ms: 1,
         },

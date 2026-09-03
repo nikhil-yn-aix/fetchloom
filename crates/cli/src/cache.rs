@@ -51,9 +51,12 @@ pub fn open(
         {
             Opened::Refused(Box::new(refused))
         }
-        Err(refused) => Opened::Degraded {
-            reason: refused.next_action().to_owned(),
-        },
+        Err(refused) => {
+            crate::hint::record(|observed| observed.cache_unusable = true);
+            Opened::Degraded {
+                reason: refused.next_action().to_owned(),
+            }
+        }
     }
 }
 

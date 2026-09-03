@@ -10,6 +10,7 @@ use clap as _;
 use clap_complete as _;
 use ctrlc as _;
 use fetchloom_archive as _;
+use fetchloom_view as _;
 use fetchloom_platform as _;
 use flate2 as _;
 #[cfg(unix)]

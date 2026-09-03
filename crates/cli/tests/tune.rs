@@ -16,6 +16,7 @@ use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::tuning::FIRST_PER_HOST;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 #[cfg(unix)]
 use rustix as _;
 use serde as _;

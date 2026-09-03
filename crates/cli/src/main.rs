@@ -26,11 +26,13 @@ use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::policy::{IoMode, Policy};
+use fetchloom_engine::seam::source::Source as _;
 use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 #[cfg(test)]
 use flate2 as _;
 #[cfg(all(test, unix))]
@@ -67,7 +69,11 @@ fn execute() -> ExitCode {
         Ok(parsed) => parsed,
         Err(error) => {
             let _ = error.print();
-            return ExitCode::Usage;
+            return if error.use_stderr() {
+                ExitCode::Usage
+            } else {
+                ExitCode::Success
+            };
         }
     };
 
@@ -111,8 +117,14 @@ fn execute() -> ExitCode {
     );
 
     let sequence = Sequence::new();
+    let animate = !parsed.global.no_animation;
+    let showing: Box<dyn Observer> = if display.mode == surface::DisplayMode::Live {
+        Box::new(fetchloom_cli::observer::Live::new(animate))
+    } else {
+        Box::new(Renderer::new(display.mode, animate))
+    };
     let mut sinks: Vec<Box<dyn Observer>> = vec![
-        Box::new(Renderer::new(display.mode, !parsed.global.no_animation)),
+        showing,
         Box::new(fetchloom_cli::logging::Log::new(resolved.log.value)),
     ];
     if let Some(target) = parsed.global.events.as_deref() {
@@ -157,7 +169,32 @@ fn execute() -> ExitCode {
             duration_ms: running.elapsed_ms(),
         },
     ));
+    offer_a_hint(&parsed, &resolved, streams, &environment);
     code
+}
+
+/// Prints at most one hint about something the user could have done
+/// differently, after the result and never during a transfer.
+fn offer_a_hint(
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    streams: Streams,
+    environment: &dyn Environment,
+) {
+    if !terminal::hints_permitted(parsed.global.no_hints, streams, environment) {
+        return;
+    }
+    let Some(hint) = fetchloom_cli::hint::taken().hint() else {
+        return;
+    };
+    let Ok(root) = run::resolve_path(&resolved.cache_dir.value) else {
+        return;
+    };
+    if fetchloom_cli::hint::already_said(&root, &hint.key) {
+        return;
+    }
+    eprintln!("{}", hint.line);
+    fetchloom_cli::hint::remember(&root, &hint.key);
 }
 
 /// Returns the materialization flags a command carries, or none when it takes
@@ -170,6 +207,9 @@ fn transfer_flags(command: &Command) -> surface::TransferFlags {
         | Command::Repair { transfer, .. } => (**transfer).clone(),
         Command::Verify { .. }
         | Command::Init { .. }
+        | Command::Watch { .. }
+        | Command::Doctor
+        | Command::Why { .. }
         | Command::Completions { .. }
         | Command::Cache { .. }
         | Command::Explain { .. } => surface::TransferFlags::default(),
@@ -188,6 +228,15 @@ fn dispatch(
             run_explain(resolved, discovered, key.as_deref(), parsed.global.json)
         }
         Command::Completions { shell } => write_completions(*shell),
+        Command::Doctor => run_doctor(resolved, discovered, parsed.global.json),
+        Command::Why { reference } => run_why(reference, parsed, resolved, observer, sequence),
+        Command::Watch { stream } => match fetchloom_cli::observer::watch(stream) {
+            Ok(()) => ExitCode::Success,
+            Err(reason) => {
+                eprintln!("could not read the event stream at {stream}: {reason}");
+                ExitCode::Usage
+            }
+        },
         Command::Verify { target } => {
             run_verify(target, resolved, parsed.global.json, observer, sequence)
         }
@@ -542,21 +591,25 @@ fn run_get(
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let json = parsed.global.json;
     let work = Arc::new(WorkCounter::new());
-    let adapters = run::adapters_for(&work, &settings::limits_for(resolved));
-    let remote = run::is_served(&adapters, reference);
+    let limits = settings::limits_for(resolved);
+    let adapters = run::adapters_for(&work, &limits);
     let environment = ProcessEnvironment;
     let policy = get_policy(transfer, parsed, resolved, &environment, observer, sequence);
-    let (source, named) = match resolve_places(&adapters, reference, transfer, &policy) {
-        Ok(places) => places,
-        Err(error) => {
-            return reporter.report(&error);
-        }
-    };
 
-    let (manifest, is_dataset) = match resolve_manifest(&adapters, reference, &source, remote) {
-        Ok(found) => found,
+    let Requested {
+        reference: named_reference,
+        source,
+        named,
+        manifest,
+        is_dataset,
+        remote,
+    } = match open_request(
+        reference, transfer, &adapters, resolved, &policy, &limits, observer, sequence,
+    ) {
+        Ok(opened) => opened,
         Err(error) => return reporter.report(&error),
     };
+    let reference = named_reference.as_str();
     let dataset = manifest.name.clone();
     let accepted_terms = match run::assert_terms(&policy, manifest.license.as_ref()) {
         Ok(accepted) => accepted,
@@ -932,7 +985,7 @@ fn infer_over_the_network(
         Ok(placements) => placements,
         Err(error) => return Ok(Err(error)),
     };
-    let observed: Vec<fetchloom_cli::inference::Observed> = placements
+    let read: Vec<fetchloom_cli::inference::Observed> = placements
         .into_iter()
         .map(|(path, content, size)| fetchloom_cli::inference::Observed {
             interop: held
@@ -944,7 +997,7 @@ fn infer_over_the_network(
         })
         .collect();
     Ok(fetchloom_cli::inference::from_observed(
-        reference, &observed, limits, emit,
+        reference, &read, limits, emit,
     ))
 }
 
@@ -1215,6 +1268,120 @@ fn lock_path_of(
 }
 
 /// Returns the manifest a reference resolves from, and whether it named one.
+/// Returns the reference a run actually fetches, having walked the resolution
+/// order: an explicit scheme, then a local path, then the configured sources.
+///
+/// # Errors
+///
+/// Fails with `reference.unresolved` when a name matches none of the configured
+/// sources, and when none is configured.
+fn resolve_reference(
+    reference: &str,
+    adapters: &Adapters,
+    resolved: &settings::Settings,
+    policy: &dyn Policy,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<String, fetchloom_engine::error::Error> {
+    use fetchloom_cli::resolve;
+
+    if resolve::has_explicit_scheme(reference) || !resolve::is_name(reference) {
+        return Ok(reference.to_owned());
+    }
+    if std::path::Path::new(reference).exists() {
+        return Ok(reference.to_owned());
+    }
+    let sources = &resolved.sources.value;
+    let candidates = resolve::candidates(reference, sources);
+    for candidate in &candidates {
+        let Some((source, _)) = adapters.serving(candidate) else {
+            continue;
+        };
+        let host = run::host_of(candidate);
+        let credential = policy.credential(
+            &fetchloom_engine::reference::Host::new(host),
+            fetchloom_engine::credential::Necessity::Optional,
+        )?;
+        if source.probe(candidate, credential.as_ref()).is_ok() {
+            observer.emit(&Event::new(
+                sequence,
+                EventPayload::ResolveAlias {
+                    from: reference.to_owned(),
+                    to: fetchloom_engine::redact::SafeUrl::new(candidate).to_string(),
+                },
+            ));
+            return Ok(candidate.clone());
+        }
+    }
+    Err(resolve::unmatched(reference, candidates.len()))
+}
+
+/// Reads the manifest a metadata document describes.
+///
+/// # Errors
+///
+/// Fails when the document cannot be fetched, or states something no manifest
+/// can represent honestly.
+fn manifest_from_metadata(
+    reference: &str,
+    adapters: &Adapters,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+) -> Result<fetchloom_engine::manifest::Manifest, fetchloom_engine::error::Error> {
+    use fetchloom_engine::metadata::{Context, MetadataReader, croissant};
+
+    let location = fetchloom_cli::resolve::metadata_location(reference)?;
+    let bytes = read_document(&location, adapters, policy, limits)?;
+    let name = run::remote_name(&location);
+    croissant::Croissant.read(
+        &bytes,
+        &Context {
+            base: &location,
+            name: &name,
+            limits,
+        },
+    )
+}
+
+/// Reads the bytes of one document a reference names, bounded by the manifest
+/// size a run holds itself to.
+fn read_document(
+    location: &str,
+    adapters: &Adapters,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+) -> Result<Vec<u8>, fetchloom_engine::error::Error> {
+    use std::io::Read as _;
+
+    run::allowed_offline(location, policy)?;
+    let Some((source, _)) = adapters.serving(location) else {
+        let path = run::local_path(location)?;
+        return std::fs::read(&path).map_err(|reason| {
+            fetchloom_engine::error::Error::new(
+                fetchloom_engine::error::ErrorKind::ManifestInvalid,
+                format!("make {} readable: {reason}", path.display()),
+            )
+        });
+    };
+    let credential = policy.credential(
+        &fetchloom_engine::reference::Host::new(run::host_of(location)),
+        fetchloom_engine::credential::Necessity::Optional,
+    )?;
+    let served = source.fetch(location, None, credential.as_ref())?;
+    let mut bytes = Vec::new();
+    served
+        .body
+        .take(limits.manifest_size)
+        .read_to_end(&mut bytes)
+        .map_err(|reason| {
+            fetchloom_engine::error::Error::new(
+                fetchloom_engine::error::ErrorKind::ManifestInvalid,
+                format!("serve the document again, because it could not be read: {reason}"),
+            )
+        })?;
+    Ok(bytes)
+}
+
 fn resolve_manifest(
     adapters: &Adapters,
     reference: &str,
@@ -1647,4 +1814,161 @@ fn locked_selection(
     let selection = selection_of(transfer);
     let pinned = held_to_lock(&lock_path, dataset, manifest, &selection, transfer.locked)?;
     Ok((lock_path, selection, pinned))
+}
+
+/// Checks the environment and changes nothing.
+fn run_doctor(
+    resolved: &settings::Settings,
+    discovered: &config::Discovered,
+    json: bool,
+) -> ExitCode {
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("{}", error.next_action());
+            return ExitCode::Usage;
+        }
+    };
+    let environment = ProcessEnvironment;
+    let report = fetchloom_cli::doctor::run(
+        discovered,
+        &root,
+        &environment,
+        &policy::NativeCredentialStore,
+    );
+    let mut stdout = std::io::stdout().lock();
+    if json {
+        match serde_json::to_string(&report) {
+            Ok(written) => {
+                let _ = writeln!(stdout, "{written}");
+            }
+            Err(reason) => {
+                eprintln!("the report could not be written: {reason}");
+                return ExitCode::Usage;
+            }
+        }
+    } else {
+        let _ = write!(stdout, "{}", report.render());
+    }
+    let _ = stdout.flush();
+    report.exit_code()
+}
+
+/// Explains a decision a run already made, inventing none.
+fn run_why(
+    reference: &str,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let reporter = Reporter::new(parsed.global.json, observer, sequence);
+    let work = Arc::new(WorkCounter::new());
+    let adapters = run::adapters_for(&work, &settings::limits_for(resolved));
+    let root = match run::resolve_path(&resolved.cache_dir.value) {
+        Ok(root) => root,
+        Err(error) => return reporter.report(&error),
+    };
+    let Ok(processor) = Processor::new(thread_budget(resolved)) else {
+        eprintln!("the processor pool could not be built");
+        return ExitCode::Resource;
+    };
+    let held = match cache::open(
+        &root,
+        DurabilityTier::Normal,
+        fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+        IoMode::Auto,
+        Arc::clone(&work),
+        Arc::new(processor),
+    ) {
+        cache::Opened::Ready(held) => Some(held),
+        cache::Opened::Degraded { .. } | cache::Opened::Refused(_) => None,
+    };
+    let explained = match fetchloom_cli::why::explain(reference, &adapters, held.as_deref()) {
+        Ok(explained) => explained,
+        Err(error) => return reporter.report(&error),
+    };
+    let mut stdout = std::io::stdout().lock();
+    if parsed.global.json {
+        match serde_json::to_string(&explained) {
+            Ok(written) => {
+                let _ = writeln!(stdout, "{written}");
+            }
+            Err(reason) => {
+                eprintln!("the explanation could not be written: {reason}");
+                return ExitCode::Usage;
+            }
+        }
+    } else {
+        let _ = write!(stdout, "{}", explained.render());
+    }
+    let _ = stdout.flush();
+    ExitCode::Success
+}
+
+/// What the resolution order settled before a run touched a destination.
+struct Requested {
+    /// The reference actually fetched, after a name was resolved.
+    reference: String,
+    /// The path the reference names on this machine, when it names one.
+    source: PathBuf,
+    /// The destination the user named, when they named one.
+    named: Option<PathBuf>,
+    /// The manifest the run materializes.
+    manifest: fetchloom_engine::manifest::Manifest,
+    /// Whether that manifest was read rather than synthesized.
+    is_dataset: bool,
+    /// Whether the reference names a network location.
+    remote: bool,
+}
+
+/// Walks the resolution order and reads the manifest a run materializes.
+///
+/// # Errors
+///
+/// Fails when the reference resolves to nothing, and when a metadata document
+/// states something no manifest can represent.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolution reads the reference, the flags, the adapters, the settings, the policy, the limits, and both observers"
+)]
+fn open_request(
+    reference: &str,
+    transfer: &surface::TransferFlags,
+    adapters: &Adapters,
+    resolved: &settings::Settings,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Requested, fetchloom_engine::error::Error> {
+    let describes_metadata = fetchloom_cli::resolve::is_metadata_document(reference);
+    let reference = resolve_reference(reference, adapters, resolved, policy, observer, sequence)?;
+    let remote = run::is_served(adapters, &reference);
+
+    if describes_metadata {
+        let named = match transfer.output.clone() {
+            Some(at) => Some(run::resolve_path(&at)?),
+            None => None,
+        };
+        return Ok(Requested {
+            manifest: manifest_from_metadata(&reference, adapters, policy, limits)?,
+            reference,
+            source: PathBuf::from("."),
+            named,
+            is_dataset: true,
+            remote,
+        });
+    }
+
+    let (source, named) = resolve_places(adapters, &reference, transfer, policy)?;
+    let (manifest, is_dataset) = resolve_manifest(adapters, &reference, &source, remote)?;
+    Ok(Requested {
+        reference,
+        source,
+        named,
+        manifest,
+        is_dataset,
+        remote,
+    })
 }

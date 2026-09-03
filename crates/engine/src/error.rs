@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::redact::SafeUrl;
 
 /// The stage of a run an error belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Layer {
     /// Turning a reference into a manifest and its artifacts.
@@ -29,7 +29,7 @@ pub enum Layer {
 }
 
 /// Every failure Fetchloom can report.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "&'static str")]
 pub enum ErrorKind {
     /// A reference named nothing Fetchloom could resolve.
@@ -231,7 +231,7 @@ impl fmt::Display for ErrorKind {
 }
 
 /// A failure, carrying every field the contract requires of one.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
     kind: ErrorKind,
     layer: Layer,

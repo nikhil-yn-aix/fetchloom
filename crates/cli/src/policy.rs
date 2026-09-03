@@ -401,6 +401,10 @@ impl Policy for CommandLinePolicy<'_> {
         self.emit(EventPayload::CredentialOffer {
             provider: help.provider.clone(),
         });
+        crate::hint::record(|observed| {
+            observed.projected_gain = Some(projected_gain);
+            observed.placement = Some(help.placement.clone());
+        });
         eprintln!(
             "a credential for {} would save about {} on this transfer",
             help.provider,
@@ -465,6 +469,9 @@ impl CommandLinePolicy<'_> {
     /// Records that this provider's optional credential was declined, so it
     /// is never offered again in this run.
     fn remember_declined(&self, provider: &str) {
+        crate::hint::record(|observed| {
+            observed.declined_provider = Some(provider.to_owned());
+        });
         self.declined
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

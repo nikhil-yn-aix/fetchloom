@@ -13,6 +13,7 @@ use fetchloom_archive as _;
 use fetchloom_cache as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;
@@ -241,9 +242,9 @@ fn a_credential_is_read_from_the_host_scoped_variable_and_never_reported() {
         .unwrap()
         .unwrap();
     assert_eq!(found.host, host);
-    assert_eq!(found.value.expose(), "secret-value");
+    assert_eq!(found.bearer().unwrap_or_default(), "secret-value");
 
-    let rendered = format!("{:?}", found.value);
+    let rendered = format!("{:?}", found.secrets);
     assert!(
         !rendered.contains("secret-value"),
         "debug leaked the secret"
@@ -624,7 +625,7 @@ fn the_environment_variable_wins_over_the_platform_store() {
         .expect("no credential was found");
 
     assert_eq!(found.origin, CredentialOrigin::Environment);
-    assert_eq!(found.value.expose(), "from-the-env");
+    assert_eq!(found.bearer().unwrap_or_default(), "from-the-env");
 }
 
 #[test]
@@ -641,7 +642,7 @@ fn the_platform_store_is_asked_when_the_environment_holds_nothing() {
         .expect("no credential was found");
 
     assert_eq!(found.origin, CredentialOrigin::PlatformStore);
-    assert_eq!(found.value.expose(), "from-the-store");
+    assert_eq!(found.bearer().unwrap_or_default(), "from-the-store");
 }
 
 #[test]
@@ -717,10 +718,14 @@ fn no_secret_appears_in_anything_the_credential_lookup_writes() {
         .expect("the lookup failed")
         .expect("no credential was found");
 
-    assert_eq!(
-        format!("{:?}", found.value),
-        "[redacted]",
-        "the secret survives being formatted"
+    let rendered = format!("{:?}", found.secrets);
+    assert!(
+        !rendered.contains(secret),
+        "the secret survives being formatted: {rendered}"
+    );
+    assert!(
+        rendered.contains("[redacted]"),
+        "the secret was dropped rather than redacted: {rendered}"
     );
     let serialized = serde_json::to_string(&found).expect("the credential could not be serialized");
     assert!(

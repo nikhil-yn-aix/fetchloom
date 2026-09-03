@@ -302,6 +302,7 @@ fn waits_when_a_source_asks_for(asked: Option<Duration>) -> Vec<Duration> {
         std::num::NonZeroU32::new(4).unwrap(),
     ));
     let retry = fetchloom_engine::transfer::Retry {
+        host: fetchloom_engine::reference::Host::new("host.example"),
         limits: &limits,
         pause: &pause,
         observer: &observer,

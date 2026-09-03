@@ -101,6 +101,10 @@ pub struct ConfigFile {
     pub timeout: Option<String>,
     /// The base locations a bare name resolves against, in order.
     pub sources: Option<Vec<String>>,
+    /// When output carries color.
+    pub color: Option<String>,
+    /// Whether a hint may be printed at all.
+    pub hints: Option<bool>,
 }
 
 /// Everything the cache table of a configuration file may set.

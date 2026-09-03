@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -520,4 +521,26 @@ fn two_directories_on_one_volume_are_reported_separately() {
             first.case_folding
         );
     }
+}
+
+#[test]
+fn free_space_on_a_real_volume_is_a_number_and_not_a_guess() {
+    let temporary = tempfile::TempDir::new().unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+
+    let free = platform
+        .free_space(temporary.path())
+        .expect("the platform refused to report free space on a real volume");
+    assert!(
+        free > 0,
+        "a writable volume reported no free space at all, which is a measurement rather than a fact"
+    );
+
+    let absent = platform.free_space(&temporary.path().join("no-such-directory"));
+    assert!(
+        absent.is_err(),
+        "free space was reported for a path that is not there"
+    );
 }

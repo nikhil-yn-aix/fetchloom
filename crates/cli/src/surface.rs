@@ -18,6 +18,18 @@ pub enum DisplayMode {
     None,
 }
 
+/// When output carries color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ColorChoice {
+    /// Color when the stream is a terminal that permits it.
+    Auto,
+    /// Color whatever the stream is.
+    Always,
+    /// Never color.
+    Never,
+}
+
 /// A shell a completion script can be written for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
@@ -62,6 +74,12 @@ pub struct GlobalFlags {
     /// Raise the log level one step. Repeatable.
     #[arg(long, short, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
+    /// When output is colored.
+    #[arg(long, global = true, value_name = "auto|always|never")]
+    pub color: Option<ColorChoice>,
+    /// Never print a hint.
+    #[arg(long, global = true)]
+    pub no_hints: bool,
     /// Progress presentation.
     #[arg(long, global = true, value_name = "plain|live|none")]
     pub display: Option<DisplayMode>,
@@ -334,6 +352,12 @@ pub enum Command {
         #[arg(value_name = "path")]
         target: String,
     },
+    /// Render a run's event stream, live or after the fact.
+    Watch {
+        /// The event stream to render, or `-` for standard input.
+        #[arg(id = "watched", value_name = "events")]
+        stream: String,
+    },
     /// Write a shell completion script to stdout.
     Completions {
         /// The shell to write a script for.
@@ -344,6 +368,15 @@ pub enum Command {
         /// What to do with the cache.
         #[command(subcommand)]
         command: CacheCommand,
+    },
+    /// Check the environment, changing nothing.
+    Doctor,
+    /// Explain the resolution, source choice, and trust reasoning for a
+    /// reference.
+    Why {
+        /// The reference to explain.
+        #[arg(value_name = "ref")]
+        reference: String,
     },
     /// Report effective settings and their origin.
     Explain {

@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test assertions, where the run that failed is the message"
 )]
 
@@ -14,6 +15,7 @@ use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;
@@ -308,4 +310,120 @@ fn init_over_one_object_says_to_name_a_container() {
         Some(10),
         "init over one object did not say to name a container"
     );
+}
+
+#[test]
+fn a_metadata_document_resolves_to_the_files_it_describes() {
+    let workspace = Workspace::new();
+    let bytes = b"the described bytes".to_vec();
+    let server = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let origin = server.origin();
+
+    let document = format!(
+        r#"{{"@context":{{"cr":"croissant"}},"@type":"Dataset","name":"described",
+        "distribution":[{{"@type":"sc:FileObject","@id":"one.bin",
+        "contentUrl":"{origin}/one.bin"}}]}}"#
+    );
+    let path = workspace.write("metadata.json", document.as_bytes());
+    let reference = format!("croissant:{}", located(&path));
+
+    let output = workspace.run(&["get", &reference, "--output", "out", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a metadata document did not resolve: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        workspace.path().join("out").join("one.bin").is_file(),
+        "the file the document described was not materialized"
+    );
+    assert_eq!(
+        std::fs::read(workspace.path().join("out").join("one.bin")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn a_bare_name_resolves_through_the_configured_sources() {
+    let workspace = Workspace::new();
+    let bytes = b"the named dataset".to_vec();
+    let server = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    workspace.write(
+        "fetchloom.toml",
+        format!("sources = [\"{}/data/\"]\n", server.origin()).as_bytes(),
+    );
+
+    let output = workspace.run(&["get", "silesia", "--output", "out", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a bare name did not resolve through the configured sources: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(workspace.path().join("out").join("silesia").is_file());
+}
+
+#[test]
+fn a_namespaced_release_resolves_the_same_way() {
+    let workspace = Workspace::new();
+    let server = TestServer::start(Script::serving(b"a release".to_vec())).unwrap();
+    workspace.write(
+        "fetchloom.toml",
+        format!("sources = [\"{}/data/\"]\n", server.origin()).as_bytes(),
+    );
+
+    let output = workspace.run(&["get", "acme/imagenet@2012", "--output", "out", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a namespaced release did not resolve: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_name_with_no_sources_configured_says_to_configure_one() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["get", "silesia", "--json"]);
+    assert_eq!(output.status.code(), Some(10));
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        said.contains("sources") && said.contains("fetchloom.toml"),
+        "the failure did not say how to configure a source: {said}"
+    );
+}
+
+#[test]
+fn a_name_that_matches_no_configured_source_is_never_guessed_at() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "fetchloom.toml",
+        b"sources = [\"http://127.0.0.1:9/data/\"]\n",
+    );
+
+    let output = workspace.run(&["get", "nothing-is-published-here", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(10),
+        "a name that matched no source failed as something other than an unresolved reference: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        said.contains("never guessed") && said.contains('1'),
+        "the failure did not say the name was not guessed at, or how many were tried: {said}"
+    );
+}
+
+/// Returns a path as a `file:` location, which is how a test names one to a
+/// scheme that reads a document.
+fn located(path: &Path) -> String {
+    let text: String = path
+        .display()
+        .to_string()
+        .chars()
+        .map(|letter| if letter == '\\' { '/' } else { letter })
+        .collect();
+    format!("file:///{text}")
 }

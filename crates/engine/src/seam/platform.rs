@@ -54,6 +54,13 @@ pub trait Platform: Send + Sync {
     /// Fails when the path cannot be opened or the platform refuses the query.
     fn volume_id(&self, path: &Path) -> Result<VolumeId, Error>;
 
+    /// Returns how many bytes the volume a path is on has free for this user.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the path is not there or the platform refuses the query.
+    fn free_space(&self, path: &Path) -> Result<u64, Error>;
+
     /// Returns the identifier of the file at a path within its volume.
     ///
     /// # Errors

@@ -13,7 +13,9 @@ use rustix as _;
 use tempfile as _;
 #[cfg(all(test, windows))]
 use windows_sys as _;
+pub mod doctor;
 pub mod explain;
+pub mod hint;
 pub mod inference;
 pub mod locked;
 pub mod logging;
@@ -22,10 +24,12 @@ pub mod observer;
 pub mod planning;
 pub mod policy;
 pub mod repair;
+pub mod resolve;
 pub mod run;
 pub mod settings;
 pub mod surface;
 pub mod terminal;
+pub mod why;
 
 /// Where a failure is written, and the event stream it also enters.
 pub struct Reporter<'a> {

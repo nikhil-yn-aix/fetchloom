@@ -18,6 +18,7 @@ use fetchloom_cache as _;
 use fetchloom_cli as _;
 use fetchloom_faults as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;

@@ -8,6 +8,12 @@ fn unsafe_path(member: &str, next_action: String) -> Error {
 }
 
 /// Validates a raw member path and returns it as an owned string.
+///
+/// # Errors
+///
+/// Fails with `archive.unsafe_path` when the path is absolute, holds a parent
+/// component, a NUL, a backslash, or a drive letter, is not valid UTF-8, or
+/// nests deeper than the limit.
 pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
     if raw.contains(&0) {
         let lossy = String::from_utf8_lossy(raw).into_owned();

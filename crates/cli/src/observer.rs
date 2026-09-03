@@ -122,6 +122,51 @@ impl Renderer {
     }
 }
 
+/// The live view, redrawn in place, fed by the event stream and nothing else.
+pub struct Live {
+    view: Mutex<fetchloom_view::LiveView>,
+    drawn: Mutex<usize>,
+    animate: bool,
+}
+
+impl std::fmt::Debug for Live {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Live").finish_non_exhaustive()
+    }
+}
+
+impl Live {
+    /// Builds the live view for a run.
+    #[must_use]
+    pub fn new(animate: bool) -> Self {
+        Self {
+            view: Mutex::new(fetchloom_view::LiveView::new()),
+            drawn: Mutex::new(0),
+            animate,
+        }
+    }
+}
+
+impl Observer for Live {
+    fn emit(&self, event: &Event) {
+        let mut view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
+        view.observe(event);
+        let rendered = view.render();
+        let mut drawn = self.drawn.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut stderr = std::io::stderr().lock();
+        if self.animate && *drawn > 0 {
+            let _ = write!(stderr, "\u{1b}[{drawn}A\u{1b}[0J");
+        }
+        let _ = write!(stderr, "{rendered}");
+        let _ = stderr.flush();
+        *drawn = if self.animate {
+            rendered.lines().count()
+        } else {
+            0
+        };
+    }
+}
+
 impl Observer for Renderer {
     fn emit(&self, event: &Event) {
         if self.mode == DisplayMode::None {
@@ -197,4 +242,33 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+/// Renders a run's event stream through the live view, live or after the fact.
+///
+/// # Errors
+///
+/// Fails when the stream cannot be read.
+pub fn watch(target: &str) -> std::io::Result<()> {
+    let reader: Box<dyn std::io::BufRead> = if target == "-" {
+        Box::new(std::io::BufReader::new(std::io::stdin()))
+    } else {
+        Box::new(std::io::BufReader::new(std::fs::File::open(Path::new(
+            target,
+        ))?))
+    };
+    let live = Live::new(true);
+    let mut stream = reader;
+    let mut written = String::new();
+    loop {
+        written.clear();
+        if stream.read_line(&mut written)? == 0 {
+            break;
+        }
+        let Ok(event) = serde_json::from_str::<Event>(written.trim()) else {
+            continue;
+        };
+        live.emit(&event);
+    }
+    Ok(())
 }

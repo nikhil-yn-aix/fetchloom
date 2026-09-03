@@ -11,6 +11,7 @@ use clap_complete as _;
 use ctrlc as _;
 use fetchloom_archive as _;
 use fetchloom_cli as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;

@@ -9,6 +9,7 @@ use clap as _;
 use clap_complete as _;
 use ctrlc as _;
 use fetchloom_archive as _;
+use fetchloom_view as _;
 use fetchloom_cache::Cache;
 use fetchloom_cli::cache as cache_cli;
 use fetchloom_engine::degrade::DegradeQueue;

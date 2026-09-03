@@ -381,6 +381,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             observer: self.observer,
             sequence: self.sequence,
             controller: &controller,
+            host: Host::of_location(location),
         };
         let mut buffer = vec![0u8; BUFFER];
         let probed = Mutex::new(already);
@@ -457,6 +458,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
         self.emit(EventPayload::TransferStart {
             source: metadata.location.clone(),
+            host: metadata.host.clone(),
             expected_bytes: metadata.size,
         });
         if keep > 0 {
@@ -508,6 +510,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         ended_early(&arrived, &metadata, location, keep + moved)?;
         let digests = self.store.commit(lease, writer)?;
         self.emit(EventPayload::TransferEnd {
+            host: metadata.host.clone(),
             bytes: moved,
             duration_ms: started.elapsed_ms(),
         });
@@ -932,6 +935,8 @@ pub struct Retry<'a, P> {
     pub sequence: &'a Sequence,
     /// How many transfers this host permits, moved as the host answers.
     pub controller: &'a Mutex<Controller>,
+    /// The host being retried, which every retry event is filed under.
+    pub host: crate::reference::Host,
 }
 
 impl<P: Pause> Retry<'_, P> {
@@ -967,6 +972,7 @@ impl<P: Pause> Retry<'_, P> {
             self.observer.emit(&Event::new(
                 self.sequence,
                 EventPayload::TransferRetry {
+                    host: self.host.clone(),
                     attempt,
                     reason: failure.next_action().to_owned(),
                 },

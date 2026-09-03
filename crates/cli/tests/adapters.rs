@@ -33,6 +33,7 @@ use fetchloom_engine::work::WorkCounter;
 use fetchloom_faults as _;
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 use flate2 as _;
 #[cfg(unix)]
 use rustix as _;

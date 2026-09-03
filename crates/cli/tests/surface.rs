@@ -15,6 +15,7 @@ use fetchloom_cli as _;
 use fetchloom_engine as _;
 use fetchloom_platform as _;
 use fetchloom_sources as _;
+use fetchloom_view as _;
 #[cfg(unix)]
 use rustix as _;
 use serde as _;
@@ -451,9 +452,9 @@ fn explain_reports_a_setting_and_where_it_came_from() {
 }
 
 #[test]
-fn a_command_this_build_does_not_perform_is_a_usage_error() {
+fn a_word_that_is_no_command_is_a_usage_error() {
     let workspace = Workspace::new();
-    for command in ["init", "watch", "doctor", "why"] {
+    for command in ["fetch", "download", "sync", "install"] {
         let run = workspace.run(&[command, "anything"]);
         assert_eq!(run.code(), 2, "{command} was accepted: {}", run.out());
     }
@@ -524,9 +525,6 @@ fn a_form_this_build_cannot_resolve_says_what_it_resolves() {
     let workspace = Workspace::new();
     for reference in [
         "s3://bucket/prefix/",
-        "hf:datasets/org/name@rev",
-        "zenodo:10.5281/zenodo.1234567",
-        "croissant:https://host.invalid/metadata.json",
         "blake3:0000000000000000000000000000000000000000000000000000000000000000",
         "silesia",
         "acme/imagenet@2012",

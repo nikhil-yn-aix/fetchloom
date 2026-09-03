@@ -442,3 +442,14 @@ fn token_for(host: &str, text: &str) -> Option<String> {
     }
     None
 }
+
+/// Returns how many bytes the volume a path is on has free for this user.
+///
+/// # Errors
+///
+/// Fails when the path is not there or the platform refuses the query.
+pub(crate) fn free_space(path: &Path) -> Result<u64, Error> {
+    let found = rustix::fs::statvfs(path)
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &std::io::Error::from(reason)))?;
+    Ok(found.f_bavail.saturating_mul(found.f_frsize))
+}

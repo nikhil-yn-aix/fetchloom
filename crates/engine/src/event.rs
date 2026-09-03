@@ -50,7 +50,7 @@ pub const EVENT_NAMES: [&str; 34] = [
 ];
 
 /// What one event says.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 #[serde(tag = "event")]
 pub enum EventPayload {
     /// A run began.
@@ -167,6 +167,8 @@ pub enum EventPayload {
     TransferStart {
         /// The source the bytes come from.
         source: SafeUrl,
+        /// The host serving them, which is what a per-host figure is filed under.
+        host: crate::reference::Host,
         /// How many bytes are expected, when the source states it.
         expected_bytes: Option<u64>,
     },
@@ -179,6 +181,8 @@ pub enum EventPayload {
     /// A transient failure is being retried.
     #[serde(rename = "transfer.retry")]
     TransferRetry {
+        /// The host that was retried.
+        host: crate::reference::Host,
         /// Which attempt this is.
         attempt: u32,
         /// Why the previous attempt failed.
@@ -195,6 +199,8 @@ pub enum EventPayload {
     /// A transfer finished.
     #[serde(rename = "transfer.end")]
     TransferEnd {
+        /// The host that served them.
+        host: crate::reference::Host,
         /// How many bytes arrived.
         bytes: u64,
         /// How long the transfer took, in milliseconds.
@@ -360,7 +366,7 @@ impl Default for Span {
 }
 
 /// One line of the event stream.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct Event {
     seq: u64,
     timestamp: Timestamp,
