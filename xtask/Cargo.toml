@@ -12,9 +12,16 @@ rayon = { workspace = true }
 sha2 = { workspace = true }
 fetchloom-engine = { workspace = true }
 fetchloom-platform = { workspace = true }
+fetchloom-cache = { workspace = true }
 fetchloom-faults = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+] }
 
 [lints]
 workspace = true

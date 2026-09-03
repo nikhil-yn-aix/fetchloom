@@ -85,12 +85,27 @@ fn the_amazon_match_is_case_insensitive() {
 }
 
 #[test]
-fn the_amazon_s3_record_states_that_a_key_pair_cannot_be_used() {
+fn the_amazon_s3_record_names_the_credential_the_build_actually_resolves() {
     let record = help_for("s3.amazonaws.com", Necessity::Required);
-    let combined = format!("{} {}", record.unlocks, record.steps.join(" "));
+    let combined = format!(
+        "{} {} {}",
+        record.unlocks,
+        record.steps.join(" "),
+        record.placement
+    );
+    for named in [
+        "FETCHLOOM_ACCESS_KEY_S3_AMAZONAWS_COM",
+        "FETCHLOOM_SECRET_KEY_S3_AMAZONAWS_COM",
+        "FETCHLOOM_REGION_S3_AMAZONAWS_COM",
+    ] {
+        assert!(
+            combined.contains(named),
+            "the Amazon S3 record does not name {named}, which is what the build reads: {combined}"
+        );
+    }
     assert!(
-        combined.contains("key") && combined.contains("cannot"),
-        "the Amazon S3 record did not state that a key pair cannot be used: {combined}"
+        !combined.contains("cannot be fetched by name here"),
+        "the Amazon S3 record still tells a user with a private bucket to go elsewhere"
     );
 }
 

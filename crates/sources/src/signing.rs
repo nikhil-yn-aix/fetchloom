@@ -136,8 +136,31 @@ fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&s
     }
     format!(
         "{}\n{}\n{}\n{headers}\n{signed}\n{}",
-        request.method, request.path, request.query, request.payload
+        request.method,
+        request.path,
+        canonical_query(request.query),
+        request.payload
     )
+}
+
+/// Returns the query in the one order a signature is computed over: by name in
+/// byte order, then by value, with a parameter carrying no value written as one
+/// carrying an empty value.
+fn canonical_query(query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<(&str, &str)> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| pair.split_once('=').unwrap_or((pair, "")))
+        .collect();
+    pairs.sort_unstable();
+    pairs
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// Returns the headers that authorize one request, signing with a secret that
@@ -436,5 +459,42 @@ mod tests {
             &moment(),
         );
         assert_ne!(plain.authorization, with_query.authorization);
+    }
+
+    #[test]
+    fn the_query_is_signed_in_byte_order_whatever_order_it_was_given_in() {
+        let signed_over = |query: &str| {
+            sign(
+                &keys(),
+                "s3",
+                &Request {
+                    method: "GET",
+                    path: "/object",
+                    query,
+                    host: "bucket.example",
+                    payload: EMPTY_PAYLOAD,
+                },
+                &moment(),
+            )
+            .authorization
+        };
+
+        assert_eq!(
+            signed_over("versionId=2&partNumber=3"),
+            signed_over("partNumber=3&versionId=2"),
+            "the same query in two orders signed differently, so a source that reorders it \
+             refuses the signature"
+        );
+        assert_eq!(
+            signed_over("uploads"),
+            signed_over("uploads="),
+            "a parameter with no value signed differently from the same parameter with an empty \
+             one"
+        );
+        assert_ne!(
+            signed_over("versionId=2&partNumber=3"),
+            signed_over("versionId=3&partNumber=2"),
+            "two different queries signed the same"
+        );
     }
 }

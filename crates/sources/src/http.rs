@@ -99,6 +99,7 @@ impl HttpSource {
         credential: Option<&Credential>,
         asking: &Validator,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
+        fetchloom_engine::network::allowed(location)?;
         let start = Origin::of(location)?;
         let mut current = location.to_owned();
         let mut carried = credential;
@@ -235,6 +236,7 @@ fn build_agent(limits: &Limits) -> ureq::Agent {
         .timeout_recv_response(Some(limits.response_timeout))
         .timeout_recv_body(Some(limits.idle_timeout))
         .max_idle_connections_per_host(limits.connections_per_host)
+        .max_idle_age(limits.idle_connection_age)
         .tls_config(
             ureq::tls::TlsConfig::builder()
                 .root_certs(ureq::tls::RootCerts::PlatformVerifier)
@@ -564,9 +566,35 @@ pub(crate) fn status_failure(
 
 pub(crate) fn transport_failure(location: &str, reason: &ureq::Error) -> Error {
     let (kind, retryable, action) = classify(reason);
-    Error::new(kind, format!("{action}: {reason}"))
+    Error::new(kind, format!("{action}: {}", detail(reason)))
         .with_source(location)
         .with_retryable(retryable)
+}
+
+/// What a transport failure may say about itself.
+///
+/// The transport writes the location it was given into several of its own
+/// messages, so its text is never interpolated. Each variant that says
+/// something about the connection rather than about the address says it here,
+/// and every other one says nothing.
+fn detail(reason: &ureq::Error) -> String {
+    match reason {
+        ureq::Error::Io(socket) => socket.to_string(),
+        ureq::Error::Timeout(what) => what.to_string(),
+        ureq::Error::HostNotFound => "the host name resolved to no address".to_owned(),
+        ureq::Error::ConnectionFailed => "the connection could not be opened".to_owned(),
+        ureq::Error::TooManyRedirects => "the source redirected too many times".to_owned(),
+        ureq::Error::RedirectFailed => "the redirect could not be followed".to_owned(),
+        ureq::Error::TlsRequired => "the transport was unsecured".to_owned(),
+        ureq::Error::BodyExceedsLimit(limit) => {
+            format!("the body is larger than the {limit} byte limit")
+        }
+        ureq::Error::LargeResponseHeader(seen, allowed) => {
+            format!("a response header of {seen} bytes is over the {allowed} allowed")
+        }
+        ureq::Error::Rustls(why) => why.to_string(),
+        _ => "the transport gave no reason that is safe to repeat".to_owned(),
+    }
 }
 
 /// What to tell someone whose host name went nowhere.

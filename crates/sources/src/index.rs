@@ -130,15 +130,18 @@ fn relative(prefix: &str, name: &str) -> Option<String> {
     if trimmed.starts_with("../") || trimmed == "../" || trimmed == ".." {
         return None;
     }
-    let without_prefix = trimmed
-        .strip_prefix(prefix)
-        .or_else(|| trimmed.strip_prefix(prefix.trim_start_matches('/')))
-        .unwrap_or(trimmed);
-    let without_prefix = without_prefix.trim_start_matches('/');
-    if without_prefix.starts_with("http") {
+    if trimmed.starts_with("//") || trimmed.contains("://") {
         return None;
     }
-    Some(without_prefix.to_owned())
+    let without_prefix = match trimmed
+        .strip_prefix(prefix)
+        .or_else(|| trimmed.strip_prefix(prefix.trim_start_matches('/')))
+    {
+        Some(rest) => rest,
+        None if trimmed.starts_with('/') => return None,
+        None => trimmed,
+    };
+    Some(without_prefix.trim_start_matches('/').to_owned())
 }
 
 #[cfg(test)]
@@ -184,5 +187,31 @@ mod tests {
             .collect();
         assert_eq!(paths, vec!["one"]);
         assert_eq!(listing.skipped, 0);
+    }
+
+    #[test]
+    fn a_link_outside_the_prefix_is_ignored_and_counted() {
+        let body = concat!(
+            "<html><body><h1>Index of /set/</h1><pre>",
+            r#"<a href="/other/thing">thing</a>"#,
+            r#"<a href="//elsewhere/x">x</a>"#,
+            r#"<a href="one">one</a>"#,
+            "</pre></body></html>"
+        );
+        let listing = parse("http://host/set/", 200, body).unwrap();
+        let paths: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["one"],
+            "a link pointing outside the prefix became an entry naming a location nothing serves"
+        );
+        assert_eq!(
+            listing.skipped, 2,
+            "a link pointing outside the prefix was dropped without being counted"
+        );
     }
 }

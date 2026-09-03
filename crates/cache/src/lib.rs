@@ -68,14 +68,7 @@ pub struct Cache<P: Platform> {
     /// Held across an append to this process's pack, so that two appends never
     /// record the same offset.
     appending: std::sync::Mutex<()>,
-    packed: std::sync::Mutex<
-        Option<
-            std::collections::BTreeMap<
-                fetchloom_engine::digest::ContentDigest,
-                (std::path::PathBuf, crate::pack::Entry),
-            >,
-        >,
-    >,
+    packed: std::sync::Mutex<Option<Arc<crate::pack::Index>>>,
 }
 
 impl<P: Platform> Cache<P> {

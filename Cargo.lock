@@ -1405,6 +1405,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "fetchloom-cache",
  "fetchloom-engine",
  "fetchloom-faults",
  "fetchloom-platform",
@@ -1412,6 +1413,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

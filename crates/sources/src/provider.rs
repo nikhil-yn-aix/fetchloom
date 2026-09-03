@@ -181,6 +181,23 @@ impl ZenodoSource {
     }
 }
 
+/// Returns the link a record states for one of its files.
+fn file_link(body: &str, key: &str) -> Option<String> {
+    let document: serde_json::Value = serde_json::from_str(body).ok()?;
+    let files = document.get("files")?.as_array()?;
+    files.iter().find_map(|file| {
+        let named = file.get("key").or_else(|| file.get("filename"))?.as_str()?;
+        if named != key {
+            return None;
+        }
+        file.get("links")?
+            .get("self")
+            .or_else(|| file.get("links")?.get("download"))?
+            .as_str()
+            .map(str::to_owned)
+    })
+}
+
 /// Reads the entries a record description names, taking each file's location
 /// and length from what the record stated and nothing else.
 fn record_entries(location: &str, body: &str) -> Result<Vec<ListingEntry>, Error> {
@@ -245,7 +262,7 @@ macro_rules! delegating_source {
                 location: &str,
                 credential: Option<&Credential>,
             ) -> Result<SourceMetadata, Error> {
-                let resolved = self.located(location)?;
+                let resolved = self.located(location, credential)?;
                 let started = Instant::now();
                 let (answer, served) = self.http.send(Method::Head, &resolved, None, credential)?;
                 let elapsed = started.elapsed();
@@ -267,7 +284,7 @@ macro_rules! delegating_source {
                 range: Option<ByteRange>,
                 credential: Option<&Credential>,
             ) -> Result<Served<Self::Body>, Error> {
-                let resolved = self.located(location)?;
+                let resolved = self.located(location, credential)?;
                 let started = Instant::now();
                 let (answer, served) = self.http.send(Method::Get, &resolved, range, credential)?;
                 let elapsed = started.elapsed();
@@ -285,7 +302,7 @@ macro_rules! delegating_source {
                 validator: &Validator,
                 credential: Option<&Credential>,
             ) -> Result<Revalidated<Self::Body>, Error> {
-                let resolved = self.located(location)?;
+                let resolved = self.located(location, credential)?;
                 let started = Instant::now();
                 let (answer, served) = self.http.send_conditional(
                     Method::Get,
@@ -327,7 +344,7 @@ macro_rules! delegating_source {
 
 impl HuggingFaceSource {
     /// Returns the location one reference is fetched from.
-    fn located(&self, reference: &str) -> Result<String, Error> {
+    fn located(&self, reference: &str, _credential: Option<&Credential>) -> Result<String, Error> {
         self.resolve(reference)
     }
 
@@ -401,8 +418,52 @@ impl HuggingFaceSource {
 
 impl ZenodoSource {
     /// Returns the location one reference is fetched from.
-    fn located(&self, reference: &str) -> Result<String, Error> {
-        self.resolve(reference)
+    ///
+    /// A reference naming a file inside a record is resolved by reading the
+    /// record and taking that file's own link, because the provider publishes
+    /// no stable template a location could be built from instead.
+    fn located(&self, reference: &str, credential: Option<&Credential>) -> Result<String, Error> {
+        let (record, file) = Self::parts(reference);
+        let api = self.resolve(&record)?;
+        if file.is_empty() {
+            return Ok(api);
+        }
+        let body = self.record_body(&api, credential)?;
+        file_link(&body, &file).ok_or_else(|| {
+            Error::new(
+                ErrorKind::ReferenceUnresolved,
+                format!(
+                    "name a file the record holds, because {} states none called {file}",
+                    SafeUrl::new(&record)
+                ),
+            )
+            .with_source(&api)
+        })
+    }
+
+    /// Splits a reference into the record it names and the file under it, when
+    /// it names one. A record identifier is a deposit identifier, which is two
+    /// segments, or a bare number, which is one.
+    fn parts(reference: &str) -> (String, String) {
+        let Some(rest) = reference.strip_prefix("zenodo:") else {
+            return (reference.to_owned(), String::new());
+        };
+        let segments: Vec<&str> = rest.split('/').collect();
+        let held = if segments
+            .first()
+            .is_some_and(|first| first.starts_with("10."))
+        {
+            2
+        } else {
+            1
+        };
+        if segments.len() <= held {
+            return (reference.to_owned(), String::new());
+        }
+        (
+            format!("zenodo:{}", segments[..held].join("/")),
+            segments[held..].join("/"),
+        )
     }
 
     /// Returns what the response said about the object, under the reference the
@@ -432,25 +493,31 @@ impl ZenodoSource {
 
     /// Lists the files one record holds.
     fn listed(&self, reference: &str, credential: Option<&Credential>) -> Result<Listing, Error> {
-        let api = self.located(reference)?;
-        let (answer, _served) = self.http.send(Method::Get, &api, None, credential)?;
+        let api = self.resolve(reference)?;
+        let body = self.record_body(&api, credential)?;
+        let limits = self.http.limits();
+        bounded(record_entries(&api, &body)?, 0, &api, &limits)
+    }
+
+    /// Reads what a record states about itself.
+    fn record_body(&self, api: &str, credential: Option<&Credential>) -> Result<String, Error> {
+        let (answer, _served) = self.http.send(Method::Get, api, None, credential)?;
         let status = answer.status().as_u16();
         if !(200..300).contains(&status) {
             return Err(crate::http::status_failure(
-                &api,
+                api,
                 status,
                 header(&answer, "retry-after").as_deref(),
                 credential,
             ));
         }
         let limits = self.http.limits();
-        let body = answer
+        answer
             .into_body()
             .into_with_config()
             .limit(limits.listing_bytes)
             .read_to_string()
-            .map_err(|reason| crate::http::transport_failure(&api, &reason))?;
-        bounded(record_entries(&api, &body)?, 0, &api, &limits)
+            .map_err(|reason| crate::http::transport_failure(api, &reason))
     }
 }
 

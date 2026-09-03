@@ -1,7 +1,7 @@
 //! The fixed provider help records, and the function that chooses one for an
 //! endpoint.
 
-use fetchloom_engine::credential::{Necessity, ProviderHelp, token_variable};
+use fetchloom_engine::credential::{Necessity, ProviderHelp, host_variable, token_variable};
 use fetchloom_engine::reference::Host;
 
 fn google_cloud_storage(host: &str, necessity: Necessity) -> ProviderHelp {
@@ -102,41 +102,48 @@ fn azure_blob_storage(host: &str, necessity: Necessity) -> ProviderHelp {
 }
 
 fn amazon_s3(host: &str, necessity: Necessity) -> ProviderHelp {
+    let named = Host::new(host.to_owned());
+    let access = host_variable("FETCHLOOM_ACCESS_KEY_", &named);
+    let secret = host_variable("FETCHLOOM_SECRET_KEY_", &named);
+    let region = host_variable("FETCHLOOM_REGION_", &named);
     ProviderHelp {
         provider: "Amazon S3".to_owned(),
-        unlocks: "Nothing this build can use. Amazon S3 authenticates a request by \
-            signing it with an access key and a secret key, which is not a token that \
-            can be sent, and this build sends a token. A private Amazon S3 bucket cannot \
-            be fetched by name here."
+        unlocks: "A private bucket. Amazon S3 authenticates a request by signing it with \
+            an access key and a secret key rather than by sending a token, and this build \
+            computes that signature itself."
             .to_owned(),
         necessity,
         steps: vec![
-            format!(
-                "If the bucket is public, no token is needed. Fetch it by its endpoint, \
-                    for example `https://{host}/<your bucket>/<your prefix>/`."
-            ),
-            "If the bucket is private, ask whoever owns it for a presigned link to each \
-                object you need. A presigned link is an ordinary web address that already \
-                carries its own authorization and expires after a set time."
+            "If the bucket is public, no credential is needed.".to_owned(),
+            "For a private bucket, create an access key for a user or role that may read \
+                it, in the AWS console under Security credentials."
                 .to_owned(),
             format!(
-                "Fetch each presigned link directly, for example \
-                    `fetchloom get \"https://{host}/bucket/object?X-Amz-Signature=...\"`. \
-                    Quote the address, because it contains characters a terminal would \
-                    otherwise read as instructions. Fetchloom never writes the part after \
-                    the question mark to any file, log, event or message."
+                "Set `{access}`, `{secret}`, and `{region}` to the access key, the secret \
+                    key, and the region the bucket is in. All three are required together: \
+                    an access key without a secret key or without a region is refused by \
+                    name rather than sent."
             ),
+            "A session token from a temporary credential goes in the matching \
+                `FETCHLOOM_SESSION_TOKEN_` variable and is signed over with the rest."
+                .to_owned(),
+            "The standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` \
+                and `AWS_REGION` variables are read as a second tier, after the host-scoped \
+                ones."
+                .to_owned(),
         ],
-        placement: "None. There is nowhere to put an access key and secret key that this \
-            build would use."
-            .to_owned(),
-        verification: format!(
-            "`fetchloom plan https://{host}/<your bucket>/<your prefix>/` For a public \
-                bucket the plan prints. For a private one it fails naming the status the \
-                bucket returned."
+        placement: format!(
+            "The environment, as `{access}`, `{secret}` and `{region}`. The secret key is \
+                never written to any file, log, event or message, and never leaves this \
+                process: only the signature computed from it is sent."
         ),
-        scope: "For a presigned link, the narrowest that works is one object, for the \
-            shortest time that covers the transfer."
+        verification: format!(
+            "`fetchloom plan https://{host}/<your bucket>/<your prefix>/` The plan prints \
+                for a bucket the credential may read, and fails naming the status the \
+                bucket returned for one it may not."
+        ),
+        scope: "The narrowest policy that works, which for one dataset is read access to \
+            one bucket prefix."
             .to_owned(),
     }
 }
@@ -209,7 +216,7 @@ pub fn signs_requests(host: &str) -> bool {
 }
 
 #[cfg(test)]
-mod signing_tests {
+mod tests {
     use super::signs_requests;
 
     #[test]

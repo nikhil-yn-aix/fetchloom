@@ -14,10 +14,13 @@ use windows_sys::Win32::System::SystemServices::{
     FILE_SUPPORTS_BLOCK_REFCOUNTING, FILE_SUPPORTS_HARD_LINKS, FILE_SUPPORTS_SPARSE_FILES,
 };
 
-use super::{MAX_PATH_LENGTH, ffi};
+use super::{PATH_LENGTHS, ffi};
 use fetchloom_engine::degrade::DegradeQueue;
 
 use crate::probe_tag;
+
+/// The ratio above which writing many small files is called expensive.
+const SMALL_WRITE_COST_RATIO: f64 = 2.0;
 
 /// How many small files the scanner measurement writes.
 const SCANNER_FILES: usize = 64;
@@ -93,7 +96,11 @@ fn measure(
         symlink,
         hard_link: information.flags & FILE_SUPPORTS_HARD_LINKS != 0,
         max_component_length: information.max_component_length,
-        max_path_length: MAX_PATH_LENGTH,
+        max_path_length: crate::pathlen::measure(
+            directory,
+            &PATH_LENGTHS,
+            information.max_component_length,
+        ),
         backing: if ffi::is_remote_drive(directory) {
             Backing::Network
         } else {
@@ -196,7 +203,10 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
     };
 
     let Some(loaded) = ffi::loaded_minifilters() else {
-        return Ok(Scanner::Unknown { cost_ratio: ratio });
+        if ratio > SMALL_WRITE_COST_RATIO {
+            return Ok(Scanner::Unknown { cost_ratio: ratio });
+        }
+        return Ok(Scanner::Absent);
     };
     let named = loaded
         .into_iter()

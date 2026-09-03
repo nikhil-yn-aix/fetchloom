@@ -119,41 +119,105 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
             return ExitCode::from(1);
         }
     };
+    let regimes = match collect_regimes(&binary, iterations, &wanted) {
+        Ok(regimes) => regimes,
+        Err(code) => return code,
+    };
+    regimes_into_baseline(
+        regimes,
+        workspace,
+        &Asked {
+            save,
+            compare,
+            publish,
+            timing: if gate_timing {
+                Timing::Recorded
+            } else {
+                Timing::Reported
+            },
+            scope: if only.is_none() {
+                Scope::Whole
+            } else {
+                Scope::One
+            },
+        },
+    )
+}
+
+/// Runs every regime the caller asked for.
+fn collect_regimes(
+    binary: &Path,
+    iterations: u32,
+    wanted: &dyn Fn(&str) -> bool,
+) -> Result<Vec<bench::RegimeResult>, ExitCode> {
     let mut regimes = Vec::new();
     if wanted("no-op") {
-        match bench::run_no_op(&binary, iterations) {
+        match bench::run_no_op(binary, iterations) {
             Ok(regime) => regimes.push(regime),
             Err(error) => {
                 eprintln!("{error}");
-                return ExitCode::from(1);
+                return Err(ExitCode::from(1));
             }
         }
     }
     if wanted("cold-cache") || wanted("warm-cache") {
-        match measure_cache(&binary, iterations) {
-            Ok(measured) => regimes.extend(measured),
-            Err(code) => return code,
-        }
+        regimes.extend(measure_cache(binary, iterations)?);
     }
     if wanted("cold-transfer") || wanted("interrupted-transfer") {
-        match measure_transfer(&binary, iterations) {
-            Ok(measured) => regimes.extend(measured),
-            Err(code) => return code,
-        }
+        regimes.extend(measure_transfer(binary, iterations)?);
     }
     if wanted("many-small-files") || wanted("one-large-file") {
-        match measure_shapes(&binary, iterations) {
-            Ok(measured) => regimes.extend(measured),
-            Err(code) => return code,
+        regimes.extend(measure_shapes(binary, iterations)?);
+    }
+    if wanted("many-hosts-concurrency") || wanted("many-hosts-backoff") {
+        regimes.extend(measure_hosts(binary, iterations)?);
+    }
+    if wanted("constrained-network") {
+        match bench::run_constrained(binary, iterations.min(3)) {
+            Ok(regime) => regimes.push(regime),
+            Err(error) => {
+                eprintln!("{error}");
+                return Err(ExitCode::from(1));
+            }
         }
     }
-    if wanted("many-hosts") {
-        match measure_hosts(&binary, iterations) {
-            Ok(measured) => regimes.extend(measured),
-            Err(code) => return code,
+    if wanted("packed-index") {
+        match bench::run_packed_index(binary, iterations.min(3)) {
+            Ok(regime) => regimes.push(regime),
+            Err(error) => {
+                eprintln!("{error}");
+                return Err(ExitCode::from(1));
+            }
+        }
+    }
+    if wanted("slow-disk") {
+        match bench::run_slow_disk(iterations.min(3)) {
+            Ok(regime) => regimes.push(regime),
+            Err(error) => {
+                eprintln!("{error}");
+                return Err(ExitCode::from(1));
+            }
         }
     }
     regimes.retain(|regime| wanted(&regime.regime));
+    Ok(regimes)
+}
+
+/// Reports what the regimes measured, publishes it when asked, and gates.
+fn regimes_into_baseline(
+    regimes: Vec<bench::RegimeResult>,
+    workspace: &Path,
+    asked: &Asked,
+) -> ExitCode {
+    let Asked {
+        save,
+        compare,
+        publish,
+        timing,
+        scope,
+    } = *asked;
+    let gate_timing = timing == Timing::Recorded;
+    let whole = scope == Scope::Whole;
     let mut current = bench::Baseline {
         target: target_triple(),
         regimes,
@@ -180,7 +244,7 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
         println!("published to {}", page.display());
     }
 
-    if only.is_some() {
+    if !whole {
         println!(
             "one regime was measured, so nothing was recorded or compared, because a baseline states every regime"
         );
@@ -238,7 +302,7 @@ fn record_and_gate(
             return ExitCode::from(1);
         }
         println!(
-            "no deterministic metric regressed by more than five percent; a timing metric is recorded and reported and never gates, because no machine here is quiet enough for a wall clock to mean anything"
+            "no deterministic metric moved by more than five percent in either direction, and none the baseline carries went missing; a timing metric is recorded and reported and never gates, because no machine here is quiet enough for a wall clock to mean anything"
         );
     }
     ExitCode::SUCCESS
@@ -378,4 +442,37 @@ pub(crate) fn run_network(workspace: &Path, arguments: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// What one benchmark invocation was asked to do with what it measured.
+struct Asked {
+    /// Whether the run is recorded as the baseline.
+    save: bool,
+    /// Whether the run is compared against the baseline.
+    compare: bool,
+    /// Whether the published page is rewritten.
+    publish: bool,
+    /// Whether timing metrics are recorded at all.
+    timing: Timing,
+    /// How much of the matrix ran.
+    scope: Scope,
+}
+
+/// Whether a run records the durations it measured.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Timing {
+    /// Durations are recorded alongside the counters.
+    Recorded,
+    /// Durations are reported and not recorded, because a baseline carrying
+    /// one is only valid on the machine that measured it.
+    Reported,
+}
+
+/// How much of the matrix one invocation ran.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// Every regime, which is what a baseline states.
+    Whole,
+    /// One regime, which states nothing a baseline can be compared against.
+    One,
 }

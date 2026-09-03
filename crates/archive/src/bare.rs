@@ -87,7 +87,7 @@ pub fn list_member<R: Read + Seek + 'static>(
     let mut decompressor = build_decompressor(compression, rewind, name)?;
     let mut guard = BombGuard::new(name, on_disk_bytes, limits);
     guard.observe_entry()?;
-    let mut buffer = vec![0_u8; 65_536];
+    let mut buffer = vec![0_u8; crate::extract::BUFFER_LEN];
     let mut total = 0_u64;
     loop {
         let read = decompressor

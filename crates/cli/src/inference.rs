@@ -4,7 +4,6 @@ use std::path::Path;
 
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, ErrorKind};
-use fetchloom_engine::event::EventPayload;
 use fetchloom_engine::hashing::Digester;
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::{Artifact, DigestClaims, Manifest};
@@ -32,7 +31,6 @@ pub fn from_directory(
     root: &Path,
     processor: &Processor,
     limits: &Limits,
-    emit: &dyn Fn(EventPayload),
 ) -> Result<Manifest, Error> {
     let walked = crate::materialize::walk(root)?;
     if !walked.links.is_empty() {
@@ -75,12 +73,7 @@ pub fn from_directory(
             layout: fetchloom_engine::selection::Layout::default(),
         });
     }
-    finish(
-        dataset_name(&root.display().to_string()),
-        artifacts,
-        limits,
-        emit,
-    )
+    finish(dataset_name(&root.display().to_string()), artifacts, limits)
 }
 
 /// What one entry of a container hashed to when inference read its bytes.
@@ -105,13 +98,12 @@ pub fn from_observed(
     location: &str,
     observed: &[Observed],
     limits: &Limits,
-    emit: &dyn Fn(EventPayload),
 ) -> Result<Manifest, Error> {
     let artifacts = observed
         .iter()
         .map(|entry| Artifact {
             id: entry.path.clone(),
-            sources: vec![format!("{location}{}", entry.path)],
+            sources: vec![fetchloom_sources::joined(location, &entry.path)],
             size: Some(entry.size),
             digest: Some(DigestClaims {
                 blake3: Some(entry.content),
@@ -123,16 +115,11 @@ pub fn from_observed(
             layout: fetchloom_engine::selection::Layout::default(),
         })
         .collect();
-    finish(dataset_name(location), artifacts, limits, emit)
+    finish(dataset_name(location), artifacts, limits)
 }
 
 /// Orders the artifacts, bounds them, and refuses a manifest that names none.
-fn finish(
-    name: String,
-    mut artifacts: Vec<Artifact>,
-    limits: &Limits,
-    emit: &dyn Fn(EventPayload),
-) -> Result<Manifest, Error> {
+fn finish(name: String, mut artifacts: Vec<Artifact>, limits: &Limits) -> Result<Manifest, Error> {
     if artifacts.len() as u64 > limits.listing_entries {
         return Err(Error::new(
             ErrorKind::ResourceLimit,
@@ -156,10 +143,6 @@ fn finish(
         artifacts,
         license: None,
     };
-    emit(EventPayload::ResolveAlias {
-        from: manifest.name.clone(),
-        to: format!("{} artifacts", manifest.artifacts.len()),
-    });
     Ok(manifest)
 }
 

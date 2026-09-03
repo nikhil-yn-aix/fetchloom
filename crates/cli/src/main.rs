@@ -103,12 +103,12 @@ fn execute() -> ExitCode {
             return ExitCode::Usage;
         }
     };
-    if resolved.aggressive.value {
-        eprintln!(
-            "--aggressive raises the transfers in flight for one host past the {} a run holds itself to, so a source may answer with a rate limit or refuse the run outright",
-            fetchloom_engine::limits::Limits::default().connections_per_host
-        );
-    }
+    warn_about_aggressive(&resolved);
+    fetchloom_cli::style::colored(terminal::resolve_color(
+        Some(resolved.color.value),
+        streams,
+        &environment,
+    ));
     let display = terminal::resolve_display(
         resolved.display.value,
         parsed.global.quiet,
@@ -169,19 +169,14 @@ fn execute() -> ExitCode {
             duration_ms: running.elapsed_ms(),
         },
     ));
-    offer_a_hint(&parsed, &resolved, streams, &environment);
+    offer_a_hint(&resolved, streams, &environment);
     code
 }
 
 /// Prints at most one hint about something the user could have done
 /// differently, after the result and never during a transfer.
-fn offer_a_hint(
-    parsed: &CommandLine,
-    resolved: &settings::Settings,
-    streams: Streams,
-    environment: &dyn Environment,
-) {
-    if !terminal::hints_permitted(parsed.global.no_hints, streams, environment) {
+fn offer_a_hint(resolved: &settings::Settings, streams: Streams, environment: &dyn Environment) {
+    if !terminal::hints_permitted(!resolved.hints.value, streams, environment) {
         return;
     }
     let Some(hint) = fetchloom_cli::hint::taken().hint() else {
@@ -511,10 +506,7 @@ fn run_verify(
         Err(error) => return reporter.report(&error),
     };
     let work = Arc::new(WorkCounter::new());
-    let Ok(processor) = Processor::new(ThreadBudget::resolve(
-        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
-        None,
-    )) else {
+    let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
@@ -549,7 +541,7 @@ fn run_verify(
         Some(Err(error)) => return reporter.report(&error),
         None => None,
     };
-    match run::verify_tree(&path, receipt.as_ref(), &emit) {
+    match run::verify_tree(&path, receipt.as_ref(), thread_budget(resolved), &emit) {
         Ok((tree, entries)) => {
             if let Some(recorded) = receipt.as_ref().and_then(|receipt| receipt.tree)
                 && recorded != tree
@@ -849,7 +841,6 @@ fn run_init(
     if let Err(error) = run::allowed_offline(reference, &policy) {
         return reporter.report(&error);
     }
-    let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
 
     let Ok(processor) = Processor::new(thread_budget(resolved)) else {
         eprintln!("the processor pool could not be built");
@@ -858,13 +849,13 @@ fn run_init(
     let processor = Arc::new(processor);
     let inferred = if run::is_served(&adapters, reference) {
         infer_over_the_network(
-            reference, &adapters, &policy, &work, &processor, resolved, &limits, &emit, observer,
+            reference, &adapters, &policy, &work, &processor, resolved, &limits, observer,
             sequence, &reporter,
         )
     } else {
         match run::local_path(reference) {
             Ok(path) if path.is_dir() => Ok(fetchloom_cli::inference::from_directory(
-                &path, &processor, &limits, &emit,
+                &path, &processor, &limits,
             )),
             Ok(path) => Ok(Err(fetchloom_engine::error::Error::new(
                 fetchloom_engine::error::ErrorKind::ReferenceUnresolved,
@@ -935,7 +926,6 @@ fn infer_over_the_network(
     processor: &Arc<Processor>,
     resolved: &settings::Settings,
     limits: &fetchloom_engine::limits::Limits,
-    emit: &dyn Fn(EventPayload),
     observer: &dyn Observer,
     sequence: &Sequence,
     reporter: &Reporter<'_>,
@@ -989,7 +979,7 @@ fn infer_over_the_network(
         })
         .collect();
     Ok(fetchloom_cli::inference::from_observed(
-        reference, &read, limits, emit,
+        reference, &read, limits,
     ))
 }
 
@@ -1552,9 +1542,9 @@ fn finish_get(
         }
     } else {
         println!(
-            "{}  {} entries  {}",
-            result.tree,
-            result.entries,
+            "{}  {}  {}",
+            fetchloom_cli::style::accent(&result.tree.to_string()),
+            fetchloom_cli::style::dimmed(&format!("{} entries", result.entries)),
             result.destination.display()
         );
     }
@@ -1934,6 +1924,7 @@ fn open_request(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<Requested, fetchloom_engine::error::Error> {
+    run::allowed_offline(reference, policy)?;
     let describes_metadata = fetchloom_cli::resolve::is_metadata_document(reference);
     let reference = resolve_reference(reference, adapters, resolved, policy, observer, sequence)?;
     let remote = run::is_served(adapters, &reference);
@@ -1963,4 +1954,15 @@ fn open_request(
         is_dataset,
         remote,
     })
+}
+
+/// Says what raising the politeness ceiling costs, before a run pays it.
+fn warn_about_aggressive(resolved: &settings::Settings) {
+    if !resolved.aggressive.value {
+        return;
+    }
+    eprintln!(
+        "--aggressive raises the transfers in flight for one host past the {} a run holds itself to, so a source may answer with a rate limit or refuse the run outright",
+        fetchloom_engine::limits::Limits::default().connections_per_host
+    );
 }

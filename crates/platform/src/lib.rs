@@ -29,6 +29,8 @@ pub(crate) enum ProcessState {
 #[cfg(test)]
 use tempfile as _;
 
+mod pathlen;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
@@ -116,6 +118,7 @@ impl NativePlatform {
     fn copy_bytes(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
         let copied = std::fs::copy(from, to)
             .map_err(|error| filesystem_failure(Surface::Destination, to, &error))?;
+        self.work.read_bytes(copied);
         self.work.wrote_bytes(copied);
         self.work.touched_file();
         Ok(CopyMechanism::Copy)
@@ -420,22 +423,22 @@ impl Platform for NativePlatform {
 
     fn try_lock(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
         self.work.touched_file();
-        acquire(path, Sharing::Exclusive, Waiting::No)
+        attempted(path, Sharing::Exclusive)
     }
 
     fn lock(&self, path: &Path) -> Result<Self::Lock, Error> {
         self.work.touched_file();
-        acquire(path, Sharing::Exclusive, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
+        waited_for(path, Sharing::Exclusive)
     }
 
     fn try_lock_shared(&self, path: &Path) -> Result<Option<Self::Lock>, Error> {
         self.work.touched_file();
-        acquire(path, Sharing::Shared, Waiting::No)
+        attempted(path, Sharing::Shared)
     }
 
     fn lock_shared(&self, path: &Path) -> Result<Self::Lock, Error> {
         self.work.touched_file();
-        acquire(path, Sharing::Shared, Waiting::Yes)?.ok_or_else(|| waited_without_it(path))
+        waited_for(path, Sharing::Shared)
     }
 }
 
@@ -448,70 +451,61 @@ enum Sharing {
     Shared,
 }
 
-/// Whether an acquisition waits for a holder to release.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Waiting {
-    /// Return without the lock rather than wait.
-    No,
-    /// Wait for the holder to release it.
-    Yes,
-}
-
 /// How many times an acquisition is retried when the name is replaced under it.
 const LOCK_ATTEMPTS: u32 = 16;
 
 /// Takes an advisory lock over the file a path currently names.
-fn acquire(path: &Path, sharing: Sharing, waiting: Waiting) -> Result<Option<PlatformLock>, Error> {
+fn waited_for(path: &Path, sharing: Sharing) -> Result<PlatformLock, Error> {
     for _ in 0..LOCK_ATTEMPTS {
         let file = open_lock_file(path)?;
-        let taken = match (sharing, waiting) {
-            (Sharing::Exclusive, Waiting::No) => immediate(file.try_lock(), path)?,
-            (Sharing::Shared, Waiting::No) => immediate(file.try_lock_shared(), path)?,
-            (Sharing::Exclusive, Waiting::Yes) => {
-                file.lock().map_err(|why| lock_failure(path, &why))?;
-                true
-            }
-            (Sharing::Shared, Waiting::Yes) => {
-                file.lock_shared().map_err(|why| lock_failure(path, &why))?;
-                true
-            }
-        };
-        if !taken {
-            return Ok(None);
+        match sharing {
+            Sharing::Exclusive => file.lock().map_err(|why| lock_failure(path, &why))?,
+            Sharing::Shared => file.lock_shared().map_err(|why| lock_failure(path, &why))?,
         }
+        let held = PlatformLock { file };
+        if imp::file_id_of(&held.file)? == imp::file_id(path)? {
+            return Ok(held);
+        }
+    }
+    Err(replaced_under_every_attempt(path))
+}
 
+/// Takes an advisory lock over the file a path currently names, or reports
+/// that a holder has it, without ever waiting for one.
+fn attempted(path: &Path, sharing: Sharing) -> Result<Option<PlatformLock>, Error> {
+    for _ in 0..LOCK_ATTEMPTS {
+        let file = open_lock_file(path)?;
+        let outcome = match sharing {
+            Sharing::Exclusive => file.try_lock(),
+            Sharing::Shared => file.try_lock_shared(),
+        };
+        match outcome {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::fs::TryLockError::Error(reason)) => {
+                return Err(lock_failure(path, &reason));
+            }
+        }
         let held = PlatformLock { file };
         if imp::file_id_of(&held.file)? == imp::file_id(path)? {
             return Ok(Some(held));
         }
     }
-    Err(Error::new(
+    Err(replaced_under_every_attempt(path))
+}
+
+/// The failure an acquisition reports when the name it locked kept being
+/// replaced by another one.
+fn replaced_under_every_attempt(path: &Path) -> Error {
+    Error::new(
         ErrorKind::CacheLocked,
         format!(
             "try again, because {} was replaced under every attempt to lock it",
             path.display()
         ),
-    ))
-}
-
-/// Reports whether an immediate attempt took the lock.
-fn immediate(outcome: Result<(), std::fs::TryLockError>, path: &Path) -> Result<bool, Error> {
-    match outcome {
-        Ok(()) => Ok(true),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
-        Err(std::fs::TryLockError::Error(reason)) => Err(lock_failure(path, &reason)),
-    }
-}
-
-fn waited_without_it(path: &Path) -> Error {
-    Error::new(
-        ErrorKind::CacheLocked,
-        format!(
-            "try again, because the wait for {} ended without the lock",
-            path.display()
-        ),
     )
 }
+
 fn open_lock_file(path: &Path) -> Result<File, Error> {
     File::options()
         .read(true)

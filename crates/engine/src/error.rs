@@ -401,6 +401,8 @@ pub enum Surface {
     Cache,
     /// A path under a destination the run materializes.
     Destination,
+    /// A path a reference names, which the run reads and never writes.
+    Source,
 }
 
 /// Turns a filesystem failure on one of the two surfaces into the kind that
@@ -411,18 +413,22 @@ pub fn filesystem_failure(
     path: &std::path::Path,
     reason: &std::io::Error,
 ) -> Error {
-    let kind = match (reason.kind(), surface) {
-        (std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded, _) => {
-            ErrorKind::ResourceDisk
-        }
-        (std::io::ErrorKind::CrossesDevices, Surface::Cache) => ErrorKind::CacheCrossVolume,
-        (std::io::ErrorKind::CrossesDevices, Surface::Destination) => {
-            ErrorKind::DestinationCrossVolume
-        }
-        (_, Surface::Cache) => ErrorKind::CacheCorrupt,
-        (_, Surface::Destination) => ErrorKind::DestinationUnrepresentable,
+    if surface == Surface::Source && reason.kind() == std::io::ErrorKind::NotFound {
+        return Error::new(
+            ErrorKind::ReferenceUnresolved,
+            format!(
+                "name a path that exists, because nothing is at {}",
+                path.display()
+            ),
+        );
+    }
+    let kind = filesystem_kind(surface, reason);
+    let action = if surface == Surface::Source {
+        format!("make {} readable: {reason}", path.display())
+    } else {
+        format!("{}: {reason}", path.display())
     };
-    Error::new(kind, format!("{}: {reason}", path.display()))
+    Error::new(kind, action)
 }
 
 /// Turns a failure to take an advisory lock into the kind that names it.
@@ -441,4 +447,25 @@ pub fn lock_failure(path: &std::path::Path, reason: &std::io::Error) -> Error {
             path.display()
         ),
     )
+}
+
+/// Decides which kind a filesystem failure on one surface is.
+///
+/// This is the rule, and `filesystem_failure` is the way to reach it with a
+/// path. A caller holding an open handle and no path reaches it here rather
+/// than deciding for itself.
+#[must_use]
+pub fn filesystem_kind(surface: Surface, reason: &std::io::Error) -> ErrorKind {
+    match (reason.kind(), surface) {
+        (std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded, _) => {
+            ErrorKind::ResourceDisk
+        }
+        (std::io::ErrorKind::CrossesDevices, Surface::Cache) => ErrorKind::CacheCrossVolume,
+        (std::io::ErrorKind::CrossesDevices, Surface::Destination | Surface::Source) => {
+            ErrorKind::DestinationCrossVolume
+        }
+        (_, Surface::Cache) => ErrorKind::CacheCorrupt,
+        (_, Surface::Destination) => ErrorKind::DestinationUnrepresentable,
+        (_, Surface::Source) => ErrorKind::ReferenceUnresolved,
+    }
 }

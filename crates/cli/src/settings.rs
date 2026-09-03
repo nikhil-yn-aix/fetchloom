@@ -8,7 +8,7 @@ use fetchloom_engine::limits::{Bandwidth, Limits};
 
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
 use crate::logging::LogLevel;
-use crate::surface::{DisplayMode, DurationArg, GlobalFlags, IoChoice, TransferFlags};
+use crate::surface::{ColorChoice, DisplayMode, DurationArg, GlobalFlags, IoChoice, TransferFlags};
 
 /// Somewhere a value can be read from.
 pub trait Environment: Send + Sync {
@@ -82,6 +82,10 @@ pub struct Settings {
     pub timeout: Sourced<Duration>,
     /// The base locations a bare name resolves against, in order.
     pub sources: Sourced<Vec<String>>,
+    /// When output carries color.
+    pub color: Sourced<ColorChoice>,
+    /// Whether a hint may be printed at all.
+    pub hints: Sourced<bool>,
 }
 
 /// Returns the limits a run holds itself to, after the levels that name any of
@@ -327,10 +331,11 @@ pub fn resolve_all(
         NonZeroU32::new(defaults.retry_attempts).unwrap_or(NonZeroU32::MIN),
     );
     let timeout = resolve_timeout(transfer, &levels, defaults)?;
-    let sources = match levels.pick(|file| file.sources.clone()) {
-        Some((bases, origin)) => Sourced::new(bases, origin),
-        None => Sourced::new(Vec::new(), Origin::Default),
-    };
+    let Presented {
+        sources,
+        color,
+        hints,
+    } = resolve_presentation(flags, &levels)?;
 
     Ok(Settings {
         offline,
@@ -348,7 +353,33 @@ pub fn resolve_all(
         retries,
         timeout,
         sources,
+        color,
+        hints,
     })
+}
+
+/// Resolves when output carries color, from the flag and then the files.
+fn resolve_color_choice(
+    flags: &GlobalFlags,
+    levels: &Levels<'_>,
+) -> Result<Sourced<ColorChoice>, Refused> {
+    if let Some(chosen) = flags.color {
+        return Ok(Sourced::new(chosen, Origin::CommandLine));
+    }
+    match from_files(
+        levels,
+        |file| file.color.clone(),
+        |text| match text {
+            "auto" => Some(ColorChoice::Auto),
+            "always" => Some(ColorChoice::Always),
+            "never" => Some(ColorChoice::Never),
+            _ => None,
+        },
+        "color",
+    )? {
+        Some((chosen, origin)) => Ok(Sourced::new(chosen, origin)),
+        None => Ok(Sourced::new(ColorChoice::Auto, Origin::Default)),
+    }
 }
 
 /// The settings that bound a run's transfers.
@@ -482,4 +513,33 @@ fn resolve_timeout(
         return Ok(Sourced::new(span, origin));
     }
     Ok(Sourced::new(defaults.idle_timeout, Origin::Default))
+}
+
+/// The settings that decide what a run writes where a person reads it.
+struct Presented {
+    /// The base locations a bare name resolves against, in order.
+    sources: Sourced<Vec<String>>,
+    /// When output carries color.
+    color: Sourced<ColorChoice>,
+    /// Whether a hint may be printed at all.
+    hints: Sourced<bool>,
+}
+
+/// Resolves what a run writes where a person reads it.
+fn resolve_presentation(flags: &GlobalFlags, levels: &Levels<'_>) -> Result<Presented, Refused> {
+    let sources = match levels.pick(|file| file.sources.clone()) {
+        Some((bases, origin)) => Sourced::new(bases, origin),
+        None => Sourced::new(Vec::new(), Origin::Default),
+    };
+    Ok(Presented {
+        sources,
+        color: resolve_color_choice(flags, levels)?,
+        hints: resolve(
+            flags.no_hints.then_some(false),
+            None,
+            levels,
+            |file| file.hints,
+            true,
+        ),
+    })
 }

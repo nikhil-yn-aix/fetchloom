@@ -12,8 +12,7 @@ use serde::Serialize;
 use crate::record::{self, ObjectRecord};
 use crate::{Cache, owner_record_of, source_record_of};
 
-/// How large a buffer a rebuild reads through.
-const BUFFER: usize = 1 << 20;
+use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 /// What one rebuild did.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

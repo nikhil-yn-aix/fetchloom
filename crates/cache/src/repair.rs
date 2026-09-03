@@ -15,8 +15,7 @@ use fetchloom_engine::timestamp::Timestamp;
 use crate::Cache;
 use crate::diagnosis::{Diagnosis, NotLocalized, spans_of};
 
-/// How large a buffer a repair reads and writes through.
-const BUFFER: usize = 1 << 20;
+use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 /// Where the bytes of an object this cache knows about are.
 #[derive(Clone, Debug, PartialEq, Eq)]

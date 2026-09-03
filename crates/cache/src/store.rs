@@ -23,8 +23,7 @@ use crate::layout::{digest_of, name_of};
 use crate::record::{self, ObjectRecord};
 use crate::{Cache, owner_record_of, source_record_of};
 
-/// How many bytes a resume reads back at a time to rebuild the digest.
-const RESUME_BUFFER_BYTES: usize = 1 << 20;
+use fetchloom_engine::limits::STREAM_BUFFER_BYTES as RESUME_BUFFER_BYTES;
 
 /// A completed object held open, with the lease that keeps it from being pruned
 /// while it is being read.
@@ -490,12 +489,14 @@ impl<P: Platform> Store for Cache<P> {
 
     fn unpin(&self, digest: ContentDigest) -> Result<(), Error> {
         let path = self.layout.pin_of(digest);
-        std::fs::remove_file(&path).map_err(|reason| {
-            Error::new(
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Err(Error::new(
                 ErrorKind::CacheCorrupt,
-                format!("pin {digest} before unpinning it, because nothing pins it: {reason}"),
-            )
-        })
+                format!("pin {digest} before unpinning it, because nothing pins it"),
+            )),
+            Err(reason) => Err(filesystem_failure(Surface::Cache, &path, &reason)),
+        }
     }
 
     fn list(&self) -> Result<Vec<ContentDigest>, Error> {

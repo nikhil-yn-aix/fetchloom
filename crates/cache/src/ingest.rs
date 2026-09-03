@@ -13,8 +13,7 @@ use serde::Serialize;
 use crate::Cache;
 use crate::record::{self, ObjectRecord};
 
-/// How large a buffer the ingest reads through.
-const BUFFER: usize = 1 << 20;
+use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 /// What one ingest did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -95,6 +94,7 @@ impl<P: Platform> Cache<P> {
         if length <= fetchloom_engine::limits::PACK_THRESHOLD {
             let bytes = std::fs::read(source)
                 .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
+            self.work().read_bytes(bytes.len() as u64);
             self.pack_bytes(digest, digests.interop, &bytes)?;
             self.finish_publication(digests)?;
             return Ok(Ingested {
@@ -107,7 +107,6 @@ impl<P: Platform> Cache<P> {
         let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
         self.platform().clone_or_copy(source, &scratch)?;
-        self.work().wrote_bytes(length);
         let written = std::fs::OpenOptions::new()
             .write(true)
             .open(&scratch)

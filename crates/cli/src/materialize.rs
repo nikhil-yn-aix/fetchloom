@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
@@ -80,7 +80,8 @@ fn entry_path_of(relative: &Path) -> Result<EntryPath, Error> {
 ///
 /// Returns the entry that cannot be represented, or the read that failed.
 pub fn walk(root: &Path) -> Result<Walked, Error> {
-    let metadata = fs::symlink_metadata(root).map_err(|reason| read_failure(root, &reason))?;
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|reason| filesystem_failure(Surface::Source, root, &reason))?;
     let mut walked = Walked::default();
     if metadata.is_dir() {
         walked.root = root.to_path_buf();
@@ -95,34 +96,20 @@ pub fn walk(root: &Path) -> Result<Walked, Error> {
     Ok(walked)
 }
 
-fn read_failure(path: &Path, reason: &std::io::Error) -> Error {
-    if reason.kind() == std::io::ErrorKind::NotFound {
-        return Error::new(
-            ErrorKind::ReferenceUnresolved,
-            format!(
-                "name a path that exists, because nothing is at {}",
-                path.display()
-            ),
-        );
-    }
-    Error::new(
-        ErrorKind::ReferenceUnresolved,
-        format!("make {} readable: {reason}", path.display()),
-    )
-}
-
 fn walk_into(root: &Path, directory: &Path, walked: &mut Walked) -> Result<(), Error> {
-    let listing = fs::read_dir(directory).map_err(|reason| read_failure(directory, &reason))?;
+    let listing = fs::read_dir(directory)
+        .map_err(|reason| filesystem_failure(Surface::Source, directory, &reason))?;
     let mut children: Vec<PathBuf> = Vec::new();
     for entry in listing {
-        let entry = entry.map_err(|reason| read_failure(directory, &reason))?;
+        let entry =
+            entry.map_err(|reason| filesystem_failure(Surface::Source, directory, &reason))?;
         children.push(entry.path());
     }
     children.sort();
 
     for path in children {
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|reason| read_failure(&path, &reason))?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|reason| filesystem_failure(Surface::Source, &path, &reason))?;
         walk_one(root, &path, &metadata, walked)?;
     }
     Ok(())
@@ -138,7 +125,8 @@ fn walk_one(
     let entry_path = entry_path_of(&relative)?;
 
     if metadata.is_symlink() {
-        let target = fs::read_link(path).map_err(|reason| read_failure(path, &reason))?;
+        let target = fs::read_link(path)
+            .map_err(|reason| filesystem_failure(Surface::Source, path, &reason))?;
         let bytes = target.to_string_lossy().replace('\\', "/").into_bytes();
         walked.entries.push(TreeEntry::Symlink {
             path: entry_path.clone(),
@@ -177,12 +165,14 @@ pub fn copy_file(
     from: &Path,
     to: &Path,
 ) -> Result<(u64, hashing::Digests), Error> {
-    let source = fs::File::open(from).map_err(|reason| read_failure(from, &reason))?;
-    let target = fs::File::create(to).map_err(|reason| read_failure(to, &reason))?;
+    let source = fs::File::open(from)
+        .map_err(|reason| filesystem_failure(Surface::Source, from, &reason))?;
+    let target = fs::File::create(to)
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     work.touched_file();
     let length = source
         .metadata()
-        .map_err(|reason| read_failure(from, &reason))?
+        .map_err(|reason| filesystem_failure(Surface::Source, from, &reason))?
         .len();
     let mut tee = Tee {
         source,
@@ -192,10 +182,10 @@ pub fn copy_file(
     };
     let digests = digester
         .hash(processor, &mut tee)
-        .map_err(|reason| read_failure(from, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Source, from, &reason))?;
     tee.target
         .flush()
-        .map_err(|reason| read_failure(to, &reason))?;
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     Ok((length, digests))
 }
 

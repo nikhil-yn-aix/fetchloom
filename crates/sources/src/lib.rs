@@ -21,3 +21,12 @@ pub use provider::{HuggingFaceSource, ZenodoSource};
 pub use signing::{
     EMPTY_PAYLOAD, Request as SigningRequest, Signed, SigningTime, payload_digest, sign,
 };
+
+/// Returns the reference one entry of a container is named by, with exactly one
+/// separator between them however the container was written.
+#[must_use]
+pub fn joined(container: &str, path: &str) -> String {
+    let head = container.trim_end_matches('/');
+    let tail = path.trim_start_matches('/');
+    format!("{head}/{tail}")
+}

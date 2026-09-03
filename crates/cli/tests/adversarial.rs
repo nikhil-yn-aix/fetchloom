@@ -244,6 +244,12 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
         .unwrap_err();
 
     assert_eq!(ExitCode::from(failure.layer()), ExitCode::Network);
+    assert_eq!(
+        failure.kind(),
+        ErrorKind::NetworkTimeout,
+        "a body that went quiet was reported as {}, and the contract names the kind a run out of \n         time reports",
+        failure.kind().label()
+    );
     assert!(failure.retryable(), "a stall is not terminal");
     assert!(
         harness

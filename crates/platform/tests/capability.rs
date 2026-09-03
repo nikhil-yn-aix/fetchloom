@@ -544,3 +544,32 @@ fn free_space_on_a_real_volume_is_a_number_and_not_a_guess() {
         "free space was reported for a path that is not there"
     );
 }
+
+#[test]
+fn the_path_length_is_measured_on_the_volume_and_not_assumed_from_the_platform() {
+    let scratch = support::scratch();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let measured = platform.volume_capabilities(scratch.path()).unwrap();
+
+    assert!(
+        measured.max_path_length >= measured.max_component_length,
+        "a volume reported a path shorter than one name it accepts: path {} component {}",
+        measured.max_path_length,
+        measured.max_component_length
+    );
+    assert!(
+        measured.max_path_length >= 255,
+        "a volume reported a path length of {}, which no filesystem this build runs on has",
+        measured.max_path_length
+    );
+
+    let deep = scratch.path().join("nested");
+    std::fs::create_dir_all(&deep).unwrap();
+    let inside = platform.volume_capabilities(&deep).unwrap();
+    assert_eq!(
+        inside.max_path_length, measured.max_path_length,
+        "the same volume answered two different path lengths"
+    );
+}

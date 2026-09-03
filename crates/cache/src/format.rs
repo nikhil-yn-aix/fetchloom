@@ -2,7 +2,7 @@
 
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::identity::CacheFormatFingerprint;
-use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
+use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD, PACK_THRESHOLD};
 
 /// The domain this fingerprint is derived under.
 const FORMAT_CONTEXT: &str = "fetchloom cache format";
@@ -10,11 +10,17 @@ const FORMAT_CONTEXT: &str = "fetchloom cache format";
 /// Every statement that defines the on-disk format.
 fn statements() -> Vec<String> {
     vec![
-        "the cache root holds objects, outboard, partial, staging, quarantine, receipts, meta, locks, pins, and format"
+        "the cache root holds objects, packs, outboard, partial, staging, quarantine, receipts, meta, locks, pins, and format"
             .to_owned(),
         "an object is objects/<hex>, where hex is the lowercase hexadecimal of the content digest"
             .to_owned(),
         "an outboard tree is outboard/<hex> and is stored only above the threshold".to_owned(),
+        "an object at or below the pack threshold is appended to a pack in packs/ rather than written as its own file"
+            .to_owned(),
+        "a packed object is a header of the content digest, the interop digest, and the length as eight little-endian bytes, followed by the bytes"
+            .to_owned(),
+        "a pack states what it holds, so no index file can disagree with it".to_owned(),
+        format!("an object is packed at or below {PACK_THRESHOLD} bytes"),
         "an in-progress transfer is partial/<hex> and its owner record is partial/<hex>.owner"
             .to_owned(),
         "a staging tree is staging/<name> and its owner record is staging/<name>.owner".to_owned(),

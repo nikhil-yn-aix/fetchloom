@@ -190,13 +190,13 @@ impl<P: Platform> Cache<P> {
     /// The answer is built from the packs themselves the first time it is
     /// asked for and kept for the life of the cache, so a pack stays the only
     /// authority on what it holds and no index file can disagree with it.
-    pub(crate) fn packed_index(&self) -> Index {
+    pub(crate) fn packed_index(&self) -> std::sync::Arc<Index> {
         let mut held = self
             .packed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(built) = held.as_ref() {
-            return built.clone();
+            return std::sync::Arc::clone(built);
         }
         let mut index = Index::new();
         for pack in self.packs().unwrap_or_default() {
@@ -204,8 +204,9 @@ impl<P: Platform> Cache<P> {
                 index.insert(digest, (pack.clone(), entry));
             }
         }
-        *held = Some(index.clone());
-        index
+        let built = std::sync::Arc::new(index);
+        *held = Some(std::sync::Arc::clone(&built));
+        built
     }
 
     /// Records that this process just packed an object.
@@ -215,7 +216,7 @@ impl<P: Platform> Cache<P> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(built) = held.as_mut() {
-            built.insert(digest, (pack, entry));
+            std::sync::Arc::make_mut(built).insert(digest, (pack, entry));
         }
     }
 }
@@ -293,7 +294,7 @@ impl<P: Platform> Cache<P> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(built) = held.as_mut() {
-            built.retain(|_, (held_in, _)| held_in != pack);
+            std::sync::Arc::make_mut(built).retain(|_, (held_in, _)| held_in != pack);
         }
     }
 }

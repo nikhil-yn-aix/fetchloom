@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -169,5 +170,76 @@ fn a_provider_refusal_never_carries_a_secret_from_the_reference() {
     assert!(
         !everything.contains("super-secret-value"),
         "a query value reached the refusal: {everything}"
+    );
+}
+
+#[test]
+fn every_entry_a_record_lists_is_named_by_a_reference_that_resolves() {
+    let body = r#"{"files":[
+        {"key":"article.pdf","size":10,"links":{"self":"https://zenodo.org/api/files/x/article.pdf"}}
+    ]}"#;
+    let server = TestServer::start(Script::serving(body.as_bytes().to_vec())).unwrap();
+    let host = server.origin();
+    let source = ZenodoSource::reaching(host, Limits::default(), counter());
+
+    let listing = source.list("zenodo:10.5281/zenodo.1234567", None).unwrap();
+    let named =
+        fetchloom_sources::joined("zenodo:10.5281/zenodo.1234567", &listing.entries[0].path);
+
+    assert_eq!(
+        named, "zenodo:10.5281/zenodo.1234567/article.pdf",
+        "a listed entry was named by pasting its path onto the container"
+    );
+    assert!(
+        source.serves(&named).is_some(),
+        "the reference a listing produces is not one the provider serves"
+    );
+}
+
+#[test]
+fn a_container_reference_and_an_entry_path_are_joined_by_one_separator() {
+    for (container, path, expected) in [
+        (
+            "zenodo:10.5281/zenodo.1234567",
+            "article.pdf",
+            "zenodo:10.5281/zenodo.1234567/article.pdf",
+        ),
+        (
+            "hf:datasets/org/name/",
+            "train.csv",
+            "hf:datasets/org/name/train.csv",
+        ),
+        ("https://host/set/", "one.bin", "https://host/set/one.bin"),
+        ("https://host/set", "one.bin", "https://host/set/one.bin"),
+    ] {
+        assert_eq!(fetchloom_sources::joined(container, path), expected);
+    }
+}
+
+#[test]
+fn a_file_inside_a_record_is_fetched_from_the_link_the_record_states() {
+    let files = TestServer::start(Script::serving(b"the article bytes".to_vec())).unwrap();
+    let body = format!(
+        r#"{{"files":[{{"key":"article.pdf","size":17,"links":{{"self":"{}/files/article.pdf"}}}}]}}"#,
+        files.origin()
+    );
+    let record = TestServer::start(Script::serving(body.into_bytes())).unwrap();
+    let source = ZenodoSource::reaching(record.origin(), Limits::default(), counter());
+
+    let described = source
+        .probe("zenodo:10.5281/zenodo.1234567/article.pdf", None)
+        .expect("a file inside a record did not resolve");
+    assert!(
+        described.location.as_str().contains("/files/article.pdf"),
+        "a file reference resolved to {} rather than to the link the record states",
+        described.location
+    );
+
+    let missing = source
+        .probe("zenodo:10.5281/zenodo.1234567/absent.pdf", None)
+        .expect_err("a file the record does not state resolved anyway");
+    assert_eq!(
+        missing.kind(),
+        fetchloom_engine::error::ErrorKind::ReferenceUnresolved
     );
 }

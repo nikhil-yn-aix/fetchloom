@@ -957,7 +957,7 @@ The result's `status` is one of exactly four values, and no other value is ever 
 
 `restored` and `adopted` are run-level statuses. They share their names with the per-entry reconcile outcomes because they name the same fact at a different scale, and a run whose entries are all `restored` reports `restored`.
 
-The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests`, and `file_operations`. Bytes read counts every byte the run read from a file, bytes written counts every byte it wrote to one, requests counts every request it issued to a source, retries and probes included, and file operations counts every file or directory the run created, every rename it performed, and every flush it issued. All four are identical on identical inputs, so they are what a benchmark gates on. None of them is a duration.
+The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests`, and `file_operations`. Bytes read counts every byte of content the run read from a file and bytes written counts every byte of content it wrote to one, so that on a run into an empty destination and an empty cache, bytes written is exactly what the run left on disk. Neither counts the cache's own records, its format fingerprint, its locks, or the receipt: those are bookkeeping about a run rather than the content it moved, a run that writes no content still writes some of them, and the receipt's own length varies with where the run wrote, which would make a gated number depend on the path it was given. Requests counts every request the run issued to a source, retries and probes included, and file operations counts every file or directory the run created, every rename it performed, and every flush it issued, bookkeeping included. All four are identical on identical inputs, so they are what a benchmark gates on. None of them is a duration.
 
 File operations is counted because the cost of holding many small objects is dominated by how many files each one takes rather than by how many bytes, and a count is the only form of that fact a gate can hold. It is counted where the platform performs the operation, so a new caller counts by construction.
 
@@ -1043,6 +1043,8 @@ reconcile.outcome
 degrade
 error
 ```
+
+A transfer emits `verify.start` before the bytes it wrote are checked against the digest they were expected to have, and then `verify.end` when they matched or `verify.mismatch` when they did not. `repair` emits the same three around the object it checks, and `verify.range` for each range it verified against the outboard tree.
 
 `degrade` fires whenever any capability, optimization, or trust level is lower than requested, and names the reason. Silence is never used to signal degradation.
 
@@ -1148,6 +1150,8 @@ Second interrupt: abort immediately. Cache invariants still hold because nothing
 ## Offline
 
 `--offline` forbids DNS resolution, connection attempts, source probes, remote credential lookups, and update checks. Any operation requiring one of these fails with `policy.offline` before doing avoidable work. Plans produced offline mark every network-derived field as unknown.
+
+A reference is taken to require the network unless it names something this machine already holds, so a reference form added to the grammar later is refused offline until it is shown to be local rather than permitted until someone remembers to name it. The refusal is decided once, before a reference is resolved, and enforced again at the point a request would be issued, so that no adapter can reach the network by resolving to a location the first decision never saw.
 
 ## Determinism
 

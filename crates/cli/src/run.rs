@@ -14,7 +14,7 @@ use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::erased::{Adapters, AnySource};
-use fetchloom_engine::error::{Error, ErrorKind, Layer};
+use fetchloom_engine::error::{Error, ErrorKind, Layer, Surface, filesystem_failure};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
 use fetchloom_engine::hashing;
@@ -175,10 +175,6 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf, Error> {
             format!("{}: {reason}", path.display()),
         )
     })
-}
-
-fn failure(kind: ErrorKind, path: &Path, reason: &std::io::Error) -> Error {
-    Error::new(kind, format!("{}: {reason}", path.display()))
 }
 
 /// Returns the directory a path sits in, treating a single-component relative
@@ -461,7 +457,7 @@ fn materialize_fresh(
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
     }
     with.platform.create_directories(&staging)?;
 
@@ -948,6 +944,7 @@ fn staging_beside(destination: &Path) -> PathBuf {
 pub fn verify_tree(
     path: &Path,
     receipt: Option<&Receipt>,
+    budget: ThreadBudget,
     emit: &dyn Fn(EventPayload),
 ) -> Result<(TreeDigest, u64), Error> {
     if !path.exists() {
@@ -956,11 +953,7 @@ pub fn verify_tree(
             format!("check that {} names a path that exists", path.display()),
         ));
     }
-    let processor = Processor::new(ThreadBudget::resolve(
-        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
-        None,
-    ))
-    .map_err(|reason| {
+    let processor = Processor::new(budget).map_err(|reason| {
         Error::new(
             ErrorKind::ResourceLimit,
             format!("the processor pool could not be built: {reason}"),
@@ -1046,10 +1039,10 @@ fn hash_files(
     for file in files {
         let full = root.join(&file.relative);
         let handle = std::fs::File::open(&full)
-            .map_err(|reason| failure(ErrorKind::ReferenceUnresolved, &full, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Source, &full, &reason))?;
         let size = handle
             .metadata()
-            .map_err(|reason| failure(ErrorKind::ReferenceUnresolved, &full, &reason))?
+            .map_err(|reason| filesystem_failure(Surface::Source, &full, &reason))?
             .len();
         let counted = CountedRead {
             inner: handle,
@@ -1059,7 +1052,7 @@ fn hash_files(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .hash(processor, counted)
-            .map_err(|reason| failure(ErrorKind::IntegrityMismatch, &full, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Source, &full, &reason))?;
         entries.push(TreeEntry::File {
             path: file.entry.clone(),
             mode: file.mode,
@@ -1294,7 +1287,7 @@ fn apply_selection(
     for file in &new_files {
         let full = walked.root.join(&file.relative);
         let metadata = std::fs::symlink_metadata(&full)
-            .map_err(|reason| failure(ErrorKind::ReferenceUnresolved, &full, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Source, &full, &reason))?;
         bytes += metadata.len();
     }
 
@@ -1350,17 +1343,32 @@ pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error
     if !policy.offline() {
         return Ok(());
     }
-    let network = reference.contains("://") && !reference.starts_with("file://");
-    if network {
-        return Err(Error::new(
-            ErrorKind::PolicyOffline,
-            format!(
-                "run the command again without --offline to reach {}",
-                SafeUrl::new(reference)
-            ),
-        ));
+    fetchloom_engine::network::forbid();
+    if names_something_here(reference) {
+        return Ok(());
     }
-    Ok(())
+    Err(Error::new(
+        ErrorKind::PolicyOffline,
+        format!(
+            "run the command again without --offline to reach {}",
+            SafeUrl::new(reference)
+        ),
+    ))
+}
+
+/// Reports whether a reference names something this machine already holds.
+///
+/// Every other shape needs the network, so a shape added to the grammar later
+/// is refused offline until it is shown to be local, rather than permitted
+/// until someone remembers to name it.
+fn names_something_here(reference: &str) -> bool {
+    if let Some(path) = reference.strip_prefix("file://") {
+        return !path.is_empty();
+    }
+    if reference.contains("://") {
+        return false;
+    }
+    std::path::Path::new(reference).exists()
 }
 
 /// Materializes one object named by an HTTP or HTTPS reference.
@@ -1494,19 +1502,6 @@ fn container_name(location: &str) -> String {
     last.map_or_else(|| "dataset".to_owned(), str::to_owned)
 }
 
-/// Materializes every entry an object store container lists into one
-/// destination.
-///
-/// # Errors
-///
-/// Fails when the container cannot be listed, when the listing does not
-/// answer in the object store list format, when the selection matches no
-/// entry, when an entry cannot be transferred, and when a destination entry is
-/// modified or foreign and neither `force` nor `adopt` was given.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the selection, force, and adopt flags each name a contract behavior of their own"
-)]
 /// Lists a container, transfers every entry into the cache, and returns what
 /// each one's bytes hashed to, which is the only digest inference ever records
 /// for a source that stated none.
@@ -1731,7 +1726,7 @@ fn transfer_container_entries(
     let pause = SleepingPause;
     let locations: Vec<String> = listed
         .iter()
-        .map(|entry| format!("{location}{}", entry.path))
+        .map(|entry| fetchloom_sources::joined(location, &entry.path))
         .collect();
     let hosts: Vec<String> = locations.iter().map(|one| host_of(one)).collect();
     let flights = Flights::new(with.tuning.ceilings, |host: &str| {
@@ -1818,7 +1813,7 @@ fn place_container_entries(
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
     }
     with.platform.create_directories(&staging)?;
 
@@ -1988,7 +1983,7 @@ fn restore_object(
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
     }
     with.platform.create_directories(&staging)?;
 
@@ -2129,7 +2124,7 @@ fn publish_one_object(
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
     }
     with.platform.create_directories(&staging)?;
 
@@ -3076,7 +3071,7 @@ fn build_dataset_staging(
     let staging = staging_beside(destination);
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
-            .map_err(|reason| failure(ErrorKind::DestinationForeign, &staging, &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
     }
     with.platform.create_directories(&staging)?;
 

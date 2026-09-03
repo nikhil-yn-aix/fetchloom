@@ -85,18 +85,27 @@ fn no_other_place_turns_a_filesystem_failure_into_an_error() {
         .unwrap()
         .to_path_buf();
     let mut offenders = Vec::new();
-    for crate_name in ["cache", "platform"] {
+    let crates = std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for crate_name in crates {
         let directory = root.join("crates").join(crate_name).join("src");
         let mut files = Vec::new();
         collect(&directory, &mut files);
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
-            for (number, line) in text.lines().enumerate() {
+            let lines: Vec<&str> = text.lines().collect();
+            for (number, line) in lines.iter().enumerate() {
                 let signature = line.trim_start();
-                let declares = signature.starts_with("fn ")
-                    || signature.starts_with("pub fn ")
-                    || signature.starts_with("pub(crate) fn ");
-                if declares && line.contains("io::Error") && line.contains("-> Error") {
+                let statement = format!(
+                    "{} {signature}",
+                    lines.get(number.wrapping_sub(1)).unwrap_or(&"")
+                );
+                if decides_for_itself(signature)
+                    && !PERMITTED.iter().any(|(_, held)| statement.contains(held))
+                {
                     offenders.push(format!("{}:{}: {}", file.display(), number + 1, signature));
                 }
             }
@@ -144,4 +153,66 @@ fn a_lock_that_failed_for_want_of_room_is_a_resource_failure_and_not_a_volume_ve
         &IoError::from(IoErrorKind::StorageFull),
     );
     assert_eq!(refused.kind(), ErrorKind::ResourceDisk);
+}
+
+/// Reports whether one line turns a failure the filesystem reported into a kind
+/// of its own choosing.
+///
+/// Two shapes count. A function that takes something the filesystem reported
+/// and returns an error is one, whatever the error type is named. A conversion
+/// written at the call site that names a kind is the other, which is the shape
+/// the walk missed for eight phases because it looked only at declarations.
+fn decides_for_itself(line: &str) -> bool {
+    let reports_a_failure = ["io::Error", "Errno", "std::io::Error"]
+        .iter()
+        .any(|named| line.contains(named));
+    let declares = line.starts_with("fn ")
+        || line.starts_with("pub fn ")
+        || line.starts_with("pub(crate) fn ");
+    if declares && reports_a_failure && line.contains("-> Error") {
+        return true;
+    }
+    line.contains("map_err") && line.contains("ErrorKind::")
+}
+
+/// The conversions that are not filesystem decisions, each with the reason it
+/// is not one. A conversion added anywhere else fails the walk, and adding it
+/// here is a deliberate act rather than an omission.
+const PERMITTED: &[(&str, &str)] = &[
+    (
+        "the rule itself, which every other site reaches",
+        "fn filesystem_kind",
+    ),
+    (
+        "the lock rule, which asks the filesystem rule for the failures it shares",
+        "fn lock_failure",
+    ),
+    (
+        "the platform's own path into the rule, which delegates rather than deciding",
+        "fn from_errno",
+    ),
+    (
+        "an archive member, which fails as a member and never as a path on a volume",
+        "fn io_error",
+    ),
+    ("the same, for the member a plan names", "fn io_failure"),
+    (
+        "a response body, which fails as a transfer and never as a path on a volume",
+        "fn body_failure",
+    ),
+    (
+        "an entry path a tree cannot represent, which is a name and not a failure the filesystem reported",
+        "EntryPath::new",
+    ),
+];
+
+#[test]
+fn every_permitted_conversion_states_why_it_is_not_a_filesystem_decision() {
+    for (reason, symbol) in PERMITTED {
+        assert!(
+            !reason.is_empty(),
+            "{symbol} is permitted without a reason, which is how the walk stopped catching \
+             anything the first time"
+        );
+    }
 }

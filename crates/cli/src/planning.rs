@@ -87,7 +87,7 @@ pub fn build(
         dataset: dataset.to_owned(),
         release: pinned.release.clone(),
         network: PlanNetwork {
-            hosts: host_of(reference).into_iter().collect(),
+            hosts: named_host(reference).into_iter().collect(),
             required,
         },
         artifacts,
@@ -180,14 +180,40 @@ fn volume_of(path: &Path) -> String {
     }
 }
 
-fn host_of(reference: &str) -> Option<Host> {
-    let after = reference.split_once("://")?.1;
-    let authority = after.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit('@').next()?;
-    let host = host.split(':').next()?;
-    if host.is_empty() {
+/// Returns the host a reference names, when it names one.
+fn named_host(reference: &str) -> Option<Host> {
+    let host = Host::of_location(reference);
+    if host.as_str().is_empty() {
         None
     } else {
-        Some(Host::new(host))
+        Some(host)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_host;
+
+    #[test]
+    fn a_bracketed_literal_is_the_address_inside_it() {
+        assert_eq!(
+            named_host("https://[2001:db8::1]:8443/object.bin")
+                .map(|host| host.as_str().to_owned()),
+            Some("2001:db8::1".to_owned()),
+            "a plan named an opening bracket as a host"
+        );
+    }
+
+    #[test]
+    fn a_name_and_a_port_are_the_name() {
+        assert_eq!(
+            named_host("https://lab.edu:8443/object.bin").map(|host| host.as_str().to_owned()),
+            Some("lab.edu".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_reference_naming_no_host_names_none() {
+        assert!(named_host("./data.yaml").is_none());
     }
 }

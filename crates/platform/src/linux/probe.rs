@@ -84,13 +84,20 @@ fn measure(
         symlink,
         hard_link,
         max_component_length: max_component_length(directory),
-        max_path_length: MAX_PATH_LENGTH,
+        max_path_length: crate::pathlen::measure(
+            directory,
+            &PATH_LENGTHS,
+            max_component_length(directory),
+        ),
         backing: backing(directory),
         scanner,
     })
 }
 
-const MAX_PATH_LENGTH: u32 = 4096;
+/// The path lengths a volume is measured against, longest first. The first is
+/// what the kernel interface permits and the second is what a filesystem that
+/// bounds a path more tightly than the interface does permits.
+const PATH_LENGTHS: [u32; 2] = [4096, 255];
 
 fn fold_probe(
     directory: &Path,
@@ -178,7 +185,7 @@ fn clone_probe(directory: &Path) -> bool {
     let tag = probe_tag();
     let from = directory.join(format!("fetchloom-probe-{tag}-clone-source"));
     let to = directory.join(format!("fetchloom-probe-{tag}-clone-target"));
-    if std::fs::write(&from, vec![0u8; 4096]).is_err() {
+    if std::fs::write(&from, vec![0u8; 4096 + 17]).is_err() {
         return false;
     }
     let cloned = super::clone_file(&from, &to).is_ok();

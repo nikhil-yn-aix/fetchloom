@@ -27,11 +27,11 @@ use windows_sys::Win32::Security::{
     TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenOwner, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateSymbolicLinkW, FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileAllocationInfo, FileBasicInfo, FileEndOfFileInfo,
-    FileIdInfo, FlushFileBuffers, GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx,
+    FILE_ALLOCATION_INFO, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_ID_INFO, FileAllocationInfo, FileBasicInfo, FileEndOfFileInfo, FileIdInfo,
+    GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileInformationByHandleEx,
     GetVolumeInformationByHandleW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    SYMBOLIC_LINK_FLAG_DIRECTORY, SetFileInformationByHandle,
+    SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{DUPLICATE_EXTENTS_DATA, FSCTL_DUPLICATE_EXTENTS_TO_FILE};
@@ -49,9 +49,6 @@ use windows_sys::Win32::System::Threading::{
 
 /// The drive type the platform reports for a volume reached over a network.
 const DRIVE_REMOTE: u32 = 4;
-
-/// The flag that permits an unprivileged process to create a symbolic link.
-const ALLOW_UNPRIVILEGED_CREATE: u32 = 0x2;
 
 /// Encodes a path the way every wide-character Windows call expects it.
 fn wide(path: &Path) -> Vec<u16> {
@@ -177,16 +174,6 @@ pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<
     Ok(())
 }
 
-/// Pushes a file's buffered bytes to the device.
-pub(crate) fn flush_file_buffers(file: &File) -> io::Result<()> {
-    // SAFETY: the handle is owned and open for the call.
-    let ok = unsafe { FlushFileBuffers(file.as_raw_handle() as HANDLE) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// Reserves clusters for a file and then sets its length.
 pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
     let signed = i64::try_from(length).unwrap_or(i64::MAX);
@@ -225,12 +212,17 @@ pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
 }
 
 /// Shares the blocks of one file with another rather than writing them again.
-pub(crate) fn duplicate_extents(source: &File, target: &File, length: u64) -> io::Result<()> {
+pub(crate) fn duplicate_extents(
+    source: &File,
+    target: &File,
+    at: u64,
+    span: u64,
+) -> io::Result<()> {
     let request = DUPLICATE_EXTENTS_DATA {
         FileHandle: source.as_raw_handle() as HANDLE,
-        SourceFileOffset: 0,
-        TargetFileOffset: 0,
-        ByteCount: i64::try_from(length).unwrap_or(i64::MAX),
+        SourceFileOffset: i64::try_from(at).unwrap_or(i64::MAX),
+        TargetFileOffset: i64::try_from(at).unwrap_or(i64::MAX),
+        ByteCount: i64::try_from(span).unwrap_or(i64::MAX),
     };
     let size = u32::try_from(size_of::<DUPLICATE_EXTENTS_DATA>()).unwrap_or(u32::MAX);
     let mut returned = 0u32;
@@ -255,18 +247,11 @@ pub(crate) fn duplicate_extents(source: &File, target: &File, length: u64) -> io
 
 /// Creates a symbolic link with the given target.
 pub(crate) fn create_symlink(target: &str, link: &Path, directory: bool) -> io::Result<()> {
-    let target_wide = wide_text(target);
-    let link_wide = wide(link);
-    let mut flags = ALLOW_UNPRIVILEGED_CREATE;
     if directory {
-        flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
     }
-    // SAFETY: both buffers are NUL-terminated wide strings that outlive the call.
-    let ok = unsafe { CreateSymbolicLinkW(link_wide.as_ptr(), target_wide.as_ptr(), flags) };
-    if !ok {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// Reports whether a path sits on a volume reached over a network.
@@ -746,4 +731,113 @@ pub(crate) fn free_space(path: &Path) -> std::io::Result<u64> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(available)
+}
+
+/// The largest region one clone may cover, which the specification states is
+/// under four gigabytes.
+pub(crate) const CLONE_CEILING: u64 = 4 * 1024 * 1024 * 1024 - 1;
+
+/// Returns the spans a clone covers and how many bytes are left over.
+///
+/// The specification requires every cloned region to begin and end on a cluster
+/// boundary and to be under four gigabytes, so an object whose length is not a
+/// multiple of the cluster size is cloned up to the last whole cluster and the
+/// remainder, which is under one cluster, is written.
+pub(crate) fn clone_spans(length: u64, cluster: u64, ceiling: u64) -> (Vec<(u64, u64)>, u64) {
+    if cluster == 0 || ceiling < cluster {
+        return (Vec::new(), length);
+    }
+    let aligned = length - length % cluster;
+    let step = ceiling - ceiling % cluster;
+    let mut spans = Vec::new();
+    let mut at = 0;
+    while at < aligned {
+        let span = step.min(aligned - at);
+        spans.push((at, span));
+        at += span;
+    }
+    (spans, length - aligned)
+}
+
+/// Returns how many bytes one cluster of the volume a path sits on holds.
+pub(crate) fn cluster_bytes(path: &Path) -> io::Result<u64> {
+    let mut root = match path.components().next() {
+        Some(first) => Path::new(first.as_os_str()).to_path_buf(),
+        None => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
+    };
+    root.push("");
+    let wide_root = wide(&root);
+    let mut sectors_per_cluster = 0u32;
+    let mut bytes_per_sector = 0u32;
+    let mut free_clusters = 0u32;
+    let mut total_clusters = 0u32;
+    // SAFETY: the buffer is a NUL-terminated wide string that outlives the call, and every out pointer addresses a live local.
+    let ok = unsafe {
+        GetDiskFreeSpaceW(
+            wide_root.as_ptr(),
+            &raw mut sectors_per_cluster,
+            &raw mut bytes_per_sector,
+            &raw mut free_clusters,
+            &raw mut total_clusters,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(u64::from(sectors_per_cluster) * u64::from(bytes_per_sector))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CLONE_CEILING, clone_spans};
+
+    #[test]
+    fn a_length_that_is_a_whole_number_of_clusters_is_cloned_entirely() {
+        let (spans, remainder) = clone_spans(4096 * 3, 4096, CLONE_CEILING);
+        assert_eq!(spans, vec![(0, 4096 * 3)]);
+        assert_eq!(remainder, 0);
+    }
+
+    #[test]
+    fn a_length_that_is_not_leaves_the_last_partial_cluster_to_be_written() {
+        let (spans, remainder) = clone_spans(4096 * 3 + 17, 4096, CLONE_CEILING);
+        assert_eq!(spans, vec![(0, 4096 * 3)]);
+        assert_eq!(remainder, 17);
+        assert_eq!(
+            spans.iter().map(|(_, span)| span).sum::<u64>() + remainder,
+            4096 * 3 + 17,
+            "the cloned spans and the remainder do not cover the object"
+        );
+    }
+
+    #[test]
+    fn a_length_under_one_cluster_is_written_rather_than_cloned() {
+        let (spans, remainder) = clone_spans(100, 4096, CLONE_CEILING);
+        assert!(spans.is_empty());
+        assert_eq!(remainder, 100);
+    }
+
+    #[test]
+    fn a_region_is_never_larger_than_the_ceiling_and_never_unaligned() {
+        let cluster = 4096;
+        let length = 10 * 1024 * 1024 * 1024 + 5;
+        let (spans, remainder) = clone_spans(length, cluster, CLONE_CEILING);
+        assert_eq!(remainder, 5);
+        let mut at = 0;
+        for (offset, span) in &spans {
+            assert_eq!(*offset, at, "a span did not begin where the last one ended");
+            assert_eq!(offset % cluster, 0, "a span began off a cluster boundary");
+            assert_eq!(span % cluster, 0, "a span ended off a cluster boundary");
+            assert!(*span <= CLONE_CEILING, "a span was larger than the ceiling");
+            at += span;
+        }
+        assert_eq!(at + remainder, length, "the spans do not cover the object");
+    }
+
+    #[test]
+    fn a_volume_that_states_no_cluster_size_is_written_rather_than_cloned() {
+        let (spans, remainder) = clone_spans(8192, 0, CLONE_CEILING);
+        assert!(spans.is_empty());
+        assert_eq!(remainder, 8192);
+    }
 }

@@ -50,6 +50,10 @@ pub struct Limits {
     pub response_timeout: Duration,
     /// Longest a body may go without producing a byte.
     pub idle_timeout: Duration,
+    /// Longest an idle connection is kept in a host's pool, which is the
+    /// retry ceiling, so a resumed transfer after the longest permitted wait
+    /// still finds its connection rather than paying a handshake.
+    pub idle_connection_age: Duration,
     /// Most separate ranges one repair may ask a source for.
     pub repair_spans: u64,
     /// The length above which one object may be fetched as several ranges at
@@ -81,6 +85,7 @@ impl Default for Limits {
             connect_timeout: Duration::from_secs(10),
             response_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(30),
+            idle_connection_age: Duration::from_secs(60),
             repair_spans: 64,
             split_threshold: OUTBOARD_THRESHOLD,
             repair_whole_percent: 50,
@@ -138,3 +143,8 @@ impl std::str::FromStr for Bandwidth {
 /// The object size at or below which an object is packed beside others rather
 /// than given a file of its own.
 pub const PACK_THRESHOLD: u64 = OUTBOARD_CHUNK_GROUP;
+
+/// How large a buffer every streaming path reads and writes through. One
+/// declaration, because a path that streams through a smaller one issues that
+/// many times the calls for the same bytes.
+pub const STREAM_BUFFER_BYTES: usize = 1 << 20;

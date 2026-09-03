@@ -19,8 +19,10 @@ use crate::ProcessState;
 /// The interval the Windows epoch counts in, relative to the Unix epoch.
 const WINDOWS_TO_UNIX_INTERVALS: i64 = 116_444_736_000_000_000;
 
-/// The longest path Windows accepts through the extended prefix.
-const MAX_PATH_LENGTH: u32 = 32_767;
+/// The path lengths a volume is measured against, longest first. The first is
+/// what the platform permits with long paths enabled and the second is what it
+/// permits without them.
+pub(crate) const PATH_LENGTHS: [u32; 2] = [32_767, 260];
 
 /// The registry location of this machine's identity.
 const MACHINE_KEY: &str = "SOFTWARE\\Microsoft\\Cryptography";
@@ -167,7 +169,7 @@ pub(crate) fn preallocate(
 ) -> Result<(), Error> {
     ffi::preallocate(file, length).map_err(|reason| {
         Error::new(
-            ErrorKind::ResourceDisk,
+            fetchloom_engine::error::filesystem_kind(Surface::Cache, &reason),
             format!("free {length} bytes on the volume: {reason}"),
         )
     })
@@ -184,8 +186,12 @@ pub(crate) fn flush(
     _degradations: &DegradeQueue,
 ) -> Result<(), Error> {
     match tier {
-        DurabilityTier::Strict | DurabilityTier::Normal => ffi::flush_file_buffers(file)
-            .map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}"))),
+        DurabilityTier::Strict | DurabilityTier::Normal => file.sync_all().map_err(|reason| {
+            Error::new(
+                fetchloom_engine::error::filesystem_kind(Surface::Cache, &reason),
+                format!("{reason}"),
+            )
+        }),
         DurabilityTier::Fast => Ok(()),
     }
 }
@@ -263,8 +269,40 @@ pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
         .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
     ffi::preallocate(&target, length)
         .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
-    ffi::duplicate_extents(&source, &target, length)
-        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))
+
+    let cluster = ffi::cluster_bytes(to)
+        .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
+    let (spans, remainder) = ffi::clone_spans(length, cluster, ffi::CLONE_CEILING);
+    if spans.is_empty() {
+        return Err(Error::new(
+            ErrorKind::DestinationUnrepresentable,
+            format!(
+                "copy these bytes rather than cloning them, because a clone begins and ends on a cluster boundary and this object is shorter than the {cluster} byte cluster this volume uses"
+            ),
+        ));
+    }
+    for (at, span) in spans {
+        ffi::duplicate_extents(&source, &target, at, span)
+            .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
+    }
+    if remainder > 0 {
+        write_tail(&source, &target, length - remainder, remainder)
+            .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))?;
+    }
+    Ok(())
+}
+
+/// Writes the bytes past the last whole cluster, which a clone cannot cover.
+fn write_tail(source: &File, target: &File, at: u64, span: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut reading = source;
+    let mut writing = target;
+    reading.seek(SeekFrom::Start(at))?;
+    writing.seek(SeekFrom::Start(at))?;
+    let mut bytes = vec![0_u8; usize::try_from(span).unwrap_or(0)];
+    reading.read_exact(&mut bytes)?;
+    writing.write_all(&bytes)
 }
 
 /// Creates a symbolic link with the given target bytes.

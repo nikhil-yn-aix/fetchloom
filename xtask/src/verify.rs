@@ -160,7 +160,16 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
     for target in LINT_TARGETS {
         let lint = cargo(
             workspace,
-            &["clippy", "--workspace", "--all-targets", "--target", target],
+            &[
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--target",
+                target,
+                "--",
+                "-D",
+                "warnings",
+            ],
         );
         report.step(&format!("lint {target}"), lint);
     }
@@ -177,7 +186,7 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
     }
 
     let volumes = host_volumes(workspace, report);
-    let mut test = cargo(workspace, &["test", "--workspace", "--exclude", "xtask"]);
+    let mut test = cargo(workspace, &["test", "--workspace"]);
     test.env("FETCHLOOM_VERIFY", "1");
     for (name, value) in &volumes {
         test.env(name, value);

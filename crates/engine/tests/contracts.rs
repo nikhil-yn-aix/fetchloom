@@ -99,7 +99,7 @@ fn every_error_kind_the_contract_lists_exists_with_its_layer() {
 }
 
 #[test]
-fn every_error_kind_is_reachable_and_carries_the_required_fields() {
+fn every_error_kind_carries_the_fields_a_report_needs() {
     for kind in ErrorKind::ALL {
         let error = Error::new(kind, "do the thing")
             .with_dataset("silesia")
@@ -386,4 +386,67 @@ fn a_timestamp_is_written_and_read_as_one_form() {
         "1970-01-01T00:00:00Z"
     );
     assert!("2026-08-29 04:11:02".parse::<Timestamp>().is_err());
+}
+
+/// Where a kind is defined, which naming it there is not construction.
+const DEFINITION: &str = "error.rs";
+
+/// Where a unit test module begins, past which a mention is a test's and not
+/// a producer's. Every crate in the workspace puts its unit tests in one
+/// module of this name at the end of the file.
+const TESTS_BEGIN: &str = "\nmod tests {";
+
+/// Returns every line of production source in the workspace, with each file cut
+/// at its unit tests.
+fn production_source() -> String {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the workspace root above this crate")
+        .to_path_buf();
+    let mut collected = String::new();
+    let mut pending = vec![workspace.join("crates")];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .unwrap_or_else(|reason| panic!("read {}: {reason}", directory.display()))
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "tests") {
+                    continue;
+                }
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|kind| kind != "rs")
+                || path.file_name().is_some_and(|name| name == DEFINITION)
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            collected.push_str(text.split(TESTS_BEGIN).next().unwrap_or_default());
+        }
+    }
+    collected
+}
+
+#[test]
+fn every_error_kind_is_constructed_by_something_that_is_not_a_test() {
+    let source = production_source();
+    assert!(
+        source.len() > 100_000,
+        "the walk read {} bytes of source, so it proves nothing",
+        source.len()
+    );
+    let unreachable: Vec<&str> = ErrorKind::ALL
+        .iter()
+        .filter(|kind| !source.contains(&format!("ErrorKind::{kind:?}")))
+        .map(|kind| kind.label())
+        .collect();
+    assert!(
+        unreachable.is_empty(),
+        "these kinds are defined and no production path builds one, so no run can ever report \
+         them: {unreachable:?}"
+    );
 }

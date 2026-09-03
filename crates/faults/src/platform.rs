@@ -54,7 +54,7 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
     }
 
     fn free_space(&self, path: &Path) -> Result<u64, Error> {
-        self.gate(Operation::VolumeId)?;
+        self.gate(Operation::FreeSpace)?;
         self.inner.free_space(path)
     }
 

@@ -49,10 +49,11 @@ impl FileSource {
 
     fn open(&self, location: &str) -> Result<(std::fs::File, u64), Error> {
         let path = PathBuf::from(location);
-        let handle = std::fs::File::open(&path).map_err(|reason| read_failure(&path, &reason))?;
+        let handle = std::fs::File::open(&path)
+            .map_err(|reason| filesystem_failure(Surface::Source, &path, &reason))?;
         let size = handle
             .metadata()
-            .map_err(|reason| read_failure(&path, &reason))?
+            .map_err(|reason| filesystem_failure(Surface::Source, &path, &reason))?
             .len();
         self.work.touched_file();
         Ok((handle, size))
@@ -111,7 +112,7 @@ impl Source for FileSource {
         });
         handle
             .seek(SeekFrom::Start(span.start))
-            .map_err(|reason| read_failure(Path::new(location), &reason))?;
+            .map_err(|reason| filesystem_failure(Surface::Source, Path::new(location), &reason))?;
         Ok(Served {
             metadata: Self::describe(location, size),
             body: FileBody {
@@ -139,17 +140,4 @@ impl Source for FileSource {
             ),
         ))
     }
-}
-
-fn read_failure(path: &Path, reason: &std::io::Error) -> Error {
-    if reason.kind() == std::io::ErrorKind::NotFound {
-        return Error::new(
-            ErrorKind::ReferenceUnresolved,
-            format!(
-                "name a path that exists, because nothing is at {}",
-                path.display()
-            ),
-        );
-    }
-    filesystem_failure(Surface::Destination, path, reason)
 }

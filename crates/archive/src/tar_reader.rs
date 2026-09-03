@@ -310,7 +310,7 @@ pub fn open_member<R: Read + Seek + 'static>(
 }
 
 fn skip_to(stream: &TarStream, target: u64, archive_name: &str) -> Result<(), Error> {
-    let mut buffer = vec![0_u8; 65_536];
+    let mut buffer = vec![0_u8; crate::extract::BUFFER_LEN];
     while stream.position.get() < target {
         let remaining = target - stream.position.get();
         let chunk = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());

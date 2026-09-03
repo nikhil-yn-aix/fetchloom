@@ -275,7 +275,7 @@ impl<P: Platform> Cache<P> {
             .publish_file(&from, &to, self.tier())
             .map_err(|reason| {
                 Error::new(
-                    ErrorKind::CacheCorrupt,
+                    reason.kind(),
                     format!(
                         "remove {} by hand, because it failed verification and could not be quarantined: {}",
                         from.display(),
@@ -315,7 +315,7 @@ impl<P: Platform> Cache<P> {
             Placement::Packed { .. } => {
                 let mut reading = self.read(digest)?;
                 let mut file = self.platform().create_file_exclusive(at)?;
-                let mut buffer = vec![0_u8; 1 << 16];
+                let mut buffer = vec![0_u8; fetchloom_engine::limits::STREAM_BUFFER_BYTES];
                 loop {
                     let filled = reading
                         .read(&mut buffer)

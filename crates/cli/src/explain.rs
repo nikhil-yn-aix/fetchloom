@@ -61,6 +61,16 @@ impl Describe for std::path::PathBuf {
     }
 }
 
+impl Describe for crate::surface::ColorChoice {
+    fn describe(&self) -> String {
+        match self {
+            Self::Auto => "auto".to_owned(),
+            Self::Always => "always".to_owned(),
+            Self::Never => "never".to_owned(),
+        }
+    }
+}
+
 impl Describe for crate::surface::DisplayMode {
     fn describe(&self) -> String {
         match self {
@@ -184,6 +194,8 @@ pub fn rows(settings: &Settings, measured: &Measured) -> Vec<Explained> {
         row!("retries", retries),
         row!("timeout", timeout),
         row!("sources", sources),
+        row!("color", color),
+        row!("hints", hints),
     ]
 }
 

@@ -24,8 +24,10 @@ const BOOT_FILE: &str = "/proc/sys/kernel/random/boot_id";
 /// The field of a process status line holding its start time.
 const START_TIME_FIELD: usize = 22;
 
-fn from_errno(kind: ErrorKind, path: &Path, reason: rustix::io::Errno) -> Error {
-    Error::new(kind, format!("{}: {reason}", path.display()))
+/// Turns a kernel failure into the one the seam decides, so that a path this
+/// platform touches is judged by the same rule as one every other path is.
+fn from_errno(surface: Surface, path: &Path, reason: rustix::io::Errno) -> Error {
+    filesystem_failure(surface, path, &std::io::Error::from(reason))
 }
 
 /// What one path's identity and times are.
@@ -73,7 +75,7 @@ fn identity(path: &Path) -> Result<Identity, Error> {
         rustix::fs::AtFlags::empty(),
         IDENTITY_FIELDS,
     )
-    .map_err(|reason| from_errno(ErrorKind::CacheCorrupt, path, reason))?;
+    .map_err(|reason| from_errno(Surface::Cache, path, reason))?;
     Ok(identity_from(&found))
 }
 
@@ -251,7 +253,12 @@ pub(crate) fn flush(
         DurabilityTier::Normal => rustix::fs::fdatasync(file),
         DurabilityTier::Fast => return Ok(()),
     };
-    outcome.map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}")))
+    outcome.map_err(|reason| {
+        Error::new(
+            fetchloom_engine::error::filesystem_kind(Surface::Cache, &std::io::Error::from(reason)),
+            format!("{reason}"),
+        )
+    })
 }
 
 /// Releases a file's written range from the page cache.
@@ -270,7 +277,12 @@ pub(crate) fn release_written(file: &File, from: u64, length: u64) -> Result<boo
         rustix::fs::Advice::DontNeed,
     )
     .map(|()| true)
-    .map_err(|reason| Error::new(ErrorKind::CacheCorrupt, format!("{reason}")))
+    .map_err(|reason| {
+        Error::new(
+            fetchloom_engine::error::filesystem_kind(Surface::Cache, &std::io::Error::from(reason)),
+            format!("{reason}"),
+        )
+    })
 }
 
 /// Makes a directory's own entries durable.
@@ -284,8 +296,7 @@ pub(crate) fn flush_directory(directory: &Path, tier: DurabilityTier) -> Result<
     }
     let handle = File::open(directory)
         .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
-    rustix::fs::fsync(&handle)
-        .map_err(|reason| from_errno(ErrorKind::CacheCorrupt, directory, reason))
+    rustix::fs::fsync(&handle).map_err(|reason| from_errno(Surface::Cache, directory, reason))
 }
 
 /// Renames one path onto another on the same volume.
@@ -295,7 +306,7 @@ pub(crate) fn flush_directory(directory: &Path, tier: DurabilityTier) -> Result<
 /// Fails when the rename does not complete.
 pub(crate) fn rename(from: &Path, to: &Path, _tier: DurabilityTier) -> Result<(), Error> {
     rustix::fs::renameat(rustix::fs::CWD, from, rustix::fs::CWD, to)
-        .map_err(|reason| from_errno(ErrorKind::DestinationUnrepresentable, to, reason))
+        .map_err(|reason| from_errno(Surface::Destination, to, reason))
 }
 
 /// Shares the blocks of one file with another rather than writing them again.
@@ -332,7 +343,7 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
         )
     })?;
     rustix::fs::symlinkat(text, rustix::fs::CWD, link)
-        .map_err(|reason| from_errno(ErrorKind::DestinationUnrepresentable, link, reason))
+        .map_err(|reason| from_errno(Surface::Destination, link, reason))
 }
 
 /// Returns this machine's own identity.

@@ -10,6 +10,8 @@ use fetchloom_engine::error::Error;
 pub enum Operation {
     /// Reading the identifier of the volume a path is on.
     VolumeId,
+    /// Reading how much room a volume has left.
+    FreeSpace,
     /// Reading the identifier of a file within its volume.
     FileId,
     /// Reading the tuple recording that a file is probably unchanged.
@@ -52,6 +54,7 @@ pub enum Operation {
     Owns,
 }
 
+/// The faults scheduled for a run.
 #[derive(Debug)]
 struct Rule {
     successes: u64,
@@ -63,6 +66,7 @@ struct Rule {
 #[derive(Debug, Default)]
 pub struct Faults {
     rules: Mutex<HashMap<Operation, Vec<Rule>>>,
+    delays: Mutex<HashMap<Operation, std::time::Duration>>,
 }
 
 impl Faults {
@@ -71,7 +75,17 @@ impl Faults {
     pub fn new() -> Self {
         Self {
             rules: Mutex::new(HashMap::new()),
+            delays: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Charges every call of one operation a wait, which is how a slow device
+    /// is measured without one.
+    pub fn delay(&self, operation: Operation, waiting: std::time::Duration) {
+        self.delays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(operation, waiting);
     }
 
     /// Schedules a failure for one operation.
@@ -87,6 +101,15 @@ impl Faults {
     /// Consults the schedule before an operation runs.
     #[must_use]
     pub fn check(&self, operation: Operation) -> Option<Error> {
+        let waiting = self
+            .delays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&operation)
+            .copied();
+        if let Some(waiting) = waiting {
+            std::thread::sleep(waiting);
+        }
         let mut rules = self.rules.lock().unwrap_or_else(PoisonError::into_inner);
         let slots = rules.get_mut(&operation)?;
         for slot in slots {

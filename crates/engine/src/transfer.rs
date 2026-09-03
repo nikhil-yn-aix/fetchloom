@@ -26,8 +26,7 @@ use crate::source_record::SourceRecord;
 use crate::split::{Refused, parts_for, spans};
 use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate};
 
-/// How many bytes move between the source and the store at a time.
-const BUFFER: usize = 1 << 20;
+use crate::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 /// How many buffers one span of a split holds, which is what bounds how far
 /// ahead of the writer a span may run.
@@ -508,7 +507,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         self.store
             .record_source(key, &record_of(&metadata, rung, keep + moved))?;
         ended_early(&arrived, &metadata, location, keep + moved)?;
-        let digests = self.store.commit(lease, writer)?;
+        let digests = self.committed(lease, writer, keep + moved)?;
         self.emit(EventPayload::TransferEnd {
             host: metadata.host.clone(),
             bytes: moved,
@@ -526,6 +525,41 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             served,
             chosen: None,
         })
+    }
+
+    /// Publishes what arrived, reporting the verification the publication is
+    /// conditional on, because the digest is checked here and a reader of the
+    /// stream has no other place to learn that it was checked.
+    ///
+    /// # Errors
+    ///
+    /// Fails with whatever the store failed to publish for, including the
+    /// mismatch it reports when the bytes hash to something else.
+    fn committed(
+        &self,
+        lease: T::Lease,
+        writer: T::Writer,
+        bytes: u64,
+    ) -> Result<crate::hashing::Digests, Error> {
+        let checking = Span::start();
+        self.emit(EventPayload::VerifyStart);
+        match self.store.commit(lease, writer) {
+            Ok(digests) => {
+                self.emit(EventPayload::VerifyEnd {
+                    bytes,
+                    duration_ms: checking.elapsed_ms(),
+                });
+                Ok(digests)
+            }
+            Err(reason) => {
+                if reason.kind() == ErrorKind::IntegrityMismatch {
+                    self.emit(EventPayload::VerifyMismatch {
+                        error: reason.clone(),
+                    });
+                }
+                Err(reason)
+            }
+        }
     }
 
     /// Returns the rung a transfer stands on and how many bytes already on disk

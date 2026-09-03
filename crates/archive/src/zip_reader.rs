@@ -148,12 +148,22 @@ fn method_number(method: CompressionMethod) -> u16 {
 }
 
 struct LocalHeader {
+    flags: u16,
     method: u16,
     compressed_size: u32,
     uncompressed_size: u32,
     name: Vec<u8>,
     data_start: u64,
 }
+
+/// The general purpose bit that says the sizes and the check value follow the
+/// data rather than preceding it, which every writer producing a zip to a
+/// stream it cannot seek sets.
+const SIZES_FOLLOW_THE_DATA: u16 = 1 << 3;
+
+/// The value a legacy size field carries when the real one is in a ZIP64
+/// record.
+const ZIP64_SENTINEL: u32 = u32::MAX;
 
 fn read_local_header<R: Read + Seek>(
     mut source: R,
@@ -174,6 +184,7 @@ fn read_local_header<R: Read + Seek>(
             "holds a local file header without the local file header signature",
         ));
     }
+    let flags = u16::from_le_bytes([fixed[6], fixed[7]]);
     let method = u16::from_le_bytes([fixed[8], fixed[9]]);
     let compressed_size = u32::from_le_bytes([fixed[18], fixed[19], fixed[20], fixed[21]]);
     let uncompressed_size = u32::from_le_bytes([fixed[22], fixed[23], fixed[24], fixed[25]]);
@@ -183,6 +194,7 @@ fn read_local_header<R: Read + Seek>(
     source.read_exact(&mut name).map_err(io_error)?;
     let data_start = header_start + 30 + name_len as u64 + extra_len as u64;
     Ok(LocalHeader {
+        flags,
         method,
         compressed_size,
         uncompressed_size,
@@ -279,10 +291,16 @@ fn agrees_with_central_directory(local: &LocalHeader, central: &Central<'_>) -> 
             ),
         ));
     }
-    let size_disagrees = (local.compressed_size != u32::MAX
-        && u64::from(local.compressed_size) != central.compressed_size)
-        || (local.uncompressed_size != u32::MAX
-            && u64::from(local.uncompressed_size) != central.size);
+    if local.compressed_size == ZIP64_SENTINEL || local.uncompressed_size == ZIP64_SENTINEL {
+        return Err(unsupported_member(
+            central.path,
+            "is recorded in the zip64 format, which this build does not read",
+        ));
+    }
+    let states_its_sizes = local.flags & SIZES_FOLLOW_THE_DATA == 0;
+    let size_disagrees = states_its_sizes
+        && (u64::from(local.compressed_size) != central.compressed_size
+            || u64::from(local.uncompressed_size) != central.size);
     if local.method != central.method || size_disagrees {
         return Err(unsupported_member(
             central.path,

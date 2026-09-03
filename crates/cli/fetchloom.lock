@@ -1,0 +1,19 @@
+datasets:
+  a.txt:
+    artifacts:
+      a.txt:
+        digest: "blake3:ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f"
+        interop: "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        layout: "keep"
+        size: 5
+    manifest: "blake3:9250bc26c73cc11377a3d5243f59ed3609917ccf8be10108d1ce8c6d5771dd33"
+    tree: "blake3:5f3b656d129492ddbd49701e9dfd86e20e9cb76251fdb061713fd0ee0be945a5"
+  obj.bin:
+    artifacts:
+      obj.bin:
+        digest: "blake3:1adedad9735f565ac6e22dab203db63b960c27098f2c0f0fda9adf9238d4c0c9"
+        interop: "sha256:bdf23837181f5808331800c1ae2b4f7d7a839536b10d58491471c50dde23833a"
+        layout: "keep"
+        size: 8388608
+    manifest: "blake3:bb85b7aa4b730d2aeaa0450964b64991afc0ffbc854f3a75299e9b8d9ffc9dc0"
+    tree: "blake3:b2a4abe08cf7cbddf14dddc9c40a7961f43a1048167c8c65fb19841fc6a9fd1e"

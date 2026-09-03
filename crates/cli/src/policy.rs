@@ -131,8 +131,7 @@ impl<'a> CommandLinePolicy<'a> {
         self.observer.emit(&Event::new(self.sequence, payload));
     }
 
-    fn found(host: &Host, origin: CredentialOrigin, secrets: Secrets, from: &str) -> Credential {
-        eprintln!("using {} for {host} from {from}", secrets.label());
+    fn found(host: &Host, origin: CredentialOrigin, secrets: Secrets) -> Credential {
         Credential {
             host: host.clone(),
             origin,
@@ -340,7 +339,6 @@ impl Policy for CommandLinePolicy<'_> {
                 Secrets::Bearer {
                     value: Secret::new(value),
                 },
-                &token_variable(host),
             )));
         }
         if let Some(keys) = self.host_scoped_keys(host)? {
@@ -348,7 +346,6 @@ impl Policy for CommandLinePolicy<'_> {
                 host,
                 CredentialOrigin::Environment,
                 Secrets::Signing { keys },
-                &host_variable("FETCHLOOM_ACCESS_KEY_", host),
             )));
         }
         if let Some(value) = self.store.token(host)? {
@@ -358,15 +355,13 @@ impl Policy for CommandLinePolicy<'_> {
                 Secrets::Bearer {
                     value: Secret::new(value),
                 },
-                &self.store.describe(),
             )));
         }
-        if let Some((keys, from)) = self.helper_keys(host)? {
+        if let Some((keys, _from)) = self.helper_keys(host)? {
             return Ok(Some(Self::found(
                 host,
                 CredentialOrigin::ProviderHelper,
                 Secrets::Signing { keys },
-                &from,
             )));
         }
         match necessity {

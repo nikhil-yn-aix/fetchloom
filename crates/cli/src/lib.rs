@@ -27,6 +27,7 @@ pub mod repair;
 pub mod resolve;
 pub mod run;
 pub mod settings;
+pub mod style;
 pub mod surface;
 pub mod terminal;
 pub mod why;
@@ -87,10 +88,10 @@ impl<'a> Reporter<'a> {
         if self.json {
             match serde_json::to_string(error) {
                 Ok(body) => println!("{body}"),
-                Err(_) => eprintln!("{error}"),
+                Err(_) => eprintln!("{}", crate::style::failure(&error.to_string())),
             }
         } else {
-            eprintln!("{error}");
+            eprintln!("{}", crate::style::failure(&error.to_string()));
         }
         fetchloom_engine::outcome::ExitCode::from(error.layer())
     }

@@ -15,8 +15,7 @@ use crate::layout::{digest_of, name_of};
 /// The size of one tar block.
 const BLOCK: usize = 512;
 
-/// How many bytes move between a bundle and the cache at a time.
-const BUFFER: usize = 1 << 20;
+use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 /// What one export or import did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +233,7 @@ fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
 /// Reads the members of a bundle in the order they were written.
 pub struct BundleReader {
     file: std::fs::File,
+    path: std::path::PathBuf,
     at: u64,
 }
 
@@ -246,7 +246,11 @@ impl BundleReader {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let file = std::fs::File::open(path)
             .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
-        Ok(Self { file, at: 0 })
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            at: 0,
+        })
     }
 
     fn next_member(&mut self, from: &Path) -> Result<Option<BundleMember>, Error> {
@@ -290,12 +294,10 @@ impl BundleReader {
     }
 
     fn read_body(&mut self, into: &mut [u8]) -> Result<usize, Error> {
-        let filled = self.file.read(into).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("the bundle could not be read: {reason}"),
-            )
-        })?;
+        let filled = self
+            .file
+            .read(into)
+            .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
         self.at += filled as u64;
         Ok(filled)
     }
@@ -307,12 +309,8 @@ impl BundleReader {
         }
         let mut block = [0u8; BLOCK];
         let want = BLOCK - over;
-        let filled = fill(&mut self.file, &mut block[..want]).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("the bundle could not be read: {reason}"),
-            )
-        })?;
+        let filled = fill(&mut self.file, &mut block[..want])
+            .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
         if filled < want {
             return Err(Error::new(
                 ErrorKind::IntegrityTruncated,
