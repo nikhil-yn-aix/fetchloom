@@ -98,7 +98,7 @@ Pruning is deterministic and safe while other processes are running. Active and 
 
 Cache location is configurable by command, environment, project config, and user config, with documented precedence. A single operation can bypass the cache entirely.
 
-Storage cost, reuse, and retained bytes are reported before and after operations.
+`cache status` reports what the cache holds: how many objects, how many bytes, how many partial transfers, pins and quarantined objects. `prune` reports what it removed, what it kept, and how many bytes it freed.
 
 Internal cache layout is never a public interface.
 
@@ -114,7 +114,7 @@ Deterministic: permissions, executable bits, timestamps, and symlink handling fo
 
 Selection happens without extracting irrelevant archive members when the format allows it.
 
-Copy-on-write clones are used when the filesystem supports them, so materializing from a warm cache costs metadata rather than a second copy of the data. Otherwise it falls back to a copy and reports which happened. A symlink an archive names is an ordinary entry type and is created as one, after the same escape check every other member passes.
+Copy-on-write clones are used when the filesystem supports them, so materializing from a warm cache costs metadata rather than a second copy of the data. A volume that refuses to clone falls back to a byte copy and emits a `degrade` saying so, and is not asked again in that run. A symlink an archive names is an ordinary entry type and is created as one, after the same escape check every other member passes.
 
 Unrelated or user-modified destination files are never overwritten without explicit approval.
 

@@ -651,7 +651,7 @@ Degenerate cases. A zero-byte file is a normal entry. An empty directory is a no
 
 Publication. Staging is fully validated, then the destination is exposed. A partially materialized destination is never visible.
 
-Clone or copy. Copy-on-write clone is attempted first and falls back to a byte copy. The chosen mechanism is reported per operation.
+Clone or copy. Copy-on-write clone is attempted first and falls back to a byte copy. The fallback emits a `degrade` naming the volume that refused, and that volume is not asked again in the same run. A clone that succeeded degrades nothing, because nothing was lowered.
 
 ## Reconcile
 
