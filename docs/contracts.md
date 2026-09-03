@@ -923,7 +923,7 @@ Selection may change speed. It may never change bytes.
 
 A reference naming a container is expanded by listing that container. Fetchloom lists. It does not crawl.
 
-Supported: object store listing APIs, provider repository and record APIs, WebDAV `PROPFIND`, FTP `LIST`, and standard generated HTML directory indexes.
+Supported: object store listing APIs, provider repository and record APIs, WebDAV `PROPFIND`, and standard generated HTML directory indexes. FTP is not spoken, so an FTP directory is not a container this build lists.
 
 Rules. Only entries at or below the given prefix are considered. Links pointing outside the prefix are ignored and counted in the result. Nothing is discovered from the contents of files. No script is executed. Entry count is bounded. An index that is not recognized fails with `reference.unresolved` and is never guessed at.
 

@@ -69,8 +69,7 @@ artifacts:
     trust: "tofu"
 ```
 
-and in the `trust` field of a plan. This build does not put it in the `--json`
-result of `get`.
+and in the `trust` field of a plan and of the `--json` result of `get`.
 
 ## What none of this means
 

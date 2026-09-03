@@ -381,10 +381,158 @@ $ fetchloom completions bash > /etc/bash_completion.d/fetchloom
 $ fetchloom completions powershell > fetchloom.ps1
 ```
 
-## What is not here yet
+## init
 
-`init`, `watch`, `doctor` and `why` are part of the finished command surface and
-are not in this binary. Neither are `--verbose`, `--color`, `--no-hints`,
-`--retries`, or `--timeout`. Nothing that cannot perform what it promises is
-present, so their absence is the honest answer rather than a stub that accepts
-the flag and ignores it.
+```
+fetchloom init <url|dir> [--output <path>] [--force]
+```
+
+Walks a directory or a listing and writes a manifest for what it holds. The
+manifest is the result of the command, so it goes to standard output unless
+`--output` names a file.
+
+```
+$ fetchloom init src
+artifacts:
+  -
+    digest:
+      blake3: "blake3:a74e619132c4c530d0d738f3cceddefaf06a79aad18b5be1a3bcbc054c1f3f84"
+      sha256: "sha256:480c2336b410f1ad5f8bf1b28944490255804b65350c527787e74ebdd511e3a4"
+    id: "nested/two.txt"
+    layout: "keep"
+    size: 7
+    sources:
+      - "nested/two.txt"
+name: "src"
+```
+
+Every digest is one init observed. Over a directory it reads each file; over a
+listing it fetches each object. It never takes a digest from a metadata request,
+because an entity tag is not a digest.
+
+That makes the run itself trust-on-first-use: it had no prior digest and
+recorded its own first observation. The manifest is a first-use pin, not a
+publisher's attestation. A later run against it is `verified`, which is what
+pinning is for.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-o`, `--output <path>` | standard output | Write the manifest to this file |
+| `--force` | off | Overwrite the file `--output` names |
+
+A path that already holds a file is refused without `--force`, because a
+manifest is edited after it is generated.
+
+## doctor
+
+```
+fetchloom doctor
+```
+
+Reports what this machine can do and changes nothing. It reads a format
+fingerprint rather than opening the cache, removes every probe it creates, and
+makes no request, so it answers the same offline.
+
+```
+$ fetchloom doctor
+configuration        ok         no project or user configuration file was found
+cache                ok         C:\Users\you\cache matches this build's format
+disk                 ok         47770595328 bytes free on the volume holding C:\Users\you\cache
+permissions          ok         C:\Users\you\cache can be written to
+certificates         ok         the platform trust store loaded
+provider.amazon_s3   ok         Amazon S3: no credential is present
+```
+
+It reports whether a credential is present and never what it is. Exit is 0 when
+every check passed and 50 when one found something you can act on.
+
+## why
+
+```
+fetchloom why <ref>
+```
+
+Explains a decision a run already made: how the reference resolved, which source
+was chosen and why, and what the trust class rests on. It reaches no network and
+invents nothing, so a reference no run has touched is reported as exactly that
+rather than guessed at.
+
+```
+$ fetchloom why src
+resolution   a local path: src
+destination  C:\Users\you\src
+source       no run has been recorded for this destination
+trust        no run has been recorded for this destination
+```
+
+Everything it prints comes from the receipt and the cache. When the class is
+trust-on-first-use it also names how many independent witnesses were found and
+how many `corroborated` needs.
+
+## watch
+
+```
+fetchloom watch <events|->
+```
+
+Renders a run's event stream through the live view, live or after the fact. The
+same renderer draws a file and a pipe, so a run writing its events somewhere can
+be watched from another terminal.
+
+```
+$ fetchloom get ./src --output out --events ev.ndjson &
+$ fetchloom watch ev.ndjson
+dataset  src
+source   ?
+                       ########################         13 B  1 in flight  0 retries
+cache    2 hit  0 miss     verified 0
+entries  0          bytes 13 B
+```
+
+The view reads the event stream and nothing else. That is a property of where it
+lives rather than a promise: it is a crate whose one dependency is the event
+types, and a test fails if it gains another or names a filesystem, a network, or
+a process. So it can never show you something `--json` and `--events` do not
+already carry.
+
+Fetchloom never backgrounds itself. The `&` above is your shell's.
+
+## Flags every command takes, continued
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-v`, `--verbose` | off | Raise the log level one step. Repeatable |
+| `--color <auto\|always\|never>` | `auto` | When output carries color |
+| `--no-hints` | off | Never print a hint |
+
+A log level decides which of the events the run already emits are rendered to
+standard error. It never decides which events exist, and the stream `--events`
+writes is byte-identical at every level.
+
+| Level | Rendered |
+|---|---|
+| `error` | errors and degradations |
+| `info` | those, plus the run's start, end, and result. Default |
+| `debug` | every event the stream carries, one line each |
+
+`FETCHLOOM_LOG` names a level. Raising past `debug` is clamped, and the clamp is
+reported rather than passed over.
+
+Two more flags belong to `get` and `apply`:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--retries <n>` | 5 | Attempts per transient failure |
+| `--timeout <duration>` | 30s | Idle timeout per connection, as `500ms`, `30s`, `2m`, or `1h` |
+
+## Hints
+
+After a run, Fetchloom may print one line about something you could have done
+differently, such as a credential that would have made the transfer shorter by a
+stated number of minutes. It never tells you a fact about itself, never
+interrupts a transfer, and never says the same thing to you twice.
+
+Hints go to standard error only. They never appear in the JSON result or the
+event stream, and they are suppressed when the stream is not a terminal, in
+continuous integration, and when no cache is available to record that one was
+already said. `--no-hints` and `hints = false` turn them off for good.

@@ -10,9 +10,9 @@ first match wins, and the run says which one it used without printing the secret
 
 | Order | Where | How to put one there |
 |---|---|---|
-| 1 | An environment variable named `FETCHLOOM_TOKEN_<HOST>` | Set it in your shell |
+| 1 | An environment variable named `FETCHLOOM_TOKEN_<HOST>`, or the `FETCHLOOM_ACCESS_KEY_<HOST>` set | Set it in your shell |
 | 2 | This platform's own credential store | See below |
-| 3 | The provider's own helper | Nothing ships one yet |
+| 3 | The provider's own helper | For a source that signs, the `AWS_` variables you already have |
 
 `<HOST>` is the endpoint's host in capital letters, with every character that is
 not a letter or a digit replaced by an underscore. For `storage.googleapis.com`
@@ -182,3 +182,33 @@ terms mean.
 
 A run that cannot prompt and was not given `--yes` fails with
 `policy.terms_required` and exit code 40, before a byte moves.
+
+## Two shapes of credential
+
+A credential is one of exactly two things, and which one a host needs is decided
+by the adapter that serves it rather than by you.
+
+A **bearer token** is one opaque value that is sent with the request. Google
+Cloud Storage, Azure Blob Storage and most lab endpoints take one.
+
+A **signing key pair** is an access key, a secret key and a region. The secret is
+never sent: it derives a key that signs the request, and only the signature
+travels. Amazon S3 and the endpoints that speak its protocol need this.
+
+For a signing credential the host-scoped variables are:
+
+```
+FETCHLOOM_ACCESS_KEY_<HOST>
+FETCHLOOM_SECRET_KEY_<HOST>
+FETCHLOOM_REGION_<HOST>
+FETCHLOOM_SESSION_TOKEN_<HOST>    only for a temporary credential
+```
+
+If you already have a working AWS setup, you do not need to restate it. The
+third tier reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` and
+`AWS_SESSION_TOKEN`, and is asked only after the two tiers above answered
+nothing. A per-host Fetchloom variable therefore always wins.
+
+An access key set without a region fails and says so, naming the variable to
+set. It is not guessed: a signature is computed over a region, and a wrong one
+is refused by the source with an error you cannot act on.

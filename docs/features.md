@@ -6,13 +6,13 @@ Every sentence here describes the build as it stands, except where it is followe
 
 ## References
 
-Accept every way a user might name data: bare names, namespaced names with releases, local manifest files, remote manifest URLs, direct file URLs, provider references, and pure content addresses. Every form is recognized and named back to the user. This build resolves local paths, local and remote manifests, direct file URLs, object store prefixes, and content addresses. Resolving a bare name, a namespaced release, a provider identifier, or a metadata document is **not built**: each is recognized and refused by name, phase 7 owns the provider references and phase 8 the metadata documents.
+Accept every way a user might name data: bare names, namespaced names with releases, local manifest files, remote manifest URLs, direct file URLs, provider references, and pure content addresses. Every form is recognized and named back to the user. Every form resolves. A bare name and a namespaced release resolve through the source priority the configuration names, appending the reference to each base in order and taking the first that answers; one that matches no configured base fails naming how many were tried, and one given with none configured fails saying to configure one. A name is never guessed at.
 
 The user never has to know which kind they have. One verb takes all of them.
 
 Moving aliases are resolved before transfer and the resolved identity is pinned into the lock, and a locked run whose alias moved fails as `alias.unstable` rather than fetching something else.
 
-A reference naming a folder is expanded by listing that folder: an object store prefix, a repository or record, a WebDAV or FTP directory, or a generated HTML index. This build reads object store XML, WebDAV multi-status, and generated HTML. Listing a repository, a record, or an FTP directory is **not built**, and phase 7 owns it. Fetchloom lists what it was pointed at and never wanders outside it, follows links found inside files, or executes anything. An index it does not recognize is an error, never a guess.
+A reference naming a folder is expanded by listing that folder: an object store prefix, a repository or record, a WebDAV or FTP directory, or a generated HTML index. This build reads object store XML, WebDAV multi-status, generated HTML, a provider repository tree, and a provider record. It speaks no FTP, so an FTP directory is not among the containers it lists. Fetchloom lists what it was pointed at and never wanders outside it, follows links found inside files, or executes anything. An index it does not recognize is an error, never a guess.
 
 ## Manifest inference
 
@@ -20,9 +20,9 @@ Most data has no manifest. Fetchloom writes one instead of demanding one.
 
 `fetchloom get <url>` needs no manifest at all. It probes the source, transfers, verifies, extracts, and writes a lock.
 
-`fetchloom init <url|dir>` walks a listing, an API, or a local folder and emits a manifest with digests filled in. A lab publishes a dataset by running init and putting the file on their web server. **Not built.** Phase 8 owns it.
+`fetchloom init <url|dir>` walks a listing, an API, or a local folder and emits a manifest with digests filled in. A lab publishes a dataset by running init and putting the file on their web server. The manifest goes to standard output, or to the file `--output` names, which is never overwritten without `--force`. Every digest it records is one it observed: over a directory it reads each file, and over a listing it fetches each object through the path `get` uses. It never takes a digest from a metadata request, because a validator is not a digest.
 
-Existing truth is absorbed rather than retyped: checksum sidecar files, Croissant metadata, Frictionless data packages, pooch registries, DVC files, BagIt manifests, and torrent piece hashes. **Not built.** Phase 8 owns it.
+Existing truth is absorbed rather than retyped: checksum sidecar files, Croissant metadata, Frictionless data packages, pooch registries, and BagIt manifests. Two named formats are refused rather than approximated. A torrent states SHA-1 over pieces that span file boundaries, or a merkle root over blocks that is not the SHA-256 of the file, and names a swarm rather than a location; a DVC file states MD5 or an ETag, and an ETag is supporting evidence and never content identity. Each refusal names the format and what it stated.
 
 Manifests are declarative. No shell, no hooks, no generators.
 
@@ -140,11 +140,11 @@ A structured event stream exposes timing and byte counts for resolution, cache l
 
 `explain` shows every effective setting and where it came from, including values chosen by measurement.
 
-`doctor` checks configuration, permissions, disk, cache health, certificates, and provider setup without changing anything. **Not built.**
+`doctor` checks configuration, permissions, disk, cache health, certificates, and provider setup without changing anything. It reads a format fingerprint rather than opening the cache, removes every probe it creates, makes no request, and prints no secret.
 
-Progress is plain by default. An opt-in live view shows what the run is actually doing: which source was chosen and why, throughput per host, retries, verification, cache hits, and rejected archive entries. It reads the event stream and nothing else, so it can never show something the machine-readable output does not already carry, and it can be turned off or removed without affecting a run. The live view is **not built**: asking for it degrades to the plain view and says so. Rendering a run from another terminal with `watch` is **not built** either. Fetchloom never backgrounds itself and never runs a daemon.
+Progress is plain by default. An opt-in live view shows what the run is actually doing: which source was chosen and why, throughput per host, retries, verification, cache hits, and rejected archive entries. It reads the event stream and nothing else, so it can never show something the machine-readable output does not already carry, and it can be turned off or removed without affecting a run. That it reads only events is a property of where it lives rather than a claim: the renderer is a crate whose one dependency is the event types, and a test fails if it gains another or if it names a filesystem, a network, or a process anywhere. A run writing its events to a file can be rendered from another terminal with `watch`, which drives the same renderer over a file that a run drives over a pipe. Fetchloom never backgrounds itself and never runs a daemon.
 
-After a run, Fetchloom may print one hint about something the user could have done differently, such as a token that would have made the transfer far shorter. It never states facts about itself, never interrupts a transfer, never repeats itself, and is disabled by one flag. **Not built.** No phase owns it, and the surface tests assert that `--no-hints` and a `hints` setting are refused rather than accepted and ignored.
+After a run, Fetchloom may print one hint about something the user could have done differently, such as a token that would have made the transfer shorter by a stated number of minutes. It never states facts about itself, never interrupts a transfer, never repeats itself, and is disabled by `--no-hints` or the `hints` setting. A hint goes to standard error only, never to the JSON result or the event stream, and is suppressed when nothing can record that it was said rather than repeated.
 
 Shell completion is supported. Telemetry does not exist.
 
@@ -152,9 +152,9 @@ Shell completion is supported. Telemetry does not exist.
 
 Precedence is command line, environment, project config, user config, then defaults.
 
-Configuration covers paths, network access, source priority, proxy and TLS policy, retries, resource limits, integrity policy, extraction limits, logging, and output format.
+Configuration covers the cache location, network access, source priority, the two in-flight ceilings, a bandwidth ceiling, the write path, retries, the idle timeout, logging, color, hints, and progress presentation. Every one of those keys is read, and a key this build does not act on is refused rather than accepted and ignored.
 
-TLS verification is on by default. Custom certificate authorities and proxies are explicit and inspectable.
+TLS verification is on by default and is not configurable, so there is no way to turn it off. Custom certificate authorities and proxies are read from the platform and the standard proxy variables rather than from a Fetchloom key, and `doctor` reports whether the trust store loads. Naming a certificate authority or a proxy in configuration is **not built** and no phase owns it.
 
 Every optional optimization can be disabled without disabling any correctness check.
 
@@ -162,7 +162,7 @@ Every optional optimization can be disabled without disabling any correctness ch
 
 Credentials are scoped to the host or provider they were issued for and are never sent elsewhere, including across redirects.
 
-Sources are environment variables and platform credential stores. Secrets are never copied into project files. Provider-native helpers are **not built**, and phase 7 owns them.
+Sources are environment variables, platform credential stores, and the provider's own helper, asked in that order. Secrets are never copied into project files. A credential is one of two shapes: a bearer token that is sent, or a signing key pair whose secret is never sent and is signed with instead.
 
 Fetchloom never asks for a token at startup and never presents a setup screen. It asks at the moment a token would change the outcome, and it says what the change is. When a token is required, the run stops and prints exact steps. When a token would only make things faster, Fetchloom names the two options with the measured difference, prints the steps, and continues without it if the user declines. Small differences produce no prompt at all.
 
@@ -176,7 +176,7 @@ Terms and license acceptance are never automatic. Fetchloom records that the use
 
 ## Mobility
 
-Tool mobility: one static binary per platform, installable without root, working in containers, on clusters, and in minimal images.
+Tool mobility: one static binary per platform, installable without root, working in containers, on clusters, and in minimal images. **Not built.** Phase 9 owns packaging, signing, notarization, package manager entries, and no-root install.
 
 Data mobility: a verifiable bundle can be exported from one cache and imported into another, offline, on removable media.
 

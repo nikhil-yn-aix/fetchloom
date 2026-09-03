@@ -212,9 +212,17 @@ configuration file, a measurement, or the default -- never from a flag on the
 | `FETCHLOOM_PER_HOST` | `--per-host` |
 | `FETCHLOOM_BANDWIDTH` | `--bandwidth` |
 | `FETCHLOOM_THREADS` | `--threads` |
+| `FETCHLOOM_LOG` | the log level, which `--verbose` raises |
+| `FETCHLOOM_OFFLINE` | `--offline`, when set to `1` |
+| `FETCHLOOM_CACHE_DIR` | `--cache-dir` |
+| `FETCHLOOM_CONFIG` | `--config` |
 
-Each takes exactly what its flag takes: a count for the first two, a rate in
-`--bandwidth`'s syntax for the third, a count for the fourth.
+Each takes exactly what its flag takes: a count for the concurrency pair and
+for threads, a rate in `--bandwidth`'s syntax, and one of `error`, `info` or
+`debug` for the log level.
+
+`--retries` and `--timeout` have no variable of their own; set them on the
+command line or in configuration.
 
 ## What `explain` reports
 

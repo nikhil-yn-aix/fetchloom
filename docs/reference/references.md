@@ -73,16 +73,32 @@ $ fetchloom get https://s3.amazonaws.com/bucket/prefix/ --output data --json
 listed entry fails before anything is published. Running it again against a
 destination it already holds reports `unchanged` and writes nothing.
 
-A bare name, a namespaced release, a provider reference, a metadata document and
-a content address are each recognized and refused by the form they are, naming
-what this build does resolve:
+A bare name and a namespaced release resolve through the `sources` list your
+configuration names. The reference is appended to each base in order and the
+first that answers wins.
+
+```toml
+sources = ["https://lab.edu/data/", "hf:datasets/acme/"]
+```
+
+Nothing is guessed. A name that matches no base says how many were tried, and a
+name given when no base is configured says to configure one:
 
 ```
 $ fetchloom get some-dataset --output x --json
-{"kind":"reference.unresolved", ... ,"next_action":"this build resolves only a local path or a file: location, not some-dataset which is a dataset name"}
-$ fetchloom get zenodo:1234 --output y --json
-{"kind":"reference.unresolved", ... ,"next_action":"this build resolves only a local path or a file: location, not zenodo:1234 which is a provider identifier"}
+{"kind":"reference.unresolved", ... ,"next_action":"add a sources list to fetchloom.toml naming where some-dataset is published, because a name resolves through the configured source priority and none is configured"}
+$ fetchloom get some-dataset --output x --json
+{"kind":"reference.unresolved", ... ,"next_action":"name the location instead, because some-dataset matched none of the 1 configured sources and a name is never guessed at"}
 ```
+
+A provider reference names a repository or a record and is listed like any other
+container. `hf:datasets/org/name@rev` pins a revision; without one it reads the
+default branch. `zenodo:10.5281/zenodo.1234567` names a record, and the record
+states its own files.
+
+A metadata document is read into a manifest and then fetched like one:
+`croissant:https://host/metadata.json` reads the Croissant description at that
+location and fetches every file it names.
 
 There is no `s3://` form. An `s3://bucket/prefix/` reference has nowhere to put
 the endpoint that serves it, because the authority slot of that form is spent on

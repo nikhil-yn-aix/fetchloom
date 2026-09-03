@@ -44,18 +44,18 @@ Fetchloom is before 1.0 and ships nothing it cannot do. A command or a flag is
 in the binary only once it performs what is documented. That means the surface
 here is smaller than the finished product, and everything in it works.
 
-Today it fetches over HTTPS and from local paths, reads ten archive formats,
-keeps a content-addressed cache, writes and enforces locks, writes receipts,
-plans and applies offline, exports and imports bundles, repairs damaged byte
-ranges, and lists an object store container and materializes every entry it
-holds. It resolves a credential from a host-scoped environment variable or from
-this platform's own credential store, and refuses a run that needs one it cannot
-find, with numbered steps for getting one.
+Every reference form contracts names resolves, and all twelve commands act.
+It fetches over HTTPS and from local paths, reads ten archive formats, keeps a
+content-addressed cache, writes and enforces locks, writes receipts, plans and
+applies offline, exports and imports bundles, repairs damaged byte ranges, lists
+five kinds of container, reads five published metadata formats into a manifest,
+and writes one of its own with `init`. It transfers independent artifacts at
+once inside both ceilings, splits one large object across ranges, and signs a
+request where the source needs a signature rather than a token.
 
-It does not yet resolve a dataset provider reference or a remote manifest, it
-signs no request so a private Amazon S3 bucket is out of reach, and it transfers
-one object at a time: `--concurrency` and `--per-host` are recorded and do not
-yet bound anything.
+What it does not do is ship: there are no published binaries, no signing, and no
+package manager entries. It also speaks HTTP/1.1 only, so there is no protocol
+to measure per host, and it speaks no FTP.
 
 ## This directory
 
@@ -64,12 +64,12 @@ yet bound anything.
 | [getting-started.md](getting-started.md) | How to build it and run a first real command |
 | [commands.md](commands.md) | Every command and flag, with a run of each |
 | [tuning.md](tuning.md) | The concurrency, bandwidth and I/O flags, the environment variables, and the precedence between them |
-| [references.md](references.md) | The ways to name data, and which this build resolves |
+| [references.md](references.md) | Every way to name data, and how each resolves |
 | [files.md](files.md) | The manifest, lock, receipt and plan formats |
 | [trust.md](trust.md) | What each trust class means |
 | [errors.md](errors.md) | Every exit code and error kind, and what to do about it |
 | [cache.md](cache.md) | Where the cache is, what it holds, how to control it |
-| [credentials.md](credentials.md) | Where a token goes, and the exact steps for each provider |
+| [credentials.md](credentials.md) | Where a credential goes, its two shapes, and the exact steps for each provider |
 
 Everything else under `docs/` is written for the people building Fetchloom:
 `contracts.md` is the exact specification, `decisions.md` is why each choice was
