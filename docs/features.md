@@ -154,7 +154,7 @@ Precedence is command line, environment, project config, user config, then defau
 
 Configuration covers the cache location, network access, source priority, the two in-flight ceilings, a bandwidth ceiling, the write path, retries, the idle timeout, logging, color, hints, and progress presentation. Every one of those keys is read, and a key this build does not act on is refused rather than accepted and ignored.
 
-TLS verification is on by default and is not configurable, so there is no way to turn it off. Custom certificate authorities and proxies are read from the platform and the standard proxy variables rather than from a Fetchloom key, and `doctor` reports whether the trust store loads. Naming a certificate authority or a proxy in configuration is **not built** and no phase owns it.
+TLS verification is on and is not configurable, so there is no flag or key that turns it off. Certificate authorities come from the platform's own trust store, and proxies from `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; both are inspectable where the operating system keeps them rather than in a second place Fetchloom would own. `doctor` reports whether the trust store loads.
 
 Every optional optimization can be disabled without disabling any correctness check.
 
