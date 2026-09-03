@@ -8313,3 +8313,42 @@ Sources: `docs/features.md`; `docs/contracts.md`; `crates/view`;
 `crates/engine/src/metadata/`; `crates/sources/src/provider.rs`;
 `crates/sources/src/signing.rs`; `crates/cli/tests/diagnose.rs`;
 `crates/cli/tests/display.rs`; `crates/cli/tests/inference.rs`.
+
+## Phase 8. The binary grew ten percent, and what the ten percent is
+
+Question: the deterministic gate fails a binary-size regression above five
+percent. Phase 8's verify reported 7,587,840 bytes growing to 8,315,904, which is
+9.6 percent.
+
+The cause is not a dependency. `git diff 2d5772f..HEAD` over every `Cargo.toml`
+adds one crate to the workspace, `fetchloom-view`, which is this repository's own
+and holds the live view. `serde_json` and `sha2` appear as new lines in a crate's
+manifest and were already workspace dependencies linked into the binary through
+the engine, so neither adds a byte that was not there.
+
+The cause is code. Fifteen new production files hold 4,866 lines: five metadata
+readers, two provider adapters, SigV4 signing, `doctor`, `why`, inference, the
+resolution order, hints, the log level, and the live view. That is the largest
+single addition of surface any phase has made, and the phase's whole purpose was
+to add exactly this.
+
+So the baseline moves, and the reason is recorded here rather than the number
+being quietly re-recorded. That distinction is the one standards.md draws: a
+timing measurement that moves while the deterministic metrics hold still is
+evidence about the machine and is investigated. A deterministic metric that moves
+because the binary genuinely does more is evidence about the change, and the
+honest response is to say what the change was. Phase 4 did the same thing when
+the binary grew ten percent and nineteen kilobytes of it was the TOML parser.
+
+What would make this the wrong call: growth with no new capability behind it, or
+growth from a dependency pulled in for one call site. Neither is the case. If a
+later phase finds that a reader or an adapter costs more than it is worth, the
+measurement to make is per-feature size, which this harness does not take and
+which the audit is the place to add.
+
+Costs: the five-percent gate cannot catch a regression that hides inside a phase
+that legitimately grows the binary. That is a real gap and it belongs to the
+audit, not to a phase whose job was to add the surface.
+
+Sources: `docs/standards.md` Measure; `docs/benchmarks.md`; the phase 4 record on
+the TOML parser.

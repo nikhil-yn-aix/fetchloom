@@ -733,8 +733,7 @@ pub(crate) fn read_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
 pub(crate) fn free_space(path: &Path) -> std::io::Result<u64> {
     let wide = wide(path);
     let mut available: u64 = 0;
-    // SAFETY: the name is a NUL-terminated wide string that outlives the call, and
-    // the out parameter is a u64 this frame owns; the other two are optional and null.
+    // SAFETY: the name is a NUL-terminated wide string that outlives the call, the out parameter is a u64 this frame owns, and the other two are optional and null.
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),
