@@ -26,18 +26,16 @@ use windows_sys as _;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{
     Script, TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer,
 };
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn scratch() -> &'static Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
@@ -61,11 +59,10 @@ fn archive() -> Vec<u8> {
 }
 
 fn run(arguments: &[&str], cache: &Path) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }

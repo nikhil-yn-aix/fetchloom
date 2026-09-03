@@ -115,3 +115,33 @@ impl Policy for NoCredentialPolicy {
         Ok(Acceptance::Asserted)
     }
 }
+
+/// The prefix every environment name Fetchloom reads begins with.
+const READS: &str = "FETCHLOOM_";
+
+/// Returns the binary under test carrying nothing this machine happened to
+/// export, so what a run reads is exactly what its own test wrote.
+fn controlled() -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+    command.stdin(std::process::Stdio::null());
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with(READS) {
+            command.env_remove(&name);
+        }
+    }
+    command
+}
+
+/// Returns the binary under test with no inherited setting and no configuration
+/// file, which is how every test that is not about configuration runs it.
+pub fn fetchloom() -> std::process::Command {
+    let mut command = controlled();
+    command.arg("--no-config");
+    command
+}
+
+/// Returns the binary under test with no inherited setting and configuration
+/// discovery left on, for the tests whose subject is configuration.
+pub fn fetchloom_reading_configuration() -> std::process::Command {
+    controlled()
+}

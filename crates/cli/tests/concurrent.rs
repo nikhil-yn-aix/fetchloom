@@ -26,10 +26,13 @@ use windows_sys as _;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
-use fetchloom_faults::{Latency, Script, TestServer};
+use std::sync::Arc;
+use std::time::Duration;
+
+use fetchloom_faults::{Flight, Latency, Script, TestServer};
+mod support;
+
 use tempfile::TempDir;
 
 /// The wait each request is charged, which is what makes a loopback socket
@@ -60,23 +63,14 @@ impl Workspace {
         target
     }
 
-    fn timed(&self, arguments: &[&str]) -> (Duration, i32, String) {
-        let started = Instant::now();
-        let output = Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+    fn run(&self, arguments: &[&str]) -> (i32, String) {
+        let output = support::fetchloom()
             .current_dir(self.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", self.path().join("cache"))
-            .env_remove("FETCHLOOM_CONFIG")
-            .env_remove("FETCHLOOM_OFFLINE")
-            .env_remove("FETCHLOOM_CONCURRENCY")
-            .env_remove("FETCHLOOM_PER_HOST")
-            .env_remove("FETCHLOOM_BANDWIDTH")
-            .env_remove("FETCHLOOM_THREADS")
-            .stdin(Stdio::null())
             .output()
             .unwrap();
         (
-            started.elapsed(),
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).into_owned(),
         )
@@ -90,14 +84,16 @@ fn object(index: usize) -> Vec<u8> {
 }
 
 /// Writes a manifest naming one distinct object per server, every server on the
-/// one loopback host and every request charged a wait, and returns the servers
-/// so they outlive the run.
-fn delayed_host(workspace: &Workspace, objects: usize) -> Vec<TestServer> {
+/// one loopback host, every request charged a wait and counted in the one
+/// recorder, and returns the servers so they outlive the run.
+fn delayed_host(workspace: &Workspace, objects: usize, flight: &Arc<Flight>) -> Vec<TestServer> {
     let mut servers = Vec::with_capacity(objects);
     let mut artifacts = String::new();
     for index in 0..objects {
         let server = TestServer::start(
-            Script::serving(object(index)).delayed(Latency::default().every_request(CHARGED)),
+            Script::serving(object(index))
+                .delayed(Latency::default().every_request(CHARGED))
+                .reporting(flight),
         )
         .unwrap();
         writeln!(
@@ -115,52 +111,64 @@ fn delayed_host(workspace: &Workspace, objects: usize) -> Vec<TestServer> {
     servers
 }
 
-/// Runs the same eight-object manifest under two settings and returns how long
-/// each took.
-fn under(first: &[&str], second: &[&str]) -> (Duration, Duration) {
-    let mut taken = Vec::new();
-    for settings in [first, second] {
-        let workspace = Workspace::new();
-        let _servers = delayed_host(&workspace, OBJECTS);
-        let mut arguments = vec!["get", "dataset.yaml", "--output", "out"];
-        arguments.extend_from_slice(settings);
-        let (elapsed, code, said) = workspace.timed(&arguments);
-        assert_eq!(code, 0, "the run under {settings:?} failed: {said}");
-        assert_eq!(
-            std::fs::read_dir(workspace.path().join("out"))
-                .unwrap()
-                .count(),
-            OBJECTS,
-            "the run under {settings:?} did not materialize every object, so this compares nothing"
-        );
-        taken.push(elapsed);
-    }
-    (taken[0], taken[1])
+/// Runs the eight-object manifest under one setting and returns the most
+/// requests the hosts were answering at the same moment.
+fn in_flight_under(settings: &[&str]) -> usize {
+    let workspace = Workspace::new();
+    let flight = Flight::new();
+    let _servers = delayed_host(&workspace, OBJECTS, &flight);
+    let mut arguments = vec!["get", "dataset.yaml", "--output", "out"];
+    arguments.extend_from_slice(settings);
+    let (code, said) = workspace.run(&arguments);
+    assert_eq!(code, 0, "the run under {settings:?} failed: {said}");
+    assert_eq!(
+        std::fs::read_dir(workspace.path().join("out"))
+            .unwrap()
+            .count(),
+        OBJECTS,
+        "the run under {settings:?} did not materialize every object, so it measures nothing"
+    );
+    flight.peak()
 }
 
 #[test]
-fn eight_artifacts_behind_a_charged_wait_finish_in_far_less_than_eight_one_at_a_time() {
-    let (sequential, together) = under(
-        &["--concurrency", "1", "--per-host", "1"],
-        &["--concurrency", "8", "--per-host", "8"],
+fn the_global_ceiling_is_the_most_transfers_that_are_ever_in_flight() {
+    let alone = in_flight_under(&["--concurrency", "1", "--per-host", "8"]);
+    assert_eq!(
+        alone, 1,
+        "a global ceiling of one had {alone} transfers in flight at once, so the ceiling bounds \
+         nothing"
+    );
+
+    let together = in_flight_under(&["--concurrency", "8", "--per-host", "8"]);
+    assert!(
+        together > 1,
+        "a global ceiling of eight never had more than one transfer in flight, so nothing ran \
+         concurrently"
     );
     assert!(
-        together < sequential.mul_f64(0.5),
-        "eight artifacts took {together:?} together against {sequential:?} one at a time, which is \
-         not materially less, so nothing ran concurrently"
+        together <= OBJECTS,
+        "a global ceiling of eight had {together} transfers in flight at once"
     );
 }
 
 #[test]
-fn a_per_host_ceiling_of_one_takes_measurably_longer_than_a_ceiling_of_four() {
-    let (one, four) = under(
-        &["--concurrency", "8", "--per-host", "1"],
-        &["--concurrency", "8", "--per-host", "4"],
+fn the_per_host_ceiling_is_the_most_transfers_in_flight_to_the_one_host() {
+    let alone = in_flight_under(&["--concurrency", "8", "--per-host", "1"]);
+    assert_eq!(
+        alone, 1,
+        "a per-host ceiling of one had {alone} transfers in flight to the one host, so the \
+         ceiling bounds nothing"
+    );
+
+    let four = in_flight_under(&["--concurrency", "8", "--per-host", "4"]);
+    assert!(
+        four > 1,
+        "a per-host ceiling of four never had more than one transfer in flight to the one host"
     );
     assert!(
-        four < one.mul_f64(0.7),
-        "four transfers per host took {four:?} against {one:?} for one, which is no measurable \
-         difference, so the per-host ceiling bounds nothing"
+        four <= 4,
+        "a per-host ceiling of four had {four} transfers in flight to the one host"
     );
 }
 
@@ -180,7 +188,7 @@ fn two_artifacts_naming_the_same_digest_transfer_it_once() {
         )
         .as_bytes(),
     );
-    let (_, code, said) = workspace.timed(&[
+    let (code, said) = workspace.run(&[
         "get",
         "dataset.yaml",
         "--output",

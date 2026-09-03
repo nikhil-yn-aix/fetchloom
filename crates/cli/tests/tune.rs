@@ -27,11 +27,13 @@ use windows_sys as _;
 use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{Reply, Script, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer};
 use flate2::Compression;
 use flate2::write::GzEncoder;
+mod support;
+
 use tempfile::TempDir;
 
 struct Run {
@@ -92,17 +94,10 @@ impl Workspace {
 
     fn run(&self, arguments: &[&str]) -> Run {
         Run {
-            output: Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+            output: support::fetchloom()
                 .current_dir(self.path())
                 .args(arguments)
                 .env("FETCHLOOM_CACHE_DIR", self.cache())
-                .env_remove("FETCHLOOM_CONFIG")
-                .env_remove("FETCHLOOM_OFFLINE")
-                .env_remove("FETCHLOOM_CONCURRENCY")
-                .env_remove("FETCHLOOM_PER_HOST")
-                .env_remove("FETCHLOOM_BANDWIDTH")
-                .env_remove("FETCHLOOM_THREADS")
-                .stdin(Stdio::null())
                 .output()
                 .unwrap(),
         }

@@ -37,10 +37,12 @@ use windows_sys as _;
 
 use std::num::NonZeroU32;
 use std::path::Path;
-use std::process::{Command, Stdio};
+
 use std::sync::Arc;
 
 use fetchloom_faults::{Script, TestServer};
+mod support;
+
 use tempfile::TempDir;
 
 /// How wide a run has to have measured a host before it splits one object
@@ -224,7 +226,7 @@ fn a_large_object_from_a_real_run_over_plain_http_says_why_it_was_not_split() {
     let scratch = TempDir::new().unwrap();
     let events = scratch.path().join("events.ndjson");
 
-    let run = Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+    let run = support::fetchloom()
         .current_dir(scratch.path())
         .args([
             "get",
@@ -235,7 +237,6 @@ fn a_large_object_from_a_real_run_over_plain_http_says_why_it_was_not_split() {
         .arg("--events")
         .arg(&events)
         .env("FETCHLOOM_CACHE_DIR", scratch.path().join("cache"))
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(

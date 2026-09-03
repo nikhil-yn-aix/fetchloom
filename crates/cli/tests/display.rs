@@ -25,13 +25,11 @@ use toml as _;
 use windows_sys as _;
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
+
+mod support;
 
 use tempfile::TempDir;
-
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
 
 fn corpus() -> TempDir {
     let temporary = TempDir::new().unwrap();
@@ -47,13 +45,11 @@ fn located(path: &Path) -> String {
 }
 
 fn fetch(directory: &Path, cache: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(directory)
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .env_remove("FETCHLOOM_LOG")
         .env_remove("NO_COLOR")
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }

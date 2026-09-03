@@ -7,7 +7,6 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use clap as _;
 use clap_complete as _;
@@ -28,11 +27,9 @@ use windows_sys as _;
 
 use fetchloom_engine::work::Work;
 use fetchloom_faults::{TYPEFLAG_REGULAR, TarHeader, TarWriter};
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn corpus(root: &Path) {
     std::fs::create_dir_all(root.join("nested")).unwrap();
@@ -48,7 +45,7 @@ struct Reported {
 }
 
 fn get_reporting_work(source: &Path, destination: &Path, cache: &Path) -> Work {
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(source)
@@ -56,7 +53,6 @@ fn get_reporting_work(source: &Path, destination: &Path, cache: &Path) -> Work {
         .arg(destination)
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(
@@ -69,7 +65,7 @@ fn get_reporting_work(source: &Path, destination: &Path, cache: &Path) -> Work {
 }
 
 fn get_reporting_work_without_cache(source: &Path, destination: &Path, cache: &Path) -> Work {
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(source)
@@ -78,7 +74,6 @@ fn get_reporting_work_without_cache(source: &Path, destination: &Path, cache: &P
         .arg("--no-cache")
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(
@@ -138,7 +133,7 @@ fn identical_inputs_count_identically() {
 fn a_local_ingest_writes_nothing_into_a_cache_that_already_holds_the_bytes() {
     let temporary = TempDir::new().unwrap();
     let source = temporary.path().join("source");
-    corpus(&source);
+    one_object(&source);
     let cache = temporary.path().join("cache");
 
     let cold = get_reporting_work(&source, &temporary.path().join("cold"), &cache);
@@ -151,11 +146,12 @@ fn a_local_ingest_writes_nothing_into_a_cache_that_already_holds_the_bytes() {
         cold.bytes_written,
         warm.bytes_written
     );
-    assert_eq!(
-        cold.bytes_read, warm.bytes_read,
-        "a local source states no digest, so both runs read it exactly once to learn one: \
-         cold {} warm {}",
-        cold.bytes_read, warm.bytes_read
+    assert!(
+        warm.bytes_read < cold.bytes_read,
+        "a run against a cache that already holds every object read as much as the run that \
+         filled it: cold {} warm {}",
+        cold.bytes_read,
+        warm.bytes_read
     );
 }
 
@@ -245,4 +241,62 @@ fn gzip(content: &[u8]) -> Vec<u8> {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(content).unwrap();
     encoder.finish().unwrap()
+}
+
+const OBJECT_BYTES: u64 = 8 * 1024 * 1024;
+
+fn object_of(root: &Path, length: u64) -> u64 {
+    std::fs::create_dir_all(root).unwrap();
+    let mut bytes = vec![0_u8; usize::try_from(length).unwrap()];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        *slot = u8::try_from(index % 251).unwrap_or(0);
+    }
+    std::fs::write(root.join("obj.bin"), &bytes).unwrap();
+    length
+}
+
+fn one_object(root: &Path) -> u64 {
+    object_of(root, OBJECT_BYTES)
+}
+
+#[test]
+fn a_run_reads_and_writes_the_source_a_whole_number_of_times() {
+    const SMALLER: u64 = 8 * 1024 * 1024;
+    const LARGER: u64 = 12 * 1024 * 1024;
+    const RECORDS: u64 = 4096;
+
+    for (shape, reads, writes) in [("file", 3, 2), ("directory", 2, 2)] {
+        let mut counted = Vec::new();
+        for length in [SMALLER, LARGER] {
+            let temporary = TempDir::new().unwrap();
+            let source = temporary.path().join("source");
+            object_of(&source, length);
+            let target = if shape == "file" {
+                source.join("obj.bin")
+            } else {
+                source.clone()
+            };
+            counted.push(get_reporting_work(
+                &target,
+                &temporary.path().join("out"),
+                &temporary.path().join("cache"),
+            ));
+        }
+        let grew = LARGER - SMALLER;
+        let read = counted[1].bytes_read - counted[0].bytes_read;
+        let written = counted[1].bytes_written - counted[0].bytes_written;
+
+        assert!(
+            read.abs_diff(grew * reads) < RECORDS,
+            "a {shape} run reads the object {reads} times, so growing it by {grew} bytes must \
+             grow the reported reads by {}, and it grew them by {read}",
+            grew * reads
+        );
+        assert!(
+            written.abs_diff(grew * writes) < RECORDS,
+            "a {shape} run writes the object {writes} times, so growing it by {grew} bytes must \
+             grow the reported writes by {}, and it grew them by {written}",
+            grew * writes
+        );
+    }
 }

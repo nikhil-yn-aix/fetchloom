@@ -112,6 +112,47 @@ impl Latency {
     }
 }
 
+/// How many requests one or more servers were answering at the same moment.
+#[derive(Debug, Default)]
+pub struct Flight {
+    current: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl Flight {
+    /// Returns a recorder every server told to report to it shares.
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Returns the most requests that were being answered at one moment.
+    #[must_use]
+    pub fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+
+    fn enter(recorder: &Arc<Self>) -> InFlight {
+        let now = recorder.current.fetch_add(1, Ordering::SeqCst) + 1;
+        recorder.peak.fetch_max(now, Ordering::SeqCst);
+        InFlight {
+            recorder: Arc::clone(recorder),
+        }
+    }
+}
+
+/// One request, counted for as long as the server is answering it.
+#[derive(Debug)]
+pub struct InFlight {
+    recorder: Arc<Flight>,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.recorder.current.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// A TLS alert record carrying a fatal handshake failure.
 const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
 
@@ -141,6 +182,8 @@ pub struct Script {
     pub latency: Latency,
     /// Additional headers carried on every response.
     pub extra_headers: Vec<(String, String)>,
+    /// The recorder every request answered by this server is counted in.
+    pub flight: Option<Arc<Flight>>,
 }
 
 impl Script {
@@ -158,7 +201,16 @@ impl Script {
             refuses_tls: false,
             latency: Latency::default(),
             extra_headers: Vec::new(),
+            flight: None,
         }
+    }
+
+    /// Returns the script with every request it answers counted in this
+    /// recorder, so a test can assert what was in flight at once.
+    #[must_use]
+    pub fn reporting(mut self, flight: &Arc<Flight>) -> Self {
+        self.flight = Some(Arc::clone(flight));
+        self
     }
 
     /// Returns the script with every secured connection refused at the
@@ -354,6 +406,7 @@ fn serve(
         seen.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(request.clone());
+        let _counted = script.flight.as_ref().map(Flight::enter);
         std::thread::sleep(script.latency.before(&request));
 
         let serving_bytes = request.method != "HEAD";

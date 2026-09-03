@@ -25,13 +25,15 @@ use windows_sys as _;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{
     Reply, Script, TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer,
 };
 use flate2::Compression;
 use flate2::write::GzEncoder;
+mod support;
+
 use tempfile::TempDir;
 
 /// The bytes of `xz -9` over a ustar tar holding `hello.txt`, whose content is
@@ -136,29 +138,22 @@ impl Workspace {
 
     fn run(&self, arguments: &[&str]) -> Run {
         Run {
-            output: Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+            output: support::fetchloom()
                 .current_dir(self.path())
                 .args(arguments)
                 .env("FETCHLOOM_CACHE_DIR", self.cache())
-                .env_remove("FETCHLOOM_CONFIG")
-                .env_remove("FETCHLOOM_OFFLINE")
-                .stdin(Stdio::null())
                 .output()
                 .unwrap(),
         }
     }
 
-    /// Runs with no Fetchloom variable in the environment, so a configuration
-    /// file is the highest level that named a value.
-    fn run_bare(&self, arguments: &[&str]) -> Run {
+    /// Runs with configuration discovery left on, so a configuration file is
+    /// the highest level that named a value.
+    fn run_reading_configuration(&self, arguments: &[&str]) -> Run {
         Run {
-            output: Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+            output: support::fetchloom_reading_configuration()
                 .current_dir(self.path())
                 .args(arguments)
-                .env_remove("FETCHLOOM_CACHE_DIR")
-                .env_remove("FETCHLOOM_CONFIG")
-                .env_remove("FETCHLOOM_OFFLINE")
-                .stdin(Stdio::null())
                 .output()
                 .unwrap(),
         }
@@ -984,9 +979,10 @@ fn cache_dir_and_no_config_and_config_each_decide_where_settings_come_from() {
     assert!(elsewhere.join("objects").is_dir());
 
     workspace.write("chosen.toml", b"[cache]\ndir = \"from-the-config\"\n");
-    let named = workspace.run_bare(&["--config", "chosen.toml", "explain", "cache.dir"]);
+    let named =
+        workspace.run_reading_configuration(&["--config", "chosen.toml", "explain", "cache.dir"]);
     assert!(named.out().contains("from-the-config"), "{}", named.out());
-    let refused = workspace.run_bare(&[
+    let refused = workspace.run_reading_configuration(&[
         "--config",
         "chosen.toml",
         "--no-config",

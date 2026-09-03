@@ -24,9 +24,11 @@ use windows_sys as _;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{TYPEFLAG_REGULAR, TarHeader, TarWriter};
+mod support;
+
 use tempfile::TempDir;
 
 /// What a tar holding `hello.txt` decompresses to.
@@ -118,13 +120,12 @@ impl Workspace {
         let stream = self
             .path()
             .join(format!("stream-{}.ndjson", arguments.len()));
-        let output = Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+        let output = support::fetchloom()
             .current_dir(self.path())
             .args(arguments)
             .arg("--events")
             .arg(&stream)
             .env("FETCHLOOM_CACHE_DIR", self.path().join("cache"))
-            .stdin(Stdio::null())
             .output()
             .unwrap();
         Run {

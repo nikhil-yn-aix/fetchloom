@@ -216,20 +216,42 @@ fn an_unknown_key_is_an_error() {
 }
 
 #[test]
-fn every_key_the_contract_names_is_read() {
+fn every_key_the_contract_names_takes_effect() {
     let temporary = TempDir::new().unwrap();
-    for key in [
-        "color = \"never\"",
-        "hints = false",
-        "log = \"debug\"",
-        "retries = 4",
-        "timeout = \"45s\"",
-        "sources = [\"https://lab.edu/data/\"]",
+    for (key, shown) in [
+        ("color = \"never\"", "color = never"),
+        ("hints = false", "hints = false"),
+        ("log = \"debug\"", "log = debug"),
+        ("retries = 4", "retries = 4"),
+        ("timeout = \"45s\"", "timeout = 45s"),
+        (
+            "sources = [\"https://lab.edu/data/\"]",
+            "sources = https://lab.edu/data/",
+        ),
     ] {
         let path = write(temporary.path(), "fetchloom.toml", &format!("{key}\n"));
         assert!(
             config::read(&path).is_ok(),
             "{key} is a contracted key and was refused"
+        );
+
+        let output = support::fetchloom_reading_configuration()
+            .arg("explain")
+            .arg("--config")
+            .arg(&path)
+            .current_dir(temporary.path())
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stdout);
+        let collapsed: String = said
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let wanted: String = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            collapsed.contains(&wanted),
+            "{key} parsed but took no effect, because explain says:\n{said}"
         );
     }
 }

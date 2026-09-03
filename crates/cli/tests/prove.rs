@@ -8,7 +8,7 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -29,6 +29,8 @@ use windows_sys as _;
 
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
 use fetchloom_faults::{Reply, Script, TestServer};
+mod support;
+
 use tempfile::TempDir;
 
 /// An object of sixty-five leaf groups plus a partial one, which is the
@@ -40,10 +42,6 @@ fn large_object() -> Vec<u8> {
         *byte = u8::try_from((index * 37 + index / 1021) % 251).unwrap_or(0);
     }
     bytes
-}
-
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
 }
 
 /// One cache, one server, and the runs a test drives against them.
@@ -72,11 +70,10 @@ impl Ground {
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
-        Command::new(binary())
+        support::fetchloom()
             .current_dir(self.scratch.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", self.cache())
-            .stdin(Stdio::null())
             .output()
             .unwrap()
     }
@@ -703,7 +700,7 @@ fn a_witness_names_the_origin_that_served_the_bytes_and_not_the_one_that_was_ask
     let redirecting = TestServer::start(script).unwrap();
 
     let asked = format!("{}/object", redirecting.origin());
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch.path())
         .args([
             "get",
@@ -712,7 +709,6 @@ fn a_witness_names_the_origin_that_served_the_bytes_and_not_the_one_that_was_ask
             scratch.path().join("out").to_str().unwrap(),
         ])
         .env("FETCHLOOM_CACHE_DIR", scratch.path().join("cache"))
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(
@@ -755,11 +751,10 @@ fn a_local_reference_can_be_repaired_from_the_file_it_named() {
     let cache = scratch.path().join("cache");
 
     let run = |arguments: &[&str]| {
-        Command::new(binary())
+        support::fetchloom()
             .current_dir(scratch.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", &cache)
-            .stdin(Stdio::null())
             .output()
             .unwrap()
     };

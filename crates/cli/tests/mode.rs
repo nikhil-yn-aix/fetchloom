@@ -9,7 +9,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -31,11 +31,9 @@ use windows_sys as _;
 use fetchloom_faults::{TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 /// A gzip-wrapped tar holding one `0644` file and one `0755` file.
 fn mixed_mode_archive() -> Vec<u8> {
@@ -71,7 +69,7 @@ fn mixed_mode_directory(at: &Path) -> PathBuf {
 }
 
 fn get(source: &Path, destination: &Path, cache: &Path, extra: &[&str]) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(source)
@@ -80,7 +78,6 @@ fn get(source: &Path, destination: &Path, cache: &Path, extra: &[&str]) -> Outpu
         .arg("--json")
         .args(extra)
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -227,13 +224,12 @@ fn a_second_get_of_a_directory_writes_nothing() {
 }
 
 fn verify_with_cache(path: &Path, cache: &Path) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .arg("verify")
         .arg(path)
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -276,14 +272,13 @@ fn verify_reads_no_mode_when_no_receipt_names_the_destination() {
     assert!(get(&archive, &destination, &cache, &[]).status.success());
 
     let elsewhere = temporary.path().join("other-cache");
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("verify")
         .arg(&destination)
         .arg("--events")
         .arg("-")
         .env("FETCHLOOM_CACHE_DIR", &elsewhere)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -305,14 +300,13 @@ fn a_receipt_naming_another_destination_is_not_read_for_this_one() {
 
     let moved = temporary.path().join("moved");
     std::fs::rename(&destination, &moved).unwrap();
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("verify")
         .arg(&moved)
         .arg("--events")
         .arg("-")
         .env("FETCHLOOM_CACHE_DIR", &cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(output.status.success());

@@ -33,6 +33,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod support;
+
 use tempfile::TempDir;
 
 /// How many files the corpus holds, chosen so a run takes long enough to be
@@ -68,7 +70,7 @@ fn scene() -> Scene {
 }
 
 fn start(scene: &Scene) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+    let mut command = support::fetchloom();
     command
         .arg("get")
         .arg(&scene.source)
@@ -78,7 +80,6 @@ fn start(scene: &Scene) -> Child {
         .arg(&scene.cache)
         .arg("--events")
         .arg(&scene.events)
-        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     interruptible(&mut command);
@@ -288,7 +289,7 @@ fn an_interrupt_with_several_transfers_in_flight_stops_within_two_seconds() {
     let manifest = scratch.path().join("dataset.yaml");
     std::fs::write(&manifest, format!("name: delayed\nartifacts:\n{artifacts}")).unwrap();
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+    let mut command = support::fetchloom();
     command
         .arg("get")
         .arg(&manifest)
@@ -302,7 +303,6 @@ fn an_interrupt_with_several_transfers_in_flight_stops_within_two_seconds() {
         .arg("8")
         .arg("--per-host")
         .arg("8")
-        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     interruptible(&mut command);

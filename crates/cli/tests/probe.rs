@@ -25,9 +25,11 @@ use windows_sys as _;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{Script, TestServer};
+mod support;
+
 use tempfile::TempDir;
 
 struct Workspace {
@@ -54,17 +56,12 @@ impl Workspace {
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_fetchloom"))
+        support::fetchloom()
             .current_dir(self.path())
             .args(arguments)
             .arg("--events")
             .arg(self.events())
             .env("FETCHLOOM_CACHE_DIR", self.path().join("cache"))
-            .env_remove("FETCHLOOM_CONFIG")
-            .env_remove("FETCHLOOM_OFFLINE")
-            .env_remove("FETCHLOOM_CONCURRENCY")
-            .env_remove("FETCHLOOM_PER_HOST")
-            .stdin(Stdio::null())
             .output()
             .unwrap()
     }

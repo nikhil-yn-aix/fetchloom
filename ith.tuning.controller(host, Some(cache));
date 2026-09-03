@@ -1,3 +1,0 @@
-host:     let start = str|host: &str| with.tuning.controller(host, Some(cache));
-host:     let start = str|host: &str| with.tuning.controller(host, Some(cache));
-host:     let start = str|host: &str| with.tuning.controller(host, with.cache);

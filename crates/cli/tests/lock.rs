@@ -26,14 +26,12 @@ use toml as _;
 use windows_sys as _;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{Reply, Script, TYPEFLAG_REGULAR, TarHeader, TarWriter, TestServer};
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn object(length: usize) -> Vec<u8> {
     (0..length)
@@ -70,7 +68,7 @@ impl Run {
 }
 
 fn get(reference: &str, destination: &Path, cache: &Path, lock: &Path, extra: &[&str]) -> Run {
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(reference)
@@ -81,7 +79,6 @@ fn get(reference: &str, destination: &Path, cache: &Path, lock: &Path, extra: &[
         .arg("--json")
         .args(extra)
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     Run { output }
@@ -328,7 +325,7 @@ fn a_directory_source_writes_no_lock_and_says_so() {
     std::fs::write(source.join("one.txt"), b"one\n").unwrap();
     let scene = scene();
 
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(&source)
@@ -339,7 +336,6 @@ fn a_directory_source_writes_no_lock_and_says_so() {
         .arg("--events")
         .arg("-")
         .env("FETCHLOOM_CACHE_DIR", &scene.cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(output.status.success());

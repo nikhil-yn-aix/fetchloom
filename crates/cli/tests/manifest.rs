@@ -26,16 +26,14 @@ use windows_sys as _;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn scratch() -> &'static Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
@@ -98,7 +96,7 @@ fn two_artifacts(body: &str) -> Scene {
 }
 
 fn get(scene: &Scene, extra: &[&str]) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(&scene.manifest)
@@ -109,7 +107,6 @@ fn get(scene: &Scene, extra: &[&str]) -> Output {
         .arg("--json")
         .args(extra)
         .env("FETCHLOOM_CACHE_DIR", &scene.cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }

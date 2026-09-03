@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -30,11 +30,9 @@ use windows_sys as _;
 use fetchloom_faults::{TYPEFLAG_DIRECTORY, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 /// A gzip-wrapped tar holding a directory and three files.
 fn archive_bytes() -> Vec<u8> {
@@ -82,7 +80,7 @@ fn fetched() -> Subject {
 }
 
 fn get(subject: &Subject, extra: &[&str]) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(&subject.archive)
@@ -91,7 +89,6 @@ fn get(subject: &Subject, extra: &[&str]) -> Output {
         .arg("--json")
         .args(extra)
         .env("FETCHLOOM_CACHE_DIR", &subject.cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -265,13 +262,12 @@ fn adopt_reports_the_destination_and_writes_nothing() {
         "--adopt wrote into the destination it was told to accept"
     );
 
-    let verified = Command::new(binary())
+    let verified = support::fetchloom()
         .current_dir(scratch())
         .arg("verify")
         .arg(&subject.destination)
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", &subject.cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(

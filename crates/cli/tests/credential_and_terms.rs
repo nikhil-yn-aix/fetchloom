@@ -8,7 +8,7 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 use std::sync::Arc;
 
 use clap as _;
@@ -34,11 +34,9 @@ use toml as _;
 use windows_sys as _;
 
 use fetchloom_faults::{Reply, Script, TestServer};
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 /// The directory every command in this file runs in, so a lock file a command
 /// writes beside itself never lands inside the repository.
@@ -48,12 +46,11 @@ fn scratch() -> &'static Path {
 }
 
 fn run_with(cache_dir: &Path, extra: &[(&str, &str)], arguments: &[&str]) -> Output {
-    let mut command = Command::new(binary());
+    let mut command = support::fetchloom();
     command
         .current_dir(scratch())
         .args(arguments)
-        .env("FETCHLOOM_CACHE_DIR", cache_dir)
-        .stdin(Stdio::null());
+        .env("FETCHLOOM_CACHE_DIR", cache_dir);
     for (name, value) in extra {
         command.env(name, value);
     }

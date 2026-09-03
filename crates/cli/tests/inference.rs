@@ -25,14 +25,12 @@ use toml as _;
 use windows_sys as _;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use fetchloom_faults::{Script, TestServer};
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 struct Workspace {
     temporary: TempDir,
@@ -59,14 +57,19 @@ impl Workspace {
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
-        Command::new(binary())
+        support::fetchloom()
             .current_dir(self.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", self.path().join("cache"))
-            .env_remove("FETCHLOOM_CONFIG")
-            .env_remove("FETCHLOOM_OFFLINE")
-            .env_remove("FETCHLOOM_LOG")
-            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    fn run_reading_configuration(&self, arguments: &[&str]) -> Output {
+        support::fetchloom_reading_configuration()
+            .current_dir(self.path())
+            .args(arguments)
+            .env("FETCHLOOM_CACHE_DIR", self.path().join("cache"))
             .output()
             .unwrap()
     }
@@ -368,7 +371,8 @@ fn a_bare_name_resolves_through_the_configured_sources() {
         format!("sources = [\"{}/data/\"]\n", server.origin()).as_bytes(),
     );
 
-    let output = workspace.run(&["get", "silesia", "--output", "out", "--json"]);
+    let output =
+        workspace.run_reading_configuration(&["get", "silesia", "--output", "out", "--json"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -387,7 +391,13 @@ fn a_namespaced_release_resolves_the_same_way() {
         format!("sources = [\"{}/data/\"]\n", server.origin()).as_bytes(),
     );
 
-    let output = workspace.run(&["get", "acme/imagenet@2012", "--output", "out", "--json"]);
+    let output = workspace.run_reading_configuration(&[
+        "get",
+        "acme/imagenet@2012",
+        "--output",
+        "out",
+        "--json",
+    ]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -416,7 +426,8 @@ fn a_name_that_matches_no_configured_source_is_never_guessed_at() {
         b"sources = [\"http://127.0.0.1:9/data/\"]\n",
     );
 
-    let output = workspace.run(&["get", "nothing-is-published-here", "--json"]);
+    let output =
+        workspace.run_reading_configuration(&["get", "nothing-is-published-here", "--json"]);
     assert_eq!(
         output.status.code(),
         Some(10),

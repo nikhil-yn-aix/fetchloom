@@ -8,7 +8,7 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -29,19 +29,16 @@ use toml as _;
 use windows_sys as _;
 
 use fetchloom_faults as _;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn run(arguments: &[&str]) -> Output {
     let cache = TempDir::new().unwrap();
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache.path())
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }

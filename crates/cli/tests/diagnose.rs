@@ -3,13 +3,12 @@
 #![expect(
     clippy::unwrap_used,
     clippy::panic,
-    clippy::expect_used,
     reason = "test setup, where a failure to run the binary is the assertion"
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -30,20 +29,16 @@ use toml as _;
 #[cfg(windows)]
 use windows_sys as _;
 
+mod support;
+
 use tempfile::TempDir;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
-
 fn run_in(directory: &Path, cache: &Path, extra: &[(&str, &str)], arguments: &[&str]) -> Output {
-    let mut command = Command::new(binary());
+    let mut command = support::fetchloom();
     command
         .current_dir(directory)
         .args(arguments)
-        .env("FETCHLOOM_CACHE_DIR", cache)
-        .env_remove("FETCHLOOM_LOG")
-        .stdin(Stdio::null());
+        .env("FETCHLOOM_CACHE_DIR", cache);
     for (key, value) in extra {
         command.env(key, value);
     }

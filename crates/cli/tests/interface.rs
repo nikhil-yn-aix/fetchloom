@@ -2,12 +2,11 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test setup, where a failure to run the binary is the assertion"
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -28,11 +27,9 @@ use toml as _;
 #[cfg(windows)]
 use windows_sys as _;
 
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn corpus() -> TempDir {
     let temporary = TempDir::new().unwrap();
@@ -48,13 +45,11 @@ fn located(path: &Path) -> String {
 }
 
 fn fetch(directory: &Path, cache: &Path, arguments: &[&str]) -> Output {
-    let mut command = Command::new(binary());
+    let mut command = support::fetchloom();
     command
         .current_dir(directory)
         .args(arguments)
-        .env("FETCHLOOM_CACHE_DIR", cache)
-        .env_remove("FETCHLOOM_LOG")
-        .stdin(Stdio::null());
+        .env("FETCHLOOM_CACHE_DIR", cache);
     command.output().unwrap()
 }
 
@@ -88,7 +83,7 @@ fn a_log_level_never_changes_the_event_stream() {
     for (index, level) in ["error", "info", "debug"].into_iter().enumerate() {
         let cache = temporary.path().join(format!("cache{index}"));
         let events = temporary.path().join(format!("events{index}.ndjson"));
-        let output = Command::new(binary())
+        let output = support::fetchloom()
             .current_dir(temporary.path())
             .args([
                 "get",
@@ -100,7 +95,6 @@ fn a_log_level_never_changes_the_event_stream() {
             ])
             .env("FETCHLOOM_CACHE_DIR", &cache)
             .env("FETCHLOOM_LOG", level)
-            .stdin(Stdio::null())
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{level} did not succeed");
@@ -183,12 +177,11 @@ fn the_log_level_variable_names_a_level_and_a_wrong_one_is_refused() {
     let temporary = corpus();
     let source = located(&temporary.path().join("source"));
 
-    let accepted = Command::new(binary())
+    let accepted = support::fetchloom()
         .current_dir(temporary.path())
         .args(["get", &source, "--output", "ok"])
         .env("FETCHLOOM_CACHE_DIR", temporary.path().join("cache-a"))
         .env("FETCHLOOM_LOG", "debug")
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(accepted.status.code(), Some(0));
@@ -197,12 +190,11 @@ fn the_log_level_variable_names_a_level_and_a_wrong_one_is_refused() {
         "FETCHLOOM_LOG=debug rendered nothing extra"
     );
 
-    let refused = Command::new(binary())
+    let refused = support::fetchloom()
         .current_dir(temporary.path())
         .args(["get", &source, "--output", "no"])
         .env("FETCHLOOM_CACHE_DIR", temporary.path().join("cache-b"))
         .env("FETCHLOOM_LOG", "chatty")
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(
@@ -215,12 +207,11 @@ fn the_log_level_variable_names_a_level_and_a_wrong_one_is_refused() {
 #[test]
 fn explain_reports_the_log_level_and_where_it_came_from() {
     let temporary = TempDir::new().unwrap();
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(temporary.path())
         .args(["explain", "log", "--json", "--no-config"])
         .env("FETCHLOOM_CACHE_DIR", temporary.path().join("cache"))
         .env("FETCHLOOM_LOG", "error")
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
@@ -234,11 +225,10 @@ fn explain_reports_the_log_level_and_where_it_came_from() {
 #[test]
 fn the_retry_and_timeout_flags_are_reported_as_effective_settings() {
     let temporary = TempDir::new().unwrap();
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(temporary.path())
         .args(["explain", "--json", "--no-config"])
         .env("FETCHLOOM_CACHE_DIR", temporary.path().join("cache"))
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));

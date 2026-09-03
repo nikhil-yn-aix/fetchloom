@@ -8,7 +8,6 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use clap as _;
 use clap_complete as _;
@@ -30,11 +29,9 @@ use windows_sys as _;
 
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_platform::NativePlatform;
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 /// Reports whether this machine lets this process create a symbolic link.
 fn links_are_permitted(directory: &Path) -> bool {
@@ -48,7 +45,7 @@ fn links_are_permitted(directory: &Path) -> bool {
 }
 
 fn get(source: &Path, destination: &Path, cache: &Path) -> std::process::Output {
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .arg("get")
         .arg(source)
@@ -56,7 +53,6 @@ fn get(source: &Path, destination: &Path, cache: &Path) -> std::process::Output 
         .arg(destination)
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -124,12 +120,11 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
     let reported: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let materialized = reported["tree"].as_str().expect("a tree digest").to_owned();
 
-    let verified = Command::new(binary())
+    let verified = support::fetchloom()
         .current_dir(scratch())
         .arg("verify")
         .arg(&destination)
         .arg("--json")
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(

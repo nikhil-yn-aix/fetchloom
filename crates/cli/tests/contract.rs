@@ -7,7 +7,7 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -28,31 +28,26 @@ use toml as _;
 use windows_sys as _;
 
 use fetchloom_faults::{Reply, Script, TestServer};
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn run(arguments: &[&str]) -> Output {
     let cache = TempDir::new().unwrap();
-    Command::new(binary())
+    support::fetchloom()
         .current_dir(scratch())
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache.path())
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
 
-fn run_in(directory: &Path, arguments: &[&str]) -> Output {
+fn run_reading_configuration(directory: &Path, arguments: &[&str]) -> Output {
     let cache = TempDir::new().unwrap();
-    Command::new(binary())
-        .current_dir(scratch())
+    support::fetchloom_reading_configuration()
+        .current_dir(directory)
         .args(arguments)
         .env("FETCHLOOM_CACHE_DIR", cache.path())
-        .current_dir(directory)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -531,7 +526,7 @@ fn explain_reports_the_level_that_supplied_each_value() {
     let temporary = TempDir::new().unwrap();
     std::fs::write(temporary.path().join("fetchloom.toml"), "threads = 3\n").unwrap();
 
-    let output = run_in(temporary.path(), &["explain"]);
+    let output = run_reading_configuration(temporary.path(), &["explain"]);
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("project config"), "stdout was {stdout}");
@@ -556,7 +551,8 @@ fn a_malformed_configuration_file_stops_the_run() {
     let named = temporary.path().join("bad.toml");
     std::fs::write(&named, "nonsense = 1\n").unwrap();
 
-    let output = run(&["--config", named.to_str().unwrap(), "explain"]);
+    let output =
+        run_reading_configuration(scratch(), &["--config", named.to_str().unwrap(), "explain"]);
     assert_eq!(output.status.code(), Some(2));
 }
 
@@ -627,7 +623,7 @@ fn a_credential_never_reaches_any_stream() {
     let events = temporary.path().join("events.ndjson");
     let secret = "super-secret-token-value";
 
-    let output = Command::new(binary())
+    let output = support::fetchloom()
         .current_dir(scratch())
         .args([
             "get",
@@ -638,7 +634,6 @@ fn a_credential_never_reaches_any_stream() {
         ])
         .current_dir(temporary.path())
         .env("FETCHLOOM_TOKEN_EXAMPLE_INVALID", secret)
-        .stdin(Stdio::null())
         .output()
         .unwrap();
 
@@ -726,11 +721,10 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
     let cache = TempDir::new().unwrap();
     let location = format!("{}/object.bin", server.origin());
 
-    let first = Command::new(binary())
+    let first = support::fetchloom()
         .current_dir(scratch())
         .args(["get", &location, "--output", destination.to_str().unwrap()])
         .env("FETCHLOOM_CACHE_DIR", cache.path())
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_ne!(
@@ -743,7 +737,7 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
         "a destination appeared after a run that never finished a transfer"
     );
 
-    let second = Command::new(binary())
+    let second = support::fetchloom()
         .current_dir(scratch())
         .args([
             "get",
@@ -754,7 +748,6 @@ fn get_over_http_resumes_a_second_run_from_what_the_first_left() {
             "-",
         ])
         .env("FETCHLOOM_CACHE_DIR", cache.path())
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     assert_eq!(

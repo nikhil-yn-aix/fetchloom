@@ -9,7 +9,7 @@
 )]
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use clap as _;
 use clap_complete as _;
@@ -31,11 +31,9 @@ use toml as _;
 #[cfg(windows)]
 use windows_sys as _;
 
-use tempfile::TempDir;
+mod support;
 
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_fetchloom")
-}
+use tempfile::TempDir;
 
 fn source_tree(under: &Path) -> std::path::PathBuf {
     let source = under.join("source");
@@ -45,7 +43,7 @@ fn source_tree(under: &Path) -> std::path::PathBuf {
 }
 
 fn get(cwd: &Path, source: &Path, output: &str, cache_dir: &str) -> (Output, serde_json::Value) {
-    let raw = Command::new(binary())
+    let raw = support::fetchloom()
         .arg("get")
         .arg(source)
         .arg("--output")
@@ -55,7 +53,6 @@ fn get(cwd: &Path, source: &Path, output: &str, cache_dir: &str) -> (Output, ser
         .arg("--json")
         .current_dir(cwd)
         .env("FETCHLOOM_CACHE_DIR", cwd.join("cache"))
-        .stdin(Stdio::null())
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&raw.stdout).unwrap_or_else(|error| {
@@ -165,13 +162,12 @@ fn a_relative_output_and_a_relative_cache_dir_with_separators_both_resolve_again
 }
 
 fn verify(cwd: &Path, target: &str) -> Output {
-    Command::new(binary())
+    support::fetchloom()
         .arg("verify")
         .arg(target)
         .arg("--json")
         .current_dir(cwd)
         .env("FETCHLOOM_CACHE_DIR", cwd.join("cache"))
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
