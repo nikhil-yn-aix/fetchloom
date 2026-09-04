@@ -16,7 +16,7 @@ use fetchloom_engine::selection::{Applied, AppliedMember, Candidate, Selection};
 use fetchloom_engine::tree::{EntryPath, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
-pub(crate) const BUFFER_LEN: usize = 65_536;
+pub(crate) use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER_LEN;
 
 struct Created {
     path: PathBuf,

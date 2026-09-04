@@ -4,52 +4,8 @@ use crate::digest::InteropDigest;
 use crate::error::{Error, ErrorKind};
 use crate::manifest::{Artifact, DigestClaims, Manifest};
 
+use super::digestline::{algorithm_name_for_length, decode_hex_32, is_hex, split_digest_and_path};
 use super::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
-
-fn is_hex(text: &str) -> bool {
-    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn decode_hex_32(text: &str) -> Option<[u8; 32]> {
-    if text.len() != 64 {
-        return None;
-    }
-    let mut bytes = [0u8; 32];
-    let raw = text.as_bytes();
-    for (index, slot) in bytes.iter_mut().enumerate() {
-        let high = hex_nibble(raw[index * 2])?;
-        let low = hex_nibble(raw[index * 2 + 1])?;
-        *slot = (high << 4) | low;
-    }
-    Some(bytes)
-}
-
-fn split_digest_and_path(line: &str) -> Option<(&str, &str)> {
-    let boundary = line.find([' ', '\t'])?;
-    let (digest, rest) = line.split_at(boundary);
-    let rest = rest.trim_start_matches([' ', '\t']);
-    if rest.is_empty() {
-        return None;
-    }
-    Some((digest, rest))
-}
-
-fn algorithm_name_for_length(length: usize) -> Option<&'static str> {
-    match length {
-        32 => Some("MD5"),
-        40 => Some("SHA-1"),
-        _ => None,
-    }
-}
 
 struct Entry {
     path: String,
@@ -233,6 +189,24 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::ManifestInvalid);
         assert!(error.next_action().contains("SHA-1"));
         assert!(error.next_action().contains("BLAKE3 and SHA-256"));
+    }
+
+    #[test]
+    fn refuses_sha512_by_name() {
+        let limits = Limits::default();
+        let ctx = context("https://host/data/", "corpus", &limits);
+        let digest = "c".repeat(128);
+        let text = format!(
+            "{digest}  empty.bin
+"
+        );
+        let error = ChecksumSidecar.read(text.as_bytes(), &ctx).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ManifestInvalid);
+        assert!(
+            error.next_action().contains("SHA-512"),
+            "a sha512sums sidecar was refused without naming what it stated: {}",
+            error.next_action()
+        );
     }
 
     #[test]

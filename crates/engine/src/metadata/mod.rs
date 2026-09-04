@@ -1,5 +1,7 @@
 //! Reading a manifest out of metadata somebody else already published.
 
+mod digestline;
+
 pub mod bagit;
 pub mod croissant;
 pub mod frictionless;

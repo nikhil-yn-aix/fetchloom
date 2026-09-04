@@ -255,6 +255,40 @@ fn an_unpinned_object_is_pruned_again() {
 }
 
 #[test]
+fn pruning_several_objects_out_of_one_pack_rewrites_it_once() {
+    let (_scratch, held) = cache();
+    let digests: Vec<_> = (0..5)
+        .map(|seed| support::publish(&held, &bytes_of(1024, seed + 1)))
+        .collect();
+    held.pin(digests[0]).unwrap();
+    held.pin(digests[1]).unwrap();
+
+    held.prune(Duration::ZERO).unwrap();
+
+    let before = held.work().taken();
+    let report = held.prune(Duration::ZERO).unwrap();
+    let after = held.work().taken();
+
+    assert_eq!(
+        report.removed, 3,
+        "the sweep did not remove the three unpinned objects"
+    );
+    for kept in &digests[..2] {
+        assert!(held.contains(*kept).unwrap(), "a pinned object was pruned");
+    }
+
+    let delta = after.file_operations - before.file_operations;
+    let rewrite_touches = delta
+        .checked_sub(3)
+        .unwrap_or_else(|| panic!("sweep touched only {delta} files, expected at least 3"));
+    assert_eq!(
+        rewrite_touches, 4,
+        "removing three objects from one pack in a single sweep did not rewrite that pack exactly once, \
+         which costs a lock, a temporary file, a flush and a rename"
+    );
+}
+
+#[test]
 fn pinning_an_object_the_cache_does_not_hold_is_refused() {
     let (_scratch, held) = cache();
     let refused = held.pin(hash_bytes(b"never fetched")).unwrap_err();
