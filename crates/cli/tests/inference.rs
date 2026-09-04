@@ -441,8 +441,6 @@ fn a_name_that_matches_no_configured_source_is_never_guessed_at() {
     );
 }
 
-/// Returns a path as a `file:` location, which is how a test names one to a
-/// scheme that reads a document.
 fn located(path: &Path) -> String {
     let text: String = path
         .display()
@@ -451,4 +449,29 @@ fn located(path: &Path) -> String {
         .map(|letter| if letter == '\\' { '/' } else { letter })
         .collect();
     format!("file:///{text}")
+}
+
+#[test]
+fn a_metadata_document_past_the_bound_is_refused_rather_than_read_in_part() {
+    let workspace = Workspace::new();
+    let padding = "x".repeat(17 * 1024 * 1024);
+    let document = format!(
+        r#"{{"@context":{{"cr":"croissant"}},"@type":"Dataset","name":"{padding}",
+        "distribution":[]}}"#
+    );
+    let server = TestServer::start(Script::serving(document.into_bytes())).unwrap();
+    let reference = format!("croissant:{}/metadata.json", server.origin());
+
+    let output = workspace.run(&["get", &reference, "--output", "out", "--json"]);
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a document larger than the bound was accepted"
+    );
+    assert!(
+        said.contains("resource.limit"),
+        "a document larger than the bound failed as {said} rather than a resource limit, so a \
+         document can be read in part and parsed as though it were whole"
+    );
 }

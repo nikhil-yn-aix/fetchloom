@@ -20,23 +20,17 @@ use crate::http::{HttpBody, HttpSource, Method, check_fetch_status, common_field
 use crate::index;
 use crate::origin::Origin;
 
-/// The header an object store carries its version identifier under.
 const VERSION_ID_HEADER: &str = "x-amz-version-id";
 
-/// The header an object store states its billing decision under.
 const REQUEST_CHARGED_HEADER: &str = "x-amz-request-charged";
 
-/// The value that header carries when the requester is billed.
 const REQUESTER_PAYS: &str = "requester";
 
-/// A source reached over an object store's HTTP or HTTPS listing and object
-/// API, holding an `HttpSource` it delegates every request to.
 pub struct ObjectStoreSource {
     http: HttpSource,
 }
 
 impl ObjectStoreSource {
-    /// Builds a source holding no connections yet.
     #[must_use]
     pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {

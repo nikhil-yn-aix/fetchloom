@@ -8,8 +8,6 @@ fn bomb(next_action: String) -> Error {
     Error::new(ErrorKind::ArchiveBomb, next_action)
 }
 
-/// Running totals for one archive, checked against the configured limits as
-/// entries and bytes are observed.
 pub struct BombGuard<'a> {
     name: &'a str,
     on_disk_bytes: u64,
@@ -19,7 +17,6 @@ pub struct BombGuard<'a> {
 }
 
 impl<'a> BombGuard<'a> {
-    /// Builds a guard for one archive of the given on-disk size.
     #[must_use]
     pub fn new(name: &'a str, on_disk_bytes: u64, limits: Limits) -> Self {
         Self {
@@ -31,12 +28,6 @@ impl<'a> BombGuard<'a> {
         }
     }
 
-    /// Records one more member and checks it against the entry limit.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `archive.bomb` naming the archive and both counts when the
-    /// entry limit is exceeded.
     pub fn observe_entry(&mut self) -> Result<(), Error> {
         self.entries += 1;
         if self.entries > self.limits.archive_entries {
@@ -48,13 +39,6 @@ impl<'a> BombGuard<'a> {
         Ok(())
     }
 
-    /// Records expanded bytes and checks them against the expanded-bytes and
-    /// expansion-ratio limits.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `archive.bomb` naming the archive and both counts, or both
-    /// ratios, when either limit is exceeded.
     pub fn observe_bytes(&mut self, count: u64) -> Result<(), Error> {
         self.expanded_bytes = self.expanded_bytes.saturating_add(count);
         if self.expanded_bytes > self.limits.expanded_bytes {

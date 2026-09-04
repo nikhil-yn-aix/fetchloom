@@ -11,7 +11,6 @@ use crate::manifest::{Artifact, DigestClaims, Manifest};
 use crate::metadata::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 use crate::selection::{Glob, Layout};
 
-/// Reads a Croissant JSON-LD dataset description into a manifest.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Croissant;
 

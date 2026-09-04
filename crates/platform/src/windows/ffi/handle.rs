@@ -16,7 +16,6 @@ use windows_sys::Win32::Storage::FileSystem::{
     GetFileInformationByHandleEx,
 };
 
-/// Opens a handle to a file or a directory for querying.
 pub(crate) fn open_for_query(path: &Path) -> io::Result<File> {
     File::options()
         .read(true)
@@ -24,7 +23,6 @@ pub(crate) fn open_for_query(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-/// Reads the identifier of a file and of the volume holding it.
 pub(crate) fn id_info(file: &File) -> io::Result<(u64, u128)> {
     let mut info = FILE_ID_INFO {
         VolumeSerialNumber: 0,
@@ -51,7 +49,6 @@ pub(crate) fn id_info(file: &File) -> io::Result<(u64, u128)> {
     ))
 }
 
-/// Reads the times the filesystem records for a file.
 pub(crate) fn basic_info(file: &File) -> io::Result<(i64, i64)> {
     let mut info = FILE_BASIC_INFO {
         CreationTime: 0,

@@ -15,26 +15,15 @@ use crate::record::{self, ObjectRecord};
 
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
-/// What one ingest did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Ingested {
-    /// The digest the bytes hash to.
     pub digest: ContentDigest,
-    /// The interop digest of the same bytes, taken in the same pass.
     pub interop: InteropDigest,
-    /// How many bytes they are.
     pub size: u64,
-    /// Whether the cache already held them.
     pub was_present: bool,
 }
 
 impl<P: Platform> Cache<P> {
-    /// Reads a file once, hashing it as it is written into the cache.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the source cannot be read, when the cache cannot be written,
-    /// and when the volume has no room.
     pub fn ingest(&self, source: &Path) -> Result<Ingested, Error> {
         let (digests, length) = self.digest_of(source)?;
         if self.contains(digests.content)? {
@@ -52,8 +41,6 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Reads a file and returns what it hashes to and how long it is, writing
-    /// nothing.
     fn digest_of(&self, source: &Path) -> Result<(Digests, u64), Error> {
         let mut reading = std::fs::File::open(source)
             .map_err(|reason| filesystem_failure(Surface::Cache, source, &reason))?;
@@ -74,12 +61,6 @@ impl<P: Platform> Cache<P> {
         Ok((pair.finish(), length))
     }
 
-    /// Puts a file whose digest is already known into the cache.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the file cannot be read, when the cache cannot be written,
-    /// and when the volume has no room.
     pub fn adopt(&self, digests: &Digests, length: u64, source: &Path) -> Result<Ingested, Error> {
         let digest = digests.content;
         let present = Ingested {
@@ -122,7 +103,6 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Returns a name inside the cache that only this writer writes.
     pub(crate) fn scratch_path(&self) -> std::path::PathBuf {
         self.layout().partial().join(format!(
             "{}-{}-{}.ingest",
@@ -137,11 +117,6 @@ impl<P: Platform> Cache<P> {
         self.finish_publication(digests)
     }
 
-    /// Returns the interop digest recorded for an object.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the record is present and cannot be read or does not parse.
     pub fn recorded_interop(&self, digest: ContentDigest) -> Result<Option<InteropDigest>, Error> {
         if let Some(crate::storage::Placement::Packed { entry, .. }) = self.placement(digest) {
             return Ok(Some(entry.interop));
@@ -150,12 +125,6 @@ impl<P: Platform> Cache<P> {
         Ok(record.map(|record| record.interop))
     }
 
-    /// Reads a stream once, hashing it as it is written into the cache.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the stream cannot be read, when the cache cannot be written,
-    /// and when the volume has no room.
     pub fn ingest_from(
         &self,
         reading: impl Read,
@@ -212,13 +181,6 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Records everything the cache knows about a published object that is not
-    /// in its bytes.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the object cannot be fingerprinted, when the record cannot be
-    /// written, and when the tree cannot be written.
     pub(crate) fn finish_publication(&self, digests: &Digests) -> Result<(), Error> {
         let digest = digests.content;
         if self.is_packed(digest) {
@@ -247,6 +209,4 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// Numbers the scratch name a writer takes, so that two writers in one process
-/// never take the same one.
 static SCRATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -15,20 +15,15 @@ use crate::config::Discovered;
 use crate::policy::CredentialStore;
 use crate::settings::Environment;
 
-/// Whether a check found something the user should act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
-    /// The check found nothing to act on.
     Ok,
-    /// The check could not determine an answer, and nothing was assumed.
     Unknown,
-    /// The check found something the user can act on.
     Actionable,
 }
 
 impl Status {
-    /// Returns the word this status is rendered under in text output.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -39,14 +34,10 @@ impl Status {
     }
 }
 
-/// One environment check as `doctor` reports it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Check {
-    /// The check's name.
     pub key: String,
-    /// What the check found.
     pub status: Status,
-    /// What the check found, in words.
     pub finding: String,
 }
 
@@ -60,15 +51,12 @@ impl Check {
     }
 }
 
-/// Every environment check `doctor` ran.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Report {
-    /// Every check, in the order it ran.
     pub checks: Vec<Check>,
 }
 
 impl Report {
-    /// Returns the exit code the checks together produce.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         if self
@@ -82,7 +70,6 @@ impl Report {
         }
     }
 
-    /// Renders every check as aligned text.
     #[must_use]
     pub fn render(&self) -> String {
         self.checks
@@ -100,10 +87,6 @@ impl Report {
     }
 }
 
-/// Runs every environment check and returns what each one found.
-///
-/// Nothing this function does writes to the cache directory beyond a
-/// probe file it creates and removes to test writability.
 #[must_use]
 pub fn run(
     discovered: &Discovered,
@@ -297,11 +280,8 @@ fn certificates_check() -> Check {
     }
 }
 
-/// One provider whose help record `doctor` checks for a credential.
 struct ProviderProbe {
-    /// The name this check is reported under.
     label: &'static str,
-    /// A host `fetchloom_sources::help_for` recognizes as this provider.
     host: &'static str,
 }
 

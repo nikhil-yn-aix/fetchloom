@@ -10,20 +10,13 @@ use fetchloom_engine::seam::observer::Observer;
 
 use crate::surface::DisplayMode;
 
-/// How often the aggregated progress line is redrawn.
 pub const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 
-/// An observer that writes the event stream as newline-delimited JSON.
 pub struct EventStream {
     sink: Mutex<Box<dyn Write + Send>>,
 }
 
 impl EventStream {
-    /// Opens an event stream at a path, or on standard output for `-`.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the path cannot be opened for writing.
     pub fn open(target: &str) -> std::io::Result<Self> {
         let sink: Box<dyn Write + Send> = if target == "-" {
             Box::new(std::io::stdout())
@@ -61,7 +54,6 @@ struct Progress {
     drawn_width: usize,
 }
 
-/// The one renderer for the whole run.
 #[derive(Debug)]
 pub struct Renderer {
     mode: DisplayMode,
@@ -70,7 +62,6 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Builds the renderer for a display mode.
     #[must_use]
     pub fn new(mode: DisplayMode, animate: bool) -> Self {
         Self {
@@ -122,7 +113,6 @@ impl Renderer {
     }
 }
 
-/// The live view, redrawn in place, fed by the event stream and nothing else.
 pub struct Live {
     view: Mutex<fetchloom_view::LiveView>,
     drawn: Mutex<usize>,
@@ -136,7 +126,6 @@ impl std::fmt::Debug for Live {
 }
 
 impl Live {
-    /// Builds the live view for a run.
     #[must_use]
     pub fn new(animate: bool) -> Self {
         Self {
@@ -196,7 +185,6 @@ impl Observer for Renderer {
     }
 }
 
-/// An observer that forwards every event to several observers.
 pub struct Fanout {
     observers: Vec<Box<dyn Observer>>,
 }
@@ -210,7 +198,6 @@ impl std::fmt::Debug for Fanout {
 }
 
 impl Fanout {
-    /// Collects observers that every event is forwarded to, in order.
     #[must_use]
     pub fn new(observers: Vec<Box<dyn Observer>>) -> Self {
         Self { observers }
@@ -244,11 +231,6 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// Renders a run's event stream through the live view, live or after the fact.
-///
-/// # Errors
-///
-/// Fails when the stream cannot be read.
 pub fn watch(target: &str) -> std::io::Result<()> {
     let reader: Box<dyn std::io::BufRead> = if target == "-" {
         Box::new(std::io::BufReader::new(std::io::stdin()))

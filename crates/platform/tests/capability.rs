@@ -101,10 +101,8 @@ fn only_an_unknown_scanner_answer_emits_a_degrade_and_it_names_the_ratio() {
     }
 }
 
-/// What a scanner degrade names as the thing that was wanted.
 const SCANNER_REQUEST: &str = "whether an on-access scanner inspects writes on this volume";
 
-/// What a normalization degrade names as the thing that was wanted.
 const NORMALIZATION_REQUEST: &str = "how this volume treats two spellings of one name";
 
 #[test]

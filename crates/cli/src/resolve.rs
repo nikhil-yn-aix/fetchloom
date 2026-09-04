@@ -1,32 +1,28 @@
 //! Turning a reference the user wrote into one this build can fetch.
 
+use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::error::{Error, ErrorKind};
+use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::redact::SafeUrl;
+use fetchloom_engine::seam::observer::Observer;
+use fetchloom_engine::seam::policy::Policy;
+use fetchloom_engine::seam::source::Source;
 
-/// The prefix a metadata document reference carries.
+use crate::settings;
+
 const METADATA_SCHEME: &str = "croissant:";
 
-/// What a reference names, once the resolution order has been walked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Resolved {
-    /// A location an adapter serves, or a path on this machine.
     Direct(String),
-    /// A metadata document to read a manifest out of.
     MetadataDocument(String),
 }
 
-/// Reports whether a reference names a metadata document.
 #[must_use]
 pub fn is_metadata_document(reference: &str) -> bool {
     reference.starts_with(METADATA_SCHEME)
 }
 
-/// Returns the location a metadata document reference names.
-///
-/// # Errors
-///
-/// Fails with `reference.unresolved` when the reference names no location after
-/// the scheme.
 pub fn metadata_location(reference: &str) -> Result<String, Error> {
     let rest = reference.strip_prefix(METADATA_SCHEME).unwrap_or_default();
     if rest.is_empty() {
@@ -38,8 +34,6 @@ pub fn metadata_location(reference: &str) -> Result<String, Error> {
     Ok(rest.to_owned())
 }
 
-/// Reports whether a reference carries a scheme, which the resolution order
-/// settles before anything else is tried.
 #[must_use]
 pub fn has_explicit_scheme(reference: &str) -> bool {
     if reference.contains("://") || is_metadata_document(reference) {
@@ -56,8 +50,6 @@ pub fn has_explicit_scheme(reference: &str) -> bool {
             .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
 }
 
-/// Reports whether a reference is a bare name or a namespaced release, which
-/// are the two forms the configured source priority resolves.
 #[must_use]
 pub fn is_name(reference: &str) -> bool {
     if has_explicit_scheme(reference) || reference.contains('\\') {
@@ -76,8 +68,6 @@ pub fn is_name(reference: &str) -> bool {
         })
 }
 
-/// Returns each location a name resolves to, in the order the configuration
-/// gave them.
 #[must_use]
 pub fn candidates(reference: &str, sources: &[String]) -> Vec<String> {
     sources
@@ -92,7 +82,6 @@ pub fn candidates(reference: &str, sources: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Returns the failure a name that matched nothing states.
 #[must_use]
 pub fn unmatched(reference: &str, tried: usize) -> Error {
     if tried == 0 {
@@ -111,6 +100,146 @@ pub fn unmatched(reference: &str, tried: usize) -> Error {
             SafeUrl::new(reference)
         ),
     )
+}
+
+pub fn resolve_reference(
+    reference: &str,
+    adapters: &Adapters,
+    resolved: &settings::Settings,
+    policy: &dyn Policy,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<String, fetchloom_engine::error::Error> {
+    if has_explicit_scheme(reference) || !is_name(reference) {
+        return Ok(reference.to_owned());
+    }
+    if std::path::Path::new(reference).exists() {
+        return Ok(reference.to_owned());
+    }
+    let sources = &resolved.sources.value;
+    let candidates = candidates(reference, sources);
+    for candidate in &candidates {
+        let Some((source, _)) = adapters.serving(candidate) else {
+            continue;
+        };
+        let host = crate::run::host_of(candidate);
+        let credential = policy.credential(
+            &fetchloom_engine::reference::Host::new(host),
+            fetchloom_engine::credential::Necessity::Optional,
+        )?;
+        if source.probe(candidate, credential.as_ref()).is_ok() {
+            observer.emit(&Event::new(
+                sequence,
+                EventPayload::ResolveAlias {
+                    from: reference.to_owned(),
+                    to: fetchloom_engine::redact::SafeUrl::new(candidate).to_string(),
+                },
+            ));
+            return Ok(candidate.clone());
+        }
+    }
+    Err(unmatched(reference, candidates.len()))
+}
+
+pub fn manifest_from_metadata(
+    reference: &str,
+    adapters: &Adapters,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+) -> Result<fetchloom_engine::manifest::Manifest, fetchloom_engine::error::Error> {
+    use fetchloom_engine::metadata::{Context, MetadataReader, croissant};
+
+    let location = metadata_location(reference)?;
+    let bytes = read_document(&location, adapters, policy, limits)?;
+    let name = crate::run::remote_name(&location);
+    croissant::Croissant.read(
+        &bytes,
+        &Context {
+            base: &location,
+            name: &name,
+            limits,
+        },
+    )
+}
+
+pub fn read_document(
+    location: &str,
+    adapters: &Adapters,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+) -> Result<Vec<u8>, fetchloom_engine::error::Error> {
+    use std::io::Read as _;
+
+    crate::run::allowed_offline(location, policy)?;
+    let mut bytes = Vec::new();
+    if let Some((source, _)) = adapters.serving(location) {
+        let credential = policy.credential(
+            &fetchloom_engine::reference::Host::new(crate::run::host_of(location)),
+            fetchloom_engine::credential::Necessity::Optional,
+        )?;
+        let served = source.fetch(location, None, credential.as_ref())?;
+        served
+            .body
+            .take(limits.manifest_size + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|reason| {
+                fetchloom_engine::error::Error::new(
+                    fetchloom_engine::error::ErrorKind::ManifestInvalid,
+                    format!("serve the document again, because it could not be read: {reason}"),
+                )
+            })?;
+    } else {
+        let path = crate::run::local_path(location)?;
+        let opened = std::fs::File::open(&path).map_err(|reason| {
+            fetchloom_engine::error::Error::new(
+                fetchloom_engine::error::ErrorKind::ManifestInvalid,
+                format!("make {} readable: {reason}", path.display()),
+            )
+        })?;
+        opened
+            .take(limits.manifest_size + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|reason| {
+                fetchloom_engine::error::Error::new(
+                    fetchloom_engine::error::ErrorKind::ManifestInvalid,
+                    format!("make {} readable: {reason}", path.display()),
+                )
+            })?;
+    }
+    if bytes.len() as u64 > limits.manifest_size {
+        return Err(fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::ResourceLimit,
+            format!(
+                "publish a smaller document, because {} is larger than the {} bytes a run reads and a document is never read in part",
+                fetchloom_engine::redact::SafeUrl::new(location),
+                limits.manifest_size
+            ),
+        )
+        .with_source(location));
+    }
+    Ok(bytes)
+}
+
+pub fn resolve_manifest(
+    adapters: &Adapters,
+    reference: &str,
+    source: &std::path::Path,
+    remote: bool,
+) -> Result<(fetchloom_engine::manifest::Manifest, bool), fetchloom_engine::error::Error> {
+    let read = if remote {
+        None
+    } else {
+        crate::run::manifest_at(source).transpose()?
+    };
+    let is_dataset = read.is_some();
+    let manifest = read.unwrap_or_else(|| {
+        crate::run::synthesized_manifest(
+            adapters,
+            &crate::run::dataset_name(adapters, reference, source),
+            reference,
+        )
+    });
+    Ok((manifest, is_dataset))
 }
 
 #[cfg(test)]

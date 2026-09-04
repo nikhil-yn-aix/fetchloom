@@ -10,20 +10,13 @@
 use std::path::Path;
 use std::process::Command;
 
-/// One archive this lane fetches, and what it must produce.
 struct Subject {
-    /// Where it lives.
     location: &'static str,
-    /// What the destination is called under the scratch root.
     name: &'static str,
-    /// How many entries the archive holds.
     entries: u64,
-    /// The tree digest `get` reports, taken from the archive's own modes, and
-    /// the one `verify` must reproduce from the run's receipt.
     fetched_tree: &'static str,
 }
 
-/// The archives this lane holds to a recorded answer.
 const SUBJECTS: [Subject; 3] = [
     Subject {
         location: "https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz",
@@ -45,17 +38,12 @@ const SUBJECTS: [Subject; 3] = [
     },
 ];
 
-/// What one attempt at the lane produced.
 pub enum Outcome {
-    /// Every subject matched what was recorded.
     Passed,
-    /// The lane could not reach a host and ran nothing.
     Skipped(String),
-    /// A subject disagreed with what was recorded.
     Failed(String),
 }
 
-/// Fetches every recorded subject and checks it against its record.
 pub fn run(workspace: &Path, binary: Option<&Path>) -> Outcome {
     let binary = binary.map_or_else(
         || {
@@ -193,7 +181,6 @@ fn verify(binary: &Path, destination: &Path, cache: &Path) -> Result<String, Str
     Err(body)
 }
 
-/// Reads one string field out of a result body without parsing JSON.
 fn field<'a>(body: &'a str, key: &str) -> &'a str {
     let needle = format!("\"{key}\":\"");
     let Some(at) = body.find(&needle) else {
@@ -211,8 +198,6 @@ fn number(body: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Describes every file under a destination well enough to tell whether a later
-/// run touched it.
 fn state_of(destination: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
     let mut found = Vec::new();
     collect(destination, destination, &mut found);

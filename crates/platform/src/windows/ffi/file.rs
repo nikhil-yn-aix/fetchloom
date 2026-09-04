@@ -17,7 +17,6 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::encode::wide;
 
-/// Renames a file or a directory onto its final name.
 pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<()> {
     let source = wide(from);
     let target = wide(to);
@@ -33,7 +32,6 @@ pub(crate) fn rename(from: &Path, to: &Path, write_through: bool) -> io::Result<
     Ok(())
 }
 
-/// Reserves clusters for a file and then sets its length.
 pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
     let signed = i64::try_from(length).unwrap_or(i64::MAX);
     let allocation = FILE_ALLOCATION_INFO {
@@ -70,7 +68,6 @@ pub(crate) fn preallocate(file: &File, length: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Creates a symbolic link with the given target.
 pub(crate) fn create_symlink(target: &str, link: &Path, directory: bool) -> io::Result<()> {
     if directory {
         std::os::windows::fs::symlink_dir(target, link)

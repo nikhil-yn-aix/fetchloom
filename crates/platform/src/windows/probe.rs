@@ -19,13 +19,10 @@ use fetchloom_engine::degrade::DegradeQueue;
 
 use crate::probe_tag;
 
-/// The ratio above which writing many small files is called expensive.
 const SMALL_WRITE_COST_RATIO: f64 = 2.0;
 
-/// How many small files the scanner measurement writes.
 const SCANNER_FILES: usize = 64;
 
-/// How many bytes each of those files holds.
 const SCANNER_FILE_BYTES: usize = 4096;
 
 fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
@@ -33,11 +30,6 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Detects everything about the volume behind a directory.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be written to.
 pub(crate) fn capabilities(
     directory: &Path,
     degradations: &DegradeQueue,
@@ -221,7 +213,6 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
     }
 }
 
-/// Reports whether an altitude is one the platform allocates to a scanner.
 fn is_scanner_altitude(altitude: u32) -> bool {
     (320_000..=329_998).contains(&altitude) || (360_000..=389_999).contains(&altitude)
 }

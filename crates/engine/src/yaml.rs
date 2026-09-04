@@ -5,21 +5,12 @@ use serde_json::{Map, Number, Value};
 use crate::error::{Error, ErrorKind};
 use crate::limits::Limits;
 
-/// One significant line of a document.
 struct Line {
-    /// The line number in the source, counted from one.
     number: usize,
-    /// How many spaces the line is indented by.
     indent: usize,
-    /// The line with its indentation and any trailing comment removed.
     content: String,
 }
 
-/// Reads the restricted subset into the model.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` naming the line and what it broke.
 pub(crate) fn parse(text: &str, limits: &Limits) -> Result<Value, Error> {
     let lines = significant(text)?;
     if lines.is_empty() {
@@ -54,8 +45,6 @@ fn at(line: usize, action: &str) -> Error {
     invalid(format!("line {line}: {action}"))
 }
 
-/// Returns the lines that carry content, with indentation measured and comments
-/// removed.
 fn significant(text: &str) -> Result<Vec<Line>, Error> {
     let mut lines = Vec::new();
     for (index, raw) in text.split('\n').enumerate() {
@@ -94,7 +83,6 @@ fn significant(text: &str) -> Result<Vec<Line>, Error> {
     Ok(lines)
 }
 
-/// Returns the part of a line before a comment that is not inside a quote.
 fn strip_comment(body: &str) -> &str {
     let bytes = body.as_bytes();
     let mut quote = None;
@@ -115,7 +103,6 @@ fn strip_comment(body: &str) -> &str {
     body
 }
 
-/// The cursor over a document's significant lines.
 struct Reader {
     lines: Vec<Line>,
     at: usize,
@@ -233,12 +220,10 @@ impl Reader {
     }
 }
 
-/// Reports whether the text after a dash begins a nested block.
 fn opens_block(rest: &str) -> bool {
     rest == "-" || rest.starts_with("- ") || split_key(rest).is_some()
 }
 
-/// Splits a line into its key and whatever follows the colon.
 fn split_key(content: &str) -> Option<(String, String)> {
     let bytes = content.as_bytes();
     if bytes
@@ -291,8 +276,6 @@ fn unquote_key(key: &str) -> Option<String> {
     Some(key.to_owned())
 }
 
-/// Reads one scalar or one flow collection, which must be the whole of the text
-/// it is given.
 fn scalar_or_flow(text: &str, number: usize) -> Result<Value, Error> {
     let (value, used) = read_node(text, 0, number)?;
     if text[used..].trim().is_empty() {
@@ -506,7 +489,6 @@ fn refuse_reserved(raw: &str, number: usize) -> Result<(), Error> {
     }
 }
 
-/// Returns the value an unquoted scalar stands for.
 fn plain_value(raw: &str) -> Value {
     match raw {
         "true" => return Value::Bool(true),

@@ -45,12 +45,8 @@ mod support;
 
 use tempfile::TempDir;
 
-/// How wide a run has to have measured a host before it splits one object
-/// across that host.
 const MEASURED_WIDTH: u32 = 4;
 
-/// The header an object store answers with when the version it served cannot
-/// change under the same name.
 const VERSION_HEADER: &str = "x-amz-version-id";
 
 fn large() -> Vec<u8> {
@@ -60,8 +56,6 @@ fn large() -> Vec<u8> {
         .collect()
 }
 
-/// An observer that keeps nothing, because these tests read the store and the
-/// requests the server saw rather than the stream.
 struct Quiet;
 
 impl Observer for Quiet {
@@ -89,9 +83,6 @@ fn measurement(concurrency: u32) -> HostMeasurement {
     }
 }
 
-/// Transfers one object through the object store adapter, which is the adapter
-/// that reports an identity a split may rely on, and returns the degradations
-/// the transfer recorded.
 fn transfer_with(
     server: &TestServer,
     width: u32,

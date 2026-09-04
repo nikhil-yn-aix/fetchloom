@@ -45,7 +45,6 @@ const VOLUME_DEPENDENT_NAMES: &[&str] = &[
     "tar_path_too_long",
 ];
 
-/// Reports whether this volume stores a name exactly as it was asked to.
 fn volume_stores_this_name(name: &str) -> bool {
     let Ok(directory) = tempfile::tempdir() else {
         return false;
@@ -148,7 +147,6 @@ fn every_benign_entry_extracts_cleanly_into_a_real_staging_directory() {
     }
 }
 
-/// Asserts a volume-dependent name against what this volume actually stores.
 fn check_volume_dependent(
     entry: &CorpusEntry,
     kind: &str,
@@ -596,7 +594,6 @@ fn a_colon_in_a_member_name_is_refused_rather_than_hidden_in_an_alternate_data_s
     assert!(is_empty(staging.path()));
 }
 
-/// Builds a tar holding one directory and two files, named as the caller says.
 fn three_entry_tar(prefix: &str, pax: bool) -> Vec<u8> {
     let mut writer = TarWriter::new();
     let directory = format!("{prefix}docs/");

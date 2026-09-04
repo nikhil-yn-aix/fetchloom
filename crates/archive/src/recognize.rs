@@ -38,8 +38,6 @@ impl Family {
     }
 }
 
-/// How many leading bytes `recognize` needs to answer for every format this
-/// build reads. A tar states its magic at offset 257.
 pub const SNIFF_LENGTH: usize = 262;
 
 const EXTENSIONS: &[(&str, ArchiveFormat)] = &[
@@ -57,7 +55,6 @@ const EXTENSIONS: &[(&str, ArchiveFormat)] = &[
     (".tar", ArchiveFormat::Tar),
 ];
 
-/// Reads the archive format a location's final extensions name.
 #[must_use]
 pub fn format_from_extension(location: &str) -> Option<ArchiveFormat> {
     EXTENSIONS
@@ -90,11 +87,6 @@ fn sniff(header: &[u8]) -> Option<Family> {
     None
 }
 
-/// Decides what format an archive is, or that it is not an archive at all.
-///
-/// # Errors
-///
-/// Fails when a format is claimed and the leading bytes do not agree with it.
 pub fn recognize(
     declared: Option<ArchiveFormat>,
     location: &str,

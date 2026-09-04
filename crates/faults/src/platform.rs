@@ -14,7 +14,6 @@ use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 
 use crate::schedule::{Faults, Operation};
 
-/// A platform that consults a schedule before it calls the one underneath.
 #[derive(Debug)]
 pub struct FaultyPlatform<P> {
     inner: P,
@@ -22,7 +21,6 @@ pub struct FaultyPlatform<P> {
 }
 
 impl<P: Platform> FaultyPlatform<P> {
-    /// Wraps a platform in a schedule that starts empty.
     #[must_use]
     pub fn new(inner: P) -> Self {
         Self {
@@ -31,7 +29,6 @@ impl<P: Platform> FaultyPlatform<P> {
         }
     }
 
-    /// Returns the schedule, so faults can be added to it.
     #[must_use]
     pub fn faults(&self) -> &Faults {
         &self.faults

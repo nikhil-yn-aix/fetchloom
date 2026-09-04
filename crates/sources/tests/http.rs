@@ -526,3 +526,27 @@ fn a_listing_with_more_entries_than_the_limit_allows_is_refused_as_a_limit() {
         failure.next_action()
     );
 }
+
+#[test]
+fn an_index_larger_than_the_bound_fails_rather_than_listing_what_fitted() {
+    let server = TestServer::start(Script::serving(object()).replying(vec![Reply::Listing {
+        format: IndexFormat::ObjectStore,
+    }]))
+    .unwrap();
+    let source = HttpSource::new(
+        Limits {
+            listing_bytes: 16,
+            ..Limits::default()
+        },
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let failure = source
+        .list(&format!("{}/set/", server.origin()), None)
+        .unwrap_err();
+    assert_eq!(
+        failure.kind(),
+        ErrorKind::ResourceLimit,
+        "an index past the size bound was answered with {failure:?} rather than a resource limit, \
+         so a listing can be silently clipped to whatever fitted"
+    );
+}

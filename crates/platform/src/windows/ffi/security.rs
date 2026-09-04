@@ -20,7 +20,6 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// Reads the user a file belongs to.
 pub(crate) fn file_owner(file: &File) -> io::Result<String> {
     let mut sid: PSID = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -48,7 +47,6 @@ pub(crate) fn file_owner(file: &File) -> io::Result<String> {
     owner
 }
 
-/// Reads the users a file this process creates can be owned by.
 pub(crate) fn process_owners() -> io::Result<Vec<String>> {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: the pseudo handle for this process is always valid, and the out pointer addresses a local the call fills in.
@@ -76,7 +74,6 @@ pub(crate) fn process_owners() -> io::Result<Vec<String>> {
     Ok(found)
 }
 
-/// Reads one security identifier out of an access token.
 fn token_sid(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String> {
     let mut needed = 0u32;
     // SAFETY: the token handle is open for the call, and a null buffer with a zero length is how the call is asked for the size it needs.
@@ -108,7 +105,6 @@ fn token_sid(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String
     let sid = unsafe { buffer.as_ptr().cast::<PSID>().read_unaligned() };
     sid_text(sid)
 }
-/// Renders a security identifier as the text form the platform defines.
 fn sid_text(sid: PSID) -> io::Result<String> {
     let mut text: PWSTR = std::ptr::null_mut();
     // SAFETY: the identifier came from a call that reported success, and the out pointer addresses a local the call fills in.

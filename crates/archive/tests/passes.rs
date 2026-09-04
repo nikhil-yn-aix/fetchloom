@@ -26,7 +26,6 @@ use fetchloom_platform::NativePlatform;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-/// A source that reports how many bytes were read out of it.
 struct Counted {
     inner: Cursor<Vec<u8>>,
     read: Rc<std::cell::Cell<u64>>,
@@ -46,7 +45,6 @@ impl Seek for Counted {
     }
 }
 
-/// A gzip-wrapped tar of `count` files, each holding a kilobyte.
 fn archive(count: usize) -> Vec<u8> {
     let mut writer = TarWriter::new();
     let body = vec![b'x'; 1024];
@@ -61,8 +59,6 @@ fn archive(count: usize) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
-/// Extracts an archive of `count` members and returns the compressed bytes that
-/// were read to do it.
 fn compressed_bytes_read(count: usize) -> (u64, u64) {
     let bytes = archive(count);
     let length = bytes.len() as u64;

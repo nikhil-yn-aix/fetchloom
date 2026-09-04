@@ -46,7 +46,6 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources::HttpSource;
 use tempfile::TempDir;
 
-/// A pause that records what it was asked to wait and never waits.
 #[derive(Debug, Default)]
 struct CountedPause {
     waits: Mutex<Vec<Duration>>,
@@ -147,8 +146,6 @@ fn at(server: &TestServer) -> Vec<String> {
     vec![format!("{}/object", server.origin())]
 }
 
-/// Limits that give up on a body that stops arriving without giving up on a
-/// machine that is busy.
 fn impatient() -> Limits {
     Limits {
         connect_timeout: Duration::from_millis(500),
@@ -157,7 +154,6 @@ fn impatient() -> Limits {
     }
 }
 
-/// A run with nothing recorded for the reference.
 fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
     None
 }
@@ -387,7 +383,6 @@ fn a_weak_validator_resumes_on_the_fourth_rung() {
     assert_eq!(done.bytes_kept, 16 * 1024);
 }
 
-/// The processor pool every cache in a test is opened with.
 fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     let budget = fetchloom_engine::threads::ThreadBudget::resolve(
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
@@ -396,8 +391,6 @@ fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }
 
-/// Ceilings that hold one transfer in flight, which is what a harness driving
-/// one transfer directly is bounded by.
 fn one_at_a_time() -> fetchloom_engine::tuning::Ceilings {
     fetchloom_engine::tuning::Ceilings {
         global: std::num::NonZeroU32::MIN,

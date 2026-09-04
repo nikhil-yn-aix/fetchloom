@@ -4,46 +4,29 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Number of bytes in every digest Fetchloom produces.
 pub const DIGEST_LEN: usize = 32;
 
-/// The derived key context separating tree digests from every other domain.
 pub const TREE_DIGEST_CONTEXT: &str = "fetchloom tree digest";
 
-/// The derived key context separating manifest digests from every other domain.
 pub const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
 
-/// The derived key context separating the name of a receipt from every other
-/// domain.
 pub const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
 
-/// The derived key context separating partial key names from every other
-/// domain.
 pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
 
-/// The derived key context separating the name a witness record is filed under
-/// from every other domain.
 pub const WITNESS_KEY_CONTEXT: &str = "fetchloom witness key";
 
-/// The derived key context separating the name a resolution record is filed
-/// under from every other domain.
 pub const RESOLUTION_KEY_CONTEXT: &str = "fetchloom resolution key";
 
-/// The derived key context separating the name a per-host measurement is filed
-/// under from every other domain.
 pub const MEASUREMENT_KEY_CONTEXT: &str = "fetchloom measurement key";
 
-/// The hash algorithm a digest was produced by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Algorithm {
-    /// The algorithm behind every content, tree, and manifest digest.
     Blake3,
-    /// The algorithm behind every interop digest.
     Sha256,
 }
 
 impl Algorithm {
-    /// Returns the prefix this algorithm is written with.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -59,7 +42,6 @@ impl fmt::Display for Algorithm {
     }
 }
 
-/// A digest written as an algorithm label, a colon, and lowercase hexadecimal.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Digest {
@@ -68,19 +50,16 @@ pub struct Digest {
 }
 
 impl Digest {
-    /// Builds a digest from an algorithm and its raw bytes.
     #[must_use]
     pub fn new(algorithm: Algorithm, bytes: [u8; DIGEST_LEN]) -> Self {
         Self { algorithm, bytes }
     }
 
-    /// Returns the algorithm that produced this digest.
     #[must_use]
     pub fn algorithm(&self) -> Algorithm {
         self.algorithm
     }
 
-    /// Returns the raw bytes of this digest.
     #[must_use]
     pub fn bytes(&self) -> &[u8; DIGEST_LEN] {
         &self.bytes
@@ -109,15 +88,10 @@ impl From<Digest> for String {
     }
 }
 
-/// Why a digest string could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParseDigestError {
-    /// The string had no algorithm label followed by a colon.
     MissingAlgorithm,
-    /// The algorithm label named no algorithm Fetchloom produces.
     UnknownAlgorithm,
-    /// The hexadecimal part was not sixty-four lowercase hexadecimal
-    /// characters.
     MalformedHex,
 }
 
@@ -176,12 +150,9 @@ fn hex_value(byte: u8) -> Result<u8, ParseDigestError> {
     }
 }
 
-/// A digest carried an algorithm its domain does not accept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WrongAlgorithm {
-    /// The algorithm the domain requires.
     pub expected: Algorithm,
-    /// The algorithm the digest carried.
     pub found: Algorithm,
 }
 
@@ -203,19 +174,16 @@ macro_rules! domain_digest {
         pub struct $name(Digest);
 
         impl $name {
-            /// Builds this digest from its raw bytes.
             #[must_use]
             pub fn from_bytes(bytes: [u8; DIGEST_LEN]) -> Self {
                 Self(Digest::new($algorithm, bytes))
             }
 
-            /// Returns the underlying digest.
             #[must_use]
             pub fn digest(&self) -> Digest {
                 self.0
             }
 
-            /// Returns the raw bytes of this digest.
             #[must_use]
             pub fn bytes(&self) -> &[u8; DIGEST_LEN] {
                 self.0.bytes()
@@ -237,8 +205,6 @@ macro_rules! domain_digest {
         impl std::str::FromStr for $name {
             type Err = String;
 
-            /// Reads a digest written as its algorithm, a colon, and lowercase
-            /// hexadecimal.
             fn from_str(text: &str) -> Result<Self, Self::Err> {
                 let digest: Digest = text
                     .parse()

@@ -10,11 +10,8 @@
 
 use fetchloom_engine as _;
 
-/// Every dependency this crate is permitted to have.
 const PERMITTED: [&str; 1] = ["fetchloom-engine"];
 
-/// Every name that reaches outside this crate, as a whole word rather than as
-/// a substring, so that a grouped import spells one of them too.
 const FORBIDDEN: [&str; 12] = [
     "fs",
     "net",
@@ -30,8 +27,6 @@ const FORBIDDEN: [&str; 12] = [
     "include_bytes",
 ];
 
-/// Returns the source with its comments and string literals removed, because a
-/// word inside prose or inside a message is not a way out of the crate.
 fn code_only(text: &str) -> String {
     let mut kept = String::with_capacity(text.len());
     let mut held = text.chars().peekable();
@@ -72,7 +67,6 @@ fn code_only(text: &str) -> String {
     kept
 }
 
-/// Returns every identifier the code spells, as whole words.
 fn words(code: &str) -> Vec<String> {
     code.split(|character: char| !character.is_alphanumeric() && character != '_')
         .filter(|word| !word.is_empty())

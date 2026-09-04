@@ -155,13 +155,6 @@ fn a_lock_that_failed_for_want_of_room_is_a_resource_failure_and_not_a_volume_ve
     assert_eq!(refused.kind(), ErrorKind::ResourceDisk);
 }
 
-/// Reports whether one line turns a failure the filesystem reported into a kind
-/// of its own choosing.
-///
-/// Two shapes count. A function that takes something the filesystem reported
-/// and returns an error is one, whatever the error type is named. A conversion
-/// written at the call site that names a kind is the other, which is the shape
-/// the walk missed for eight phases because it looked only at declarations.
 fn decides_for_itself(line: &str) -> bool {
     let reports_a_failure = ["io::Error", "Errno", "std::io::Error"]
         .iter()
@@ -175,9 +168,6 @@ fn decides_for_itself(line: &str) -> bool {
     line.contains("map_err") && line.contains("ErrorKind::")
 }
 
-/// The conversions that are not filesystem decisions, each with the reason it
-/// is not one. A conversion added anywhere else fails the walk, and adding it
-/// here is a deliberate act rather than an omission.
 const PERMITTED: &[(&str, &str)] = &[
     (
         "the rule itself, which every other site reaches",

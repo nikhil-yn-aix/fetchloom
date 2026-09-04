@@ -10,13 +10,10 @@ use crate::config::{ConfigFile, Discovered, Origin, Sourced};
 use crate::logging::LogLevel;
 use crate::surface::{ColorChoice, DisplayMode, DurationArg, GlobalFlags, IoChoice, TransferFlags};
 
-/// Somewhere a value can be read from.
 pub trait Environment: Send + Sync {
-    /// Returns the value of a variable, or nothing when it is unset.
     fn get(&self, name: &str) -> Option<String>;
 }
 
-/// The real process environment.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessEnvironment;
 
@@ -26,14 +23,10 @@ impl Environment for ProcessEnvironment {
     }
 }
 
-/// A value a level supplied that this build cannot read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refused {
-    /// The setting the value was for.
     pub key: String,
-    /// The level that supplied it.
     pub origin: Origin,
-    /// What to do about it.
     pub next_action: String,
 }
 
@@ -49,47 +42,27 @@ impl std::fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
-/// Every effective setting, each carrying the level that supplied it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
-    /// Whether all network activity is forbidden.
     pub offline: Sourced<bool>,
-    /// The ceiling on threads used for processor work.
     pub threads: Sourced<Option<NonZeroU32>>,
-    /// The progress presentation requested.
     pub display: Sourced<DisplayMode>,
-    /// Where the cache is.
     pub cache_dir: Sourced<PathBuf>,
-    /// The ceiling on transfers in flight across every host.
     pub concurrency: Sourced<Option<NonZeroU32>>,
-    /// The ceiling on transfers in flight for one host.
     pub per_host: Sourced<Option<NonZeroU32>>,
-    /// The ceiling on how fast the run may transfer.
     pub bandwidth: Sourced<Option<Bandwidth>>,
-    /// Which write path the run takes.
     pub io: Sourced<IoChoice>,
-    /// Whether the politeness ceilings are raised.
     pub aggressive: Sourced<bool>,
-    /// Whether adaptation is disabled, so two runs do identical work.
     pub deterministic_io: Sourced<bool>,
-    /// How much of the event stream is rendered to standard error.
     pub log: Sourced<LogLevel>,
-    /// Whether the log level asked for was above the highest one.
     pub log_clamped: bool,
-    /// Attempts per transient failure.
     pub retries: Sourced<NonZeroU32>,
-    /// Idle timeout per connection.
     pub timeout: Sourced<Duration>,
-    /// The base locations a bare name resolves against, in order.
     pub sources: Sourced<Vec<String>>,
-    /// When output carries color.
     pub color: Sourced<ColorChoice>,
-    /// Whether a hint may be printed at all.
     pub hints: Sourced<bool>,
 }
 
-/// Returns the limits a run holds itself to, after the levels that name any of
-/// them.
 #[must_use]
 pub fn limits_for(settings: &Settings) -> Limits {
     Limits {
@@ -99,7 +72,6 @@ pub fn limits_for(settings: &Settings) -> Limits {
     }
 }
 
-/// Returns the cache directory this platform puts a cache in by default.
 #[must_use]
 pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
     #[cfg(windows)]
@@ -120,15 +92,12 @@ pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
     PathBuf::from(".fetchloom-cache")
 }
 
-/// Resolves the cache directory a project file names, against the directory
-/// that file is in.
 fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
     let named = loaded.values.cache.as_ref()?.dir.as_ref()?;
     let beside = loaded.path.parent().unwrap_or(Path::new("."));
     Some(without_here(&beside.join(named)))
 }
 
-/// Returns a path with every `.` component dropped.
 fn without_here(path: &Path) -> PathBuf {
     path.components()
         .filter(|part| !matches!(part, std::path::Component::CurDir))
@@ -203,8 +172,6 @@ where
     Sourced::new(fallback, Origin::Default)
 }
 
-/// Reads a variable a setting takes, refusing a value this build cannot read
-/// rather than falling through to the next level.
 fn from_environment<T: std::str::FromStr>(
     environment: &dyn Environment,
     name: &str,
@@ -220,8 +187,6 @@ fn from_environment<T: std::str::FromStr>(
     })
 }
 
-/// Reads what a configuration file said for a setting whose surface form is
-/// text, refusing a value this build cannot read.
 fn from_files<T, F, P>(
     levels: &Levels<'_>,
     read: F,
@@ -245,12 +210,6 @@ where
     }
 }
 
-/// Resolves every setting across the five precedence levels.
-///
-/// # Errors
-///
-/// Fails when a level supplied a value this build cannot read, naming the
-/// setting and the level.
 pub fn resolve_all(
     flags: &GlobalFlags,
     transfer: &TransferFlags,
@@ -358,7 +317,6 @@ pub fn resolve_all(
     })
 }
 
-/// Resolves when output carries color, from the flag and then the files.
 fn resolve_color_choice(
     flags: &GlobalFlags,
     levels: &Levels<'_>,
@@ -382,7 +340,6 @@ fn resolve_color_choice(
     }
 }
 
-/// The settings that bound a run's transfers.
 struct Tuned {
     concurrency: Sourced<Option<NonZeroU32>>,
     per_host: Sourced<Option<NonZeroU32>>,
@@ -392,7 +349,6 @@ struct Tuned {
     deterministic_io: Sourced<bool>,
 }
 
-/// Resolves the settings that bound a run's transfers.
 fn resolve_tuning(
     transfer: &TransferFlags,
     levels: &Levels<'_>,
@@ -462,12 +418,6 @@ fn resolve_tuning(
     })
 }
 
-/// Resolves the log level and reports whether the request was clamped to the
-/// highest one.
-///
-/// # Errors
-///
-/// Fails when a level supplied names something this build does not take.
 fn resolve_log(
     flags: &GlobalFlags,
     levels: &Levels<'_>,
@@ -491,11 +441,6 @@ fn resolve_log(
     Ok((Sourced::new(LogLevel::default(), Origin::Default), false))
 }
 
-/// Resolves the idle timeout a connection is held to.
-///
-/// # Errors
-///
-/// Fails when a level supplied a value that is not a duration.
 fn resolve_timeout(
     transfer: &TransferFlags,
     levels: &Levels<'_>,
@@ -515,17 +460,12 @@ fn resolve_timeout(
     Ok(Sourced::new(defaults.idle_timeout, Origin::Default))
 }
 
-/// The settings that decide what a run writes where a person reads it.
 struct Presented {
-    /// The base locations a bare name resolves against, in order.
     sources: Sourced<Vec<String>>,
-    /// When output carries color.
     color: Sourced<ColorChoice>,
-    /// Whether a hint may be printed at all.
     hints: Sourced<bool>,
 }
 
-/// Resolves what a run writes where a person reads it.
 fn resolve_presentation(flags: &GlobalFlags, levels: &Levels<'_>) -> Result<Presented, Refused> {
     let sources = match levels.pick(|file| file.sources.clone()) {
         Some((bases, origin)) => Sourced::new(bases, origin),

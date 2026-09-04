@@ -20,14 +20,6 @@ use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Materializes one cached object into a destination, reconciling when the
-/// destination already exists.
-///
-/// # Errors
-///
-/// Fails when the object cannot be read, when the destination is modified or
-/// foreign and neither `--force` nor `--adopt` was given, and when staging
-/// cannot be published.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
@@ -109,7 +101,6 @@ pub(super) fn materialize_object(
     )
 }
 
-/// Returns the tree one cached object resolves to, having written nothing.
 pub(super) fn object_tree(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -139,7 +130,6 @@ pub(super) fn object_tree(
     result
 }
 
-/// Restores the entries reconcile found missing from a cached object.
 pub(super) fn restore_object(
     with: &Materialization<'_>,
     digest: ContentDigest,

@@ -144,7 +144,6 @@ pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: boo
     )
 }
 
-/// Runs every regime the caller asked for.
 fn collect_regimes(
     binary: &Path,
     iterations: u32,
@@ -203,7 +202,6 @@ fn collect_regimes(
     Ok(regimes)
 }
 
-/// Reports what the regimes measured, publishes it when asked, and gates.
 fn regimes_into_baseline(
     regimes: Vec<bench::RegimeResult>,
     workspace: &Path,
@@ -425,7 +423,6 @@ fn measure_shapes(binary: &Path, iterations: u32) -> Result<Vec<bench::RegimeRes
     }
 }
 
-/// Runs the network lane on its own.
 pub(crate) fn run_network(workspace: &Path, arguments: &[String]) -> ExitCode {
     let binary = arguments.first().map(PathBuf::from);
     match network::run(workspace, binary.as_deref()) {
@@ -444,35 +441,22 @@ pub(crate) fn run_network(workspace: &Path, arguments: &[String]) -> ExitCode {
     }
 }
 
-/// What one benchmark invocation was asked to do with what it measured.
 struct Asked {
-    /// Whether the run is recorded as the baseline.
     save: bool,
-    /// Whether the run is compared against the baseline.
     compare: bool,
-    /// Whether the published page is rewritten.
     publish: bool,
-    /// Whether timing metrics are recorded at all.
     timing: Timing,
-    /// How much of the matrix ran.
     scope: Scope,
 }
 
-/// Whether a run records the durations it measured.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Timing {
-    /// Durations are recorded alongside the counters.
     Recorded,
-    /// Durations are reported and not recorded, because a baseline carrying
-    /// one is only valid on the machine that measured it.
     Reported,
 }
 
-/// How much of the matrix one invocation ran.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
-    /// Every regime, which is what a baseline states.
     Whole,
-    /// One regime, which states nothing a baseline can be compared against.
     One,
 }

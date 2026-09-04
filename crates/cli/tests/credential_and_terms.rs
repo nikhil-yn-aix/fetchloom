@@ -38,8 +38,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// The directory every command in this file runs in, so a lock file a command
-/// writes beside itself never lands inside the repository.
 fn scratch() -> &'static Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
@@ -364,8 +362,6 @@ fn a_source_refusing_without_a_credential_stops_the_run_with_steps_a_first_time_
     );
 }
 
-/// Records what a run would have measured about a host, so that a test can put
-/// two hosts a measurable distance apart without waiting for the distance.
 fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
     let work = Arc::new(WorkCounter::new());
     let processor = Arc::new(
@@ -450,8 +446,6 @@ fn a_credential_worth_more_than_the_offer_threshold_is_offered_and_the_run_finis
     );
 }
 
-/// The secret one host is given, which no request to the other host and no
-/// output stream may ever carry.
 const HOST_A_SECRET: &str = "a-secret-only-the-first-host-was-given";
 
 #[test]

@@ -10,15 +10,8 @@ use fetchloom_engine::seam::store::{PruneReport, Store};
 use crate::Cache;
 use crate::record::{self, Mark};
 
-/// How long an object stays marked before a sweep may remove it.
 pub const GRACE: Duration = Duration::from_secs(60);
 
-/// Marks what nothing refers to, then removes what has been marked longer than
-/// the grace period.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be read or written.
 pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport, Error> {
     let mut report = PruneReport::default();
     let now = nanos_now();
@@ -78,7 +71,6 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
     Ok(report)
 }
 
-/// Removes the quarantined objects this user created.
 fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> Result<(), Error> {
     for digest in cache.quarantined()? {
         let path = cache.layout().quarantined(digest);
@@ -99,7 +91,6 @@ fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> 
     Ok(())
 }
 
-/// Removes a mark from an object that is referenced again.
 fn clear_mark<P: Platform>(cache: &Cache<P>, digest: ContentDigest) -> Result<(), Error> {
     remove(&cache.layout().mark_of(digest))
 }
@@ -112,7 +103,6 @@ fn remove(path: &std::path::Path) -> Result<(), Error> {
     }
 }
 
-/// Returns this instant in nanoseconds since the epoch.
 fn nanos_now() -> i128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

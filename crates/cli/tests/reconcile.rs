@@ -440,7 +440,6 @@ fn every_status_a_run_reports_is_one_the_contract_names() {
     }
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

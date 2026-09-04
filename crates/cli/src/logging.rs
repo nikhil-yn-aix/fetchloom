@@ -6,20 +6,15 @@ use std::sync::{Mutex, PoisonError};
 use fetchloom_engine::event::{Event, EventPayload};
 use fetchloom_engine::seam::observer::Observer;
 
-/// How much of the event stream is rendered to standard error.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
-    /// Errors and degradations only.
     Error,
-    /// Those, plus the run's own start, end, and result.
     #[default]
     Info,
-    /// Every event the stream carries.
     Debug,
 }
 
 impl LogLevel {
-    /// Returns the name this level is written under.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -29,8 +24,6 @@ impl LogLevel {
         }
     }
 
-    /// Returns the level one step above this one, or nothing when this is
-    /// already the highest.
     #[must_use]
     pub fn above(self) -> Option<Self> {
         match self {
@@ -40,8 +33,6 @@ impl LogLevel {
         }
     }
 
-    /// Returns the level reached by raising this one the given number of steps,
-    /// and whether the request went past the highest.
     #[must_use]
     pub fn raised(self, steps: u32) -> (Self, bool) {
         let mut level = self;
@@ -54,7 +45,6 @@ impl LogLevel {
         (level, false)
     }
 
-    /// Reports whether an event is rendered at this level.
     #[must_use]
     pub fn renders(self, payload: &EventPayload) -> bool {
         match self {
@@ -93,7 +83,6 @@ impl std::str::FromStr for LogLevel {
     }
 }
 
-/// An observer that renders the events a level admits to standard error.
 pub struct Log {
     level: LogLevel,
     sink: Mutex<Box<dyn Write + Send>>,
@@ -108,7 +97,6 @@ impl std::fmt::Debug for Log {
 }
 
 impl Log {
-    /// Builds the log for a level, writing to standard error.
     #[must_use]
     pub fn new(level: LogLevel) -> Self {
         Self {
@@ -117,7 +105,6 @@ impl Log {
         }
     }
 
-    /// Builds the log for a level, writing somewhere a test can read.
     #[must_use]
     pub fn writing(level: LogLevel, sink: Box<dyn Write + Send>) -> Self {
         Self {

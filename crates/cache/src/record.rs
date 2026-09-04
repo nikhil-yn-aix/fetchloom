@@ -9,28 +9,18 @@ use fetchloom_engine::seam::platform::OwnerToken;
 
 use serde::{Deserialize, Serialize};
 
-/// Everything the cache knows about a published object that is not in its
-/// bytes, in one record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectRecord {
-    /// The interop digest of the object's bytes, taken as they were written.
     pub interop: fetchloom_engine::digest::InteropDigest,
-    /// The volume the object is on.
     pub volume: u64,
-    /// The object within that volume.
     pub file: u128,
-    /// The length of the object in bytes.
     pub size: u64,
-    /// The modification time in nanoseconds since the epoch.
     pub modified_nanos: i128,
-    /// The change time in nanoseconds since the epoch.
     pub changed_nanos: i128,
 }
 
 impl ObjectRecord {
-    /// Builds the record of an object from what was observed as it was
-    /// published.
     #[must_use]
     pub fn new(fingerprint: Fingerprint, interop: fetchloom_engine::digest::InteropDigest) -> Self {
         Self {
@@ -43,33 +33,24 @@ impl ObjectRecord {
         }
     }
 
-    /// Reports whether a fingerprint read now is the one that was recorded.
     #[must_use]
     pub fn matches(self, now: Fingerprint) -> bool {
         let observed = Self::new(now, self.interop);
         self == observed
     }
 
-    /// Returns the volume the object was on when it was recorded.
     #[must_use]
     pub fn volume(self) -> VolumeId {
         VolumeId::new(self.volume)
     }
 }
 
-/// When a prune run marked an object unreferenced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mark {
-    /// The instant the object was marked, in nanoseconds since the epoch.
     pub marked_nanos: i128,
 }
 
-/// Writes a record where a reader finds it whole or not at all.
-///
-/// # Errors
-///
-/// Fails when the record cannot be written.
 pub fn write<T: Serialize>(
     path: &Path,
     record: &T,
@@ -101,11 +82,6 @@ pub fn write<T: Serialize>(
     Ok(())
 }
 
-/// Reads a record.
-///
-/// # Errors
-///
-/// Fails when the record is present and cannot be read or does not parse.
 pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -125,15 +101,8 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
     })
 }
 
-/// Reads an owner record.
-///
-/// # Errors
-///
-/// Fails when the record is present and does not parse.
 pub fn read_owner(path: &Path) -> Result<Option<OwnerToken>, Error> {
     read(path)
 }
 
-/// Numbers the file a record is written through, so that two writers in one
-/// process never write the same one.
 static WRITES: AtomicU64 = AtomicU64::new(0);

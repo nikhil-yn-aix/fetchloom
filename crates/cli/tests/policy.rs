@@ -71,8 +71,6 @@ const INTERACTIVE: Streams = Streams {
     stdin: true,
 };
 
-/// A prompter that fails the test if it is ever asked anything, for the runs
-/// that must never block on a question.
 struct PanicPrompter;
 
 impl Prompter for PanicPrompter {
@@ -85,7 +83,6 @@ impl Prompter for PanicPrompter {
     }
 }
 
-/// A prompter that always answers the same way.
 struct FixedPrompter(bool);
 
 impl Prompter for FixedPrompter {
@@ -460,8 +457,6 @@ fn a_gain_below_the_offer_threshold_produces_no_prompt_and_no_message() {
     );
 }
 
-/// A policy that answers `offline` from itself and carries no settings at all,
-/// so a refusal under it can only have come from the seam.
 #[derive(Debug)]
 struct SeamOnly {
     offline: bool,
@@ -549,7 +544,6 @@ fn the_seam_is_what_refuses_a_network_reference_offline() {
     );
 }
 
-/// A store holding nothing, which is every platform before a user writes one.
 struct EmptyStore;
 
 impl CredentialStore for EmptyStore {
@@ -562,8 +556,6 @@ impl CredentialStore for EmptyStore {
     }
 }
 
-/// A store that is present and refuses to be read, which is what a locked
-/// credential manager does.
 struct LockedStore;
 
 impl CredentialStore for LockedStore {
@@ -579,7 +571,6 @@ impl CredentialStore for LockedStore {
     }
 }
 
-/// A store holding one token for every host asked about.
 struct FilledStore(&'static str);
 
 impl CredentialStore for FilledStore {

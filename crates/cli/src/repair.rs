@@ -15,43 +15,24 @@ use fetchloom_engine::work::{Work, WorkCounter};
 use fetchloom_platform::NativePlatform;
 use fetchloom_sources::{FileSource, HttpSource};
 
-/// What one repair did.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RepairResult {
-    /// What the repair did: `repaired` when bytes moved, `unchanged` when
-    /// nothing was damaged.
     pub status: &'static str,
-    /// The object that was repaired.
     pub digest: String,
-    /// How many separate ranges were fetched.
     pub ranges: u64,
-    /// How many bytes those ranges carried.
     pub bytes: u64,
-    /// What the run read, wrote, and asked for.
     pub work: Work,
 }
 
-/// Everything one repair runs against.
 pub struct Repair<'a> {
-    /// The cache holding the damaged object.
     pub cache: &'a Cache<NativePlatform>,
-    /// Where the object came from.
     pub location: &'a str,
-    /// Where the run counts what it moves.
     pub work: &'a Arc<WorkCounter>,
-    /// Where the event stream is written.
     pub observer: &'a dyn Observer,
-    /// The numbers the events are ordered by.
     pub sequence: &'a Sequence,
 }
 
 impl Repair<'_> {
-    /// Repairs one object, fetching only the ranges that are wrong.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `integrity.mismatch` when the repaired bytes still do not
-    /// hash to the digest, and with whatever the source failed with.
     pub fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
         if FileSource::names_a_file(self.location) {
             let source = FileSource::new(Arc::clone(self.work));
@@ -74,12 +55,6 @@ impl Repair<'_> {
         done
     }
 
-    /// Repairs one object against the source that can serve its bytes.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `integrity.mismatch` when the repaired bytes still do not
-    /// hash to the digest, and with whatever the source failed with.
     fn against<S: Source>(&self, digest: ContentDigest, source: &S) -> Result<RepairResult, Error> {
         let emit = |payload: EventPayload| self.observer.emit(&Event::new(self.sequence, payload));
         let checking = Span::start();
@@ -169,8 +144,6 @@ impl Repair<'_> {
         }
     }
 
-    /// Says why the damage could not be narrowed, before the whole object is
-    /// fetched instead.
     fn report_unlocalized(
         localized: &fetchloom_cache::repair::Localized,
         whole: u64,
@@ -197,7 +170,6 @@ impl Repair<'_> {
     }
 }
 
-/// Returns how long the whole object is.
 fn whole_of(
     metadata: &fetchloom_engine::seam::source::SourceMetadata,
     localized: &fetchloom_cache::repair::Localized,
@@ -205,12 +177,6 @@ fn whole_of(
     metadata.size.unwrap_or(localized.object_len)
 }
 
-/// Returns the digest a repair works on, from what the run states or from what
-/// the cache last resolved the reference to.
-///
-/// # Errors
-///
-/// Fails with `reference.unresolved` when neither states one.
 pub fn digest_for(
     cache: &Cache<NativePlatform>,
     reference: &str,
@@ -246,7 +212,6 @@ fn parse_digest(reference: &str) -> Option<ContentDigest> {
     ContentDigest::try_from(parsed).ok()
 }
 
-/// Reports what a repair did.
 #[must_use]
 pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<'_>) -> ExitCode {
     match outcome {
@@ -270,7 +235,6 @@ pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<
     }
 }
 
-/// Returns what the bytes at a path hash to.
 fn digest_of_file(cache: &Cache<NativePlatform>, path: &str) -> Option<ContentDigest> {
     let handle = std::fs::File::open(path).ok()?;
     let mut digester = fetchloom_engine::hashing::Digester::new();

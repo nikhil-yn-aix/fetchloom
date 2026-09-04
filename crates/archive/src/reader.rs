@@ -20,8 +20,6 @@ enum Offsets {
     Bare(u64),
 }
 
-/// Where one member's bytes are, taken out of the listing by value so the
-/// listing is no longer borrowed when the stream is opened.
 #[derive(Clone, Copy)]
 enum Located {
     Tar(TarOffset),
@@ -29,15 +27,12 @@ enum Located {
     Bare(u64),
 }
 
-/// Everything one listing pass produced.
 struct Listing {
     members: Vec<ArchiveMember>,
     offsets: Offsets,
     at: std::collections::HashMap<String, usize>,
 }
 
-/// Reads the container or compression formats this build carries, over any
-/// `Read + Seek` source.
 pub struct ArchiveReader<R> {
     source: SharedSource<R>,
     format: ArchiveFormat,
@@ -50,11 +45,6 @@ pub struct ArchiveReader<R> {
 }
 
 impl<R: Read + Seek + 'static> ArchiveReader<R> {
-    /// Builds a reader over the given source.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the source's length cannot be determined.
     pub fn new(
         source: R,
         format: ArchiveFormat,
@@ -80,7 +70,6 @@ impl<R: Read + Seek + 'static> ArchiveReader<R> {
         })
     }
 
-    /// Removes and returns every fallback this reader performed so far.
     #[must_use]
     pub fn take_degradations(&self) -> Vec<Degradation> {
         self.degradations.take()

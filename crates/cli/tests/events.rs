@@ -36,14 +36,12 @@ use tempfile::TempDir;
 
 mod support;
 
-/// One run, and what it emitted.
 struct Emitted {
     names: BTreeSet<String>,
     code: i32,
     said: String,
 }
 
-/// Runs the binary in a directory of its own and returns what it emitted.
 fn run_in(directory: &Path, arguments: &[&str]) -> Emitted {
     let stream = directory.join(format!("events-{}.ndjson", arguments.join("-").len()));
     let output = support::fetchloom()
@@ -61,7 +59,6 @@ fn run_in(directory: &Path, arguments: &[&str]) -> Emitted {
     }
 }
 
-/// Returns every event name a stream holds.
 fn names_in(stream: &Path) -> BTreeSet<String> {
     std::fs::read_to_string(stream)
         .unwrap_or_default()
@@ -103,7 +100,6 @@ fn write(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     target
 }
 
-/// A local directory fetched twice, which misses the cache and then hits it.
 fn a_local_directory_fetched_twice(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let source = scratch.path().join("source");
@@ -125,7 +121,6 @@ fn a_local_directory_fetched_twice(seen: &mut BTreeSet<String>) {
     seen.extend(again.names);
 }
 
-/// An archive fetched from a local path, which is extracted.
 fn an_archive_is_extracted(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let archive = write(
@@ -141,7 +136,6 @@ fn an_archive_is_extracted(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// An archive naming a path outside the destination, which is refused.
 fn an_archive_entry_is_rejected(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let archive = write(
@@ -160,7 +154,6 @@ fn an_archive_entry_is_rejected(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// An object served whole, with a digest to check it against.
 fn an_object_is_transferred_and_verified(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(512 * 1024, 1);
@@ -176,7 +169,6 @@ fn an_object_is_transferred_and_verified(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A source that serves the wrong bytes once, which is a mismatch and a retry.
 fn a_mismatch_is_retried(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(64 * 1024, 2);
@@ -194,7 +186,6 @@ fn a_mismatch_is_retried(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A source that closes mid-body and serves the rest after, which is a resume.
 fn a_cut_transfer_is_resumed(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(512 * 1024, 3);
@@ -212,7 +203,6 @@ fn a_cut_transfer_is_resumed(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// Two sources for one object, the first of which refuses, which is a failover.
 fn a_refusing_source_fails_over(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(32 * 1024, 4);
@@ -234,7 +224,6 @@ fn a_refusing_source_fails_over(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A directory index served by a source, which is a listing.
 fn a_listing_is_read(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let server =
@@ -256,7 +245,6 @@ fn a_listing_is_read(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A source behind a credential nothing can supply.
 fn a_credential_is_required(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let server =
@@ -280,8 +268,6 @@ fn a_credential_is_required(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// Four artifacts naming one object from a slow source, so three of them wait
-/// on the one transfer.
 fn a_second_wanter_waits_for_the_first(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(256 * 1024, 7);
@@ -362,8 +348,6 @@ fn every_event_name_the_contract_lists_is_emitted_by_a_run() {
     );
 }
 
-/// Records what a host was measured at, so a run has a reason to prefer one
-/// source over another before it has probed either.
 fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
     let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
     let processor = std::sync::Arc::new(
@@ -387,8 +371,6 @@ fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
     .unwrap();
 }
 
-/// A source whose first candidate answers with a status that ends the attempt,
-/// which moves the transfer to the next one.
 fn a_dead_source_fails_over(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(32 * 1024, 8);
@@ -421,8 +403,6 @@ fn a_dead_source_fails_over(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A transfer cut short by a source that runs out of retries, and a second run
-/// against the same source that picks the partial up.
 fn a_second_run_resumes_a_partial(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(512 * 1024, 9);
@@ -456,8 +436,6 @@ fn a_second_run_resumes_a_partial(seen: &mut BTreeSet<String>) {
     seen.extend(resumed.names);
 }
 
-/// A credential worth more than the offer threshold on one of two sources, so
-/// the run offers it, is not able to ask, and takes the other source.
 fn a_credential_is_offered_and_declined(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(4096, 10);
@@ -491,8 +469,6 @@ fn a_credential_is_offered_and_declined(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
-/// A bare name resolved through the sources a configuration file names, which
-/// is an alias resolved to a location.
 fn a_bare_name_resolves_to_a_location(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let server = TestServer::start(Script::serving(object(2048, 11))).unwrap();
@@ -518,8 +494,6 @@ fn a_bare_name_resolves_to_a_location(seen: &mut BTreeSet<String>) {
     seen.extend(names_in(&stream));
 }
 
-/// Two runs wanting the same object from a slow source at once, so one holds
-/// the single-writer claim and the other waits for it.
 fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(1024 * 1024, 12);
@@ -557,8 +531,6 @@ fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
     }
 }
 
-/// An object in the cache with a damaged region, repaired by range against the
-/// source it came from, which is what verifies a range.
 fn a_damaged_object_is_repaired_by_range(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(4 * 1024 * 1024, 13);
@@ -589,8 +561,6 @@ fn a_damaged_object_is_repaired_by_range(seen: &mut BTreeSet<String>) {
     seen.extend(names_in(&stream));
 }
 
-/// Flips one byte deep inside every object the cache holds, which is damage the
-/// outboard tree localizes to one range.
 fn damage_one_object(cache: &Path) {
     let mut pending = vec![cache.join("objects")];
     let mut damaged = 0_usize;

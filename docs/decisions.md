@@ -5776,7 +5776,7 @@ promises `fetch` fails when a source "serves an object whose identity has
 changed", but `fetch` is given the location, a range and a credential and never
 the identity a previous response stated, so it cannot detect it. The only
 situation that could name it is a resume whose recorded identity differs, and
-contracts.md:368 settles that one by restarting from zero rather than by
+contracts.md under Bundles settles that one by restarting from zero rather than by
 failing, which the code does. Clearing this needs either a contract sentence
 saying when the kind fires or the Source seam carrying the recorded identity
 into `fetch`. Both are decisions, not implementations.
@@ -5805,7 +5805,7 @@ against 593 before; `crates/engine/tests/filesystem_failure.rs`,
 
 Four limits in the Limits table were read by nothing. Two are now read. An
 optional credential is offered only when the projected gain exceeds the offer
-threshold, which contracts.md:761 states and the code ignored: it prompted at
+threshold, which contracts.md under When Fetchloom asks states and the code ignored: it prompted at
 any gain and, worse, emitted `credential.offer` and `credential.declined` below
 the threshold, where the same sentence says there is no prompt and no message.
 A listing with more entries than the limit allows is refused with
@@ -5847,7 +5847,7 @@ the size the lock pins, which is what contracts.md asks of it, and no sentence
 requires `get` to check free space before starting. What is wrong is smaller and
 sharper: the plan reports `staging` and `destination` as zero bytes for an
 archive whose expanded size is unknown, while listing `expanded` under
-`unknown`. contracts.md:265 says a field is never estimated into a number, and
+`unknown`. contracts.md under Plan says a field is never estimated into a number, and
 zero is a number. Fixing it changes the shape of a portable artifact, which is
 additive-only, so it is a decision rather than an edit.
 
@@ -6014,7 +6014,7 @@ Both are work, not lines.
 
 ## What packing does to per-user ownership
 
-contracts.md:518 says objects are writable only by their creator and that prune
+contracts.md under Quarantine diagnostics says objects are writable only by their creator and that prune
 removes only objects the invoking user created. A pack belongs to the process
 and boot that writes it, so ownership of a small object is ownership of its
 pack. That is the same statement at a coarser grain and not a weaker one: two
@@ -6076,7 +6076,7 @@ nothing else is read by anything. They are stored one host per file at
 the cache directory does not leak the list of hosts a user fetches from to
 anything that can read a directory listing but not a file.
 
-They are derived data under contracts.md:13 and contracts.md:424, so they carry
+They are derived data under contracts.md under Compatibility and contracts.md under Revalidating a completed remote object, so they carry
 no version field and are discarded rather than migrated when the format
 fingerprint changes. A record that will not parse, is truncated, or was written
 under a different fingerprint is discarded and the host is measured again. That
@@ -6086,7 +6086,7 @@ measurement and a run that reads a good one produce the same bytes.
 Scoring is deliberately not a formula. The concurrency number is the previous
 run's answer and is used as a starting point, not as a target, because the
 controller below moves it from there on this run's evidence. Throughput and time
-to first byte are inputs to the source order in contracts.md:803 and are not
+to first byte are inputs to the source order in contracts.md under Source selection and are not
 combined into any other number.
 
 ### The increase and backoff policy for concurrency
@@ -6105,7 +6105,7 @@ seconds, and the cost of being several too fast is a host that stops answering.
 
 ### How protocol choice is evaluated
 
-It is not evaluated separately. contracts.md:803 already fixes the order —
+It is not evaluated separately. contracts.md under Source selection already fixes the order —
 reachable, supports ranges, exposes immutable identity, recorded throughput for
 that host, time to first byte, egress cost, remaining politeness headroom, ties
 broken by manifest order. Phase 6 supplies two of those inputs from the
@@ -6172,7 +6172,7 @@ and that the platform offers no way to release written pages without
 constraining every write.
 
 `auto` chooses from the capability answers the Platform seam already produces,
-never from the platform name, per contracts.md:1002. It chooses `uncached` only
+never from the platform name, per contracts.md under Display modes. It chooses `uncached` only
 on a volume whose backing is local, whose scanner answer is absent, and on a
 platform that has the call. Network backing keeps the page cache, because on a
 network volume the cache is the only thing hiding the latency. A scanner that is
@@ -6187,7 +6187,7 @@ nothing downstream may exceed what it returns. The order is fixed: the detected
 thread budget after affinity, container and job limits; clamped to the transfer
 ceiling; then the politeness limit per host unless `--aggressive`; then anything
 the user asked for, which may only lower it. A user asking for more than the
-machine has is clamped and told so, per contracts.md:1002. A measurement enters
+machine has is clamped and told so, per contracts.md under Display modes. A measurement enters
 only after all of that, and only as a starting point inside the range those
 bounds already allow.
 
@@ -6334,7 +6334,7 @@ change the shape, which requires the shape to exist first. standards.md now says
 that the exemption covers the method surface too, so this is not re-opened.
 
 The behavior did not move. An offline run still refuses a network reference with
-`policy.offline` and exits 40 before any avoidable work, per contracts.md:923.
+`policy.offline` and exits 40 before any avoidable work, per contracts.md under Offline.
 `the_seam_is_what_refuses_a_network_reference_offline` asserts it against a
 policy carrying no settings at all, so nothing but the seam can have answered.
 Twelve of the trait's fifteen methods now have a production caller; `credential`,
@@ -6647,7 +6647,7 @@ enough.
 Chosen: bearer only.
 
 The decisive check is in the code rather than in an argument.
-`crates/engine/src/credential.rs:22` is `Credential { host, origin, value:
+`Credential` in `crates/engine/src/credential.rs` is `Credential { host, origin, value:
 Secret<String> }`: one opaque string. SigV4 needs an access key, a secret key and
 a region, and the secret never crosses the wire -- it is not a value that is
 sent, it is a value that is signed with. That is a different shape, and
@@ -7290,7 +7290,7 @@ requirement on implementors all the same and it is named here rather than left t
 be discovered.
 
 `Transfer::credential` is now a resolver keyed by host rather than one credential
-resolved for the first candidate's host. contracts.md:768 forbids sending host
+resolved for the first candidate's host. contracts.md under Credentials forbids sending host
 A's credential to host B; it does not forbid resolving host B's own when the
 transfer moves to host B, and features.md's promise that credentials are scoped
 to the host they were issued for is what resolving per host honors.
@@ -7364,7 +7364,7 @@ Sources: contracts.md Splitting one object, Limits; `crates/engine/src/split.rs`
 
 ## Phase 7.5. Two counts the seam did not carry, and dispatch that named adapters
 
-contracts.md:832 has always said that links pointing outside the listed prefix
+contracts.md under Configuration files has always said that links pointing outside the listed prefix
 are ignored and counted in the result. The count had nowhere to live: `list`
 returned a bare vector of entries, so `listing.skipped` was in the event registry
 with no caller anywhere in the build. `list` now returns a `Listing` carrying the
@@ -7425,7 +7425,7 @@ Sources: contracts.md Listing; roadmap.md:135;
 
 ## Phase 7.5. Per-candidate credentials, and the sixth leak site there was not
 
-contracts.md:768 forbids sending host A's credential to host B. That is the
+contracts.md under Credentials forbids sending host A's credential to host B. That is the
 drop-on-redirect rule and it stands. It does not forbid resolving host B's own
 credential when a transfer moves to host B, and a run that failed over to a
 second candidate without doing so would fail on a host it holds a credential for.
@@ -7445,16 +7445,16 @@ stream; and that it reached no receipt.
 
 Phase 7 found five leak sites, each a redacted field one line from a raw
 interpolation. There is no sixth of that shape: `Secret::expose` is called at
-exactly one place in the build, `crates/sources/src/http.rs:125`, where it becomes
+exactly one place in the build, the request builder in `crates/sources/src/http.rs`, where it becomes
 the `Authorization` header of a request already bound to a host. Every other path
 carries the redacted form.
 
-Sources: contracts.md:768; `crates/cli/tests/credential_and_terms.rs`;
+Sources: contracts.md under Credentials; `crates/cli/tests/credential_and_terms.rs`;
 `crates/engine/src/transfer.rs`.
 
 ## Phase 7.5. The count rises while throughput improves, which it did not before
 
-features.md:63 says the connection count per host rises while throughput improves
+features.md under Adaptive performance says the connection count per host rises while throughput improves
 and falls when it does not. The controller rose on a clean answer and fell on a
 failure, and nothing anywhere compared what a host delivered at one count against
 what it delivered at another. The first half of that sentence was false.
@@ -7482,7 +7482,7 @@ Rate limits and failures still halve and step down without consulting throughput
 A host asking to be left alone is not a measurement of capacity and is not treated
 as one.
 
-Sources: features.md:63; `crates/engine/src/tuning.rs`;
+Sources: features.md under Adaptive performance; `crates/engine/src/tuning.rs`;
 `crates/engine/tests/tuning.rs`.
 
 ## Phase 7.5. The regime matrix with real concurrency, and what it did not prove
@@ -7582,7 +7582,7 @@ leave still open.
 
 **The six, item by item.**
 
-*features.md:49, independent artifacts transfer concurrently inside global and
+*features.md under Transfer, independent artifacts transfer concurrently inside global and
 per-host limits.* True. `crates/engine/src/flights.rs` is the scheduler and
 `crates/cli/tests/concurrent.rs` proves it three ways: eight artifacts across
 eight hosts complete in materially less than eight times one artifact's time; a
@@ -7592,33 +7592,33 @@ deterministic under it, which was the first test written and the one that had to
 fail first: outputs stop at the first failure in manifest order whichever thread
 finished first, asserted in `crates/engine/tests/flights.rs`.
 
-*features.md:49, a single object splits only under four conditions.*
+*features.md under Transfer, a single object splits only under four conditions.*
 True. `crates/engine/src/split.rs` checks size, immutable identity, range
 support, and a measured width, in that order, and `crates/engine/tests/split.rs`
 asserts each refusal by name. `crates/cli/tests/ranged.rs` drives a real object
 store: four ranges at once, one digest whether split or whole, and a `degrade`
 naming the condition that failed when it was not split.
 
-*features.md:51, several sources are probed cheaply in parallel and one is
+*features.md under Transfer, several sources are probed cheaply in parallel and one is
 picked.* True, and not raced. `crates/engine/src/candidate.rs` holds the fixed
-scoring order from contracts.md:836, ties break by manifest order, and at most
+scoring order from contracts.md under Source selection, ties break by manifest order, and at most
 `probed_candidates` are asked. `crates/cli/tests/probe.rs` asserts that a losing
 candidate is never asked for bytes, that one source is not probed at all, and
 that the reason is recorded in the receipt.
 
-*features.md:63, the count per host rises while throughput improves.* True as of
+*features.md under Adaptive performance, the count per host rises while throughput improves.* True as of
 this phase. The controller sums what a host delivered at the count it permits and
 raises only when that beats the count below, giving up a count that did not help
 for the rest of the run. Below a window of bytes nothing has been measured and a
 clean answer rises as before, because the second stream is what measures whether
 a second stream helps. `crates/engine/tests/tuning.rs`.
 
-*features.md:165, the offer names the two options with the measured difference.*
+*features.md under Credentials and access, the offer names the two options with the measured difference.*
 True. It could compute the difference before this phase and had no caller;
 scoring two candidates gave it one. `crates/cli/tests/credential_and_terms.rs`
 asserts a real run offers and, being unable to ask, declines and says so.
 
-*features.md:163, provider-native helpers.* Not built, and the sentence is
+*features.md under Credentials and access, provider-native helpers.* Not built, and the sentence is
 corrected rather than the tier built. Phase 7 owns it.
 
 **Three more the walk found.** Protocol choice is not measured per host and
@@ -7727,7 +7727,7 @@ surface.
 
 ## Phase 8. Where `init` writes
 
-Question: contracts.md:701 says `init` infers and writes a manifest and never
+Question: contracts.md under Command surface says `init` infers and writes a manifest and never
 says to what. `plan` has an explicit rule and `init` has none.
 
 Options: standard output only, like `plan`; a file only, with a default name; a
@@ -7783,7 +7783,7 @@ tier, host-scoped by exactly the rule `FETCHLOOM_TOKEN_<HOST>` uses, so an
 explicit per-host credential wins. The platform credential store is the second
 tier, unchanged. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN` and `AWS_REGION`, and the profile in the shared credentials
-file, are the third tier, which is the provider-native helper contracts.md:766
+file, are the third tier, which is the provider-native helper contracts.md under Credentials
 already names and which has answered nothing until now because the one adapter
 built had no helper to call.
 
@@ -7813,7 +7813,7 @@ Sources: docs/contracts.md Credentials, Environment; docs/standards.md Language;
 
 ## Phase 8. Source priority, and how a bare name resolves
 
-Question: contracts.md:113 resolves a bare name and a namespaced release through
+Question: contracts.md under Selection resolves a bare name and a namespaced release through
 "configured source priority", and no configuration key for it exists anywhere in
 contracts.md.
 
@@ -8000,13 +8000,13 @@ docs/contracts.md Manifest, Identity, Selection.
 Question: five of the five representable metadata formats state a SHA-256 and
 none states a BLAKE3. What happens today when a manifest states a SHA-256.
 
-Nothing happens. `crates/cli/src/run.rs:2599` takes the expected digest from
+Nothing happens. `ingest_artifact` in `crates/cli/src/run/dataset.rs` takes the expected digest from
 `artifact.digest.and_then(|claims| claims.blake3)` and falls back to the lock. The
 `sha256` field of a manifest is parsed, is written back out, and is compared
 against no bytes anywhere. A publisher can state a SHA-256 and Fetchloom will
 serve bytes that disagree with it without a word.
 
-`LockedArtifact::check` at `crates/engine/src/lock.rs:163` does compare a lock's
+`LockedArtifact::check` in `crates/engine/src/lock.rs` does compare a lock's
 interop digest and fails `integrity.mismatch` on a difference, so the gap is the
 manifest alone. It is not a phase 8 regression; it has been true since manifests
 existed, and it was invisible because nothing in the tree ever wrote a manifest
@@ -8082,7 +8082,7 @@ Sources: docs/roadmap.md; docs/contracts.md Directory listing, Manifest;
 
 ## Phase 8. What inference records when a source states no digest
 
-Question: roadmap.md:141's third decision, and the one contracts.md:286 makes
+Question: roadmap.md:141's third decision, and the one contracts.md under Plan makes
 sharp: a field is never estimated into a number, and zero is a number.
 
 Options: record no digest and let the manifest force a weak class; synthesize a
@@ -8385,3 +8385,87 @@ one at 20 against a different total.
 
 Sources: `crates/cli/src/run/context.rs` for the field; `crates/cli/src/run/`
 `object.rs`, `dataset.rs`, `container.rs` and `local.rs` for the six call sites.
+
+## Audit. Docstrings are removed, and what carries their weight instead
+
+Question: the tree carried 4,889 `///` lines across 225 files, and the lint policy
+denied `missing_docs`, `missing_errors_doc` and `missing_panics_doc`, so no public
+item could exist without one. The owner asked for them all gone.
+
+Chosen: gone, and the three lints with them. `missing_errors_doc` and
+`missing_panics_doc` come from `clippy::pedantic`, which is denied at the
+workspace level, so each is now an explicit `allow` in the workspace lint table
+rather than a silent omission: the table states the position instead of leaving a
+reader to infer it.
+
+What carries the weight instead. standards.md already said that a function needing
+a comment to be understood is renamed or split, and that rationale belongs here
+rather than beside the code. A docstring that only restated a signature was the
+same duplication the No comments rule forbids, kept alive by a lint. Behavior is
+stated in contracts.md, reasons are stated here, and both are read once rather
+than once per call site. The `//!` module header stays, because it names what a
+file is rather than what an item does and it is the map of a tree that is now
+thirteen modules in one crate where it used to be one file.
+
+Costs, stated plainly rather than argued away. `cargo doc` now produces a bare
+API listing with no prose, so the crates are not readable from rustdoc. A caller
+who wants to know which errors a `Result` can carry reads the body or the tests
+rather than an `# Errors` section, and nothing mechanical will remind an author to
+say so. The decisions.md record at the phase 0 gate, which lists `missing_docs`
+denied among the standards the lint policy enforces, describes a policy this
+change reverses; it is left as written because it was true when it was written.
+
+What would make this the wrong call: a second person joining who has to learn the
+tree from the outside. The answer then is contracts.md and the tests, and if that
+is not enough the docstrings come back with the lints that required them.
+
+Sources: `docs/standards.md` under Docstrings and under No comments; the
+`[workspace.lints]` table in `Cargo.toml`.
+
+## Audit. What the seams cannot say, and the two answers a run was giving instead
+
+Question: the audit asked of all six seams what each cannot report. Two were
+marked worth acting on: `Source::Listing` cannot say a listing was clipped by a
+bound, and `Platform` cannot report its own degradation although `preallocate`
+promised one.
+
+Neither turned out to need a wider seam. Both turned out to be a run telling the
+user something untrue, which is the defect the question was pointing at.
+
+`Platform`. The promise of a `degrade` from `preallocate` lived only in a
+docstring, and every docstring in this tree has now been removed. contracts.md
+never made that promise and the trait never carried an observer. There is nothing
+left to widen and nothing left that lies.
+
+`Source::Listing`. A listing is never silently clipped: past the entry bound the
+adapter fails `resource.limit` naming a narrower prefix, and past the size bound
+the HTTP client refuses to read further. But the size refusal was classified as
+`network.refused`, retryable, layer transfer, telling the user to try the source
+again — advice that can never work, because the index will be that size on every
+attempt. It is now `resource.limit`, not retryable, naming a narrower prefix, the
+same answer the entry bound already gave. So the seam does not need a new field:
+what it could not say, it never had to, because the condition is terminal and an
+error already carries it.
+
+The same question asked of the document reader found the sharper case.
+`read_document` took `manifest_size` bytes with `Read::take`, which truncates in
+silence, and handed the prefix to the parser. A 17 MiB Croissant document failed
+with `manifest.invalid` and the next action "correct the JSON, because EOF while
+parsing a string at line 1 column 16777216" — the run telling the user their
+document is malformed when the run is the thing that cut it. It now reads one
+byte past the bound and fails `resource.limit` if that byte is there, on the
+local path as well as the remote one, because contracts.md states the bound
+without qualifying where the document came from.
+
+Costs: a document exactly at the bound now costs one extra byte read. The four
+seams the audit did not mark are unchanged and their observations stand as
+written.
+
+Proof: `crates/sources/tests/http.rs`
+`an_index_larger_than_the_bound_fails_rather_than_listing_what_fitted` and
+`crates/cli/tests/inference.rs`
+`a_metadata_document_past_the_bound_is_refused_rather_than_read_in_part`, each
+run against the code as it stood and each failing there for the reason above.
+
+Sources: audit2.md F81; contracts.md under Limits; `crates/sources/src/http.rs`
+`classify`; `crates/cli/src/resolve.rs` `read_document`.

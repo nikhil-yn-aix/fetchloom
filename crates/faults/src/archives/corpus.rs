@@ -8,33 +8,18 @@ use super::tar::{
 };
 use super::zip::{METHOD_DEFLATE, ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter, crc32};
 
-/// The container format an archive byte string is encoded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Container {
-    /// A POSIX ustar tar archive.
     Tar,
-    /// A zip archive.
     Zip,
 }
 
-/// What a correct archive reader must do with a corpus entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expectation {
-    /// The archive must be refused with the named error kind, naming the given
-    /// member path.
-    Rejected {
-        /// The error kind label from `contracts.md`, such as
-        /// `archive.unsafe_path`.
-        kind: &'static str,
-        /// The member path the error must name.
-        member: String,
-    },
-    /// The archive is benign and must extract cleanly.
+    Rejected { kind: &'static str, member: String },
     Benign,
 }
 
-/// One named archive in the corpus, with the bytes it is built from and what a
-/// correct reader must do with them.
 #[derive(Clone, Debug)]
 pub struct CorpusEntry {
     pub(super) name: &'static str,
@@ -45,45 +30,38 @@ pub struct CorpusEntry {
 }
 
 impl CorpusEntry {
-    /// Returns the name this entry is filed under in the corpus.
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Returns which container this entry's bytes are encoded as.
     #[must_use]
     pub fn container(&self) -> Container {
         self.container
     }
 
-    /// Returns the raw archive bytes this entry carries.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Returns the one-line statement of what this entry attacks.
     #[must_use]
     pub fn attacks(&self) -> &'static str {
         self.attacks
     }
 
-    /// Returns what a correct reader must do with this entry.
     #[must_use]
     pub fn expectation(&self) -> &Expectation {
         &self.expectation
     }
 }
 
-/// The full set of named archives used by the archive-reader adversarial tests.
 #[derive(Clone, Debug)]
 pub struct Corpus {
     entries: Vec<CorpusEntry>,
 }
 
 impl Corpus {
-    /// Builds the corpus. Every call returns the same bytes for the same name.
     #[must_use]
     pub fn build() -> Self {
         Self {
@@ -91,13 +69,11 @@ impl Corpus {
         }
     }
 
-    /// Returns every entry in the corpus.
     #[must_use]
     pub fn entries(&self) -> &[CorpusEntry] {
         &self.entries
     }
 
-    /// Returns the entries whose archive must be rejected.
     #[must_use]
     pub fn hostile(&self) -> Vec<&CorpusEntry> {
         self.entries
@@ -106,7 +82,6 @@ impl Corpus {
             .collect()
     }
 
-    /// Returns the entries whose archive must extract cleanly.
     #[must_use]
     pub fn benign(&self) -> Vec<&CorpusEntry> {
         self.entries

@@ -270,7 +270,6 @@ fn a_source_that_stopped_stating_an_immutable_identity_restarts_rather_than_fail
     assert_eq!(keep, 0);
 }
 
-/// A pause that never waits and records every wait it was asked for.
 #[derive(Debug, Default)]
 struct RecordingPause {
     jitter: f64,
@@ -375,8 +374,6 @@ fn a_retry_after_longer_than_the_backoff_raises_the_wait_to_it() {
     }
 }
 
-/// An observer a test hands the retry loop when the events are not what it is
-/// asserting on.
 #[derive(Debug)]
 struct SilentObserver;
 

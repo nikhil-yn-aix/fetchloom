@@ -8,22 +8,13 @@ use serde::Serialize;
 
 use crate::Cache;
 
-/// What one verification run found.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct VerifyReport {
-    /// How many objects hashed to the name they are stored under.
     pub verified: u64,
-    /// The objects that did not, each now in quarantine.
     pub quarantined: Vec<String>,
-    /// How many objects another writer held and were not read.
     pub held: u64,
 }
 
-/// Rereads and rehashes every object, quarantining each mismatch.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be read or an object cannot be moved.
 pub fn run<P: Platform>(cache: &Cache<P>) -> Result<VerifyReport, Error> {
     let mut report = VerifyReport::default();
     for digest in cache.list()? {

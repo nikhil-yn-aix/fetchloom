@@ -20,12 +20,10 @@ use fetchloom_engine::seam::policy::{IoMode, Policy};
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::verification::VerificationPolicy;
 
-/// An environment a test writes, so no test reads the real process environment.
 #[derive(Default)]
 pub struct FakeEnvironment(HashMap<String, String>);
 
 impl FakeEnvironment {
-    /// Builds an environment holding exactly these names.
     pub fn with(pairs: &[(&str, &str)]) -> Self {
         Self(
             pairs
@@ -42,11 +40,8 @@ impl Environment for FakeEnvironment {
     }
 }
 
-/// A policy that resolves no credential, requires no acceptance, and refuses
-/// nothing, for tests exercising a transfer rather than the policy seam.
 #[derive(Debug, Default)]
 pub struct NoCredentialPolicy {
-    /// The bounds this policy states.
     pub limits: Limits,
 }
 
@@ -116,11 +111,8 @@ impl Policy for NoCredentialPolicy {
     }
 }
 
-/// The prefix every environment name Fetchloom reads begins with.
 const READS: &str = "FETCHLOOM_";
 
-/// Returns the binary under test carrying nothing this machine happened to
-/// export, so what a run reads is exactly what its own test wrote.
 fn controlled() -> std::process::Command {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fetchloom"));
     command.stdin(std::process::Stdio::null());
@@ -132,16 +124,12 @@ fn controlled() -> std::process::Command {
     command
 }
 
-/// Returns the binary under test with no inherited setting and no configuration
-/// file, which is how every test that is not about configuration runs it.
 pub fn fetchloom() -> std::process::Command {
     let mut command = controlled();
     command.arg("--no-config");
     command
 }
 
-/// Returns the binary under test with no inherited setting and configuration
-/// discovery left on, for the tests whose subject is configuration.
 pub fn fetchloom_reading_configuration() -> std::process::Command {
     controlled()
 }

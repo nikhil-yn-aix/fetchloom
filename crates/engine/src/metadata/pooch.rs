@@ -111,7 +111,6 @@ fn parse_entries(bytes: &[u8], context: &Context<'_>) -> Result<Vec<Entry>, Erro
     Ok(entries)
 }
 
-/// Reads a pooch registry file, listing a path and a hash per line, into a manifest.
 pub struct PoochRegistry;
 
 impl MetadataReader for PoochRegistry {

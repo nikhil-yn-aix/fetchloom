@@ -124,7 +124,6 @@ fn parse_entries(bytes: &[u8], context: &Context<'_>) -> Result<Vec<Entry>, Erro
     Ok(entries)
 }
 
-/// Reads the `sha256sum` and `shasum` sidecar convention into a manifest.
 pub struct ChecksumSidecar;
 
 impl MetadataReader for ChecksumSidecar {

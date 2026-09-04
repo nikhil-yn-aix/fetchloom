@@ -24,25 +24,18 @@ use fetchloom_engine::seam::store::Store;
 
 use support::{bytes_of, cache_in};
 
-/// The variable naming the cache a child opens.
 const CACHE_PATH: &str = "FETCHLOOM_TEST_CACHE_PATH";
 
-/// The variable naming where a child writes what it did.
 const REPORT_PATH: &str = "FETCHLOOM_TEST_REPORT_PATH";
 
-/// The variable naming how many objects a child publishes before it aborts.
 const ABORT_AFTER: &str = "FETCHLOOM_TEST_ABORT_AFTER";
 
-/// The variable naming the first object a child publishes.
 const FIRST_OBJECT: &str = "FETCHLOOM_TEST_FIRST_OBJECT";
 
-/// How many bytes each object in a race holds.
 const RACED_LENGTH: usize = 1 << 18;
 
-/// How many processes race for one digest.
 const RACERS: usize = 8;
 
-/// How many times a writer is killed part way through its work.
 const KILLS: u32 = 1000;
 
 fn child(name: &str, cache: &Path) -> Command {
@@ -312,11 +305,8 @@ fn recovery_leaves_an_entry_another_machine_wrote() {
     );
 }
 
-/// How many objects small enough to be packed are published at once.
 const PACKED: usize = 64;
 
-/// How many bytes each of those objects holds, which is under the threshold
-/// above which an object gets a file of its own.
 const PACKED_LENGTH: usize = 4096;
 
 #[test]

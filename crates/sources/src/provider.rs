@@ -18,17 +18,12 @@ use fetchloom_engine::work::WorkCounter;
 
 use crate::http::{HttpBody, HttpSource, Method, check_fetch_status, header};
 
-/// What one provider identifier names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identifier {
-    /// The repository, record, or dataset path the provider knows it by.
     pub path: String,
-    /// The revision the reference pinned, when it pinned one.
     pub revision: Option<String>,
 }
 
-/// Splits a provider reference into the identifier it names and the revision it
-/// pinned.
 fn identifier_of(rest: &str) -> Identifier {
     match rest.rsplit_once('@') {
         Some((path, revision)) if !path.is_empty() && !revision.is_empty() => Identifier {
@@ -42,7 +37,6 @@ fn identifier_of(rest: &str) -> Identifier {
     }
 }
 
-/// Returns the failure a reference this provider cannot read states.
 fn unreadable(scheme: &str, reference: &str, wanted: &str) -> Error {
     Error::new(
         ErrorKind::ReferenceUnresolved,
@@ -51,14 +45,12 @@ fn unreadable(scheme: &str, reference: &str, wanted: &str) -> Error {
     .with_source(reference)
 }
 
-/// The provider that serves model and dataset repositories at a revision.
 pub struct HuggingFaceSource {
     http: HttpSource,
     origin: String,
 }
 
 impl HuggingFaceSource {
-    /// Builds a source holding no connections yet.
     #[must_use]
     pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -67,8 +59,6 @@ impl HuggingFaceSource {
         }
     }
 
-    /// Builds a source reaching a stated host, which is how a test drives it
-    /// without the public network.
     #[must_use]
     pub fn reaching(origin: impl Into<String>, limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -77,12 +67,6 @@ impl HuggingFaceSource {
         }
     }
 
-    /// Splits a reference into the repository it names, the revision it pinned,
-    /// and the file under that repository, when it names one.
-    ///
-    /// The repository is the first three path segments of a dataset and the
-    /// first two of a model, which is the provider's own URL structure rather
-    /// than a guess about where a name ends.
     fn parts(reference: &str) -> Result<(Identifier, String), Error> {
         let wanted = "hf:datasets/org/name or hf:org/model";
         let rest = reference
@@ -111,7 +95,6 @@ impl HuggingFaceSource {
         ))
     }
 
-    /// Returns the location the provider serves one file of a repository at.
     fn resolve(&self, reference: &str) -> Result<String, Error> {
         let (held, file) = Self::parts(reference)?;
         let revision = held.revision.as_deref().unwrap_or("main");
@@ -122,14 +105,12 @@ impl HuggingFaceSource {
     }
 }
 
-/// The provider that serves one deposited record and the files it holds.
 pub struct ZenodoSource {
     http: HttpSource,
     origin: String,
 }
 
 impl ZenodoSource {
-    /// Builds a source holding no connections yet.
     #[must_use]
     pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -138,8 +119,6 @@ impl ZenodoSource {
         }
     }
 
-    /// Builds a source reaching a stated host, which is how a test drives it
-    /// without the public network.
     #[must_use]
     pub fn reaching(origin: impl Into<String>, limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -148,8 +127,6 @@ impl ZenodoSource {
         }
     }
 
-    /// Returns the record identifier a reference names, which is the trailing
-    /// digits of a deposit identifier or of a bare number.
     fn record_of(reference: &str) -> Result<String, Error> {
         let rest = reference
             .strip_prefix("zenodo:")
@@ -171,7 +148,6 @@ impl ZenodoSource {
         Ok(digits)
     }
 
-    /// Returns the location the provider describes one record at.
     fn resolve(&self, reference: &str) -> Result<String, Error> {
         Ok(format!(
             "{}/api/records/{}",
@@ -181,7 +157,6 @@ impl ZenodoSource {
     }
 }
 
-/// Returns the link a record states for one of its files.
 fn file_link(body: &str, key: &str) -> Option<String> {
     let document: serde_json::Value = serde_json::from_str(body).ok()?;
     let files = document.get("files")?.as_array()?;
@@ -198,8 +173,6 @@ fn file_link(body: &str, key: &str) -> Option<String> {
     })
 }
 
-/// Reads the entries a record description names, taking each file's location
-/// and length from what the record stated and nothing else.
 fn record_entries(location: &str, body: &str) -> Result<Vec<ListingEntry>, Error> {
     let malformed = || {
         Error::new(
@@ -343,13 +316,10 @@ macro_rules! delegating_source {
 }
 
 impl HuggingFaceSource {
-    /// Returns the location one reference is fetched from.
     fn located(&self, reference: &str, _credential: Option<&Credential>) -> Result<String, Error> {
         self.resolve(reference)
     }
 
-    /// Returns what the response said about the object, under the reference the
-    /// user wrote rather than the location it resolved to.
     fn metadata(
         &self,
         served: &str,
@@ -378,8 +348,6 @@ impl HuggingFaceSource {
         }
     }
 
-    /// Lists the entries a repository holds at the revision the reference
-    /// pinned.
     fn listed(&self, reference: &str, credential: Option<&Credential>) -> Result<Listing, Error> {
         let (held, _) = Self::parts(reference)?;
         let revision = held.revision.as_deref().unwrap_or("main");
@@ -417,11 +385,6 @@ impl HuggingFaceSource {
 }
 
 impl ZenodoSource {
-    /// Returns the location one reference is fetched from.
-    ///
-    /// A reference naming a file inside a record is resolved by reading the
-    /// record and taking that file's own link, because the provider publishes
-    /// no stable template a location could be built from instead.
     fn located(&self, reference: &str, credential: Option<&Credential>) -> Result<String, Error> {
         let (record, file) = Self::parts(reference);
         let api = self.resolve(&record)?;
@@ -441,9 +404,6 @@ impl ZenodoSource {
         })
     }
 
-    /// Splits a reference into the record it names and the file under it, when
-    /// it names one. A record identifier is a deposit identifier, which is two
-    /// segments, or a bare number, which is one.
     fn parts(reference: &str) -> (String, String) {
         let Some(rest) = reference.strip_prefix("zenodo:") else {
             return (reference.to_owned(), String::new());
@@ -466,8 +426,6 @@ impl ZenodoSource {
         )
     }
 
-    /// Returns what the response said about the object, under the reference the
-    /// user wrote rather than the location it resolved to.
     fn metadata(
         &self,
         served: &str,
@@ -491,7 +449,6 @@ impl ZenodoSource {
         }
     }
 
-    /// Lists the files one record holds.
     fn listed(&self, reference: &str, credential: Option<&Credential>) -> Result<Listing, Error> {
         let api = self.resolve(reference)?;
         let body = self.record_body(&api, credential)?;
@@ -499,7 +456,6 @@ impl ZenodoSource {
         bounded(record_entries(&api, &body)?, 0, &api, &limits)
     }
 
-    /// Reads what a record states about itself.
     fn record_body(&self, api: &str, credential: Option<&Credential>) -> Result<String, Error> {
         let (answer, _served) = self.http.send(Method::Get, api, None, credential)?;
         let status = answer.status().as_u16();
@@ -521,7 +477,6 @@ impl ZenodoSource {
     }
 }
 
-/// Reads the entries a repository tree names.
 fn tree_entries(location: &str, body: &str, prefix: &str) -> Result<Vec<ListingEntry>, Error> {
     let malformed = || {
         Error::new(
@@ -557,7 +512,6 @@ fn tree_entries(location: &str, body: &str, prefix: &str) -> Result<Vec<ListingE
     Ok(entries)
 }
 
-/// Refuses a listing longer than the bound a run holds itself to.
 fn bounded(
     entries: Vec<ListingEntry>,
     skipped: u64,

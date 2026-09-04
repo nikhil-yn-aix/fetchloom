@@ -15,18 +15,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::encode::wide;
 
-/// The drive type the platform reports for a volume reached over a network.
 const DRIVE_REMOTE: u32 = 4;
 
-/// What the volume behind a handle reports about itself.
 pub(crate) struct VolumeInformation {
-    /// The longest single name component the volume accepts.
     pub(crate) max_component_length: u32,
-    /// The capability flags the volume advertises.
     pub(crate) flags: u32,
 }
 
-/// Reads what a volume advertises about itself.
 pub(crate) fn volume_information(file: &File) -> io::Result<VolumeInformation> {
     let mut serial = 0u32;
     let mut max_component_length = 0u32;
@@ -53,7 +48,6 @@ pub(crate) fn volume_information(file: &File) -> io::Result<VolumeInformation> {
     })
 }
 
-/// Reports whether a path sits on a volume reached over a network.
 pub(crate) fn is_remote_drive(path: &Path) -> bool {
     let text = path.to_string_lossy();
     if text.starts_with("\\\\") {
@@ -70,11 +64,6 @@ pub(crate) fn is_remote_drive(path: &Path) -> bool {
     kind == DRIVE_REMOTE
 }
 
-/// Returns how many bytes the volume a path is on has free for this user.
-///
-/// # Errors
-///
-/// Fails when the path is not there or the platform refuses the query.
 pub(crate) fn free_space(path: &Path) -> std::io::Result<u64> {
     let wide = wide(path);
     let mut available: u64 = 0;
@@ -93,7 +82,6 @@ pub(crate) fn free_space(path: &Path) -> std::io::Result<u64> {
     Ok(available)
 }
 
-/// Returns how many bytes one cluster of the volume a path sits on holds.
 pub(crate) fn cluster_bytes(path: &Path) -> io::Result<u64> {
     let mut root = match path.components().next() {
         Some(first) => Path::new(first.as_os_str()).to_path_buf(),

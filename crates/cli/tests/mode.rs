@@ -35,7 +35,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// A gzip-wrapped tar holding one `0644` file and one `0755` file.
 fn mixed_mode_archive() -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(&TarHeader::ustar(b"tools/", TYPEFLAG_DIRECTORY), b"");
@@ -52,8 +51,6 @@ fn mixed_mode_archive() -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
-/// A directory holding one ordinary file and one the platform may mark
-/// executable.
 fn mixed_mode_directory(at: &Path) -> PathBuf {
     let root = at.join("tree");
     std::fs::create_dir_all(root.join("tools")).unwrap();
@@ -336,7 +333,6 @@ fn verify_against_a_receipt_reports_a_destination_that_changed() {
     );
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

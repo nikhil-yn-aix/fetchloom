@@ -5,39 +5,20 @@ use std::ops::Range;
 use crate::limits::Limits;
 use crate::seam::source::ByteRange;
 
-/// Why a repair fetches the whole object instead of the damaged spans.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WholeReason {
-    /// More damaged spans than one repair may ask a source for.
-    TooManySpans {
-        /// How many spans the damage came to.
-        spans: u64,
-        /// How many the limit allows.
-        allowed: u64,
-    },
-    /// More damaged bytes than the whole-refetch share of the object.
-    PastTheShare {
-        /// How many bytes are damaged.
-        damaged: u64,
-        /// How many the share allows.
-        allowed: u64,
-    },
-    /// The source cannot serve part of an object.
+    TooManySpans { spans: u64, allowed: u64 },
+    PastTheShare { damaged: u64, allowed: u64 },
     NoRanges,
 }
 
-/// What one repair will fetch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RepairPlan {
-    /// Nothing is damaged.
     Nothing,
-    /// Exactly these spans are fetched, in ascending order.
     Spans(Vec<ByteRange>),
-    /// The object is fetched whole, for this reason.
     Whole(WholeReason),
 }
 
-/// Decides what a repair fetches.
 #[must_use]
 pub fn plan_repair(
     damaged: &[Range<u64>],
@@ -81,8 +62,6 @@ pub fn plan_repair(
 }
 
 impl WholeReason {
-    /// Returns what the run asked for, what it used instead, and why, for the
-    /// `degrade` event a bounded repair emits.
     #[must_use]
     pub fn degradation(self, object_len: u64) -> (String, String, String) {
         let requested = "a repair fetching only the damaged ranges".to_owned();

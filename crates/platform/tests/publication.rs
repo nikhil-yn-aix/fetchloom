@@ -28,13 +28,10 @@ const TIERS: [DurabilityTier; 3] = [
     DurabilityTier::Fast,
 ];
 
-/// The variable the killed child reads to know where to publish.
 const KILL_DIRECTORY: &str = "FETCHLOOM_TEST_KILL_DIRECTORY";
 
-/// The variable naming how far the killed child gets before it dies.
 const KILL_STAGE: &str = "FETCHLOOM_TEST_KILL_STAGE";
 
-/// The bytes a complete object holds.
 const WHOLE_OBJECT: &[u8] = b"the whole object";
 
 #[test]

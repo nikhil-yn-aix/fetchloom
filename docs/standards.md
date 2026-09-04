@@ -86,19 +86,11 @@ No comments. No commented-out code. No banners, no section dividers, no decorati
 
 ## Docstrings
 
-Every public item has one. Private items have one only when the inputs and outputs are not obvious from the signature.
+There are none. No item carries a `///` docstring, and the lint policy no longer asks for one.
 
-A docstring is one sentence saying what the item is, plus an `# Errors` section when the item can fail. Nothing else. It never restates the signature, and it never carries history, rationale, or an example. Rationale belongs in decisions.md, where it can be read once instead of once per call site. A docstring that wants a second paragraph is a function that wants a better name or a smaller body.
+A name is the documentation. An item whose purpose is not clear from its name, its signature and its body is renamed or split until it is, which is the same rule the No comments section states and the reason that rule exists. What a thing is for belongs in contracts.md, and why it is that way belongs in decisions.md, where each is read once instead of once per call site.
 
-```rust
-/// Reads the object with the given digest from the cache.
-///
-/// Takes a content digest. Returns an open reader positioned at the first byte.
-/// Fails when the object is absent, when the cache format does not match, or
-/// when the recorded fingerprint no longer matches the file on disk.
-```
-
-Plain sentences. No symbols standing in for words. The only markdown permitted is an `# Errors` or `# Panics` heading, because the lint policy requires them and they are structure rather than decoration.
+A module keeps its `//!` header: one or two sentences saying what the file is, which is the map of the tree and is not attached to any item.
 
 ## Failing
 

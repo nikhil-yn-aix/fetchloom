@@ -9,26 +9,16 @@ use fetchloom_engine::seam::platform::Platform;
 
 use crate::Cache;
 
-/// What precedes every object's bytes inside a pack.
-///
-/// The content digest, the interop digest, then the length, so a pack states
-/// everything the cache knows about what it holds and no record beside it can
-/// disagree.
 const HEADER: usize = 32 + 32 + 8;
 
-/// What one entry a pack holds is, and where.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
-    /// Where the object's bytes start.
     pub offset: u64,
-    /// How many bytes it holds.
     pub length: u64,
-    /// The interop digest of those bytes.
     pub interop: InteropDigest,
 }
 
 impl<P: Platform> Cache<P> {
-    /// Returns the pack this process appends to.
     pub(crate) fn own_pack(&self) -> PathBuf {
         let token = self.token();
         self.layout()
@@ -36,11 +26,6 @@ impl<P: Platform> Cache<P> {
             .join(format!("{}-{}.pack", token.boot.as_str(), token.pid))
     }
 
-    /// Appends an object's bytes to this process's pack.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the pack cannot be written or flushed.
     pub(crate) fn append_to_pack(
         &self,
         digest: ContentDigest,
@@ -77,13 +62,6 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Returns every object a pack holds, in the order it holds them.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the pack cannot be read. A pack whose last entry was cut
-    /// short by a crash ends at the last entry that is whole, because a partial
-    /// entry was never committed to.
     pub fn entries_in(&self, pack: &std::path::Path) -> Result<Vec<(ContentDigest, Entry)>, Error> {
         let mut file = match std::fs::File::open(pack) {
             Ok(file) => file,
@@ -130,11 +108,6 @@ impl<P: Platform> Cache<P> {
         }
     }
 
-    /// Returns every pack this cache holds.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the pack directory cannot be listed.
     pub fn packs(&self) -> Result<Vec<PathBuf>, Error> {
         let directory = self.layout().packs();
         let entries = match std::fs::read_dir(&directory) {
@@ -152,7 +125,6 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// Reads exactly as many bytes as the buffer holds, or reports the end.
 fn read_exactly(
     file: &mut std::fs::File,
     into: &mut [u8],
@@ -181,15 +153,9 @@ fn malformed(pack: &std::path::Path, what: &str) -> Error {
     )
 }
 
-/// What a lookup reads to find a packed object.
 pub(crate) type Index = std::collections::BTreeMap<ContentDigest, (PathBuf, Entry)>;
 
 impl<P: Platform> Cache<P> {
-    /// Returns where every packed object this cache holds is.
-    ///
-    /// The answer is built from the packs themselves the first time it is
-    /// asked for and kept for the life of the cache, so a pack stays the only
-    /// authority on what it holds and no index file can disagree with it.
     pub(crate) fn packed_index(&self) -> std::sync::Arc<Index> {
         let mut held = self
             .packed
@@ -209,7 +175,6 @@ impl<P: Platform> Cache<P> {
         built
     }
 
-    /// Records that this process just packed an object.
     pub(crate) fn remember_packed(&self, digest: ContentDigest, pack: PathBuf, entry: Entry) {
         let mut held = self
             .packed
@@ -222,11 +187,6 @@ impl<P: Platform> Cache<P> {
 }
 
 impl<P: Platform> Cache<P> {
-    /// Rewrites a pack without the objects named, under a lock on the pack.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the pack cannot be read, written, or replaced.
     pub(crate) fn rewrite_pack(
         &self,
         pack: &std::path::Path,
@@ -287,7 +247,6 @@ impl<P: Platform> Cache<P> {
         Ok(())
     }
 
-    /// Forgets every object a lookup believed one pack held.
     fn forget_pack(&self, pack: &std::path::Path) {
         let mut held = self
             .packed

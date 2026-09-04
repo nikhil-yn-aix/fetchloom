@@ -3,14 +3,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// What a file broke, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
-    /// The file the rule was broken in.
     pub file: PathBuf,
-    /// The line the rule was broken on, counting from one.
     pub line: usize,
-    /// The rule that was broken.
     pub rule: Rule,
 }
 
@@ -20,18 +16,12 @@ impl fmt::Display for Finding {
     }
 }
 
-/// A rule the checker enforces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
-    /// A comment that is not a docstring and not a safety line.
     Comment,
-    /// A block comment, which is never permitted in any form.
     BlockComment,
-    /// A safety line that does not precede an unsafe block.
     SafetyOnSafeCode,
-    /// A decorative symbol.
     Decoration,
-    /// A banner or a section divider.
     Banner,
 }
 
@@ -60,7 +50,6 @@ fn is_decoration(character: char) -> bool {
     )
 }
 
-/// Checks one Rust source file.
 #[must_use]
 pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -151,7 +140,6 @@ pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
     findings
 }
 
-/// Checks one Markdown file.
 #[must_use]
 pub fn check_markdown(file: &Path, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();

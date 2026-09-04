@@ -15,32 +15,19 @@ use std::path::{Path, PathBuf};
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_platform::NativePlatform;
 
-/// A property a test needs from a volume, rather than a filesystem name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
-    /// Blocks can be shared instead of copied.
     Clone,
-    /// Two names differing only in case are two names.
     CaseSensitive,
-    /// Two names differing only in case are one name.
     CaseInsensitive,
-    /// Two spellings of one string are stored as one normalized form.
     Normalizing,
-    /// The volume is reached over a network protocol.
     Network,
-    /// The volume is memory rather than a device.
     Memory,
-    /// The volume records no owner for a file.
     NoOwnership,
-    /// The volume stores no holes.
     NoSparse,
-    /// The volume is small enough to fill.
     Small,
-    /// The volume cannot be written to.
     ReadOnly,
-    /// The volume is not the one the temporary directory is on.
     Second,
-    /// The volume is served by a filesystem in user space.
     Fuse,
 }
 
@@ -77,7 +64,6 @@ impl Property {
     }
 }
 
-/// Every volume the environment offers with the given property.
 pub fn volumes(property: Property) -> Vec<PathBuf> {
     let named = std::env::var_os(property.variable()).unwrap_or_default();
     let found: Vec<PathBuf> = std::env::split_paths(&named)
@@ -91,7 +77,6 @@ pub fn volumes(property: Property) -> Vec<PathBuf> {
     found
 }
 
-/// A directory inside each volume offering the given property.
 pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
     volumes(property)
         .iter()
@@ -102,7 +87,6 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
         .collect()
 }
 
-/// The user a test hands work to, when the environment names one.
 pub fn another_user() -> Option<String> {
     let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
     assert!(
@@ -112,17 +96,14 @@ pub fn another_user() -> Option<String> {
     named
 }
 
-/// Reports whether the verification matrix built the volumes for this run.
 pub fn volumes_were_built() -> bool {
     std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()
 }
 
-/// A directory this process owns, on the volume the temporary directory is on.
 pub fn scratch() -> tempfile::TempDir {
     tempfile::TempDir::new().unwrap()
 }
 
-/// A directory on a volume other than the one the temporary directory is on.
 pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
     if let Some(built) = scratch_on(Property::Second).into_iter().next() {
         return Some(built);
@@ -146,7 +127,6 @@ pub fn other_volume_scratch() -> Option<tempfile::TempDir> {
     tempfile::TempDir::new_in(&here).ok()
 }
 
-/// Reports whether this build can create a symbolic link in a directory.
 pub fn symlink_works(directory: &Path) -> bool {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
@@ -157,17 +137,14 @@ pub fn symlink_works(directory: &Path) -> bool {
     created
 }
 
-/// Creates a file holding the given bytes.
 pub fn write_file(path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap();
 }
 
-/// Reports whether a directory holds no entries at all.
 pub fn is_empty(directory: &Path) -> bool {
     std::fs::read_dir(directory).is_ok_and(|mut entries| entries.next().is_none())
 }
 
-/// Lists the names a directory holds, sorted.
 pub fn names(directory: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(directory)
         .map(|entries| {
@@ -181,13 +158,10 @@ pub fn names(directory: &Path) -> Vec<String> {
     found
 }
 
-/// A directory this test owns inside each volume offering a property, where the
-/// directory is the volume's own rather than one created inside it.
 pub fn volume_directories(property: Property) -> Vec<PathBuf> {
     volumes(property)
 }
 
-/// Removes the names a test made in a directory it does not own.
 pub fn remove_all(names: &[PathBuf]) {
     for name in names {
         let _ = std::fs::remove_file(name);

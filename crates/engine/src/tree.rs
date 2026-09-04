@@ -6,19 +6,14 @@ use serde::Serialize;
 
 use crate::digest::ContentDigest;
 
-/// The permission bits an entry may carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(into = "u32")]
 pub enum Mode {
-    /// Readable and writable by its owner, readable by everyone.
     ReadWrite,
-    /// Readable, writable, and executable by its owner, readable and executable
-    /// by everyone.
     Executable,
 }
 
 impl Mode {
-    /// Reduces a source mode to the only two modes a tree digest records.
     #[must_use]
     pub fn reduce(source_mode: u32) -> Self {
         if source_mode & 0o111 == 0 {
@@ -28,7 +23,6 @@ impl Mode {
         }
     }
 
-    /// Returns the permission bits this mode stands for.
     #[must_use]
     pub fn bits(self) -> u32 {
         match self {
@@ -44,23 +38,14 @@ impl From<Mode> for u32 {
     }
 }
 
-/// Why a path could not become an entry path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryPathError {
-    /// The path was empty.
     Empty,
-    /// The path began with a separator.
     Absolute,
-    /// The path ended with a separator.
     TrailingSeparator,
-    /// The path contained two separators in a row.
     EmptyComponent,
-    /// The path contained a component that names a directory relative to
-    /// another one.
     RelativeComponent,
-    /// The path contained a backslash, which is never a separator here.
     Backslash,
-    /// The path contained a byte no filesystem accepts inside a name.
     ControlCharacter,
 }
 
@@ -81,17 +66,11 @@ impl fmt::Display for EntryPathError {
 
 impl std::error::Error for EntryPathError {}
 
-/// A path relative to the destination root, separated by forward slashes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct EntryPath(String);
 
 impl EntryPath {
-    /// Checks a path and returns it as an entry path.
-    ///
-    /// # Errors
-    ///
-    /// Returns the rule the path broke.
     pub fn new(path: &str) -> Result<Self, EntryPathError> {
         if path.is_empty() {
             return Err(EntryPathError::Empty);
@@ -119,13 +98,11 @@ impl EntryPath {
         Ok(Self(path.to_owned()))
     }
 
-    /// Returns the path text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Returns the raw bytes entries are ordered by.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
@@ -138,39 +115,26 @@ impl fmt::Display for EntryPath {
     }
 }
 
-/// One entry of a materialized directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TreeEntry {
-    /// A file, carrying its mode, its length, and the digest of its bytes.
     File {
-        /// Where the entry sits under the destination root.
         path: EntryPath,
-        /// The reduced permission bits, taken from the source.
         mode: Mode,
-        /// The length of the file in bytes.
         size: u64,
-        /// The digest of the file bytes.
         content: ContentDigest,
     },
-    /// A directory, whether or not it contains anything.
     Directory {
-        /// Where the entry sits under the destination root.
         path: EntryPath,
     },
-    /// A symbolic link, carrying the length and digest of its target bytes.
     Symlink {
-        /// Where the entry sits under the destination root.
         path: EntryPath,
-        /// The length of the target in bytes.
         size: u64,
-        /// The digest of the target bytes.
         content: ContentDigest,
     },
 }
 
 impl TreeEntry {
-    /// Returns where this entry sits under the destination root.
     #[must_use]
     pub fn path(&self) -> &EntryPath {
         match self {
@@ -178,7 +142,6 @@ impl TreeEntry {
         }
     }
 
-    /// Returns the type tag this entry is encoded with.
     #[must_use]
     pub fn tag(&self) -> u8 {
         match self {

@@ -33,19 +33,16 @@ mod support;
 
 use tempfile::TempDir;
 
-/// What the error a refused run reports carries.
 #[derive(serde::Deserialize)]
 struct Reported {
     kind: String,
 }
 
-/// What a permitted run reports.
 #[derive(serde::Deserialize)]
 struct Completed {
     work: Work,
 }
 
-/// The exit code the contract gives a policy refusal.
 const POLICY: i32 = 40;
 
 fn offline_run(reference: &str, destination: &Path, cache: &Path) -> (i32, String) {
@@ -69,7 +66,6 @@ fn offline_run(reference: &str, destination: &Path, cache: &Path) -> (i32, Strin
     )
 }
 
-/// Every reference shape contracts.md's grammar names that needs the network.
 const REMOTE_SHAPES: &[&str] = &[
     "https://lab.edu/eeg.yaml",
     "https://host/x.tar.zst",

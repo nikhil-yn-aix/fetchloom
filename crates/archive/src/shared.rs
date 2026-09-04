@@ -5,13 +5,11 @@ use std::cell::RefCell;
 use std::io::{Read, Result, Seek, SeekFrom};
 use std::rc::Rc;
 
-/// A source shared between the archive reader and the bodies it hands out.
 pub struct SharedSource<R> {
     inner: Rc<RefCell<R>>,
 }
 
 impl<R> SharedSource<R> {
-    /// Wraps a source in a handle that can be cloned.
     pub fn new(source: R) -> Self {
         Self {
             inner: Rc::new(RefCell::new(source)),

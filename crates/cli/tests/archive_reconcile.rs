@@ -34,7 +34,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// A gzip-wrapped tar holding a directory and three files.
 fn archive_bytes() -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(&TarHeader::ustar(b"docs/", TYPEFLAG_DIRECTORY), b"");
@@ -108,7 +107,6 @@ fn complaint(output: &Output) -> String {
     body(output)["kind"].as_str().unwrap_or_default().to_owned()
 }
 
-/// Every path under a root with its length and write time.
 fn state_of(root: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
     let mut found = Vec::new();
     walk(root, root, &mut found);
@@ -277,7 +275,6 @@ fn adopt_reports_the_destination_and_writes_nothing() {
     );
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

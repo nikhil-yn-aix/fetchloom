@@ -25,8 +25,6 @@ use crate::{Cache, owner_record_of, source_record_of};
 
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as RESUME_BUFFER_BYTES;
 
-/// A completed object held open, with the lease that keeps it from being pruned
-/// while it is being read.
 #[derive(Debug)]
 pub struct ObjectReader<L> {
     bytes: crate::storage::Bytes,
@@ -34,7 +32,6 @@ pub struct ObjectReader<L> {
 }
 
 impl<L> ObjectReader<L> {
-    /// Returns the lease held for as long as this object is open.
     pub fn lease(&self) -> &L {
         &self.lease
     }
@@ -52,7 +49,6 @@ impl<L> Seek for ObjectReader<L> {
     }
 }
 
-/// An object being written, hashed as its bytes arrive.
 pub struct PartialWriter {
     file: std::fs::File,
     path: PathBuf,
@@ -63,7 +59,6 @@ pub struct PartialWriter {
 }
 
 impl PartialWriter {
-    /// Returns how many bytes have been written.
     #[must_use]
     pub fn written(&self) -> u64 {
         self.written
@@ -84,7 +79,6 @@ impl Write for PartialWriter {
     }
 }
 
-/// The single-writer claim on one key.
 #[derive(Debug)]
 pub struct WriteLease<L> {
     key: PartialKey,
@@ -93,51 +87,34 @@ pub struct WriteLease<L> {
 }
 
 impl<L> WriteLease<L> {
-    /// Returns the key this claim is on.
     #[must_use]
     pub fn key(&self) -> PartialKey {
         self.key
     }
 
-    /// Returns the holder this claim waited for, when it waited.
     #[must_use]
     pub fn waited_for(&self) -> Option<&OwnerToken> {
         self.waited_for.as_ref()
     }
 
-    /// Returns the lock the claim is held by.
     pub fn lock(&self) -> &L {
         &self.lock
     }
 }
 
 impl<P: Platform> Cache<P> {
-    /// Takes the lease a reader holds while it has an object open.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the volume cannot express advisory locking.
     pub fn read_lease(&self, digest: ContentDigest) -> Result<P::Lock, Error> {
         self.platform.lock_shared(&self.layout.lock_of(digest))
     }
 
-    /// Reports whether an object is present right now.
     fn present(&self, digest: ContentDigest) -> bool {
         self.holds(digest)
     }
 
-    /// Checks an object already in the cache against the verification policy
-    /// this cache was opened with.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the check the policy names does not pass.
     pub fn check_hit(&self, digest: ContentDigest) -> Result<(), Error> {
         self.check(digest)
     }
 
-    /// Checks an object against the verification policy this cache was opened
-    /// with.
     fn check(&self, digest: ContentDigest) -> Result<(), Error> {
         match self.policy {
             VerificationPolicy::Never => Ok(()),
@@ -167,7 +144,6 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
-    /// Rereads every byte of an object and checks it.
     fn check_bytes(&self, digest: ContentDigest) -> Result<(), Error> {
         if self.has_outboard(digest)? {
             let found = self.localize(digest)?;
@@ -203,29 +179,17 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
-    /// Reports whether an object still hashes to the name it is stored under.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the object cannot be read.
     pub fn object_is_its_digest(&self, digest: ContentDigest) -> Result<bool, Error> {
         Ok(self.hash_object(digest)? == digest)
     }
 
-    /// Returns where the fingerprint of an object is recorded.
     pub fn object_record(&self, digest: ContentDigest) -> PathBuf {
         self.layout.records().join(name_of(digest))
     }
 
-    /// Lists every object that failed verification.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the cache cannot be read.
     pub fn quarantined(&self) -> Result<Vec<ContentDigest>, Error> {
         Self::digests_in(&self.layout.quarantine())
     }
-    /// Lists the digests a directory of the cache names.
     pub(crate) fn digests_in(directory: &std::path::Path) -> Result<Vec<ContentDigest>, Error> {
         let entries = std::fs::read_dir(directory)
             .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;

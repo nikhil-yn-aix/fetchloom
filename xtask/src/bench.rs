@@ -19,124 +19,73 @@ use fetchloom_engine::work::Work;
 use fetchloom_faults::{Latency, Reply, Script, TestServer};
 use serde::{Deserialize, Serialize};
 
-/// The fraction a metric may worsen by before the gate fails.
 pub const REGRESSION_GATE: f64 = 0.05;
 
-/// How a metric is gated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
-    /// Identical on identical inputs. Gates on every machine.
     Deterministic,
-    /// A property of the machine as much as the code. Gates only on a
-    /// verification run against a baseline from that same machine.
     Timing,
 }
 
-/// One measured number from one regime.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Metric {
-    /// What was measured.
     pub name: String,
-    /// The value measured, in the metric's own unit.
     pub value: f64,
-    /// The unit the value is in.
     pub unit: String,
-    /// How this metric is gated.
     pub kind: MetricKind,
 }
 
-/// What the obvious alternative tool costs on the same regime, on the same
-/// machine, in the same run. It is context for a published number and is never
-/// gated, because the gate is about this build against the last one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Alternative {
-    /// The command the comparison ran.
     pub tool: String,
-    /// What it does, which is never exactly what Fetchloom does.
     pub does: String,
-    /// The median wall time it took, in milliseconds.
     pub wall_ms: f64,
 }
 
-/// Everything one regime measured.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RegimeResult {
-    /// The regime that was run.
     pub regime: String,
-    /// How many times the regime was run.
     pub iterations: u32,
-    /// The numbers it produced.
     pub metrics: Vec<Metric>,
-    /// What the obvious alternative cost on the same regime, when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternative: Option<Alternative>,
 }
 
-/// A whole harness run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Baseline {
-    /// The target the binary was built for.
     pub target: String,
-    /// The regimes that were run.
     pub regimes: Vec<RegimeResult>,
 }
 
-/// Why the harness could not produce a result.
 #[derive(Debug)]
 pub enum BenchError {
-    /// The binary could not be built or run.
     Process(io::Error),
-    /// The build did not produce a binary.
     MissingBinary(PathBuf),
-    /// A run of the binary did not exit zero.
     NonZeroExit(i32),
-    /// The baseline file could not be read or written.
     Baseline(io::Error),
-    /// The baseline file was not the shape the harness writes.
     MalformedBaseline(serde_json::Error),
-    /// A regime in the baseline was not run, or the other way round.
     RegimeMissing(String),
-    /// A run carries a deterministic metric the baseline does not, which is a
-    /// metric that was added rather than a number that moved.
     MetricAdded {
-        /// The regime the metric belongs to.
         regime: String,
-        /// The metric the baseline does not carry.
         metric: String,
     },
-    /// A run's `--json` result could not be parsed.
     MalformedResult(serde_json::Error),
-    /// The regime ran but the adaptive controller decided nothing in it.
     ControllerInert(String),
-    /// The no-op regime was not idle, so it measured work rather than startup.
     NotIdle(String),
-    /// The operating system did not report what a run's resident set peaked at.
     NoPeak,
-    /// The slow-disk regime could not open a cache or finish an ingest.
     SlowDisk(String),
-    /// Doubling the number of packed objects more than doubled the cost of
-    /// counting them.
     PackedIndexCurve {
-        /// How much the cost grew for twice the objects.
         ratio: f64,
     },
-    /// A metric moved by more than the gate allows, in either direction.
     Moved {
-        /// The regime the metric belongs to.
         regime: String,
-        /// The metric that moved.
         metric: String,
-        /// What the baseline recorded.
         baseline: f64,
-        /// What this run recorded.
         current: f64,
     },
-    /// The baseline carries a deterministic metric this run did not produce.
     MetricMissing {
-        /// The regime the metric belongs to.
         regime: String,
-        /// The metric the run did not produce.
         metric: String,
     },
 }
@@ -189,12 +138,6 @@ impl std::fmt::Display for BenchError {
 
 impl std::error::Error for BenchError {}
 
-/// Builds the binary in release and returns where it landed.
-///
-/// # Errors
-///
-/// Fails when the build cannot be started, when it does not succeed, and when
-/// it produces no binary.
 pub fn build_binary(workspace: &Path) -> Result<PathBuf, BenchError> {
     let status = Command::new(cargo())
         .current_dir(workspace)
@@ -215,12 +158,6 @@ pub fn build_binary(workspace: &Path) -> Result<PathBuf, BenchError> {
     }
 }
 
-/// Runs the no-op regime and returns what it measured.
-///
-/// # Errors
-///
-/// Fails when the binary cannot be run, when a run does not exit zero, and when
-/// the binary's own size cannot be read.
 pub fn run_no_op(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchError> {
     let scratch = scratch_directory(NO_OP_ROUND)?;
     let source = scratch.join("idle.bin");
@@ -276,14 +213,10 @@ pub fn run_no_op(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchEr
     })
 }
 
-/// The scratch round the no-op regime keeps its object in.
 const NO_OP_ROUND: u32 = 900;
 
-/// How large the object the no-op regime reconciles is, small enough that the
-/// regime measures starting up rather than hashing.
 const NO_OP_BYTES: usize = 1024;
 
-/// Runs a locked run against a destination that already holds every entry.
 fn locked_get(
     binary: &Path,
     source: &Path,
@@ -305,11 +238,6 @@ fn locked_get(
     measure(command)
 }
 
-/// Writes a baseline to a file.
-///
-/// # Errors
-///
-/// Fails when the file cannot be written.
 pub fn save(baseline: &Baseline, path: &Path) -> Result<(), BenchError> {
     let text = serde_json::to_string_pretty(baseline).map_err(BenchError::MalformedBaseline)?;
     if let Some(parent) = path.parent() {
@@ -318,22 +246,11 @@ pub fn save(baseline: &Baseline, path: &Path) -> Result<(), BenchError> {
     fs::write(path, text + "\n").map_err(BenchError::Baseline)
 }
 
-/// Reads a baseline from a file.
-///
-/// # Errors
-///
-/// Fails when the file cannot be read and when it is not the shape the harness
-/// writes.
 pub fn load(path: &Path) -> Result<Baseline, BenchError> {
     let text = fs::read_to_string(path).map_err(BenchError::Baseline)?;
     serde_json::from_str(&text).map_err(BenchError::MalformedBaseline)
 }
 
-/// Compares a run against a baseline.
-///
-/// # Errors
-///
-/// Returns the regime and metric that regressed, with both numbers.
 pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError> {
     for regime in &current.regimes {
         let recorded = baseline
@@ -395,11 +312,6 @@ fn binary_name(stem: &str) -> String {
     }
 }
 
-/// Reports what is inspecting writes on the volume the regimes run on.
-///
-/// # Errors
-///
-/// Fails when the volume cannot be probed.
 pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::error::Error>> {
     use fetchloom_engine::capability::Scanner;
     use fetchloom_engine::seam::platform::Platform;
@@ -427,21 +339,12 @@ pub fn scanner_lane(directory: &Path) -> Result<String, Box<fetchloom_engine::er
     })
 }
 
-/// How many files the many-small-files regime materializes.
 const SMALL_FILES: usize = 1024;
 
-/// How many bytes each of those files holds.
 const SMALL_FILE_BYTES: usize = 1024;
 
-/// How many bytes the one-large-file regime materializes.
 const LARGE_FILE_BYTES: usize = 256 * 1024 * 1024;
 
-/// Runs the many-small-files and one-large-file regimes.
-///
-/// # Errors
-///
-/// Fails when the corpus cannot be written, when a run does not exit zero, and
-/// when a run's `--json` result cannot be read.
 pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let mut small_times = Vec::with_capacity(iterations as usize);
     let mut large_times = Vec::with_capacity(iterations as usize);
@@ -538,18 +441,10 @@ pub fn run_shapes(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, B
     ])
 }
 
-/// How many files the cache regimes materialize.
 const CORPUS_FILES: usize = 64;
 
-/// How many bytes each of those files holds.
 const CORPUS_FILE_BYTES: usize = 256 * 1024;
 
-/// Runs the cold cache and warm cache regimes and returns what they measured.
-///
-/// # Errors
-///
-/// Fails when the corpus cannot be written, when a run does not exit zero, and
-/// when the cache cannot be measured.
 pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let mut cold_times = Vec::with_capacity(iterations as usize);
     let mut warm_times = Vec::with_capacity(iterations as usize);
@@ -653,7 +548,6 @@ pub fn run_cache(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
     ])
 }
 
-/// Reports whether the warm regime was faster than the cold one.
 #[must_use]
 pub fn warm_beat_cold(regimes: &[RegimeResult]) -> Option<(f64, f64)> {
     let wall = |name: &str| {
@@ -684,7 +578,6 @@ fn write_corpus(into: &Path) -> Result<(), BenchError> {
     Ok(())
 }
 
-/// Returns bytes no two indices share.
 fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
     let seed = u8::try_from(index % 251).unwrap_or(0);
     let mut bytes: Vec<u8> = (0..length)
@@ -701,20 +594,10 @@ fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
     bytes
 }
 
-/// How many bytes the transfer regimes' object holds.
 const TRANSFER_OBJECT_BYTES: usize = 4 * 1024 * 1024;
 
-/// Where the interrupted transfer regime's server closes the connection partway
-/// through the body, as percentages of the object, before serving it whole.
 const TRANSFER_INTERRUPTIONS: [usize; 2] = [25, 50];
 
-/// Runs the cold transfer and interrupted transfer regimes and returns what
-/// they measured.
-///
-/// # Errors
-///
-/// Fails when the test server cannot be started, when a run does not exit zero,
-/// and when a run's `--json` result cannot be read.
 pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let object = non_repeating_bytes(1, TRANSFER_OBJECT_BYTES);
     let mut cold_times = Vec::with_capacity(iterations as usize);
@@ -810,7 +693,6 @@ pub fn run_transfer(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>,
     ])
 }
 
-/// Builds one transfer regime result from what its rounds measured.
 fn transfer_regime(
     regime: &str,
     iterations: u32,
@@ -850,7 +732,6 @@ fn transfer_regime(
     }
 }
 
-/// What a run's `--json` result carries that a benchmark reads.
 #[derive(Deserialize)]
 struct RunOutcome {
     bytes: u64,
@@ -858,7 +739,6 @@ struct RunOutcome {
     work: Work,
 }
 
-/// Turns the four work counters into the metrics that gate on them.
 fn work_metrics(work: &Work) -> Vec<Metric> {
     #[expect(
         clippy::cast_precision_loss,
@@ -943,12 +823,10 @@ fn directory_bytes(directory: &Path) -> u64 {
     })
 }
 
-/// Returns how many bytes the cache holds, in whichever placement holds them.
 fn stored_bytes(cache: &Path) -> u64 {
     directory_bytes(&cache.join("objects")) + directory_bytes(&cache.join("packs"))
 }
 
-/// Runs a comparison command and returns how long it took, in milliseconds.
 fn time_command(program: &str, arguments: &[&std::ffi::OsStr]) -> Result<f64, BenchError> {
     let started = Instant::now();
     let output = Command::new(program)
@@ -962,14 +840,11 @@ fn time_command(program: &str, arguments: &[&std::ffi::OsStr]) -> Result<f64, Be
     Ok(elapsed.as_secs_f64() * 1000.0)
 }
 
-/// Returns the median of what a comparison command took over several rounds.
 fn median(mut times: Vec<f64>) -> f64 {
     times.sort_by(f64::total_cmp);
     times[times.len() / 2]
 }
 
-/// Copies a tree with the platform's own copy, which is the alternative every
-/// local regime is measured against.
 fn copy_tree(from: &Path, to: &Path) -> Result<f64, BenchError> {
     #[cfg(windows)]
     {
@@ -997,8 +872,6 @@ fn copy_tree(from: &Path, to: &Path) -> Result<f64, BenchError> {
     }
 }
 
-/// Downloads a URL with curl, which is the alternative the transfer regimes are
-/// measured against.
 fn curl_to(url: &str, into: &Path) -> Result<f64, BenchError> {
     time_command(
         "curl",
@@ -1012,16 +885,12 @@ fn curl_to(url: &str, into: &Path) -> Result<f64, BenchError> {
     )
 }
 
-/// The copy the published comparison runs, named as the reader would run it.
 #[cfg(windows)]
 pub const COPY_TOOL: &str = "powershell Copy-Item -Recurse";
 
-/// The copy the published comparison runs, named as the reader would run it.
 #[cfg(not(windows))]
 pub const COPY_TOOL: &str = "cp -r";
 
-/// Renders the published comparison page from what a run measured, so the page
-/// cannot drift from the numbers it reports.
 #[must_use]
 pub fn publish(baseline: &Baseline, lane: &str) -> String {
     let mut page = String::new();
@@ -1088,9 +957,6 @@ pub fn publish(baseline: &Baseline, lane: &str) -> String {
     page
 }
 
-/// States what the many-hosts ratio is made of, from the same run that produced
-/// it, so the largest loss on the page is published with its cause rather than
-/// bare.
 fn hosts_cause(baseline: &Baseline) -> Option<String> {
     let regime = baseline
         .regimes
@@ -1119,34 +985,18 @@ fn hosts_cause(baseline: &Baseline) -> Option<String> {
     ))
 }
 
-/// How many objects each host serves in the many-hosts regime.
-///
-/// The controller starts a host it has measured nothing about at
-/// `FIRST_PER_HOST`, adds one after a clean transfer, and halves on a rate
-/// limit. Eight is the smallest count that exercises the whole cycle rather
-/// than one end of it: two clean transfers to climb from two to the politeness
-/// ceiling of four, a third to prove it holds there rather than climbing past
-/// it, a rate limit to halve it, and the rest to climb back. Anything smaller
-/// records a number that only proves the controller starts somewhere.
 const OBJECTS_PER_HOST: usize = 8;
 
-/// How many bytes each of those objects holds.
 const HOST_OBJECT_BYTES: usize = 128 * 1024;
 
-/// How long each host waits before answering anything.
-///
-/// Loopback has no latency, and concurrency exists to hide latency, so without
-/// an injected wait no per-host ceiling can pay for itself in this regime.
 const HOST_LATENCY: Duration = Duration::from_millis(100);
 
-/// What one host answered, read back from the measurement the run recorded.
 #[derive(Debug, Deserialize)]
 struct RecordedHost {
     host: String,
     measurement: fetchloom_engine::tuning::HostMeasurement,
 }
 
-/// Returns what every host the run measured was recorded as, by host name.
 fn recorded_hosts(cache: &Path) -> Vec<RecordedHost> {
     let mut found = Vec::new();
     let Ok(entries) = fs::read_dir(cache.join("meta").join("host")) else {
@@ -1163,14 +1013,6 @@ fn recorded_hosts(cache: &Path) -> Vec<RecordedHost> {
     found
 }
 
-/// Runs the many-hosts regime: many objects across two hosts, so the adaptive
-/// controller has something to decide and its decision can be read back.
-///
-/// # Errors
-///
-/// Fails when a server cannot be bound, when the run does not exit zero, when
-/// its `--json` result cannot be read, and when the controller did not decide
-/// anything, which is the whole point of the regime.
 pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, BenchError> {
     let mut measured = hosts_regime(binary, iterations, "many-hosts-concurrency", false)?;
     measured.extend(hosts_regime(
@@ -1182,9 +1024,6 @@ pub fn run_hosts(binary: &Path, iterations: u32) -> Result<Vec<RegimeResult>, Be
     Ok(measured)
 }
 
-/// Runs one half of the many-hosts pair. Without a rate limit the regime
-/// measures what concurrency buys; with one it measures what backoff costs,
-/// and mixing them measures neither.
 fn hosts_regime(
     binary: &Path,
     iterations: u32,
@@ -1283,10 +1122,6 @@ fn hosts_regime(
     }])
 }
 
-/// Reports whether anything the run was given left the controller free to
-/// decide. A per-host ceiling of one is not an inert controller, it is a
-/// controller with one choice, so the regime measures such a run and asserts
-/// nothing about adaptation in it.
 fn free_to_decide() -> bool {
     std::env::var("FETCHLOOM_PER_HOST")
         .ok()
@@ -1294,8 +1129,6 @@ fn free_to_decide() -> bool {
         .is_none_or(|ceiling| ceiling > 1)
 }
 
-/// Refuses a run in which the controller decided nothing, because a regime that
-/// passes with the controller inert is not a regime.
 fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
     if !free_to_decide() {
         return Ok(());
@@ -1332,15 +1165,12 @@ fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
     Ok(())
 }
 
-/// What one measured run of the binary cost.
 struct Measured {
     wall_ms: f64,
     peak_bytes: u64,
     outcome: RunOutcome,
 }
 
-/// Runs the binary once, timing it and recording the largest resident set the
-/// operating system saw it hold.
 fn measure(mut command: Command) -> Result<Measured, BenchError> {
     use std::io::Read as _;
 
@@ -1447,7 +1277,6 @@ fn peak_of(_child: &std::process::Child, seen: Watcher) -> Result<u64, BenchErro
     }
 }
 
-/// Turns a peak resident set into the metric that records it.
 fn peak_metric(peak_bytes: u64) -> Metric {
     Metric {
         name: "peak-memory".to_owned(),
@@ -1461,20 +1290,10 @@ fn peak_metric(peak_bytes: u64) -> Metric {
     }
 }
 
-/// How long the constrained-network regime charges every request, which is what
-/// makes a loopback socket behave like a remote one.
 const CONSTRAINED_LATENCY: Duration = Duration::from_millis(250);
 
-/// How large the object the constrained-network regime transfers is.
 const CONSTRAINED_OBJECT_BYTES: usize = 2 * 1024 * 1024;
 
-/// Runs the constrained-network regime: one object from one host that answers
-/// slowly, so a run is bounded by the network rather than by the disk.
-///
-/// # Errors
-///
-/// Fails when the server cannot be bound, when the run does not exit zero, and
-/// when its `--json` result cannot be read.
 pub fn run_constrained(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchError> {
     let object = non_repeating_bytes(5, CONSTRAINED_OBJECT_BYTES);
     let mut times = Vec::with_capacity(iterations as usize);
@@ -1532,34 +1351,16 @@ pub fn run_constrained(binary: &Path, iterations: u32) -> Result<RegimeResult, B
     })
 }
 
-/// The scratch rounds the constrained-network regime uses.
 const CONSTRAINED_ROUND: u32 = 800;
 
-/// How long the slow-disk regime charges each durability flush, which is what
-/// a device that answers slowly costs a run that keeps its promises.
 const SLOW_FLUSH: Duration = Duration::from_millis(8);
 
-/// How many objects the slow-disk regime ingests.
 const SLOW_DISK_OBJECTS: usize = 24;
 
-/// How large each of them is.
 const SLOW_DISK_OBJECT_BYTES: usize = 64 * 1024;
 
-/// The scratch rounds the slow-disk regime uses.
 const SLOW_DISK_ROUND: u32 = 700;
 
-/// Runs the slow-disk regime: the same ingest, once against a device that
-/// answers at once and once against one that charges every flush and every
-/// preallocation.
-///
-/// The regime drives the cache in this process rather than the binary in
-/// another one, because a fault schedule reaches the platform it wraps and
-/// never a separate process. That is the whole reason a slow disk was named
-/// nowhere in the harness until now.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened and when an ingest fails.
 pub fn run_slow_disk(iterations: u32) -> Result<RegimeResult, BenchError> {
     let mut fast = Vec::with_capacity(iterations as usize);
     let mut slow = Vec::with_capacity(iterations as usize);
@@ -1602,8 +1403,6 @@ pub fn run_slow_disk(iterations: u32) -> Result<RegimeResult, BenchError> {
     })
 }
 
-/// Ingests the regime's objects into a fresh cache, charging each durability
-/// call the given wait, and returns how long it took in milliseconds.
 fn ingest_round(root: &Path, charged: Duration) -> Result<f64, BenchError> {
     use std::sync::Arc;
 
@@ -1659,25 +1458,12 @@ fn ingest_round(root: &Path, charged: Duration) -> Result<f64, BenchError> {
     Ok(started.elapsed().as_secs_f64() * 1000.0)
 }
 
-/// How many packed objects the smaller half of the packed-index regime holds.
 const PACKED_OBJECTS: usize = 2_000;
 
-/// The largest doubling ratio the regime accepts. Quadratic is four and linear
-/// is two, so a run above this is a lookup that walks what it should index.
 const PACKED_RATIO_CEILING: f64 = 2.0;
 
-/// The scratch rounds the packed-index regime uses.
 const PACKED_ROUND: u32 = 600;
 
-/// Runs the packed-index regime: the command whose whole job is to count what
-/// a cache holds, against a cache of packed objects and against one of twice
-/// as many.
-///
-/// # Errors
-///
-/// Fails when a cache cannot be filled, when a run does not exit zero, and
-/// when doubling the object count more than doubles the cost, which is the
-/// shape a per-lookup rebuild has.
 pub fn run_packed_index(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchError> {
     let mut smaller = Vec::with_capacity(iterations as usize);
     let mut larger = Vec::with_capacity(iterations as usize);
@@ -1731,8 +1517,6 @@ pub fn run_packed_index(binary: &Path, iterations: u32) -> Result<RegimeResult, 
     })
 }
 
-/// Fills a cache with the given number of packed objects and returns how long
-/// `cache status` takes over it, in milliseconds.
 fn status_over(binary: &Path, root: &Path, objects: usize) -> Result<f64, BenchError> {
     let source = root.join("source");
     fs::create_dir_all(&source).map_err(BenchError::Process)?;

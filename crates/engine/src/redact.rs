@@ -4,13 +4,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-/// The fixed text every redacted value is replaced with.
 pub const REDACTED: &str = "[redacted]";
 
-/// A request header whose value is never written anywhere.
 pub const SENSITIVE_HEADERS: [&str; 2] = ["authorization", "cookie"];
 
-/// Reports whether a header name is one whose value is never written anywhere.
 #[must_use]
 pub fn is_sensitive_header(name: &str) -> bool {
     SENSITIVE_HEADERS
@@ -18,18 +15,15 @@ pub fn is_sensitive_header(name: &str) -> bool {
         .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
 }
 
-/// A value that is never written to any stream, file, or record.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Secret<T>(T);
 
 impl<T> Secret<T> {
-    /// Wraps a value.
     #[must_use]
     pub fn new(value: T) -> Self {
         Self(value)
     }
 
-    /// Returns the wrapped value for the one call that must use it.
     #[must_use]
     pub fn expose(&self) -> &T {
         &self.0
@@ -54,19 +48,16 @@ impl<T> Serialize for Secret<T> {
     }
 }
 
-/// A location string that carries no credential.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct SafeUrl(String);
 
 impl SafeUrl {
-    /// Redacts a location string and returns the result.
     #[must_use]
     pub fn new(raw: &str) -> Self {
         Self(redact_location(raw))
     }
 
-    /// Returns the redacted text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

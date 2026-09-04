@@ -10,11 +10,6 @@ use fetchloom_engine::seam::platform::Platform;
 use crate::Cache;
 
 impl<P: Platform> Cache<P> {
-    /// Writes the receipt for the destination it names.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the receipt cannot be written.
     pub fn write_receipt(&self, receipt: &Receipt) -> Result<(), Error> {
         let path = self.layout().receipt_of(Receipt::key(&receipt.destination));
         let rendered = receipt.render()?;
@@ -32,11 +27,6 @@ impl<P: Platform> Cache<P> {
         Ok(())
     }
 
-    /// Returns the receipt that describes a destination.
-    ///
-    /// # Errors
-    ///
-    /// Fails when a receipt is present and cannot be read or does not parse.
     pub fn read_receipt(&self, destination: &Path) -> Result<Option<Receipt>, Error> {
         let path = self.layout().receipt_of(Receipt::key(destination));
         let bytes = match std::fs::read(&path) {

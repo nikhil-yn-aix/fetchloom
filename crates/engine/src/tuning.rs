@@ -13,33 +13,20 @@ use crate::seam::policy::IoMode;
 use crate::threads::ThreadBudget;
 use crate::timestamp::Timestamp;
 
-/// The most transfers a run holds in flight across every host, whatever the
-/// machine reports, because past this the path rather than the machine decides
-/// how fast bytes arrive.
 pub const TRANSFERS_CEILING: u32 = 8;
 
-/// The transfers a run holds in flight for a host it has measured nothing
-/// about: one to move bytes and one to learn whether a second helps.
 pub const FIRST_PER_HOST: u32 = 2;
 
-/// What a run learned about one host, kept so the next run starts where this
-/// one finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostMeasurement {
-    /// The transfers in flight the run settled on for this host.
     pub concurrency: u32,
-    /// The fastest sustained rate a transfer from this host reached, in bytes
-    /// per second.
     pub throughput: u64,
-    /// How long the host took to answer with its headers, in milliseconds.
     pub time_to_first_byte_ms: u64,
-    /// When the measurement was taken.
     pub observed_at: Timestamp,
 }
 
 impl HostMeasurement {
-    /// Describes this measurement the way `explain` reports it.
     #[must_use]
     pub fn describe(&self, host: &str) -> String {
         format!(
@@ -49,14 +36,6 @@ impl HostMeasurement {
     }
 }
 
-/// Orders candidate locations by the measured part of source selection:
-/// recorded throughput for the host, higher first, then time to first byte,
-/// lower first, with manifest order breaking every tie.
-///
-/// A candidate whose host carries no measurement is never placed ahead of one
-/// that does, however low that measurement is: the run learned nothing about
-/// it, so it cannot be preferred on the strength of what was measured. With no
-/// measurement behind any candidate, the result is the input order unchanged.
 #[must_use]
 pub fn order_candidates(
     locations: &[String],
@@ -89,18 +68,13 @@ fn candidate_order(
     }
 }
 
-/// The two bounds no measurement may push a run past.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ceilings {
-    /// The most transfers in flight across every host.
     pub global: NonZeroU32,
-    /// The most transfers in flight for one host.
     pub per_host: NonZeroU32,
 }
 
 impl Ceilings {
-    /// Resolves both ceilings from what the machine detected, what politeness
-    /// allows, and what the user asked for.
     #[must_use]
     pub fn resolve(
         budget: ThreadBudget,
@@ -130,19 +104,13 @@ impl Ceilings {
     }
 }
 
-/// Why a run's in-flight count moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// A transfer completed with no retry and no rate limit.
     Clean,
-    /// The source asked to be left alone.
     RateLimited,
-    /// The transfer failed in a way another attempt may get past.
     Faltered,
 }
 
-/// How many transfers a run holds in flight for one host, and how that number
-/// moves as the host answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Controller {
     permitted: u32,
@@ -156,8 +124,6 @@ pub struct Controller {
 }
 
 impl Controller {
-    /// Starts a controller at what was recorded for the host, or at the first
-    /// count when nothing was.
     #[must_use]
     pub fn start(recorded: Option<u32>, ceiling: NonZeroU32) -> Self {
         let ceiling = ceiling.get();
@@ -174,8 +140,6 @@ impl Controller {
         }
     }
 
-    /// Starts a controller that never moves, which is what a run bound to a
-    /// stated ceiling or to deterministic work uses.
     #[must_use]
     pub fn fixed(at: NonZeroU32) -> Self {
         Self {
@@ -190,14 +154,11 @@ impl Controller {
         }
     }
 
-    /// Returns how many transfers may be in flight now.
     #[must_use]
     pub fn permitted(&self) -> u32 {
         self.permitted
     }
 
-    /// Records what the host delivered at the count it is now permitted, which
-    /// is what the next clean answer is judged against.
     pub fn delivered(&mut self, bytes: u64, took: Duration) {
         self.bytes = self.bytes.saturating_add(bytes);
         self.nanos = self
@@ -205,7 +166,6 @@ impl Controller {
             .saturating_add(u64::try_from(took.as_nanos()).unwrap_or(u64::MAX));
     }
 
-    /// Moves the count for what a host answered.
     pub fn answered(&mut self, answer: Answer) {
         if self.fixed {
             return;
@@ -224,15 +184,11 @@ impl Controller {
         }
     }
 
-    /// Returns the rate the host delivered at the current count, and nothing
-    /// until it has delivered a window at it.
     fn rate(&self) -> Option<u64> {
         (self.bytes >= WINDOW_BYTES && self.nanos > 0)
             .then(|| self.bytes.saturating_mul(1_000_000_000) / self.nanos)
     }
 
-    /// Adds one to the count while the host is delivering more than it did at
-    /// the count below, and gives up the count that stopped helping.
     fn rise_while_it_helps(&mut self) {
         let Some(rate) = self.rate() else {
             self.settle_at(self.next_up());
@@ -257,8 +213,6 @@ impl Controller {
             .min(self.capped)
     }
 
-    /// Moves to a count and starts measuring it, because what was delivered at
-    /// one count says nothing about another.
     fn settle_at(&mut self, count: u32) {
         if count == self.permitted {
             return;
@@ -269,8 +223,6 @@ impl Controller {
     }
 }
 
-/// Returns how long a transfer must wait so that the bytes it has moved do not
-/// exceed a rate.
 #[must_use]
 pub fn debt(rate: u64, moved: u64, elapsed: Duration) -> Duration {
     if rate == 0 {
@@ -281,23 +233,12 @@ pub fn debt(rate: u64, moved: u64, elapsed: Duration) -> Duration {
     (whole + part).saturating_sub(elapsed)
 }
 
-/// How far below what a run had been sustaining the store may accept bytes
-/// before the volume counts as having collapsed under it.
 pub const COLLAPSE_FRACTION: u64 = 4;
 
-/// How many recent windows the rate a run is judged against is taken over. The
-/// first writes into a new file are absorbed by the page cache at a rate no
-/// volume sustains, so a peak taken over the whole transfer would read every
-/// honest rate after it as a collapse and drive concurrency to one and leave it
-/// there.
 pub const SUSTAINED_WINDOWS: usize = 8;
 
-/// How many bytes one window gathers before the rate it was accepted at is
-/// judged, which is the length of the buffer a transfer writes through.
 pub const WINDOW_BYTES: u64 = 1 << 20;
 
-/// The rate at which the store has been accepting bytes, and whether it has
-/// just collapsed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WriteRate {
     recent: [u64; SUSTAINED_WINDOWS],
@@ -308,16 +249,6 @@ pub struct WriteRate {
 }
 
 impl WriteRate {
-    /// Records bytes accepted by the store and reports whether the volume
-    /// collapsed under them, judged against the fastest of the recent windows
-    /// rather than against the fastest of the whole transfer.
-    ///
-    /// Bytes are gathered until a window is full before anything is judged. A
-    /// body arrives in whatever lengths the socket hands over, and timing one
-    /// of those measures the socket as much as the volume, so a window shorter
-    /// than the write buffer says nothing about the disk. The first full window
-    /// never collapses either, because nothing has been sustained for it to
-    /// fall away from.
     pub fn observed(&mut self, bytes: u64, elapsed: Duration) -> bool {
         self.pending_bytes = self.pending_bytes.saturating_add(bytes);
         self.pending_nanos = self
@@ -338,7 +269,6 @@ impl WriteRate {
     }
 }
 
-/// The aggregate ceiling on how fast a run transfers.
 #[derive(Debug)]
 pub struct Meter {
     rate: u64,
@@ -347,7 +277,6 @@ pub struct Meter {
 }
 
 impl Meter {
-    /// Starts a meter at a rate in bytes per second.
     #[must_use]
     pub fn new(rate: Bandwidth) -> Self {
         Self {
@@ -357,19 +286,14 @@ impl Meter {
         }
     }
 
-    /// Counts bytes and returns how long to wait before moving more.
     pub fn moved(&self, bytes: u64) -> Duration {
         let total = self.moved.fetch_add(bytes, Ordering::Relaxed) + bytes;
         debt(self.rate, total, self.start.elapsed())
     }
 }
 
-/// Whether this build's target can release a file's written range from the
-/// page cache without constraining every write to sector alignment.
 pub const CAN_RELEASE_PAGES: bool = cfg!(target_os = "linux");
 
-/// Resolves the write path mode a run actually takes, recording a degrade
-/// when an explicit request cannot be honored.
 #[must_use]
 pub fn resolve_io_mode(
     requested: IoMode,

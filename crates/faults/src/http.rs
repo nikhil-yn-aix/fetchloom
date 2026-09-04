@@ -6,78 +6,49 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-/// What a server does with one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
-    /// Serve the object, honoring a range when one was asked for.
     Whole,
-    /// Serve the object but stop after this many bytes, then close.
     Truncated {
-        /// How many bytes of the body reach the client.
         after: usize,
     },
-    /// Serve the object with the byte at this offset inverted.
     Flipped {
-        /// Which byte of the object is wrong.
         offset: usize,
     },
-    /// Serve a status and no body.
     Status {
-        /// The status code.
         code: u16,
-        /// What to put in `Retry-After`, when anything.
         retry_after: Option<String>,
     },
-    /// Accept the range and serve a different span of the object.
     WrongRange {
-        /// How far the served span is moved from the span asked for.
         shift: u64,
     },
-    /// Accept the range and serve the whole object with a two hundred.
     RangeIgnored,
-    /// Serve the object under a `Content-Length` that is not its length.
     LyingLength {
-        /// The length the response claims.
         claimed: u64,
     },
-    /// Serve this many bytes and then never write or close again.
     Stalled {
-        /// How many bytes reach the client before the connection goes quiet.
         after: usize,
     },
-    /// Serve this many bytes and then close without finishing.
     ClosedMidBody {
-        /// How many bytes reach the client before the connection closes.
         after: usize,
     },
-    /// Redirect.
     Redirect {
-        /// The status code.
         code: u16,
-        /// The value of the `Location` header.
         location: String,
     },
-    /// Serve a directory index.
     Listing {
-        /// Which format the index is written in.
         format: IndexFormat,
     },
 }
 
-/// A directory index format a listing is served in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexFormat {
-    /// The XML an object store returns for a list request.
     ObjectStore,
-    /// The multi-status XML a `WebDAV` `PROPFIND` returns.
     WebDav,
-    /// The HTML index a common web server generates.
     GeneratedHtml,
-    /// A body in no recognized format.
     Unrecognized,
 }
 
-/// The latency a server charges before it answers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Latency {
     every: Duration,
@@ -85,21 +56,18 @@ pub struct Latency {
 }
 
 impl Latency {
-    /// Returns the latency with this much charged to every request.
     #[must_use]
     pub fn every_request(mut self, waiting: Duration) -> Self {
         self.every = waiting;
         self
     }
 
-    /// Returns the latency with this much charged to requests naming one host.
     #[must_use]
     pub fn host(mut self, host: impl Into<String>, waiting: Duration) -> Self {
         self.hosts.push((host.into(), waiting));
         self
     }
 
-    /// Returns how long a request waits before it is answered.
     #[must_use]
     pub fn before(&self, request: &Received) -> Duration {
         let named = request.header("host").unwrap_or_default().to_lowercase();
@@ -112,7 +80,6 @@ impl Latency {
     }
 }
 
-/// How many requests one or more servers were answering at the same moment.
 #[derive(Debug, Default)]
 pub struct Flight {
     current: AtomicUsize,
@@ -120,13 +87,11 @@ pub struct Flight {
 }
 
 impl Flight {
-    /// Returns a recorder every server told to report to it shares.
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
-    /// Returns the most requests that were being answered at one moment.
     #[must_use]
     pub fn peak(&self) -> usize {
         self.peak.load(Ordering::SeqCst)
@@ -141,7 +106,6 @@ impl Flight {
     }
 }
 
-/// One request, counted for as long as the server is answering it.
 #[derive(Debug)]
 pub struct InFlight {
     recorder: Arc<Flight>,
@@ -153,41 +117,24 @@ impl Drop for InFlight {
     }
 }
 
-/// A TLS alert record carrying a fatal handshake failure.
 const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
 
-/// What a test told one server to do.
 #[derive(Clone, Debug)]
 pub struct Script {
-    /// The bytes the object holds.
     pub object: Vec<u8>,
-    /// The entity tag each request is answered with, in order.
     pub etags: Vec<String>,
-    /// What each request for bytes is answered with, in order.
     pub replies: Vec<Reply>,
-    /// What every request after the script is answered with.
     pub then: Reply,
-    /// Whether the server advertises range support.
     pub accepts_ranges: bool,
-    /// The last modified value every response carries, when the server states
-    /// one.
     pub last_modified: Option<String>,
-    /// Whether the server answers a conditional request whose validator still
-    /// matches with a three hundred and four.
     pub honors_conditionals: bool,
-    /// Whether the server answers a secured connection with a refusal instead
-    /// of a handshake.
     pub refuses_tls: bool,
-    /// The latency charged before any answer is written.
     pub latency: Latency,
-    /// Additional headers carried on every response.
     pub extra_headers: Vec<(String, String)>,
-    /// The recorder every request answered by this server is counted in.
     pub flight: Option<Arc<Flight>>,
 }
 
 impl Script {
-    /// Builds a script that serves the object whole, forever.
     #[must_use]
     pub fn serving(object: Vec<u8>) -> Self {
         Self {
@@ -205,65 +152,54 @@ impl Script {
         }
     }
 
-    /// Returns the script with every request it answers counted in this
-    /// recorder, so a test can assert what was in flight at once.
     #[must_use]
     pub fn reporting(mut self, flight: &Arc<Flight>) -> Self {
         self.flight = Some(Arc::clone(flight));
         self
     }
 
-    /// Returns the script with every secured connection refused at the
-    /// handshake.
     #[must_use]
     pub fn refusing_tls(mut self) -> Self {
         self.refuses_tls = true;
         self
     }
 
-    /// Returns the script with a last modified value on every response.
     #[must_use]
     pub fn modified_at(mut self, value: impl Into<String>) -> Self {
         self.last_modified = Some(value.into());
         self
     }
 
-    /// Returns the script with conditional requests answered or ignored.
     #[must_use]
     pub fn conditional(mut self, honors: bool) -> Self {
         self.honors_conditionals = honors;
         self
     }
 
-    /// Returns the script with these replies used, in order, before `then`.
     #[must_use]
     pub fn replying(mut self, replies: Vec<Reply>) -> Self {
         self.replies = replies;
         self
     }
 
-    /// Returns the script with these entity tags used, in order.
     #[must_use]
     pub fn tagged(mut self, etags: Vec<String>) -> Self {
         self.etags = etags;
         self
     }
 
-    /// Returns the script with range support advertised or withheld.
     #[must_use]
     pub fn ranges(mut self, accepts: bool) -> Self {
         self.accepts_ranges = accepts;
         self
     }
 
-    /// Returns the script with this latency charged before every answer.
     #[must_use]
     pub fn delayed(mut self, latency: Latency) -> Self {
         self.latency = latency;
         self
     }
 
-    /// Returns the script with these additional headers on every response.
     #[must_use]
     pub fn headers(mut self, extra: Vec<(String, String)>) -> Self {
         self.extra_headers = extra;
@@ -271,19 +207,14 @@ impl Script {
     }
 }
 
-/// One request a server received.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Received {
-    /// The method.
     pub method: String,
-    /// The target, as it appeared on the request line.
     pub target: String,
-    /// Every header, lowercased, in the order they arrived.
     pub headers: Vec<(String, String)>,
 }
 
 impl Received {
-    /// Returns the value of a header, when the request carried it.
     #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
@@ -293,7 +224,6 @@ impl Received {
     }
 }
 
-/// A server a test drives.
 #[derive(Debug)]
 pub struct TestServer {
     address: SocketAddr,
@@ -302,21 +232,10 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// Starts a server on IPv4 loopback, on a port the platform chooses.
-    ///
-    /// # Errors
-    ///
-    /// Fails when no port can be bound.
     pub fn start(script: Script) -> std::io::Result<Self> {
         Self::start_on("127.0.0.1", script)
     }
 
-    /// Starts a server on the loopback address given, on a port the platform
-    /// chooses, for a test that needs two hosts rather than two ports.
-    ///
-    /// # Errors
-    ///
-    /// Fails when no port can be bound.
     pub fn start_on(loopback: &str, script: Script) -> std::io::Result<Self> {
         let listener = TcpListener::bind((loopback, 0))?;
         let address = listener.local_addr()?;
@@ -352,19 +271,16 @@ impl TestServer {
         })
     }
 
-    /// Returns the base the test points a client at.
     #[must_use]
     pub fn origin(&self) -> String {
         format!("http://{}", self.address)
     }
 
-    /// Returns the base a test that means to speak TLS points a client at.
     #[must_use]
     pub fn secured_origin(&self) -> String {
         format!("https://{}", self.address)
     }
 
-    /// Returns every request the server has received, in order.
     #[must_use]
     pub fn received(&self) -> Vec<Received> {
         self.received
@@ -641,8 +557,6 @@ fn partial(
     write_head(writer, 206, &headers) && writer.write_all(body).is_ok()
 }
 
-/// The span a request asked for: the first byte, and the last when it named
-/// one.
 type Span = (u64, Option<u64>);
 
 fn served(script: &Script, asked: Option<Span>) -> &[u8] {
@@ -707,7 +621,6 @@ fn flush(writer: &mut impl Write) -> bool {
     writer.flush().is_ok()
 }
 
-/// Reads the span a request asked for.
 fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
     let span = value.trim().strip_prefix("bytes=")?;
     let (start, end) = span.split_once('-')?;
@@ -721,7 +634,6 @@ fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
     Some((start, end))
 }
 
-/// Reports whether a conditional request's validator still matches.
 fn still_current(script: &Script, request: &Received, etag: Option<&str>) -> bool {
     if let Some(asked) = request.header("if-none-match") {
         return etag.is_some_and(|held| asked.split(',').any(|one| one.trim() == held));
@@ -732,7 +644,6 @@ fn still_current(script: &Script, request: &Received, etag: Option<&str>) -> boo
     false
 }
 
-/// Answers a conditional request whose validator still matches.
 fn not_modified(writer: &mut impl Write, script: &Script, etag: Option<&str>) -> bool {
     let mut headers = vec![("Content-Length".to_owned(), "0".to_owned())];
     if let Some(etag) = etag {
@@ -785,7 +696,6 @@ fn listing(format: IndexFormat) -> Vec<u8> {
     }
 }
 
-/// The XML an object store returns for a list request.
 const OBJECT_STORE_INDEX: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8"?>"#,
     r#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">"#,
@@ -796,7 +706,6 @@ const OBJECT_STORE_INDEX: &str = concat!(
     "</ListBucketResult>"
 );
 
-/// The multi-status XML a `WebDAV` `PROPFIND` returns.
 const WEBDAV_INDEX: &str = concat!(
     r#"<?xml version="1.0" encoding="utf-8"?>"#,
     r#"<D:multistatus xmlns:D="DAV:">"#,
@@ -809,7 +718,6 @@ const WEBDAV_INDEX: &str = concat!(
     "</D:multistatus>"
 );
 
-/// The HTML index a common web server generates.
 const GENERATED_HTML_INDEX: &str = concat!(
     "<html><head><title>Index of /set/</title></head><body>",
     "<h1>Index of /set/</h1><pre>",
@@ -821,7 +729,6 @@ const GENERATED_HTML_INDEX: &str = concat!(
     "\n</pre></body></html>"
 );
 
-/// A body in no recognized format.
 const UNRECOGNIZED_INDEX: &str = "one 11\ntwo 22\n";
 
 fn metadata_reply(next: Option<&Reply>) -> Reply {
@@ -838,7 +745,6 @@ fn metadata_reply(next: Option<&Reply>) -> Reply {
     }
 }
 
-/// Answers a metadata request, which carries every header and no body.
 fn metadata_only(
     writer: &mut impl Write,
     script: &Script,

@@ -14,27 +14,14 @@ use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_platform::NativePlatform;
 
-/// The field a plan reports as unknown when no source states the length an
-/// artifact expands to.
 const EXPANDED: &str = "expanded";
 
-/// The staging requirement, which is the expanded length and is unknown with
-/// it.
 const STAGING: &str = "staging";
 
-/// The destination requirement, which is the expanded length and is unknown
-/// with it.
 const DESTINATION: &str = "destination";
 
-/// The cost, which no source in this build states.
 const COST: &str = "cost";
 
-/// Builds the plan a reference resolves to, moving no bytes.
-///
-/// # Errors
-///
-/// Fails with `policy.trust_refused` when the lock pins nothing for the
-/// dataset.
 pub fn build(
     pinned: Option<&LockedDataset>,
     dataset: &str,
@@ -123,11 +110,6 @@ pub fn build(
     })
 }
 
-/// Reads a plan from a file.
-///
-/// # Errors
-///
-/// Fails when the file cannot be read and when it does not parse.
 pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
     let bytes = std::fs::read(path).map_err(|reason| {
         Error::new(
@@ -140,11 +122,6 @@ pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
     Plan::parse(&bytes, syntax, limits)
 }
 
-/// Returns the digest a plan's one artifact records.
-///
-/// # Errors
-///
-/// Fails when the plan names no artifact.
 pub fn only_artifact(plan: &Plan) -> Result<&PlanArtifact, Error> {
     plan.artifacts.first().ok_or_else(|| {
         Error::new(
@@ -154,7 +131,6 @@ pub fn only_artifact(plan: &Plan) -> Result<&PlanArtifact, Error> {
     })
 }
 
-/// Returns the digest a plan pins for its one artifact.
 #[must_use]
 pub fn pinned_digest(plan: &Plan) -> Option<ContentDigest> {
     plan.artifacts.first().map(|artifact| artifact.digest)
@@ -168,7 +144,6 @@ fn conflicts(destination: &Path) -> Vec<String> {
     }
 }
 
-/// Returns the name of the volume a path sits on.
 fn volume_of(path: &Path) -> String {
     let mut components = path.components();
     match components.next() {
@@ -180,7 +155,6 @@ fn volume_of(path: &Path) -> String {
     }
 }
 
-/// Returns the host a reference names, when it names one.
 fn named_host(reference: &str) -> Option<Host> {
     let host = Host::of_location(reference);
     if host.as_str().is_empty() {

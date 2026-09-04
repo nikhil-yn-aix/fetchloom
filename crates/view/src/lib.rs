@@ -11,10 +11,8 @@ use std::fmt::Write as _;
 
 use fetchloom_engine::event::{Event, EventPayload};
 
-/// How wide the bar drawn for one host is.
 const BAR_WIDTH: usize = 24;
 
-/// What the view learned about one host from the events it saw.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct HostState {
     transfers: u64,
@@ -22,7 +20,6 @@ struct HostState {
     bytes: u64,
 }
 
-/// Everything the view knows, which is only ever what an event told it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveView {
     dataset: Option<String>,
@@ -41,13 +38,11 @@ pub struct LiveView {
 }
 
 impl LiveView {
-    /// Builds a view that has seen nothing.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Takes one event, which is the only way anything ever enters this type.
     pub fn observe(&mut self, event: &Event) {
         if let Some(dataset) = event.dataset() {
             self.dataset = Some(dataset.to_owned());
@@ -102,20 +97,16 @@ impl LiveView {
         }
     }
 
-    /// Reports whether the run this view is watching has ended.
     #[must_use]
     pub fn finished(&self) -> bool {
         self.finished
     }
 
-    /// Returns how many lines the last rendering occupied, so a caller that
-    /// redraws knows how far to move back.
     #[must_use]
     pub fn height(&self) -> usize {
         self.render().lines().count()
     }
 
-    /// Renders everything the view has been told, and nothing else.
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -174,7 +165,6 @@ impl LiveView {
     }
 }
 
-/// Returns a bar whose filled width is this value's share of the widest one.
 fn bar(value: u64, widest: u64) -> String {
     if widest == 0 {
         return " ".repeat(BAR_WIDTH);
@@ -187,7 +177,6 @@ fn bar(value: u64, widest: u64) -> String {
     bar
 }
 
-/// Returns a byte count the way a person reads it.
 fn human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     #[expect(

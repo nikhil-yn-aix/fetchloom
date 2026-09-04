@@ -33,8 +33,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// An object of sixty-five leaf groups plus a partial one, which is the
-/// smallest object that stores a tree.
 fn large_object() -> Vec<u8> {
     let len = usize::try_from(OUTBOARD_THRESHOLD + OUTBOARD_CHUNK_GROUP + 4097).unwrap();
     let mut bytes = vec![0u8; len];
@@ -44,7 +42,6 @@ fn large_object() -> Vec<u8> {
     bytes
 }
 
-/// One cache, one server, and the runs a test drives against them.
 struct Ground {
     scratch: TempDir,
     server: TestServer,
@@ -78,7 +75,6 @@ impl Ground {
             .unwrap()
     }
 
-    /// Fetches the object once, leaving it and its tree in the cache.
     fn fetch(&self) -> serde_json::Value {
         let url = self.url();
         let output = self.run(&[
@@ -97,12 +93,10 @@ impl Ground {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
-    /// Returns the one object the cache holds.
     fn object(&self) -> std::path::PathBuf {
         one_file_in(&self.cache().join("objects"))
     }
 
-    /// Returns the tree stored for it.
     fn outboard(&self) -> std::path::PathBuf {
         one_file_in(&self.cache().join("outboard"))
     }
@@ -125,7 +119,6 @@ fn one_file_in(directory: &Path) -> std::path::PathBuf {
     found.pop().unwrap()
 }
 
-/// Returns the receipt describing one destination.
 fn receipt_for(ground: &Ground, destination: &Path) -> String {
     let wanted = destination
         .file_name()
@@ -138,7 +131,6 @@ fn receipt_for(ground: &Ground, destination: &Path) -> String {
         .unwrap_or_else(|| panic!("no receipt describes {}", destination.display()))
 }
 
-/// Writes bytes over part of a file that was published read-only.
 fn damage(path: &Path, at: u64, bytes: &[u8]) {
     use std::io::{Seek, SeekFrom, Write};
 
@@ -155,7 +147,6 @@ fn damage(path: &Path, at: u64, bytes: &[u8]) {
     file.write_all(bytes).unwrap();
 }
 
-/// Overwrites a region of the object with bytes that are certainly different.
 fn damage_region(path: &Path, at: u64, length: usize) {
     damage(path, at, &vec![0x5A; length]);
 }
@@ -725,7 +716,6 @@ fn a_witness_names_the_origin_that_served_the_bytes_and_not_the_one_that_was_ask
     );
 }
 
-/// Returns every witness under a directory, however it is sharded, as one text.
 fn every_witness(directory: &std::path::Path) -> String {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return String::new();

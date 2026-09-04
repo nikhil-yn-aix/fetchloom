@@ -11,13 +11,6 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::selection::Selection;
 use std::path::Path;
 
-/// Materializes an object the cache already holds.
-///
-/// # Errors
-///
-/// Fails when the object is absent, when the destination is modified or foreign
-/// and neither `--force` nor `--adopt` was given, and when staging cannot be
-/// published.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"

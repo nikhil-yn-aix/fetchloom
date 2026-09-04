@@ -14,29 +14,16 @@ use crate::{Cache, owner_record_of, source_record_of};
 
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
-/// What one rebuild did.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct RebuildReport {
-    /// How many outboard trees were built from the object's own bytes.
     pub trees_rebuilt: u64,
-    /// How many object records were written again.
     pub records_rebuilt: u64,
-    /// How many locks whose holder is not alive were removed.
     pub locks_released: u64,
-    /// How many partial and staging entries with nothing behind them were
-    /// removed.
     pub orphans_removed: u64,
-    /// The objects whose own bytes failed, each now in quarantine.
     pub needing_a_source: Vec<String>,
-    /// How many objects another writer held, so they were left alone.
     pub held: u64,
 }
 
-/// Rebuilds every piece of derived data this cache can produce from itself.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be read or written.
 pub fn run<P: Platform>(cache: &Cache<P>) -> Result<RebuildReport, Error> {
     let mut report = RebuildReport::default();
     for digest in cache.list()? {
@@ -92,7 +79,6 @@ fn missing_tree(digest: fetchloom_engine::digest::ContentDigest) -> Error {
     )
 }
 
-/// Reports whether a stored tree fails against the digest it belongs to.
 fn tree_does_not_check_out<P: Platform>(
     cache: &Cache<P>,
     digest: fetchloom_engine::digest::ContentDigest,
@@ -139,7 +125,6 @@ fn write_record<P: Platform>(
     )
 }
 
-/// Removes every lock whose recorded holder is a process that no longer exists.
 fn release_dead_locks<P: Platform>(
     cache: &Cache<P>,
     report: &mut RebuildReport,
@@ -168,7 +153,6 @@ fn release_dead_locks<P: Platform>(
     Ok(())
 }
 
-/// Removes every partial and staging entry with nothing behind it.
 fn remove_orphans<P: Platform>(cache: &Cache<P>, report: &mut RebuildReport) -> Result<(), Error> {
     for directory in [cache.layout().partial(), cache.layout().staging()] {
         let entries = std::fs::read_dir(&directory)

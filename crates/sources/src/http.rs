@@ -21,13 +21,11 @@ use fetchloom_engine::work::WorkCounter;
 use crate::index;
 use crate::origin::Origin;
 
-/// The bytes of one object, streamed as they arrive.
 pub struct HttpBody {
     reader: Box<dyn Read + Send + Sync>,
 }
 
 impl HttpBody {
-    /// Wraps a reader as the streamed bytes of one object.
     pub(crate) fn new(reader: impl Read + Send + Sync + 'static) -> Self {
         Self {
             reader: Box::new(reader),
@@ -47,7 +45,6 @@ impl Read for HttpBody {
     }
 }
 
-/// A source reached over HTTP or HTTPS.
 #[derive(Default)]
 pub struct HttpSource {
     agents: Mutex<HashMap<String, ureq::Agent>>,
@@ -57,7 +54,6 @@ pub struct HttpSource {
 }
 
 impl HttpSource {
-    /// Builds a source holding no connections yet.
     #[must_use]
     pub fn new(limits: Limits, work: Arc<WorkCounter>) -> Self {
         Self {
@@ -76,7 +72,6 @@ impl HttpSource {
             .clone()
     }
 
-    /// Returns the bounds this source was built with.
     pub(crate) fn limits(&self) -> Limits {
         self.limits
     }
@@ -163,16 +158,12 @@ impl HttpSource {
     }
 }
 
-/// Which request a send is making.
 #[derive(Clone, Copy)]
 pub(crate) enum Method {
-    /// A bounded metadata request.
     Head,
-    /// A request for bytes.
     Get,
 }
 
-/// Splits a location into the path and query a signature is computed over.
 fn path_and_query(location: &str) -> (String, String) {
     let after_scheme = location
         .split_once("://")
@@ -185,9 +176,6 @@ fn path_and_query(location: &str) -> (String, String) {
     }
 }
 
-/// Returns the headers whatever the credential's shape authorizes a request
-/// with, which is a value the credential supplies or a signature computed over
-/// the request itself.
 fn authorizing_headers(
     credential: &Credential,
     location: &str,
@@ -253,20 +241,13 @@ fn redirect_target<T>(answer: &ureq::http::Response<T>, status: u16) -> Option<S
     header(answer, "location")
 }
 
-/// The fields common to every metadata response, independent of what
-/// identifies the bytes or who is billed for them.
 pub(crate) struct CommonFields {
-    /// The length in bytes, when the source states it.
     pub size: Option<u64>,
-    /// The last modified value the source gave, when it gave one.
     pub last_modified: Option<String>,
-    /// Whether the source can serve part of the object.
     pub supports_ranges: bool,
-    /// How long the source asked to be left alone for, when it asked.
     pub retry_after: Option<Duration>,
 }
 
-/// Reads the fields common to every metadata response out of one answer.
 pub(crate) fn common_fields<T>(answer: &ureq::http::Response<T>) -> CommonFields {
     CommonFields {
         size: header(answer, "content-length").and_then(|value| value.parse().ok()),
@@ -279,12 +260,6 @@ pub(crate) fn common_fields<T>(answer: &ureq::http::Response<T>) -> CommonFields
     }
 }
 
-/// Checks a fetch response against the range it was asked to serve.
-///
-/// # Errors
-///
-/// Fails when the source could not serve the span, refused the request, or
-/// answered with a different span than the one asked for.
 pub(crate) fn check_fetch_status(
     location: &str,
     range: Option<ByteRange>,
@@ -571,12 +546,6 @@ pub(crate) fn transport_failure(location: &str, reason: &ureq::Error) -> Error {
         .with_retryable(retryable)
 }
 
-/// What a transport failure may say about itself.
-///
-/// The transport writes the location it was given into several of its own
-/// messages, so its text is never interpolated. Each variant that says
-/// something about the connection rather than about the address says it here,
-/// and every other one says nothing.
 fn detail(reason: &ureq::Error) -> String {
     match reason {
         ureq::Error::Io(socket) => socket.to_string(),
@@ -597,14 +566,14 @@ fn detail(reason: &ureq::Error) -> String {
     }
 }
 
-/// What to tell someone whose host name went nowhere.
 const UNRESOLVED: &str =
     "check the host name, because nothing on this machine can resolve it to an address";
 
-/// What to tell someone whose request ran out of time.
 const RAN_OUT: &str = "try the source again, because the request ran out of time";
 
-/// Decides what a transport failure is and whether another attempt could work.
+const OVERSIZED: &str =
+    "ask for a narrower prefix, because the answer is larger than the bound this run reads";
+
 fn classify(reason: &ureq::Error) -> (ErrorKind, bool, &'static str) {
     match reason {
         ureq::Error::Timeout(_) => (ErrorKind::NetworkTimeout, true, RAN_OUT),
@@ -614,6 +583,7 @@ fn classify(reason: &ureq::Error) -> (ErrorKind, bool, &'static str) {
             "trust the source or name one you already trust, because the connection could not be secured",
         ),
         ureq::Error::HostNotFound => (ErrorKind::NetworkRefused, false, UNRESOLVED),
+        ureq::Error::BodyExceedsLimit(_) => (ErrorKind::ResourceLimit, false, OVERSIZED),
         ureq::Error::Io(socket) if unsecurable(socket) => (
             ErrorKind::NetworkTls,
             false,
@@ -633,14 +603,12 @@ fn classify(reason: &ureq::Error) -> (ErrorKind, bool, &'static str) {
     }
 }
 
-/// Returns whether a socket failure was the handshake and not the socket.
 fn unsecurable(reason: &std::io::Error) -> bool {
     reason
         .get_ref()
         .is_some_and(|held| held.downcast_ref::<rustls::Error>().is_some())
 }
 
-/// Returns whether a name lookup failed in a way another attempt cannot fix.
 fn unresolvable(reason: &std::io::Error) -> bool {
     if matches!(reason.raw_os_error(), Some(11_001 | 11_004)) {
         return true;
@@ -650,7 +618,6 @@ fn unresolvable(reason: &std::io::Error) -> bool {
         && !text.contains("Temporary failure in name resolution")
 }
 
-/// Reads the first byte offset a partial response says it is serving.
 fn first_byte_of(value: &str) -> Option<u64> {
     value
         .trim()
@@ -662,15 +629,10 @@ fn first_byte_of(value: &str) -> Option<u64> {
         .ok()
 }
 
-/// Reports whether a reference names a location reached over HTTP.
 pub(crate) fn is_over_http(reference: &str) -> bool {
     reference.starts_with("http://") || reference.starts_with("https://")
 }
 
-/// Reports whether this platform's certificate trust store can be loaded, which
-/// is what a source needs before it can secure a connection.
-///
-/// Makes no request, so it answers the same question offline.
 #[must_use]
 pub fn trust_store_loads() -> bool {
     let _ = rustls_graviola::default_provider().install_default();

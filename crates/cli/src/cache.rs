@@ -19,20 +19,12 @@ use fetchloom_platform::NativePlatform;
 
 use crate::surface::CacheCommand;
 
-/// A cache this run may use, or why it may not.
 pub enum Opened {
-    /// The cache is open and usable.
     Ready(Box<Cache<NativePlatform>>),
-    /// The cache cannot be used, and the run continues without one.
-    Degraded {
-        /// What the platform said.
-        reason: String,
-    },
-    /// The cache was written in a format this build does not read.
+    Degraded { reason: String },
     Refused(Box<Error>),
 }
 
-/// Opens the cache at a root, deciding what an unusable one means.
 #[must_use]
 pub fn open(
     root: &Path,
@@ -60,11 +52,6 @@ pub fn open(
     }
 }
 
-/// Opens the cache for a cache command, where there is nothing to degrade to.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened for any reason.
 pub fn require(
     root: &Path,
     work: Arc<WorkCounter>,
@@ -82,7 +69,6 @@ pub fn require(
     )
 }
 
-/// Emits the degrade event a run makes when it cannot use its cache.
 pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path, reason: &str) {
     observer.emit(&Event::new(
         sequence,
@@ -94,7 +80,6 @@ pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path,
     ));
 }
 
-/// Runs one cache command.
 #[must_use]
 pub fn run(
     root: &Path,
@@ -343,7 +328,6 @@ fn print_json<T: serde::Serialize>(body: &T) {
     }
 }
 
-/// Reports what an export or an import moved.
 fn report_bundle(
     outcome: &Result<fetchloom_cache::bundle::BundleReport, Error>,
     reporter: &crate::Reporter<'_>,

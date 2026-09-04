@@ -4,10 +4,8 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::identity::CacheFormatFingerprint;
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD, PACK_THRESHOLD};
 
-/// The domain this fingerprint is derived under.
 const FORMAT_CONTEXT: &str = "fetchloom cache format";
 
-/// Every statement that defines the on-disk format.
 fn statements() -> Vec<String> {
     vec![
         "the cache root holds objects, packs, outboard, partial, staging, quarantine, receipts, meta, locks, pins, and format"
@@ -45,7 +43,6 @@ fn statements() -> Vec<String> {
     ]
 }
 
-/// Returns the fingerprint of the format this build writes.
 #[must_use]
 pub fn fingerprint() -> CacheFormatFingerprint {
     let mut accumulator = [0u8; 32];
@@ -59,7 +56,6 @@ pub fn fingerprint() -> CacheFormatFingerprint {
     CacheFormatFingerprint::new(ContentDigest::from_bytes(sealed))
 }
 
-/// Renders a fingerprint as the text the format file holds.
 #[must_use]
 pub fn render(fingerprint: CacheFormatFingerprint) -> String {
     format!("{}\n", fingerprint.digest())

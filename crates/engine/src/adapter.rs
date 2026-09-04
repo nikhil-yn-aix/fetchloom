@@ -10,36 +10,19 @@ use crate::seam::source::{ByteRange, Served, Source, SourceIdentity, SourceMetad
 use crate::source_record::SourceRecord;
 use crate::transfer::rung_for;
 
-/// A fixture describing a location a `Source` implementation is pointed at,
-/// and the contract shape it must satisfy for that location.
 pub struct Fixture<'a> {
-    /// Where the fixture's bytes live, in the form the adapter under test
-    /// resolves.
     pub location: &'a str,
-    /// The exact bytes the location must serve.
     pub bytes: &'a [u8],
-    /// Whether the adapter is expected to serve a byte range of this
-    /// location.
     pub supports_ranges: bool,
-    /// Whether the adapter is expected to report an identity other than
-    /// `SourceIdentity::None` for this location.
     pub exposes_identity: bool,
-    /// The location of a listable container, or `None` when the adapter does
-    /// not support listing.
     pub container: Option<&'a str>,
-    /// The paths a listing of `container` must return, when `container` is
-    /// set.
     pub entries: &'a [&'a str],
 }
 
-/// One way an adapter's behavior diverged from the contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
-    /// The name of the check that failed.
     pub check: &'static str,
-    /// What the contract requires.
     pub expected: String,
-    /// What the adapter did instead.
     pub found: String,
 }
 
@@ -51,11 +34,6 @@ fn finding(check: &'static str, expected: impl Into<String>, found: impl Into<St
     }
 }
 
-/// Runs the shared adapter contract suite against one `Source`
-/// implementation for one fixture, and returns every way it diverged.
-///
-/// An empty result means the adapter satisfies the contract for this
-/// fixture.
 #[must_use]
 pub fn judge<S: Source>(source: &S, fixture: &Fixture<'_>) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -202,8 +180,6 @@ fn check_whole_fetch<B: Read>(
     }
 }
 
-/// Returns a span strictly inside a body of this length, favoring a middle
-/// third so a range check exercises neither edge.
 fn middle_span(length: usize) -> ByteRange {
     let total = u64::try_from(length).unwrap_or(u64::MAX);
     let quarter = total / 4;
@@ -415,8 +391,6 @@ fn check_listing_not_supported<S: Source>(
     }
 }
 
-/// Builds the record a partial file beside the fixture's bytes would have
-/// recorded, from a probe already taken of it.
 fn record_matching(
     location: &str,
     probed: &SourceMetadata,

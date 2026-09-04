@@ -23,9 +23,6 @@ use fetchloom_engine::manifest::ArchiveFormat;
 use fetchloom_engine::seam::archive::Archive;
 use fetchloom_faults::{Container, Corpus, CorpusEntry, Expectation};
 
-/// The corpus entries whose rejection needs the destination volume or the order
-/// extraction creates entries in, and which the reader therefore lists without
-/// deciding.
 const DECIDED_BY_EXTRACTION: &[&str] = &[
     "tar_case_collision",
     "tar_unicode_normalization_collision",
@@ -37,9 +34,6 @@ const DECIDED_BY_EXTRACTION: &[&str] = &[
     "tar_path_too_long",
 ];
 
-/// The corpus entries whose declared totals stay within the default limits on
-/// purpose, so their rejection is only reachable against an overridden limit
-/// and is asserted in `extract.rs` rather than here.
 const REQUIRES_OVERRIDDEN_LIMITS: &[&str] = &[
     "tar_bomb_entry_count",
     "tar_bomb_expanded_bytes",

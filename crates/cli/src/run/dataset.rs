@@ -32,7 +32,6 @@ use fetchloom_engine::trust::{ArtifactKey, RunId, TrustClass, Witness, classify}
 use fetchloom_platform::NativePlatform;
 use std::path::Path;
 
-/// Returns the manifest a run that was given no manifest resolved from.
 #[must_use]
 pub fn synthesized_manifest(
     adapters: &Adapters,
@@ -61,12 +60,6 @@ pub fn synthesized_manifest(
     }
 }
 
-/// Writes the receipt that records what a run materialized.
-///
-/// # Errors
-///
-/// Fails when the manifest digest cannot be taken and when the receipt cannot
-/// be written.
 pub fn write_receipt(
     cache: &Cache<NativePlatform>,
     manifest: &fetchloom_engine::manifest::Manifest,
@@ -125,7 +118,6 @@ pub fn write_receipt(
     Ok(weakest)
 }
 
-/// Returns what names this run.
 pub(super) fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
     let token = cache.token();
     RunId::new(format!(
@@ -136,7 +128,6 @@ pub(super) fn run_identity(cache: &Cache<NativePlatform>) -> RunId {
     ))
 }
 
-/// Returns the fingerprint every file of a destination carries right now.
 pub(super) fn fingerprints_of(
     cache: &Cache<NativePlatform>,
     destination: &Path,
@@ -157,7 +148,6 @@ pub(super) fn fingerprints_of(
     found
 }
 
-/// Returns the name a reference's dataset is recorded under.
 #[must_use]
 pub fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> String {
     if is_served(adapters, reference) {
@@ -169,60 +159,32 @@ pub fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> Stri
     )
 }
 
-/// What is known about where an artifact's bytes came from and what was known
-/// about them before the run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Provenance {
-    /// The digest supplied before the run, when one was.
     pub prior: Option<ContentDigest>,
-    /// The origin that served the bytes, present only when this run moved them.
     pub observed: Option<String>,
 }
 
-/// One artifact a manifest named, as this run resolved it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedArtifact {
-    /// The name the manifest gave it.
     pub id: String,
-    /// The digest its bytes hash to.
     pub digest: ContentDigest,
-    /// The interop digest of the same bytes.
     pub interop: fetchloom_engine::digest::InteropDigest,
-    /// The length of the object in bytes.
     pub size: u64,
-    /// The source that served it, redacted as it was recorded.
     pub source: SafeUrl,
-    /// The name the object is known by, which its format is read from.
     pub name: String,
-    /// The members the artifact contributes.
     pub selection: Selection,
-    /// The format the manifest declared, when it declared one.
     pub declared: Option<ArchiveFormat>,
-    /// The digest that was supplied before the run, when one was.
     pub prior: Option<ContentDigest>,
-    /// The origin that served the bytes, present only when this run transferred
-    /// them in full and verified them as they arrived.
     pub observed: Option<String>,
-    /// Why the source that served it was taken over the alternatives, when a
-    /// run selected one.
     pub reason: Option<String>,
 }
 
-/// What a run against a manifest produced.
 pub struct DatasetRun {
-    /// Every artifact that resolved, in manifest order, whether or not the run
-    /// went on to publish anything.
     pub resolved: Vec<ResolvedArtifact>,
-    /// What the run did, or what stopped it.
     pub outcome: Result<RunResult, Error>,
 }
 
-/// Reads the manifest a local reference names, when it names one.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` when the path carries a manifest extension and
-/// does not hold a manifest.
 #[must_use]
 pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::Manifest, Error>> {
     let syntax = fetchloom_engine::document::Syntax::of_path(source)?;
@@ -240,7 +202,6 @@ pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::M
     }))
 }
 
-/// Materializes every artifact a manifest names into one destination.
 #[expect(
     clippy::too_many_arguments,
     reason = "the manifest, the lock, and the reconcile flags each name a contract behavior of their own"
@@ -302,8 +263,6 @@ pub fn materialize_manifest(
     DatasetRun { resolved, outcome }
 }
 
-/// Returns the host an artifact's first source names, and nothing for an
-/// artifact no host serves.
 pub(super) fn serving_host(
     adapters: &Adapters,
     artifact: &fetchloom_engine::manifest::Artifact,
@@ -316,7 +275,6 @@ pub(super) fn serving_host(
         .unwrap_or_default()
 }
 
-/// Puts one artifact's bytes in the cache and reports what they are.
 pub(super) fn resolve_artifact(
     with: &Materialization<'_>,
     flights: &Flights<'_>,
@@ -397,7 +355,6 @@ pub(super) fn resolve_artifact(
     })
 }
 
-/// Puts the bytes an artifact names on this machine into the cache.
 pub(super) fn ingest_artifact(
     with: &Materialization<'_>,
     artifact: &fetchloom_engine::manifest::Artifact,
@@ -453,8 +410,6 @@ pub(super) fn ingest_artifact(
     Ok(ingested)
 }
 
-/// Returns what the cache already holds for a reference, which is what a
-/// conditional request is built from.
 pub(super) fn prior_from(
     cache: &Cache<NativePlatform>,
 ) -> impl Fn(&str) -> Option<fetchloom_engine::transfer::Prior> + '_ {
@@ -470,7 +425,6 @@ pub(super) fn prior_from(
     }
 }
 
-/// Records what a reference resolved to and the validator that came with it.
 pub(super) fn remember(
     cache: &Cache<NativePlatform>,
     location: &str,
@@ -489,7 +443,6 @@ pub(super) fn remember(
     )
 }
 
-/// Publishes every resolved artifact into one destination.
 pub(super) fn publish_dataset(
     with: &Materialization<'_>,
     resolved: &[ResolvedArtifact],
@@ -540,19 +493,10 @@ pub(super) fn publish_dataset(
     )
 }
 
-/// Returns where under the destination a plain artifact lands, which is its
-/// identifier and never the way one of its sources happens to spell it.
-///
-/// # Errors
-///
-/// Fails with `archive.unsafe_path` when the identifier is not a path the
-/// destination can hold, by exactly the rules an archive member passes.
 pub(super) fn placement_of(artifact: &ResolvedArtifact, limits: &Limits) -> Result<String, Error> {
     fetchloom_archive::validate_member_path(artifact.id.as_bytes(), limits.nesting_depth)
 }
 
-/// Returns the entries with one directory entry for every ancestor a file
-/// entry needs, because a tree records every directory it holds.
 pub(super) fn with_ancestor_directories(entries: Vec<TreeEntry>) -> Result<Vec<TreeEntry>, Error> {
     let mut held: std::collections::BTreeSet<String> = entries
         .iter()
@@ -584,7 +528,6 @@ pub(super) fn with_ancestor_directories(entries: Vec<TreeEntry>) -> Result<Vec<T
     Ok(all)
 }
 
-/// Returns the entries one resolved artifact contributes, writing nothing.
 pub(super) fn dataset_entries(
     with: &Materialization<'_>,
     artifact: &ResolvedArtifact,
@@ -613,7 +556,6 @@ pub(super) fn dataset_entries(
     result
 }
 
-/// Builds every resolved artifact into one staging directory and publishes it.
 pub(super) fn build_dataset_staging(
     with: &Materialization<'_>,
     resolved: &[ResolvedArtifact],
@@ -700,8 +642,6 @@ pub(super) fn fill_dataset_staging(
     with_ancestor_directories(entries)
 }
 
-/// Returns what a run against a single object resolved, in the form the lock
-/// and the receipt record it.
 #[must_use]
 pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<ResolvedArtifact> {
     let Some(artifact) = &result.artifact else {
@@ -725,7 +665,6 @@ pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<Resolve
     }]
 }
 
-/// Returns the trust class a run may claim before its own witness is recorded.
 pub(super) fn provisional_trust(
     with: &Materialization<'_>,
     artifact: Option<&RecordedArtifact>,

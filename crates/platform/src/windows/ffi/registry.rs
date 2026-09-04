@@ -11,7 +11,6 @@ use windows_sys::Win32::System::Registry::{
 
 use super::encode::wide_text;
 
-/// Reads a string value from the local machine registry.
 pub(crate) fn registry_string(subkey: &str, value: &str) -> Option<String> {
     let subkey = wide_text(subkey);
     let value = wide_text(value);
@@ -36,7 +35,6 @@ pub(crate) fn registry_string(subkey: &str, value: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&buffer[..characters]))
 }
 
-/// Reads a numeric value from the local machine registry.
 pub(crate) fn registry_number(subkey: &str, value: &str) -> Option<u32> {
     let subkey = wide_text(subkey);
     let value = wide_text(value);

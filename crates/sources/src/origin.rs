@@ -5,7 +5,6 @@ use std::fmt;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 
-/// The scheme, host and port a location names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Origin {
     scheme: String,
@@ -14,11 +13,6 @@ pub struct Origin {
 }
 
 impl Origin {
-    /// Reads the origin a location names.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the location names no scheme this source reaches.
     pub fn of(location: &str) -> Result<Self, Error> {
         let (scheme, rest) = location
             .split_once("://")
@@ -46,17 +40,11 @@ impl Origin {
         })
     }
 
-    /// Returns the host.
     #[must_use]
     pub fn host(&self) -> &str {
         &self.host
     }
 
-    /// Resolves a redirect target against the location it came from.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the target is neither.
     pub fn join(from: &str, target: &str) -> Result<String, Error> {
         if target.contains("://") {
             return Ok(target.to_owned());

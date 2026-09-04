@@ -36,8 +36,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// The bytes of `xz -9` over a ustar tar holding `hello.txt`, whose content is
-/// `hello\n`, embedded because this tree carries no xz encoder.
 const TAR_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 103, 128, 80, 33, 1, 28, 0, 0, 0, 0,
     0, 0, 0, 0, 170, 92, 211, 43, 224, 39, 255, 0, 95, 93, 0, 52, 25, 73, 238, 141, 240, 186, 200,
@@ -49,7 +47,6 @@ const TAR_XZ: &[u8] = &[
     144, 3, 244, 231, 177, 196, 103, 251, 2, 0, 0, 0, 0, 4, 89, 90,
 ];
 
-/// The bytes of `bzip2 -9` over the same tar, embedded for the same reason.
 const TAR_BZ2: &[u8] = &[
     66, 90, 104, 57, 49, 65, 89, 38, 83, 89, 68, 112, 61, 139, 0, 0, 111, 251, 128, 201, 144, 0, 4,
     64, 1, 71, 128, 0, 128, 98, 68, 158, 64, 8, 8, 32, 0, 84, 52, 128, 76, 70, 0, 77, 160, 146, 36,
@@ -58,23 +55,19 @@ const TAR_BZ2: &[u8] = &[
     12, 248, 113, 244, 136, 128, 232, 187, 146, 41, 194, 132, 130, 35, 129, 236, 88,
 ];
 
-/// The bytes of `xz -9` over `hello\n` alone.
 const GREETING_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 10, 6, 33, 1, 28, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 99, 160, 172, 177, 1, 0, 5, 104, 101, 108, 108, 111, 10, 0, 0, 0, 165, 96, 151, 241,
     148, 246, 253, 224, 0, 1, 38, 6, 58, 147, 59, 10, 31, 182, 243, 125, 1, 0, 0, 0, 0, 4, 89, 90,
 ];
 
-/// The bytes of `bzip2 -9` over `hello\n` alone.
 const GREETING_BZ2: &[u8] = &[
     66, 90, 104, 57, 49, 65, 89, 38, 83, 89, 193, 192, 128, 226, 0, 0, 1, 65, 0, 0, 16, 2, 68, 160,
     0, 48, 205, 0, 195, 70, 41, 151, 23, 114, 69, 56, 80, 144, 193, 192, 128, 226,
 ];
 
-/// What a tar holding `hello.txt` decompresses to.
 const GREETING: &[u8] = b"hello\n";
 
-/// One run of the binary and everything it produced.
 struct Run {
     output: Output,
 }
@@ -107,7 +100,6 @@ impl Run {
     }
 }
 
-/// A directory the binary runs in, with a cache of its own.
 struct Workspace {
     temporary: TempDir,
 }
@@ -147,8 +139,6 @@ impl Workspace {
         }
     }
 
-    /// Runs with configuration discovery left on, so a configuration file is
-    /// the highest level that named a value.
     fn run_reading_configuration(&self, arguments: &[&str]) -> Run {
         Run {
             output: support::fetchloom_reading_configuration()
@@ -192,8 +182,6 @@ fn gzip(content: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
-/// Wraps bytes in a zstd frame of one raw block, which the format permits and
-/// the decoder accepts without any encoder existing here.
 fn zstd(content: &[u8]) -> Vec<u8> {
     assert!(content.len() < 0x0002_0000, "one raw block bounds this");
     let mut frame = vec![0x28, 0xB5, 0x2F, 0xFD, 0xA0];
@@ -204,7 +192,6 @@ fn zstd(content: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// A tar holding `hello.txt`, whose content is the greeting.
 fn greeting_tar() -> Vec<u8> {
     let mut header = TarHeader::ustar(b"hello.txt", TYPEFLAG_REGULAR);
     header.set_size(GREETING.len() as u64);
@@ -213,8 +200,6 @@ fn greeting_tar() -> Vec<u8> {
     writer.finish()
 }
 
-/// A tar shaped the way `tar -c pkg-1.0` writes one: a directory header for
-/// every directory, then the files beneath them.
 fn package_tar() -> Vec<u8> {
     let mut writer = TarWriter::new();
     for name in [&b"pkg-1.0/"[..], b"pkg-1.0/src/"] {
@@ -232,8 +217,6 @@ fn package_tar() -> Vec<u8> {
     writer.finish()
 }
 
-/// A zip of stored members, written without directory entries, which is what
-/// `zip -D` produces.
 fn package_zip() -> Vec<u8> {
     let members: [(&[u8], &[u8]); 2] = [
         (b"pkg-1.0/README", b"readme\n"),
@@ -286,7 +269,6 @@ fn package_zip() -> Vec<u8> {
     body
 }
 
-/// A directory of three files and one empty directory.
 fn tree(workspace: &Workspace) -> PathBuf {
     let root = workspace.path().join("tree");
     std::fs::create_dir_all(root.join("nested")).unwrap();
@@ -1157,7 +1139,6 @@ fn a_second_reference_is_a_usage_error_rather_than_a_declared_capability() {
     assert_eq!(run.code(), 2, "{} {}", run.out(), run.err());
 }
 
-/// Adds up the length of every file under a directory.
 fn bytes_under(root: &Path) -> u64 {
     let mut total = 0;
     let mut pending = vec![root.to_path_buf()];

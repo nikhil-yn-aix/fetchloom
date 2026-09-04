@@ -89,7 +89,6 @@ fn object(index: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Writes a manifest naming one artifact that every server given serves.
 fn mirrored(workspace: &Workspace, servers: &[&TestServer], bytes: &[u8]) {
     let mut sources = String::new();
     for server in servers {
@@ -108,8 +107,6 @@ fn mirrored(workspace: &Workspace, servers: &[&TestServer], bytes: &[u8]) {
     );
 }
 
-/// Returns the authority of an origin, which is what an event carries after
-/// redaction.
 fn authority(origin: &str) -> String {
     origin.trim_start_matches("http://").to_owned()
 }

@@ -5,15 +5,11 @@
 
 use std::ffi::c_void;
 
-/// One filter driver the platform has loaded.
 pub(crate) struct LoadedFilter {
-    /// The product's own name.
     pub(crate) name: String,
-    /// Where the platform ordered it relative to other filters.
     pub(crate) altitude: u32,
 }
 
-/// Lists the filter drivers inspecting file operations on this machine.
 pub(crate) fn loaded_minifilters() -> Option<Vec<LoadedFilter>> {
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS};
     use windows_sys::Win32::Storage::InstallableFileSystems::{
@@ -85,7 +81,6 @@ pub(crate) fn loaded_minifilters() -> Option<Vec<LoadedFilter>> {
     Some(found)
 }
 
-/// Builds the result value the filter manager returns for a Win32 error.
 const fn win32_result(code: u32) -> i32 {
     i32::from_ne_bytes((0x8007_0000 | (code & 0xffff)).to_ne_bytes())
 }

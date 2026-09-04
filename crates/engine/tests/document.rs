@@ -259,12 +259,6 @@ fn a_document_past_a_bound_is_refused_rather_than_read() {
     assert!(parse(YAML.as_bytes(), Syntax::Yaml, &shallow).is_err());
 }
 
-/// A fingerprint tuple holds a volume identifier, a file identifier and two
-/// instants, and two of those are a hundred and twenty-eight bits wide. The
-/// canonical form carries a number as a run of digits that fits sixty-four, so
-/// a receipt that wrote them as numbers could be written on a platform whose
-/// values happen to be small and not on one whose values are not. It is written
-/// on every platform or on none.
 #[test]
 fn a_receipt_renders_with_the_widest_fingerprint_any_platform_can_produce() {
     let mut fingerprints = std::collections::BTreeMap::new();

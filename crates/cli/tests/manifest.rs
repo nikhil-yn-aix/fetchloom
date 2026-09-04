@@ -40,7 +40,6 @@ fn scratch() -> &'static Path {
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }
 
-/// A gzip-wrapped tar holding one directory and one file under it.
 fn archive(directory: &str, name: &str, body: &[u8]) -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(
@@ -65,7 +64,6 @@ struct Scene {
     lock: PathBuf,
 }
 
-/// A dataset of two artifacts, each a small archive beside the manifest.
 fn two_artifacts(body: &str) -> Scene {
     let temporary = TempDir::new().unwrap();
     let root = temporary.path().to_path_buf();

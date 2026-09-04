@@ -9,8 +9,6 @@ use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::{Artifact, DigestClaims, Manifest};
 use fetchloom_engine::pool::Processor;
 
-/// Returns the dataset name a reference carries, which is the last named part
-/// of it.
 #[must_use]
 pub fn dataset_name(reference: &str) -> String {
     let trimmed = reference.trim_end_matches('/');
@@ -21,12 +19,6 @@ pub fn dataset_name(reference: &str) -> String {
     last.map_or_else(|| "dataset".to_owned(), str::to_owned)
 }
 
-/// Infers a manifest for a directory on this machine, reading every file once
-/// to record the digests it observed.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be walked or a file cannot be read.
 pub fn from_directory(
     root: &Path,
     processor: &Processor,
@@ -76,24 +68,13 @@ pub fn from_directory(
     finish(dataset_name(&root.display().to_string()), artifacts, limits)
 }
 
-/// What one entry of a container hashed to when inference read its bytes.
 pub struct Observed {
-    /// The entry's path relative to the container, which is its identifier.
     pub path: String,
-    /// The content digest of the bytes that arrived.
     pub content: ContentDigest,
-    /// The interop digest of the same bytes, when the store recorded it.
     pub interop: Option<InteropDigest>,
-    /// How many bytes arrived.
     pub size: u64,
 }
 
-/// Infers a manifest for a container reached over the network, from the bytes
-/// inference actually read rather than from anything a metadata request said.
-///
-/// # Errors
-///
-/// Fails when the container holds more entries than the limit permits, or none.
 pub fn from_observed(
     location: &str,
     observed: &[Observed],
@@ -118,7 +99,6 @@ pub fn from_observed(
     finish(dataset_name(location), artifacts, limits)
 }
 
-/// Orders the artifacts, bounds them, and refuses a manifest that names none.
 fn finish(name: String, mut artifacts: Vec<Artifact>, limits: &Limits) -> Result<Manifest, Error> {
     if artifacts.len() as u64 > limits.listing_entries {
         return Err(Error::new(

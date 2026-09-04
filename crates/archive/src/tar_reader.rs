@@ -17,28 +17,18 @@ use crate::bomb::BombGuard;
 use crate::path::{claim_member_path, validate_link_target, validate_member_path};
 use crate::shared::SharedSource;
 
-/// Which compression, if any, wraps the tar stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TarCompression {
-    /// No compression: a bare ustar stream.
     None,
-    /// A tar wrapped in a gzip member.
     Gzip,
-    /// A tar wrapped in a zstd frame.
     Zstd,
-    /// A tar wrapped in an xz stream.
     Xz,
-    /// A tar wrapped in a bzip2 stream.
     Bzip2,
 }
 
-/// Where one member's bytes begin and how many there are, within the
-/// decompressed tar byte stream.
 #[derive(Clone, Copy, Debug)]
 pub struct TarOffset {
-    /// The byte offset, in the decompressed stream, of the member's data.
     pub data_start: u64,
-    /// The number of bytes the member holds.
     pub size: u64,
 }
 
@@ -79,19 +69,14 @@ fn build_decompressor<R: Read + 'static>(
     }
 }
 
-/// The pax records extraction reads or discards without complaint.
 const IGNORED_PAX_KEYS: [&str; 8] = [
     "path", "linkpath", "size", "mtime", "atime", "ctime", "charset", "comment",
 ];
 
-/// The pax records that name ownership, which a tree never carries.
 const OWNERSHIP_PAX_KEYS: [&str; 4] = ["uid", "gid", "uname", "gname"];
 
-/// The prefix a pax record uses for a real extended attribute.
 const EXTENDED_ATTRIBUTE_PREFIX: &str = "SCHILY.xattr.";
 
-/// The prefix a pax record uses for a sparse member, which this build cannot
-/// reconstruct.
 const SPARSE_PREFIX: &str = "GNU.sparse.";
 
 fn reject_disallowed_pax_extensions(
@@ -139,14 +124,6 @@ fn reject_disallowed_pax_extensions(
     Ok(())
 }
 
-/// Lists every member of a tar stream, bare or wrapped in one compression.
-///
-/// # Errors
-///
-/// Fails when the stream is truncated or malformed, when a member's path or
-/// mode is rejected, when a member is a device, FIFO, or carries a pax extended
-/// attribute or ownership record, and when the archive exceeds the entry, byte,
-/// or ratio limit.
 pub fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: TarCompression,
@@ -229,7 +206,6 @@ pub fn list_members<R: Read + Seek + 'static>(
     Ok((members, offsets))
 }
 
-/// A decompressed tar stream held open between members.
 pub struct TarStream {
     decoder: Rc<RefCell<Box<dyn Read>>>,
     position: Rc<Cell<u64>>,
@@ -244,7 +220,6 @@ impl Clone for TarStream {
     }
 }
 
-/// One member's bytes, read out of the stream the archive holds open.
 pub struct MemberBody {
     stream: TarStream,
     remaining: u64,
@@ -266,12 +241,6 @@ impl Read for MemberBody {
     }
 }
 
-/// Opens one member's bytes out of a stream held open across members.
-///
-/// # Errors
-///
-/// Fails when the stream cannot be rewound or is truncated or malformed before
-/// reaching the member's offset.
 pub fn open_member<R: Read + Seek + 'static>(
     held: &mut Option<TarStream>,
     source: &SharedSource<R>,

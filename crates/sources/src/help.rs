@@ -188,11 +188,6 @@ fn generic_object_storage(host: &str, necessity: Necessity) -> ProviderHelp {
     }
 }
 
-/// Chooses the fixed provider help record for an endpoint's host.
-///
-/// The record is selected by the host's suffix, matched case-insensitively, and carries
-/// the given necessity. A host matching none of the known suffixes gets the generic
-/// object storage record.
 #[must_use]
 pub fn help_for(host: &str, necessity: Necessity) -> ProviderHelp {
     let lowercase = host.to_ascii_lowercase();
@@ -207,8 +202,6 @@ pub fn help_for(host: &str, necessity: Necessity) -> ProviderHelp {
     }
 }
 
-/// Reports whether a host is reached with a credential that signs a request
-/// rather than one that is sent.
 #[must_use]
 pub fn signs_requests(host: &str) -> bool {
     let lowercase = host.to_ascii_lowercase();

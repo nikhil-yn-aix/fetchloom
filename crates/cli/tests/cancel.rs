@@ -38,8 +38,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// How many files the corpus holds, chosen so a run takes long enough to be
-/// interrupted while it is still working.
 const FILES: usize = 1500;
 
 struct Scene {
@@ -85,12 +83,8 @@ fn start(scene: &Scene) -> Child {
     command.spawn().unwrap()
 }
 
-/// What `--events` is given so the stream arrives on standard output, where a
-/// blocking read is the wait and no test has to poll a file.
 const STREAMED: &str = "-";
 
-/// Reads the event stream a child is writing until it says it reached this
-/// event, which is a wait on the pipe and not on a clock.
 fn wait_until(child: &mut Child, event: &str) {
     let stream = child.stdout.as_mut().expect("the events pipe");
     let mut reader = std::io::BufReader::new(stream);
@@ -139,9 +133,6 @@ fn interrupt(child: &Child) {
     let _ = rustix::process::kill_process(pid, rustix::process::Signal::INT);
 }
 
-/// Returns whether the cache holds nothing that fails its own verification,
-/// asked of the cache rather than of a second reader that would have to know
-/// the pack layout to answer.
 fn every_object_is_its_own_name(cache: &Path) -> bool {
     let output = support::fetchloom()
         .args(["cache", "verify", "--cache-dir"])
@@ -200,11 +191,8 @@ fn a_second_interrupt_aborts_and_the_cache_still_holds_only_what_it_verified() {
     );
 }
 
-/// How long each request to a delayed server waits before it is answered, so
-/// that an interrupt lands while transfers are still in flight.
 const CHARGED: Duration = Duration::from_millis(400);
 
-/// How many objects the interrupted concurrent run transfers.
 const IN_FLIGHT: usize = 12;
 
 #[test]

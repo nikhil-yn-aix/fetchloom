@@ -29,7 +29,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// A value that must never appear in any stream a run writes.
 const SENTINEL: &str = "sentinel-token-4f19bd7c";
 
 #[test]

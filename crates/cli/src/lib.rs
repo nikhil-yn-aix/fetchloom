@@ -32,7 +32,6 @@ pub mod surface;
 pub mod terminal;
 pub mod why;
 
-/// Where a failure is written, and the event stream it also enters.
 pub struct Reporter<'a> {
     json: bool,
     observer: &'a dyn fetchloom_engine::seam::observer::Observer,
@@ -40,7 +39,6 @@ pub struct Reporter<'a> {
 }
 
 impl<'a> Reporter<'a> {
-    /// Builds a reporter over the stream a run is already writing.
     #[must_use]
     pub fn new(
         json: bool,
@@ -54,14 +52,11 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    /// Reports whether the result is machine readable.
     #[must_use]
     pub fn json(&self) -> bool {
         self.json
     }
 
-    /// Writes a failure where the caller asked for it, puts it on the event
-    /// stream, and returns its exit code.
     #[must_use]
     pub fn report(
         &self,

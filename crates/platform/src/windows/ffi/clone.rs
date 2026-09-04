@@ -12,7 +12,6 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{DUPLICATE_EXTENTS_DATA, FSCTL_DUPLICATE_EXTENTS_TO_FILE};
 
-/// Shares the blocks of one file with another rather than writing them again.
 pub(crate) fn duplicate_extents(
     source: &File,
     target: &File,
@@ -46,16 +45,8 @@ pub(crate) fn duplicate_extents(
     Ok(())
 }
 
-/// The largest region one clone may cover, which the specification states is
-/// under four gigabytes.
 pub(crate) const CLONE_CEILING: u64 = 4 * 1024 * 1024 * 1024 - 1;
 
-/// Returns the spans a clone covers and how many bytes are left over.
-///
-/// The specification requires every cloned region to begin and end on a cluster
-/// boundary and to be under four gigabytes, so an object whose length is not a
-/// multiple of the cluster size is cloned up to the last whole cluster and the
-/// remainder, which is under one cluster, is written.
 pub(crate) fn clone_spans(length: u64, cluster: u64, ceiling: u64) -> (Vec<(u64, u64)>, u64) {
     if cluster == 0 || ceiling < cluster {
         return (Vec::new(), length);

@@ -350,7 +350,6 @@ fn a_directory_source_writes_no_lock_and_says_so() {
     );
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
@@ -383,7 +382,6 @@ fn one_source_writes_one_lock_on_every_platform() {
     );
 }
 
-/// One archive, written out byte for byte rather than built here.
 const FIXED_ARCHIVE: &[u8] = &[
     0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xed, 0xcd, 0x31, 0x0a, 0x83, 0x40,
     0x10, 0x05, 0xd0, 0xa9, 0x73, 0x0a, 0x4f, 0x20, 0x2b, 0xa8, 0xf7, 0x09, 0x21, 0x60, 0x21, 0x28,
@@ -394,7 +392,6 @@ const FIXED_ARCHIVE: &[u8] = &[
     0x00, 0x80, 0x93, 0x79, 0x03, 0x2d, 0xa8, 0xc8, 0x0a, 0x00, 0x28, 0x00, 0x00,
 ];
 
-/// The lock a run against `FIXED_ARCHIVE` writes, on every platform.
 const RECORDED_LOCK: &str = concat!(
     "datasets:
 ",

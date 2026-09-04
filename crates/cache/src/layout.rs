@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use fetchloom_engine::digest::ContentDigest;
 
-/// The directories a cache root holds.
 pub(crate) const DIRECTORIES: [&str; 10] = [
     "objects",
     "packs",
@@ -18,214 +17,179 @@ pub(crate) const DIRECTORIES: [&str; 10] = [
     "pins",
 ];
 
-/// The paths of one cache root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     root: PathBuf,
 }
 
 impl Layout {
-    /// Names the paths under a cache root.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
-    /// Returns the cache root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Returns the directory holding completed objects.
     #[must_use]
     pub fn objects(&self) -> PathBuf {
         self.root.join("objects")
     }
 
-    /// Returns the directory holding chunk trees.
     #[must_use]
     pub fn outboard(&self) -> PathBuf {
         self.root.join("outboard")
     }
 
-    /// Returns the directory holding in-progress transfers.
     #[must_use]
     pub fn partial(&self) -> PathBuf {
         self.root.join("partial")
     }
 
-    /// Returns the directory holding extraction trees not yet published.
     #[must_use]
     pub fn staging(&self) -> PathBuf {
         self.root.join("staging")
     }
 
-    /// Returns the directory holding objects that failed verification.
     #[must_use]
     pub fn quarantine(&self) -> PathBuf {
         self.root.join("quarantine")
     }
 
-    /// Returns the quarantined object with the given digest.
     #[must_use]
     pub fn quarantined(&self, digest: ContentDigest) -> PathBuf {
         self.quarantine().join(name_of(digest))
     }
 
-    /// Returns the diagnosis written beside a quarantined object.
     #[must_use]
     pub fn diagnosis_of(&self, digest: ContentDigest) -> PathBuf {
         self.quarantine()
             .join(format!("{}.diagnosis", name_of(digest)))
     }
 
-    /// Returns the directory holding receipts.
     #[must_use]
     pub fn receipts(&self) -> PathBuf {
         self.root.join("receipts")
     }
 
-    /// Returns the receipt stored under the given key.
     #[must_use]
     pub fn receipt_of(&self, key: ContentDigest) -> PathBuf {
         self.receipts().join(name_of(key))
     }
 
-    /// Returns the directory holding resolution metadata.
     #[must_use]
     pub fn meta(&self) -> PathBuf {
         self.root.join("meta")
     }
 
-    /// Returns the directory holding packed objects.
     #[must_use]
     pub fn packs(&self) -> PathBuf {
         self.root.join("packs")
     }
 
-    /// Returns the directory holding advisory locks.
     #[must_use]
     pub fn locks(&self) -> PathBuf {
         self.root.join("locks")
     }
 
-    /// Returns the directory holding pin records.
     #[must_use]
     pub fn pins(&self) -> PathBuf {
         self.root.join("pins")
     }
 
-    /// Returns the file holding the cache format fingerprint.
     #[must_use]
     pub fn format(&self) -> PathBuf {
         self.root.join("format")
     }
 
-    /// Returns the file holding the boot of the last recovery.
     #[must_use]
     pub fn recovered(&self) -> PathBuf {
         self.meta().join("recovered")
     }
 
-    /// Returns the directory holding prune marks.
     #[must_use]
     pub fn marks(&self) -> PathBuf {
         self.meta().join("prune")
     }
 
-    /// Returns the completed object with the given digest.
     #[must_use]
     pub fn object(&self, digest: ContentDigest) -> PathBuf {
         self.objects().join(name_of(digest))
     }
 
-    /// Returns the chunk tree of the object with the given digest.
     #[must_use]
     pub fn outboard_of(&self, digest: ContentDigest) -> PathBuf {
         self.outboard().join(name_of(digest))
     }
 
-    /// Returns the in-progress transfer of the object with the given digest.
     #[must_use]
     pub fn partial_of(&self, digest: ContentDigest) -> PathBuf {
         self.partial().join(name_of(digest))
     }
 
-    /// Returns the lock file of the object with the given digest.
     #[must_use]
     pub fn lock_of(&self, digest: ContentDigest) -> PathBuf {
         self.locks().join(format!("{}.lock", name_of(digest)))
     }
 
-    /// Returns the owner record of the lock on the given digest.
     #[must_use]
     pub fn lock_owner_of(&self, digest: ContentDigest) -> PathBuf {
         self.locks().join(format!("{}.owner", name_of(digest)))
     }
 
-    /// Returns the pin record of the object with the given digest.
     #[must_use]
     pub fn pin_of(&self, digest: ContentDigest) -> PathBuf {
         self.pins().join(name_of(digest))
     }
 
-    /// Returns the directory holding one record per published object.
     #[must_use]
     pub fn records(&self) -> PathBuf {
         self.meta().join("object")
     }
 
-    /// Returns the directory holding one record per artifact key.
     #[must_use]
     pub fn witnesses(&self) -> PathBuf {
         self.meta().join("witness")
     }
 
-    /// Returns the witnesses recorded for one artifact key.
     #[must_use]
     pub fn witness_of(&self, key: &fetchloom_engine::trust::ArtifactKey) -> PathBuf {
         self.witnesses().join(hexadecimal(key.bytes()))
     }
 
-    /// Returns the directory holding one measurement per host.
     #[must_use]
     pub fn measurements(&self) -> PathBuf {
         self.meta().join("host")
     }
 
-    /// Returns the measurement recorded for one host.
     #[must_use]
     pub fn measurement_of(&self, key: &[u8; 32]) -> PathBuf {
         self.measurements().join(hexadecimal(key))
     }
 
-    /// Returns the directory holding one record per reference resolved.
     #[must_use]
     pub fn resolutions(&self) -> PathBuf {
         self.meta().join("resolution")
     }
 
-    /// Returns what a reference last resolved to.
     #[must_use]
     pub fn resolution_of(&self, key: &[u8; 32]) -> PathBuf {
         self.resolutions().join(hexadecimal(key))
     }
 
-    /// Returns the prune mark of the object with the given digest.
     #[must_use]
     pub fn mark_of(&self, digest: ContentDigest) -> PathBuf {
         self.marks().join(name_of(digest))
     }
 }
 
-/// Returns the file name a digest is stored under.
 #[must_use]
 pub fn name_of(digest: ContentDigest) -> String {
     hexadecimal(digest.bytes())
 }
 
-/// Returns the lowercase hexadecimal of some bytes.
 fn hexadecimal(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -236,7 +200,6 @@ fn hexadecimal(bytes: &[u8]) -> String {
     name
 }
 
-/// Returns the digest a file name stands for.
 #[must_use]
 pub fn digest_of(name: &str) -> Option<ContentDigest> {
     if name.len() != 64 {

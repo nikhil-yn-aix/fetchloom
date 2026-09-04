@@ -5,19 +5,14 @@ use std::io::IsTerminal;
 use crate::settings::Environment;
 use crate::surface::DisplayMode;
 
-/// What each stream is attached to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Streams {
-    /// Whether the standard output stream is a terminal.
     pub stdout: bool,
-    /// Whether the standard error stream is a terminal.
     pub stderr: bool,
-    /// Whether the standard input stream is a terminal.
     pub stdin: bool,
 }
 
 impl Streams {
-    /// Reads what the process's own streams are attached to.
     #[must_use]
     pub fn detect() -> Self {
         Self {
@@ -27,37 +22,29 @@ impl Streams {
         }
     }
 
-    /// Reports whether a prompt may be shown.
     #[must_use]
     pub fn can_prompt(self) -> bool {
         self.stdin && self.stderr
     }
 }
 
-/// Reports whether the run is inside a continuous integration environment.
 #[must_use]
 pub fn continuous_integration(environment: &dyn Environment) -> bool {
     environment.get("CI").is_some()
 }
 
-/// Reports whether the terminal cannot address the cursor.
 #[must_use]
 pub fn dumb_terminal(environment: &dyn Environment) -> bool {
     environment.get("TERM").as_deref() == Some("dumb")
 }
 
-/// Why a display mode was not the one that was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForcedDisplay {
-    /// The mode actually used.
     pub mode: DisplayMode,
-    /// The mode that was asked for, when it differed.
     pub requested: Option<DisplayMode>,
-    /// Why the mode changed, when it changed.
     pub reason: Option<String>,
 }
 
-/// Decides which display mode a run actually uses.
 #[must_use]
 pub fn resolve_display(
     requested: DisplayMode,
@@ -116,8 +103,6 @@ pub fn resolve_display(
     }
 }
 
-/// Decides whether output carries color, which is a presentation choice and
-/// never a fact about the run.
 #[must_use]
 pub fn resolve_color(
     requested: Option<crate::surface::ColorChoice>,
@@ -133,8 +118,6 @@ pub fn resolve_color(
     }
 }
 
-/// Reports whether a hint may be printed at all, which contracts settles before
-/// any hint is chosen.
 #[must_use]
 pub fn hints_permitted(disabled: bool, streams: Streams, environment: &dyn Environment) -> bool {
     !disabled && streams.stderr && streams.stdin && !continuous_integration(environment)

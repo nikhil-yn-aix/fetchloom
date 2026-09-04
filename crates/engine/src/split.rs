@@ -6,23 +6,15 @@ use std::num::NonZeroU32;
 use crate::limits::Limits;
 use crate::seam::source::{ByteRange, SourceIdentity, SourceMetadata};
 
-/// Why a run fetched an object whole where it would otherwise have split it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused {
-    /// The object is not long enough for the extra requests to pay for
-    /// themselves.
     NotLarge,
-    /// The source states nothing that fixes which bytes it is serving, so two
-    /// spans may not come from one object.
     NotImmutable,
-    /// The source cannot serve part of an object.
     NoRanges,
-    /// Nothing this run measured says the host serves more with more streams.
     NoMeasuredGain,
 }
 
 impl Refused {
-    /// Names the condition that failed, which is what the `degrade` reports.
     #[must_use]
     pub fn because(self) -> &'static str {
         match self {
@@ -38,18 +30,6 @@ impl Refused {
     }
 }
 
-/// Returns how many spans one object is fetched as, or the condition that
-/// failed.
-///
-/// The four conditions are checked in the order they are cheapest to answer,
-/// and the width is what the host's own controller permits: the adaptive
-/// controller raised that count only because the host answered more requests
-/// cleanly, which is the measurement that a second stream to this host is
-/// worth opening.
-///
-/// # Errors
-///
-/// Returns the first condition that failed.
 pub fn parts_for(
     metadata: &SourceMetadata,
     limits: &Limits,
@@ -76,8 +56,6 @@ fn immutable(identity: &SourceIdentity) -> bool {
     )
 }
 
-/// Returns the spans a split asks for, which cover the missing bytes once, in
-/// order, with no gap and no overlap.
 #[must_use]
 pub fn spans(start: u64, end: u64, parts: NonZeroU32) -> Vec<ByteRange> {
     let length = end.saturating_sub(start);

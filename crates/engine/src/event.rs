@@ -11,7 +11,6 @@ use crate::redact::SafeUrl;
 use crate::resume::ResumeRung;
 use crate::timestamp::Timestamp;
 
-/// Every event name, in the order the contract lists them.
 pub const EVENT_NAMES: [&str; 34] = [
     "run.start",
     "run.end",
@@ -49,240 +48,107 @@ pub const EVENT_NAMES: [&str; 34] = [
     "error",
 ];
 
-/// What one event says.
 #[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 #[serde(tag = "event")]
 pub enum EventPayload {
-    /// A run began.
     #[serde(rename = "run.start")]
     RunStart,
-    /// A run finished.
     #[serde(rename = "run.end")]
-    RunEnd {
-        /// How long the run took, in milliseconds.
-        duration_ms: u64,
-    },
-    /// Resolution began.
+    RunEnd { duration_ms: u64 },
     #[serde(rename = "resolve.start")]
     ResolveStart,
-    /// A reference resolved through an alias.
     #[serde(rename = "resolve.alias")]
-    ResolveAlias {
-        /// The alias that was followed.
-        from: String,
-        /// What it resolved to.
-        to: String,
-    },
-    /// Resolution finished.
+    ResolveAlias { from: String, to: String },
     #[serde(rename = "resolve.end")]
-    ResolveEnd {
-        /// How long resolution took, in milliseconds.
-        duration_ms: u64,
-    },
-    /// A plan is resolved and can be reported or executed.
+    ResolveEnd { duration_ms: u64 },
     #[serde(rename = "plan.ready")]
     PlanReady,
-    /// The cache already holds an object.
     #[serde(rename = "cache.hit")]
-    CacheHit {
-        /// The object the cache holds.
-        digest: ContentDigest,
-    },
-    /// The cache does not hold an object.
+    CacheHit { digest: ContentDigest },
     #[serde(rename = "cache.miss")]
-    CacheMiss {
-        /// The object the cache does not hold.
-        digest: ContentDigest,
-    },
-    /// Another writer holds an object, so this run waits and reuses it.
+    CacheMiss { digest: ContentDigest },
     #[serde(rename = "cache.wait")]
-    CacheWait {
-        /// The object being waited for.
-        digest: ContentDigest,
-    },
-    /// A credential is required before the run can continue.
+    CacheWait { digest: ContentDigest },
     #[serde(rename = "credential.required")]
-    CredentialRequired {
-        /// The provider that requires it.
-        provider: String,
-    },
-    /// A credential would improve the run and is offered.
+    CredentialRequired { provider: String },
     #[serde(rename = "credential.offer")]
-    CredentialOffer {
-        /// The provider that would use it.
-        provider: String,
-    },
-    /// An offered credential was declined for the whole run.
+    CredentialOffer { provider: String },
     #[serde(rename = "credential.declined")]
-    CredentialDeclined {
-        /// The provider whose offer was declined.
-        provider: String,
-    },
-    /// A container is being listed.
+    CredentialDeclined { provider: String },
     #[serde(rename = "listing.start")]
-    ListingStart {
-        /// The container being listed.
-        source: SafeUrl,
-    },
-    /// Entries pointing outside the prefix were ignored.
+    ListingStart { source: SafeUrl },
     #[serde(rename = "listing.skipped")]
-    ListingSkipped {
-        /// How many entries were ignored.
-        count: u64,
-    },
-    /// A listing finished.
+    ListingSkipped { count: u64 },
     #[serde(rename = "listing.end")]
-    ListingEnd {
-        /// How many entries the listing returned.
-        entries: u64,
-        /// How long the listing took, in milliseconds.
-        duration_ms: u64,
-    },
-    /// A candidate source was probed.
+    ListingEnd { entries: u64, duration_ms: u64 },
     #[serde(rename = "source.probe")]
-    SourceProbe {
-        /// The candidate probed.
-        source: SafeUrl,
-    },
-    /// A source was chosen.
+    SourceProbe { source: SafeUrl },
     #[serde(rename = "source.selected")]
-    SourceSelected {
-        /// The source chosen.
-        source: SafeUrl,
-        /// Why it was chosen.
-        reason: String,
-    },
-    /// A transfer moved to another source.
+    SourceSelected { source: SafeUrl, reason: String },
     #[serde(rename = "source.failover")]
     SourceFailover {
-        /// The source moved away from.
         from: SafeUrl,
-        /// The source moved to.
         to: SafeUrl,
-        /// Why the move happened.
         reason: String,
     },
-    /// A transfer began.
     #[serde(rename = "transfer.start")]
     TransferStart {
-        /// The source the bytes come from.
         source: SafeUrl,
-        /// The host serving them, which is what a per-host figure is filed under.
         host: crate::reference::Host,
-        /// How many bytes are expected, when the source states it.
         expected_bytes: Option<u64>,
     },
-    /// A transfer advanced.
     #[serde(rename = "transfer.progress")]
-    TransferProgress {
-        /// How many bytes have arrived so far.
-        bytes: u64,
-    },
-    /// A transient failure is being retried.
+    TransferProgress { bytes: u64 },
     #[serde(rename = "transfer.retry")]
     TransferRetry {
-        /// The host that was retried.
         host: crate::reference::Host,
-        /// Which attempt this is.
         attempt: u32,
-        /// Why the previous attempt failed.
         reason: String,
     },
-    /// A transfer resumed rather than restarting.
     #[serde(rename = "transfer.resume")]
-    TransferResume {
-        /// The rung of the resume ladder used.
-        rung: ResumeRung,
-        /// How many bytes already on disk were kept.
-        bytes_kept: u64,
-    },
-    /// A transfer finished.
+    TransferResume { rung: ResumeRung, bytes_kept: u64 },
     #[serde(rename = "transfer.end")]
     TransferEnd {
-        /// The host that served them.
         host: crate::reference::Host,
-        /// How many bytes arrived.
         bytes: u64,
-        /// How long the transfer took, in milliseconds.
         duration_ms: u64,
     },
-    /// Verification began.
     #[serde(rename = "verify.start")]
     VerifyStart,
-    /// One byte range was verified against the outboard tree.
     #[serde(rename = "verify.range")]
-    VerifyRange {
-        /// The first byte of the range.
-        start: u64,
-        /// One past the last byte of the range.
-        end: u64,
-    },
-    /// Verification found bytes that do not match.
+    VerifyRange { start: u64, end: u64 },
     #[serde(rename = "verify.mismatch")]
-    VerifyMismatch {
-        /// What did not match.
-        error: Error,
-    },
-    /// Verification finished.
+    VerifyMismatch { error: Error },
     #[serde(rename = "verify.end")]
-    VerifyEnd {
-        /// How many bytes were verified.
-        bytes: u64,
-        /// How long verification took, in milliseconds.
-        duration_ms: u64,
-    },
-    /// Extraction began.
+    VerifyEnd { bytes: u64, duration_ms: u64 },
     #[serde(rename = "extract.start")]
     ExtractStart,
-    /// One archive entry was rejected.
     #[serde(rename = "extract.reject")]
-    ExtractReject {
-        /// The entry path, exactly as the archive wrote it.
-        path: String,
-        /// Why the entry was rejected.
-        error: Error,
-    },
-    /// Extraction finished.
+    ExtractReject { path: String, error: Error },
     #[serde(rename = "extract.end")]
     ExtractEnd {
-        /// How many entries were written to staging.
         entries: u64,
-        /// How many bytes were written to staging.
         bytes: u64,
-        /// How long extraction took, in milliseconds.
         duration_ms: u64,
     },
-    /// Staging was published.
     #[serde(rename = "publish.commit")]
     PublishCommit,
-    /// One destination entry was reconciled.
     #[serde(rename = "reconcile.outcome")]
     ReconcileOutcomeReached {
-        /// The entry reconciled.
         path: String,
-        /// What was found.
         outcome: ReconcileOutcome,
     },
-    /// Something was lower than requested.
     #[serde(rename = "degrade")]
     Degrade {
-        /// What was asked for.
         requested: String,
-        /// What was used instead.
         used: String,
-        /// Why the substitution happened.
         reason: String,
     },
-    /// A failure occurred.
     #[serde(rename = "error")]
-    Failure {
-        /// The failure.
-        error: Error,
-    },
+    Failure { error: Error },
 }
 
 impl EventPayload {
-    /// Returns the name this payload is written under.
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
@@ -324,35 +190,29 @@ impl EventPayload {
     }
 }
 
-/// The source of the monotonic sequence number every event carries.
 #[derive(Debug, Default)]
 pub struct Sequence(AtomicU64);
 
 impl Sequence {
-    /// Starts a sequence at zero.
     #[must_use]
     pub fn new() -> Self {
         Self(AtomicU64::new(0))
     }
 
-    /// Takes the next number in the sequence.
     pub fn next(&self) -> u64 {
         self.0.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-/// How long an operation has been running.
 #[derive(Clone, Copy, Debug)]
 pub struct Span(std::time::Instant);
 
 impl Span {
-    /// Starts a span now.
     #[must_use]
     pub fn start() -> Self {
         Self(std::time::Instant::now())
     }
 
-    /// Returns how many milliseconds have passed since the span started.
     #[must_use]
     pub fn elapsed_ms(self) -> u64 {
         u64::try_from(self.0.elapsed().as_millis()).unwrap_or(u64::MAX)
@@ -365,7 +225,6 @@ impl Default for Span {
     }
 }
 
-/// One line of the event stream.
 #[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct Event {
     seq: u64,
@@ -379,7 +238,6 @@ pub struct Event {
 }
 
 impl Event {
-    /// Stamps a payload with its place in the sequence and the wall clock.
     #[must_use]
     pub fn new(sequence: &Sequence, payload: EventPayload) -> Self {
         Self {
@@ -391,51 +249,43 @@ impl Event {
         }
     }
 
-    /// Records the dataset this event belongs to.
     #[must_use]
     pub fn with_dataset(mut self, dataset: impl Into<String>) -> Self {
         self.dataset = Some(dataset.into());
         self
     }
 
-    /// Records the artifact this event belongs to.
     #[must_use]
     pub fn with_artifact(mut self, artifact: impl Into<String>) -> Self {
         self.artifact = Some(artifact.into());
         self
     }
 
-    /// Returns this event's place in the sequence.
     #[must_use]
     pub fn seq(&self) -> u64 {
         self.seq
     }
 
-    /// Returns when this event was stamped.
     #[must_use]
     pub fn timestamp(&self) -> Timestamp {
         self.timestamp
     }
 
-    /// Returns the dataset this event belongs to, when one is known.
     #[must_use]
     pub fn dataset(&self) -> Option<&str> {
         self.dataset.as_deref()
     }
 
-    /// Returns the artifact this event belongs to, when one is known.
     #[must_use]
     pub fn artifact(&self) -> Option<&str> {
         self.artifact.as_deref()
     }
 
-    /// Returns what this event says.
     #[must_use]
     pub fn payload(&self) -> &EventPayload {
         &self.payload
     }
 
-    /// Returns the name this event is written under.
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.payload.name()

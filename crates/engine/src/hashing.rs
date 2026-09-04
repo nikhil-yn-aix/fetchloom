@@ -10,34 +10,21 @@ use crate::digest::{ContentDigest, InteropDigest};
 use crate::outboard::{self, GROUP_LEN, Outboard};
 use crate::pool::Processor;
 
-/// The number of bytes at which pairing the two digests across the processor
-/// pool starts to pay.
 pub const POOL_THRESHOLD: usize = 1 << 20;
 
-/// Everything one streaming pass over an object's bytes produces.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Digests {
-    /// The BLAKE3 root of the object bytes.
     pub content: ContentDigest,
-    /// The SHA-256 of the same bytes.
     pub interop: InteropDigest,
-    /// The chunk tree, present only above the outboard threshold.
     pub outboard: Option<Outboard>,
-    /// How many bytes the pass covered.
     pub length: u64,
 }
 
-/// The BLAKE3 side of one pass: the chaining value of each leaf group, and the
-/// group still filling.
 #[derive(Clone, Debug)]
 struct Groups {
-    /// The hasher covering the group currently filling.
     current: blake3::Hasher,
-    /// How many bytes of that group have arrived.
     filled: u64,
-    /// The chaining value of every group already finished, in order.
     finished: Vec<ChainingValue>,
-    /// How many bytes have arrived in total.
     length: u64,
 }
 
@@ -53,7 +40,6 @@ impl Default for Groups {
 }
 
 impl Groups {
-    /// Takes bytes, closing a group only once the next group has a byte in it.
     fn update(&mut self, mut chunk: &[u8]) {
         while !chunk.is_empty() {
             if self.filled == GROUP_LEN {
@@ -71,7 +57,6 @@ impl Groups {
         }
     }
 
-    /// Returns the content digest and, above the threshold, the tree.
     fn finish(mut self) -> (ContentDigest, Option<Outboard>) {
         if self.finished.is_empty() {
             let root = ContentDigest::from_bytes(*self.current.finalize().as_bytes());
@@ -86,7 +71,6 @@ fn usize_of(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 
-/// The two digests of one object and its tree, updated together.
 #[derive(Clone, Debug, Default)]
 pub struct Pair {
     content: Groups,
@@ -94,13 +78,11 @@ pub struct Pair {
 }
 
 impl Pair {
-    /// Starts a pair that has seen nothing.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Updates both digests with the same bytes.
     pub fn update(&mut self, processor: &Processor, chunk: &[u8]) {
         if chunk.len() < POOL_THRESHOLD {
             self.content.update(chunk);
@@ -121,7 +103,6 @@ impl Pair {
         });
     }
 
-    /// Returns the two digests, the tree, and the length covered.
     #[must_use]
     pub fn finish(self) -> Digests {
         let interop_bytes: [u8; 32] = self.interop.finalize().into();
@@ -136,7 +117,6 @@ impl Pair {
     }
 }
 
-/// The one buffer a run reads every stream it hashes through.
 #[derive(Debug)]
 pub struct Digester {
     buffer: Vec<u8>,
@@ -149,7 +129,6 @@ impl Default for Digester {
 }
 
 impl Digester {
-    /// Allocates the one buffer every stream this digester reads will use.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -157,12 +136,6 @@ impl Digester {
         }
     }
 
-    /// Reads `reader` once and returns the content and interop digest of its
-    /// bytes.
-    ///
-    /// # Errors
-    ///
-    /// Fails when `reader` fails.
     pub fn hash(&mut self, processor: &Processor, reader: impl Read) -> io::Result<Digests> {
         let mut reader = reader;
         let mut pair = Pair::new();
@@ -180,7 +153,6 @@ impl Digester {
     }
 }
 
-/// Fills `buffer` from `reader`, reading until it is full or the reader ends.
 pub(crate) fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buffer.len() {
@@ -193,7 +165,6 @@ pub(crate) fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usiz
     Ok(filled)
 }
 
-/// Returns the content digest of bytes already held in memory.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> ContentDigest {
     ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes())

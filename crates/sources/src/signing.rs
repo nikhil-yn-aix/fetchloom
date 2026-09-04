@@ -5,14 +5,10 @@ use std::fmt::Write as _;
 use fetchloom_engine::credential::SigningKeys;
 use sha2::{Digest, Sha256};
 
-/// The length of one SHA-256 digest, which is also the block-aligned key length
-/// a keyed hash reduces a longer key to.
 const DIGEST_LEN: usize = 32;
 
-/// The block length SHA-256 processes, which is what a keyed hash pads to.
 const BLOCK_LEN: usize = 64;
 
-/// Returns the SHA-256 of a message keyed under a secret, per RFC 2104.
 fn keyed_hash(key: &[u8], message: &[u8]) -> [u8; DIGEST_LEN] {
     let mut block = [0_u8; BLOCK_LEN];
     if key.len() > BLOCK_LEN {
@@ -42,7 +38,6 @@ fn keyed_hash(key: &[u8], message: &[u8]) -> [u8; DIGEST_LEN] {
     answer
 }
 
-/// Returns the lowercase hexadecimal of some bytes.
 fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -51,34 +46,25 @@ fn hex(bytes: &[u8]) -> String {
     text
 }
 
-/// Returns the SHA-256 of a payload, in the hexadecimal a signature covers.
 #[must_use]
 pub fn payload_digest(payload: &[u8]) -> String {
     hex(&Sha256::digest(payload))
 }
 
-/// The digest of an empty payload, which every request this build signs carries
-/// because it sends no body.
 pub const EMPTY_PAYLOAD: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-/// A moment, in the two forms a signature is computed over.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SigningTime {
-    /// The full stamp, as `YYYYMMDDTHHMMSSZ`.
     pub stamp: String,
-    /// The day, as `YYYYMMDD`.
     pub day: String,
 }
 
 impl SigningTime {
-    /// Returns the moment a signature computed now is stamped with.
     #[must_use]
     pub fn now() -> Self {
         Self::at(fetchloom_engine::timestamp::Timestamp::now())
     }
 
-    /// Returns the moment a signature computed at a stated time is stamped
-    /// with.
     #[must_use]
     pub fn at(timestamp: fetchloom_engine::timestamp::Timestamp) -> Self {
         let rendered = timestamp.to_string();
@@ -94,36 +80,23 @@ impl SigningTime {
     }
 }
 
-/// What one request states that a signature is computed over.
 #[derive(Clone, Debug)]
 pub struct Request<'a> {
-    /// The method, uppercase.
     pub method: &'a str,
-    /// The path, already encoded, beginning with a slash.
     pub path: &'a str,
-    /// The query, already encoded, without the leading question mark.
     pub query: &'a str,
-    /// The host header the request carries.
     pub host: &'a str,
-    /// The hexadecimal digest of the payload.
     pub payload: &'a str,
 }
 
-/// The headers a signed request carries, in the order they are added.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signed {
-    /// The `Authorization` header value.
     pub authorization: String,
-    /// The `x-amz-date` header value.
     pub date: String,
-    /// The `x-amz-content-sha256` header value.
     pub content_digest: String,
-    /// The `x-amz-security-token` header value, when the credential carries a
-    /// session token.
     pub security_token: Option<String>,
 }
 
-/// Returns the canonical form of a request, which is what is actually signed.
 fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&str>) -> String {
     let mut headers = format!(
         "host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
@@ -143,9 +116,6 @@ fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&s
     )
 }
 
-/// Returns the query in the one order a signature is computed over: by name in
-/// byte order, then by value, with a parameter carrying no value written as one
-/// carrying an empty value.
 fn canonical_query(query: &str) -> String {
     if query.is_empty() {
         return String::new();
@@ -163,8 +133,6 @@ fn canonical_query(query: &str) -> String {
         .join("&")
 }
 
-/// Returns the headers that authorize one request, signing with a secret that
-/// never leaves this process.
 #[must_use]
 pub fn sign(
     keys: &SigningKeys,

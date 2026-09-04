@@ -10,7 +10,6 @@ use crate::seam::source::{
     ByteRange, Listing, Revalidated, Served, Serves, Source, SourceMetadata, Validator,
 };
 
-/// The bytes any adapter streams, once its own body type is forgotten.
 pub type AnyBody = Box<dyn Read + Send>;
 
 trait ErasedSource: Send + Sync {
@@ -95,13 +94,11 @@ where
     }
 }
 
-/// One adapter, held behind the seam rather than by its own type.
 pub struct AnySource {
     held: Box<dyn ErasedSource>,
 }
 
 impl AnySource {
-    /// Holds one adapter behind the seam.
     pub fn new<S>(adapter: S) -> Self
     where
         S: Source + Send + Sync + 'static,
@@ -155,21 +152,16 @@ impl Source for AnySource {
     }
 }
 
-/// Every adapter a run may dispatch to, asked in the order they were given.
 pub struct Adapters {
     held: Vec<AnySource>,
 }
 
 impl Adapters {
-    /// Starts a registry holding the adapters given, in the order they are
-    /// asked.
     #[must_use]
     pub fn new(held: Vec<AnySource>) -> Self {
         Self { held }
     }
 
-    /// Returns the first adapter that serves a reference, and what it serves
-    /// there.
     #[must_use]
     pub fn serving(&self, reference: &str) -> Option<(&AnySource, Serves)> {
         self.held
@@ -177,8 +169,6 @@ impl Adapters {
             .find_map(|adapter| Source::serves(adapter, reference).map(|what| (adapter, what)))
     }
 
-    /// Returns every fallback any adapter in the registry performed since the
-    /// last call.
     #[must_use]
     pub fn take_degradations(&self) -> Vec<Degradation> {
         self.held

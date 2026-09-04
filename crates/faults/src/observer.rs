@@ -5,14 +5,12 @@ use std::sync::{Mutex, PoisonError};
 use fetchloom_engine::event::Event;
 use fetchloom_engine::seam::observer::Observer;
 
-/// An observer that keeps every event a run produced.
 #[derive(Debug, Default)]
 pub struct RecordingObserver {
     events: Mutex<Vec<Event>>,
 }
 
 impl RecordingObserver {
-    /// Starts an observer that has recorded nothing.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -20,7 +18,6 @@ impl RecordingObserver {
         }
     }
 
-    /// Returns every event recorded so far, in the order they were emitted.
     #[must_use]
     pub fn events(&self) -> Vec<Event> {
         self.events
@@ -29,7 +26,6 @@ impl RecordingObserver {
             .clone()
     }
 
-    /// Returns the name of every event recorded so far, in order.
     #[must_use]
     pub fn names(&self) -> Vec<&'static str> {
         self.events

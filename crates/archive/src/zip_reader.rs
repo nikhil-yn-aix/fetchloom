@@ -18,24 +18,16 @@ const METHOD_STORE: u16 = 0;
 const METHOD_DEFLATE: u16 = 8;
 const LOCAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
 
-/// The end of central directory record signature.
 const END_RECORD_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x05, 0x06];
 
-/// The central directory file header signature.
 const CENTRAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
 
-/// How far back from the end of the file the end record is looked for, which is
-/// its fixed size plus the largest comment it may carry.
 const MAXIMUM_END_RECORD_SEARCH: u64 = 22 + 0xFFFF;
 
-/// Where one member's compressed bytes begin and how they are packed.
 #[derive(Clone, Copy, Debug)]
 pub struct ZipOffset {
-    /// The byte offset, in the zip file, of the member's compressed data.
     pub data_start: u64,
-    /// The number of compressed bytes the member holds.
     pub compressed_size: u64,
-    /// Whether the member is stored raw rather than deflated.
     pub stored: bool,
 }
 
@@ -62,23 +54,18 @@ fn unsafe_path_member(member: &str, detail: &str) -> Error {
     .with_member(member)
 }
 
-/// Decides whether every backslash in this zip's member paths can safely be
-/// read as a path separator.
 fn is_backslash_separated(names: &[Vec<u8>]) -> bool {
     let holds_forward_slash = names.iter().any(|name| name.contains(&b'/'));
     let holds_backslash = names.iter().any(|name| name.contains(&b'\\'));
     !holds_forward_slash && holds_backslash
 }
 
-/// Translates every backslash in a raw member name to a forward slash.
 fn with_backslashes_as_separators(raw: &[u8]) -> Vec<u8> {
     raw.iter()
         .map(|&byte| if byte == b'\\' { b'/' } else { byte })
         .collect()
 }
 
-/// Decides whether a zip's paths need normalizing and, when they do, records
-/// the one degradation this decision produces.
 fn decide_and_record_separator(
     central_names: &[Vec<u8>],
     archive_name: &str,
@@ -97,9 +84,6 @@ fn decide_and_record_separator(
     backslash_separated
 }
 
-/// Validates every central directory member name and reports the first
-/// collision, normalizing first when the archive was decided to be
-/// backslash-separated.
 fn validate_central_directory_paths(
     central_names: &[Vec<u8>],
     backslash_separated: bool,
@@ -113,12 +97,6 @@ fn validate_central_directory_paths(
     Ok(())
 }
 
-/// Validates one raw member name, normalizing a backslash-separated zip's paths
-/// first.
-///
-/// # Errors
-///
-/// Returns whatever `validate_member_path` fails with.
 fn zip_member_path(
     raw: &[u8],
     backslash_separated: bool,
@@ -156,13 +134,8 @@ struct LocalHeader {
     data_start: u64,
 }
 
-/// The general purpose bit that says the sizes and the check value follow the
-/// data rather than preceding it, which every writer producing a zip to a
-/// stream it cannot seek sets.
 const SIZES_FOLLOW_THE_DATA: u16 = 1 << 3;
 
-/// The value a legacy size field carries when the real one is in a ZIP64
-/// record.
 const ZIP64_SENTINEL: u32 = u32::MAX;
 
 fn read_local_header<R: Read + Seek>(
@@ -203,12 +176,6 @@ fn read_local_header<R: Read + Seek>(
     })
 }
 
-/// Reads the member name of every central directory record, in order.
-///
-/// # Errors
-///
-/// Fails when the end record cannot be found and when the central directory is
-/// truncated or malformed.
 fn central_directory_names<R: Read + Seek>(
     mut source: R,
     archive_name: &str,
@@ -265,7 +232,6 @@ fn central_directory_names<R: Read + Seek>(
     Ok(names)
 }
 
-/// What the central directory says about one member.
 struct Central<'a> {
     path: &'a str,
     name: &'a [u8],
@@ -274,12 +240,6 @@ struct Central<'a> {
     size: u64,
 }
 
-/// Checks one member's local file header against its central directory entry.
-///
-/// # Errors
-///
-/// Returns the disagreement, which is a member two headers describe differently
-/// and which must therefore never be extracted.
 fn agrees_with_central_directory(local: &LocalHeader, central: &Central<'_>) -> Result<(), Error> {
     if local.name != central.name {
         let local_lossy = String::from_utf8_lossy(&local.name);
@@ -339,14 +299,6 @@ fn open_body(
     }
 }
 
-/// Lists every member of a zip container.
-///
-/// # Errors
-///
-/// Fails when the container is truncated or malformed, when a member's path is
-/// rejected, when a local header disagrees with its central directory entry,
-/// when a member uses a compression method that is not store or deflate, and
-/// when the archive exceeds the entry, byte, or ratio limit.
 pub fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     archive_name: &str,
@@ -452,11 +404,6 @@ pub fn list_members<R: Read + Seek + 'static>(
     Ok((members, offsets))
 }
 
-/// Opens one member's bytes, at random access.
-///
-/// # Errors
-///
-/// Fails when the member's data cannot be seeked to.
 pub fn open_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     offset: ZipOffset,

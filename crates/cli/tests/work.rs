@@ -38,7 +38,6 @@ fn corpus(root: &Path) {
     std::fs::write(root.join("nested").join("b.txt"), b"world").unwrap();
 }
 
-/// What the `--json` result carries that this suite reads.
 #[derive(serde::Deserialize)]
 struct Reported {
     work: Work,
@@ -155,7 +154,6 @@ fn a_local_ingest_writes_nothing_into_a_cache_that_already_holds_the_bytes() {
     );
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
@@ -224,10 +222,8 @@ fn every_byte_a_run_writes_to_a_file_is_counted() {
     );
 }
 
-/// What a tar holding `hello.txt` decompresses to.
 const GREETING: &[u8] = b"hello\n";
 
-/// A tar holding `hello.txt`, whose content is the greeting.
 fn greeting_tar() -> Vec<u8> {
     let mut header = TarHeader::ustar(b"hello.txt", TYPEFLAG_REGULAR);
     header.set_size(GREETING.len() as u64);

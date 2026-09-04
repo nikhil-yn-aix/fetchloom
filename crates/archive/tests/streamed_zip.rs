@@ -26,10 +26,8 @@ use fetchloom_engine::manifest::ArchiveFormat;
 use fetchloom_engine::seam::archive::Archive;
 use fetchloom_faults::{ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter};
 
-/// The general purpose bit that says the sizes follow the data.
 const DESCRIPTOR: u16 = 1 << 3;
 
-/// The value a size field carries when the real one is in a ZIP64 record.
 const ZIP64_SENTINEL: u32 = u32::MAX;
 
 fn streamed(writer: &mut ZipWriter, name: &[u8], data: &[u8]) {

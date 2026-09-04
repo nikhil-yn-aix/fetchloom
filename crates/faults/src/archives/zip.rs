@@ -7,40 +7,24 @@ const EOCD_SIGNATURE: u32 = 0x0605_4b50;
 const ZIP64_EOCD_SIGNATURE: u32 = 0x0606_4b50;
 const ZIP64_LOCATOR_SIGNATURE: u32 = 0x0706_4b50;
 
-/// The store compression method.
 pub const METHOD_STORE: u16 = 0;
-/// The deflate compression method.
 pub const METHOD_DEFLATE: u16 = 8;
 
-/// A zip local file header, with its own name and size fields independent of
-/// any central directory entry for the same member.
 #[derive(Clone, Debug)]
 pub struct ZipLocalHeader {
-    /// The minimum version a reader needs to extract this entry.
     pub version_needed: u16,
-    /// The general purpose bit flags.
     pub flags: u16,
-    /// The compression method.
     pub method: u16,
-    /// The MS-DOS last modified time.
     pub mod_time: u16,
-    /// The MS-DOS last modified date.
     pub mod_date: u16,
-    /// The CRC-32 of the uncompressed data.
     pub crc32: u32,
-    /// The declared compressed size.
     pub compressed_size: u32,
-    /// The declared uncompressed size.
     pub uncompressed_size: u32,
-    /// The member name.
     pub name: Vec<u8>,
-    /// The extra field bytes.
     pub extra: Vec<u8>,
 }
 
 impl ZipLocalHeader {
-    /// Returns a stored, uncompressed local header for the given name and data,
-    /// with the CRC-32 and sizes computed from the data.
     #[must_use]
     pub fn store(name: &[u8], data: &[u8]) -> Self {
         Self {
@@ -84,48 +68,27 @@ impl ZipLocalHeader {
     }
 }
 
-/// A zip central directory file header, with its own name and size fields
-/// independent of the local file header for the same member.
 #[derive(Clone, Debug)]
 pub struct ZipCentralHeader {
-    /// The version the writer claims to have made this entry with.
     pub version_made_by: u16,
-    /// The minimum version a reader needs to extract this entry.
     pub version_needed: u16,
-    /// The general purpose bit flags.
     pub flags: u16,
-    /// The compression method.
     pub method: u16,
-    /// The MS-DOS last modified time.
     pub mod_time: u16,
-    /// The MS-DOS last modified date.
     pub mod_date: u16,
-    /// The CRC-32 of the uncompressed data.
     pub crc32: u32,
-    /// The declared compressed size.
     pub compressed_size: u32,
-    /// The declared uncompressed size.
     pub uncompressed_size: u32,
-    /// The disk number this entry starts on.
     pub disk_start: u16,
-    /// The internal file attributes.
     pub internal_attrs: u16,
-    /// The external file attributes, carrying the Unix mode in its upper
-    /// sixteen bits when a writer chooses to set it there.
     pub external_attrs: u32,
-    /// The byte offset of this member's local file header.
     pub local_header_offset: u32,
-    /// The member name.
     pub name: Vec<u8>,
-    /// The extra field bytes.
     pub extra: Vec<u8>,
-    /// The per-entry comment bytes.
     pub comment: Vec<u8>,
 }
 
 impl ZipCentralHeader {
-    /// Returns a central directory entry matching the given local header, at
-    /// the given local header offset.
     #[must_use]
     pub fn from_local(local: &ZipLocalHeader, local_header_offset: u32) -> Self {
         Self {
@@ -187,21 +150,13 @@ impl ZipCentralHeader {
     }
 }
 
-/// One zip member: a local file header and data pair, and the central directory
-/// entry that describes it, held separately.
 #[derive(Clone, Debug)]
 pub struct ZipMember {
-    /// The local file header written at the member's offset.
     pub local: ZipLocalHeader,
-    /// The central directory entry describing this member.
     pub central: ZipCentralHeader,
-    /// The bytes written after the local header.
     pub data: Vec<u8>,
 }
 
-/// Builds a zip archive byte by byte from local headers, central directory
-/// entries, and data supplied in full, with no sanitization of paths, links, or
-/// sizes.
 #[derive(Clone, Debug, Default)]
 pub struct ZipWriter {
     bytes: Vec<u8>,
@@ -209,7 +164,6 @@ pub struct ZipWriter {
 }
 
 impl ZipWriter {
-    /// Returns an empty writer.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -218,15 +172,11 @@ impl ZipWriter {
         }
     }
 
-    /// Returns the byte offset the next member's local header would be written
-    /// at, for building a central directory entry that points at it correctly.
     #[must_use]
     pub fn offset(&self) -> u32 {
         u32::try_from(self.bytes.len()).unwrap_or(u32::MAX)
     }
 
-    /// Appends one member: its local header, its data, and its central
-    /// directory entry, held for the central directory written at `finish`.
     pub fn push(&mut self, member: ZipMember) -> &mut Self {
         self.bytes.extend_from_slice(&member.local.to_bytes());
         self.bytes.extend_from_slice(&member.data);
@@ -234,16 +184,11 @@ impl ZipWriter {
         self
     }
 
-    /// Finishes the archive: the central directory, then a single
-    /// end-of-central-directory record.
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
         self.finish_inner(false)
     }
 
-    /// Finishes the archive as `finish` does, additionally writing a Zip64
-    /// end-of-central-directory record and locator before the ordinary
-    /// end-of-central-directory record.
     #[must_use]
     pub fn finish_zip64(self) -> Vec<u8> {
         self.finish_inner(true)
@@ -294,8 +239,6 @@ impl ZipWriter {
     }
 }
 
-/// Computes the CRC-32 (the zip and gzip variant, polynomial `0xEDB88320`) of
-/// the given bytes.
 #[must_use]
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;

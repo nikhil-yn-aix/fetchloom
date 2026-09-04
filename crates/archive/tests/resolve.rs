@@ -26,8 +26,6 @@ use fetchloom_faults::{
 };
 use fetchloom_platform::NativePlatform;
 
-/// A bare tar holding a directory, two files with different modes, and a
-/// symbolic link.
 fn subject() -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(&TarHeader::ustar(b"tools/", TYPEFLAG_DIRECTORY), b"");

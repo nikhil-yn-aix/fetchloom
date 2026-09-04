@@ -16,12 +16,6 @@ use fetchloom_engine::work::WorkCounter;
 use std::io::Read;
 use std::path::Path;
 
-/// Recomputes the tree digest of a materialized directory.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be read and when an entry cannot be
-/// represented on this platform.
 pub fn verify_tree(
     path: &Path,
     receipt: Option<&Receipt>,
@@ -64,7 +58,6 @@ pub fn verify_tree(
     Ok((canonical::tree_digest(&entries), entries.len() as u64))
 }
 
-/// Returns a walk's entries with every mode taken from the receipt.
 pub(super) fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     found
         .into_iter()
@@ -88,7 +81,6 @@ pub(super) fn with_receipt_modes(receipt: &Receipt, found: Vec<TreeEntry>) -> Ve
         .collect()
 }
 
-/// Reports that a tree's modes were not read from what was walked.
 pub(super) fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload)) {
     if !found_a_file {
         return;
@@ -103,12 +95,6 @@ pub(super) fn report_unread_modes(found_a_file: bool, emit: &dyn Fn(EventPayload
     });
 }
 
-/// Walks a directory and hashes every file it holds, without writing anything
-/// anywhere.
-///
-/// # Errors
-///
-/// Fails when a file cannot be opened or read.
 pub(super) fn hash_files(
     digester: &std::sync::Mutex<hashing::Digester>,
     root: &Path,
@@ -144,8 +130,6 @@ pub(super) fn hash_files(
     Ok(entries)
 }
 
-/// A reader that counts every byte it yields as read work, and writes nothing
-/// anywhere.
 pub(super) struct CountedRead<'a, R> {
     inner: R,
     work: &'a WorkCounter,
@@ -161,11 +145,6 @@ impl<R: Read> Read for CountedRead<'_, R> {
     }
 }
 
-/// Walks a destination directory and returns the entries it currently holds.
-///
-/// # Errors
-///
-/// Fails when the destination cannot be read or a file cannot be hashed.
 pub(super) fn destination_entries(
     with: &Materialization<'_>,
     destination: &Path,
@@ -191,8 +170,6 @@ pub(super) fn destination_entries(
     Ok(entries)
 }
 
-/// Returns the fingerprints the run that wrote this destination recorded, when
-/// they are a cached answer to the question this run is asking.
 pub(super) fn recorded_fingerprints(
     with: &Materialization<'_>,
     destination: &Path,
@@ -206,7 +183,6 @@ pub(super) fn recorded_fingerprints(
         .unwrap_or_default()
 }
 
-/// Returns the entry a file can be reported as without reading its bytes.
 pub(super) fn unchanged_by_fingerprint(
     with: &Materialization<'_>,
     root: &Path,

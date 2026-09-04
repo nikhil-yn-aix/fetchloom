@@ -310,7 +310,6 @@ fn a_tree_is_stored_above_the_threshold_and_not_at_it() {
     assert!(tree_of(OUTBOARD_THRESHOLD + 1, &leaves).1.is_some());
 }
 
-/// Hashes bytes in one pass the way every write path does.
 fn hash_stream(processor: &Processor, object: &[u8]) -> Digests {
     let mut pair = Pair::new();
     for chunk in object.chunks(1 << 20) {

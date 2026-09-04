@@ -5,62 +5,33 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// The size of one outboard leaf, in bytes.
 pub const OUTBOARD_CHUNK_GROUP: u64 = 1_048_576;
 
-/// The object size at or below which no outboard tree is stored.
 pub const OUTBOARD_THRESHOLD: u64 = 67_108_864;
 
-/// Every configurable bound, at its default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    /// Most entries one archive may contain.
     pub archive_entries: u64,
-    /// Most bytes one archive may expand to.
     pub expanded_bytes: u64,
-    /// Most times an archive may expand relative to its own size.
     pub expansion_ratio: u64,
-    /// Deepest nesting an archive may contain.
     pub nesting_depth: u32,
-    /// Most resident memory a run may hold.
     pub resident_memory: u64,
-    /// Most redirects one request may follow.
     pub redirects: u32,
-    /// Largest manifest that will be read.
     pub manifest_size: u64,
-    /// Most nodes one manifest may contain.
     pub manifest_nodes: u64,
-    /// Attempts made per transient failure.
     pub retry_attempts: u32,
-    /// Longest a backoff may wait.
     pub retry_ceiling: Duration,
-    /// Most entries one listing may return.
     pub listing_entries: u64,
-    /// Largest directory index that will be read.
     pub listing_bytes: u64,
-    /// Most candidate sources probed in parallel.
     pub probed_candidates: u32,
-    /// Projected transfer time above which an optional credential is offered.
     pub credential_offer_threshold: Duration,
-    /// Connections held to one host.
     pub connections_per_host: usize,
-    /// Longest a connection may take to open.
     pub connect_timeout: Duration,
-    /// Longest a source may take to answer with its headers.
     pub response_timeout: Duration,
-    /// Longest a body may go without producing a byte.
     pub idle_timeout: Duration,
-    /// Longest an idle connection is kept in a host's pool, which is the
-    /// retry ceiling, so a resumed transfer after the longest permitted wait
-    /// still finds its connection rather than paying a handshake.
     pub idle_connection_age: Duration,
-    /// Most separate ranges one repair may ask a source for.
     pub repair_spans: u64,
-    /// The length above which one object may be fetched as several ranges at
-    /// once.
     pub split_threshold: u64,
-    /// The share of an object, as a percentage, above which a repair fetches
-    /// the whole of it rather than the damaged ranges.
     pub repair_whole_percent: u64,
 }
 
@@ -93,19 +64,16 @@ impl Default for Limits {
     }
 }
 
-/// A ceiling on how fast a run may transfer, in bytes per second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Bandwidth(NonZeroU64);
 
 impl Bandwidth {
-    /// Builds a ceiling from a rate in bytes per second.
     #[must_use]
     pub fn new(bytes_per_second: NonZeroU64) -> Self {
         Self(bytes_per_second)
     }
 
-    /// Returns the rate in bytes per second.
     #[must_use]
     pub fn bytes_per_second(self) -> u64 {
         self.0.get()
@@ -140,11 +108,6 @@ impl std::str::FromStr for Bandwidth {
     }
 }
 
-/// The object size at or below which an object is packed beside others rather
-/// than given a file of its own.
 pub const PACK_THRESHOLD: u64 = OUTBOARD_CHUNK_GROUP;
 
-/// How large a buffer every streaming path reads and writes through. One
-/// declaration, because a path that streams through a smaller one issues that
-/// many times the calls for the same bytes.
 pub const STREAM_BUFFER_BYTES: usize = 1 << 20;

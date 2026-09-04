@@ -10,7 +10,6 @@ use crate::manifest::{Artifact, DigestClaims, Manifest};
 use crate::metadata::{Context, MetadataFormat, MetadataReader, malformed, unrepresentable};
 use crate::selection::Layout;
 
-/// Reads a Frictionless data package descriptor into a manifest.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrictionlessPackage;
 

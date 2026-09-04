@@ -54,12 +54,6 @@ fn fetch(directory: &Path, cache: &Path, arguments: &[&str]) -> Output {
         .unwrap()
 }
 
-/// The events a run wrote, less the one that announces a display mode the
-/// terminal could not carry.
-///
-/// That degradation is a difference between the modes by construction, because
-/// contracts forces the mode when stderr is not a terminal and forbids doing so
-/// silently. Everything else must be identical, which is what this compares.
 fn events_named(path: &Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap()
@@ -157,8 +151,6 @@ fn a_mode_the_terminal_cannot_carry_is_forced_and_says_so() {
     );
 }
 
-/// Removes the destination, which is the one field that differs by design
-/// because each run materializes into a directory of its own.
 fn strip_destination(result: &str) -> String {
     let mut value: serde_json::Value = serde_json::from_str(result).unwrap();
     if let Some(object) = value.as_object_mut() {

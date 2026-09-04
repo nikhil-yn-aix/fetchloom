@@ -15,7 +15,6 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources::{HttpSource, ObjectStoreSource};
 use std::sync::Arc;
 
-/// Returns the adapters a run dispatches to, asked in the order they are given.
 #[must_use]
 pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
     Adapters::new(vec![
@@ -32,12 +31,6 @@ pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
     ])
 }
 
-/// Resolves the credential a transfer to a host may send, without requiring
-/// one, because a source that serves the bytes without one needs none.
-///
-/// # Errors
-///
-/// Fails when the credential store is present and cannot be read.
 pub(super) fn resolve_credential(
     policy: &dyn Policy,
     host: &str,
@@ -45,13 +38,6 @@ pub(super) fn resolve_credential(
     policy.credential(&Host::new(host.to_owned()), Necessity::Optional)
 }
 
-/// Turns a source's refusal for want of authorization into the policy failure
-/// that names the provider and prints its setup steps.
-///
-/// # Errors
-///
-/// Returns the failure it was given, or the policy's required-credential
-/// failure when the source refused for want of one.
 pub(super) fn required_credential(policy: &dyn Policy, host: &str, failure: Error) -> Error {
     if failure.kind() != ErrorKind::PolicyCredentialMissing {
         return failure;
@@ -62,21 +48,14 @@ pub(super) fn required_credential(policy: &dyn Policy, host: &str, failure: Erro
     }
 }
 
-/// What bounds a run's transfers, and whether measurement may move them.
 #[derive(Clone, Copy, Debug)]
 pub struct Tuning {
-    /// The two ceilings no measurement may push a run past.
     pub ceilings: fetchloom_engine::tuning::Ceilings,
-    /// Whether a run's decisions may move with what it measures.
     pub adapts: bool,
-    /// The ceiling on how fast the run may transfer.
     pub bandwidth: Option<fetchloom_engine::limits::Bandwidth>,
 }
 
 impl Tuning {
-    /// Returns the controller a run starts a host at: what the cache recorded
-    /// for that host, a count that never moves when the run was told not to
-    /// adapt, and one transfer at a time for an artifact no host serves.
     #[must_use]
     pub fn controller(
         &self,
@@ -95,15 +74,12 @@ impl Tuning {
         fetchloom_engine::tuning::Controller::start(recorded, self.ceilings.per_host)
     }
 
-    /// Returns the meter a run's transfers share, when a rate was set.
     #[must_use]
     pub fn meter(&self) -> Option<fetchloom_engine::tuning::Meter> {
         self.bandwidth.map(fetchloom_engine::tuning::Meter::new)
     }
 }
 
-/// Records what a transfer learned about the host it ran against, so the next
-/// run starts where this one finished.
 pub(super) fn record_measurement(
     cache: &Cache<NativePlatform>,
     with: &Materialization<'_>,
@@ -139,17 +115,12 @@ pub(super) fn record_measurement(
     );
 }
 
-/// Returns the resolver a transfer finds each host's own credential through, so
-/// that a transfer moving to a second host authenticates against that host.
 pub(super) fn credentials_for(
     policy: &dyn Policy,
 ) -> impl Fn(&str) -> Result<Option<Credential>, Error> + Sync + '_ {
     move |host: &str| resolve_credential(policy, host)
 }
 
-/// Returns the hook a transfer offers an optional credential through, which
-/// names the provider from the host and lets the policy decide whether the
-/// saving is worth interrupting for.
 pub(super) fn offers_for(policy: &dyn Policy) -> impl Fn(&str, std::time::Duration) + Sync + '_ {
     move |host: &str, saved: std::time::Duration| {
         let help = fetchloom_sources::help_for(host, Necessity::Optional);
@@ -157,22 +128,16 @@ pub(super) fn offers_for(policy: &dyn Policy) -> impl Fn(&str, std::time::Durati
     }
 }
 
-/// Returns the host a location names, which is what a measurement, a credential
-/// and an in-flight count are all filed under.
 #[must_use]
 pub fn host_of(location: &str) -> String {
     Host::of_location(location).as_str().to_owned()
 }
 
-/// Reports whether an adapter serves the reference, so that a run fetches it
-/// rather than reading it as a path on this machine.
 #[must_use]
 pub fn is_served(adapters: &Adapters, reference: &str) -> bool {
     adapters.serving(reference).is_some()
 }
 
-/// Reports whether the adapter serving a reference serves it as a container to
-/// be listed rather than as one object.
 #[must_use]
 pub fn is_container(adapters: &Adapters, reference: &str) -> bool {
     matches!(adapters.serving(reference), Some((_, Serves::Container)))
@@ -187,8 +152,6 @@ pub(super) fn unserved(reference: &str) -> Error {
     )
 }
 
-/// Names the documented reference form a reference is in, when it is one this
-/// build does not resolve.
 pub(super) fn unbuilt_form(reference: &str) -> Option<&'static str> {
     if reference.starts_with("blake3:") || reference.starts_with("sha256:") {
         return Some("a content address");

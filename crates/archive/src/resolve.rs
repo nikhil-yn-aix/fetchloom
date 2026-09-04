@@ -13,14 +13,6 @@ use fetchloom_engine::tree::TreeEntry;
 
 use crate::extract::{BUFFER_LEN, build_plan, io_failure, select_members};
 
-/// Returns the tree the selected members of an archive resolve to.
-///
-/// # Errors
-///
-/// Fails with `archive.link_escape` naming the member and the target when a
-/// hard link names a member this archive does not hold, with `archive.bomb`
-/// when the members exceed the entry or expanded-byte limit, and with whatever
-/// the archive or the selection itself fails with.
 pub fn resolve<A: Archive>(
     archive: &mut A,
     selection: &Selection,

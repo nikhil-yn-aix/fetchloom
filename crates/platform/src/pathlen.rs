@@ -3,12 +3,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// Returns the longest of the candidate lengths this volume accepts, measured
-/// by writing one.
-///
-/// The candidates are given longest first, and the first that a volume accepts
-/// is the answer, so a volume with long paths costs one attempt and one without
-/// costs one more. Nothing is left behind whichever way the answer goes.
 pub(crate) fn measure(directory: &Path, candidates: &[u32], component: u32) -> u32 {
     let last = candidates.last().copied().unwrap_or(0);
     for wanted in candidates {
@@ -19,8 +13,6 @@ pub(crate) fn measure(directory: &Path, candidates: &[u32], component: u32) -> u
     last
 }
 
-/// Reports whether this volume accepts a path of the given length inside the
-/// given directory.
 fn accepts(directory: &Path, wanted: u32, component: u32) -> bool {
     let tag = crate::probe_tag();
     let root = directory.join(format!("fetchloom-probe-{tag}-length"));
@@ -35,9 +27,6 @@ fn accepts(directory: &Path, wanted: u32, component: u32) -> bool {
     answer
 }
 
-/// Builds a path of the wanted length under a root, nesting directories whose
-/// names are no longer than the volume permits, and creates every directory but
-/// the last name.
 fn build(root: &Path, wanted: u32, component: u32) -> Option<PathBuf> {
     let step = usize::try_from(component.clamp(8, 200)).ok()?;
     let wanted = usize::try_from(wanted).ok()?;
@@ -56,7 +45,6 @@ fn build(root: &Path, wanted: u32, component: u32) -> Option<PathBuf> {
     Some(path.join("x".repeat(left)))
 }
 
-/// Removes a probe tree, however deep the probe made it.
 fn remove_deeply(root: &Path) -> std::io::Result<()> {
     match std::fs::remove_dir_all(root) {
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),

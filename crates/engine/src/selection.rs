@@ -7,25 +7,21 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, ErrorKind};
 use crate::tree::EntryPath;
 
-/// A pattern matched against a canonical member path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Glob(String);
 
 impl Glob {
-    /// Builds a pattern from its text.
     #[must_use]
     pub fn new(pattern: impl Into<String>) -> Self {
         Self(pattern.into())
     }
 
-    /// Returns the pattern text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Reports whether this pattern matches a canonical member path.
     #[must_use]
     pub fn matches(&self, path: &str) -> bool {
         let pattern: Vec<&str> = self.0.split('/').collect();
@@ -75,16 +71,13 @@ fn matches_component(pattern: &str, name: &str) -> bool {
     pattern[at_pattern..].iter().all(|byte| *byte == b'*')
 }
 
-/// How member paths are rewritten on the way to the destination.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(into = "String", try_from = "String")]
 pub enum Layout {
-    /// Preserve archive paths.
     #[default]
     Keep,
-    /// Drop the first n path components.
     Flatten(u32),
 }
 
@@ -106,7 +99,6 @@ impl From<Layout> for String {
 impl std::str::FromStr for Layout {
     type Err = String;
 
-    /// Reads the text a layout is written as.
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         if text == "keep" {
             return Ok(Self::Keep);
@@ -129,18 +121,13 @@ impl TryFrom<String> for Layout {
     }
 }
 
-/// One member offered to a selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Candidate<'a> {
-    /// The canonical member path, with `/` separators and nothing normalized.
     pub path: &'a str,
-    /// Whether the member is a directory, which decides what a layout that
-    /// leaves it with no path does with it.
     pub directory: bool,
 }
 
 impl<'a> Candidate<'a> {
-    /// Builds a candidate for a member that is not a directory.
     #[must_use]
     pub fn file(path: &'a str) -> Self {
         Self {
@@ -149,7 +136,6 @@ impl<'a> Candidate<'a> {
         }
     }
 
-    /// Builds a candidate for a directory member.
     #[must_use]
     pub fn directory(path: &'a str) -> Self {
         Self {
@@ -159,37 +145,26 @@ impl<'a> Candidate<'a> {
     }
 }
 
-/// One member a selection took, and the path it lands under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppliedMember {
-    /// Where the member sits in the list the selection was applied to.
     pub index: usize,
-    /// The path the member lands under after the layout rewrote it.
     pub path: EntryPath,
 }
 
-/// What applying a selection to a list of members produced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Applied {
-    /// The selected members, in the order they were given.
     pub members: Vec<AppliedMember>,
-    /// Every directory the selected paths need that no selected member names.
     pub directories: Vec<EntryPath>,
 }
 
-/// The include and exclude patterns that make selection part of identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
-    /// Member paths to include. An empty list means every member.
     pub include: Vec<Glob>,
-    /// Member paths to remove, applied after every include.
     pub exclude: Vec<Glob>,
-    /// How the selected paths are rewritten.
     pub layout: Layout,
 }
 
 impl Selection {
-    /// Reports whether one member path survives the include and exclude lists.
     #[must_use]
     pub fn takes(&self, path: &str) -> bool {
         let included =
@@ -197,14 +172,6 @@ impl Selection {
         included && !self.exclude.iter().any(|glob| glob.matches(path))
     }
 
-    /// Applies this selection to a list of canonical member paths.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `reference.unresolved` when nothing matches, and with
-    /// `destination.unrepresentable` when the layout leaves a file with no
-    /// path, when it leaves nothing at all, or when it produces a path the
-    /// destination cannot hold.
     pub fn apply(&self, members: &[Candidate<'_>]) -> Result<Applied, Error> {
         let mut taken = Vec::new();
         for (index, member) in members.iter().enumerate() {

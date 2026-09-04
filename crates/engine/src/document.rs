@@ -9,20 +9,14 @@ use serde_json::{Map, Value};
 use crate::error::{Error, ErrorKind};
 use crate::limits::Limits;
 
-/// A surface syntax a document may be written in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Syntax {
-    /// The restricted block subset of YAML this build reads.
     Yaml,
-    /// TOML.
     Toml,
-    /// JSON.
     Json,
 }
 
 impl Syntax {
-    /// Returns the syntax a file name states, when it states one this build
-    /// reads.
     #[must_use]
     pub fn of_path(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
@@ -34,7 +28,6 @@ impl Syntax {
         }
     }
 
-    /// Returns the name this syntax is reported by.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -45,13 +38,6 @@ impl Syntax {
     }
 }
 
-/// Reads a document in one of the three accepted syntaxes into the model.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` when the bytes are not valid text, when the
-/// syntax rejects them, when the document uses a construct this build refuses,
-/// and when it exceeds the size, node, or depth bounds.
 pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Error> {
     if bytes.len() as u64 > limits.manifest_size {
         return Err(invalid(format!(
@@ -74,7 +60,6 @@ pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Err
     Ok(value)
 }
 
-/// Returns the canonical JSON bytes of a model.
 #[must_use]
 pub fn canonical_json(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();
@@ -82,8 +67,6 @@ pub fn canonical_json(value: &Value) -> Vec<u8> {
     out
 }
 
-/// Renders a model as the canonical text this build writes a lock, a receipt,
-/// and a plan in.
 #[must_use]
 pub fn render(value: &Value) -> String {
     let mut out = String::new();
@@ -163,14 +146,12 @@ fn write_json(value: &Value, out: &mut Vec<u8>) {
     }
 }
 
-/// Returns a mapping's entries ordered by the raw bytes of their keys.
 fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut entries: Vec<(&String, &Value)> = fields.iter().collect();
     entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
     entries
 }
 
-/// Returns the one double-quoted form of a string.
 #[must_use]
 pub fn quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -252,8 +233,6 @@ fn render_scalar(value: &Value) -> String {
     }
 }
 
-/// Returns a mapping key as it is written, quoted only when it would not read
-/// back as itself.
 fn render_key(key: &str) -> String {
     let plain = !key.is_empty()
         && key
@@ -263,11 +242,6 @@ fn render_key(key: &str) -> String {
     if plain { key.to_owned() } else { quote(key) }
 }
 
-/// Reads a model from a document written in the syntax this build writes.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` naming the line or the key that broke.
 pub fn read_model<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     called: &str,
@@ -276,11 +250,6 @@ pub fn read_model<T: serde::de::DeserializeOwned>(
     read_model_in(bytes, Syntax::Yaml, called, limits)
 }
 
-/// Reads a model from a document written in one of the accepted syntaxes.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` naming the line or the key that broke.
 pub fn read_model_in<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     syntax: Syntax,
@@ -290,12 +259,6 @@ pub fn read_model_in<T: serde::de::DeserializeOwned>(
     from_document(parse(bytes, syntax, limits)?, called)
 }
 
-/// Reads a parsed document into a model, refusing every key the model does not
-/// name.
-///
-/// # Errors
-///
-/// Fails with `manifest.invalid` naming the key or the field that broke.
 pub fn from_document<T: serde::de::DeserializeOwned>(
     document: Value,
     called: &str,
@@ -329,20 +292,10 @@ fn refuse_reserved_keys(document: &Value, called: &str) -> Result<(), Error> {
     }
 }
 
-/// Returns the canonical JSON bytes of a model.
-///
-/// # Errors
-///
-/// Fails when the model cannot be written.
 pub fn canonical_json_of<T: serde::Serialize>(model: &T) -> Result<Vec<u8>, Error> {
     Ok(canonical_json(&to_value(model)?))
 }
 
-/// Renders a model as the canonical text this build writes an artifact in.
-///
-/// # Errors
-///
-/// Fails when the model cannot be written.
 pub fn render_model<T: serde::Serialize>(model: &T) -> Result<String, Error> {
     Ok(render(&to_value(model)?))
 }

@@ -27,14 +27,6 @@ use fetchloom_platform::NativePlatform;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Materializes a local source tree into a destination.
-///
-/// # Errors
-///
-/// Fails when the source cannot be read, when the selection matches nothing or
-/// a layout leaves a member with no path or a collision, when a destination
-/// entry is modified or foreign and neither `force` nor `adopt` was given, and
-/// when staging cannot be published.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
@@ -178,8 +170,6 @@ pub(super) fn entry_size(entry: &TreeEntry) -> u64 {
     }
 }
 
-/// Returns a destination's entries with every mode taken from the resolved
-/// tree.
 pub(super) fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     let modes: HashMap<&str, Mode> = resolved
         .iter()
@@ -210,27 +200,14 @@ pub(super) fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>)
         .collect()
 }
 
-/// Everything settling a run against an existing destination needs to know.
 pub(super) struct Settlement<'a> {
-    /// The tree the run resolved, whatever the source was.
     pub(super) resolved: &'a [TreeEntry],
-    /// Whether the run may overwrite a modified entry and remove a foreign one.
     pub(super) force: bool,
-    /// Whether the run accepts the destination as it stands.
     pub(super) adopt: bool,
-    /// What the run calls the dataset.
     pub(super) dataset: &'a str,
-    /// The object the run resolved, when it resolved one.
     pub(super) artifact: Option<RecordedArtifact>,
 }
 
-/// Decides one run against an existing destination.
-///
-/// # Errors
-///
-/// Fails with `destination.modified` or `destination.foreign` naming every path
-/// when neither `--force` nor `--adopt` was given, and with whatever rebuilding
-/// or restoring fails with.
 pub(super) fn settle(
     with: &Materialization<'_>,
     destination: &Path,
@@ -498,11 +475,6 @@ pub(super) fn fill_staging(
     Ok(entries)
 }
 
-/// Places one file at its target, through the cache when one is open.
-///
-/// # Errors
-///
-/// Fails when the source cannot be read or the target cannot be written.
 pub(super) fn place_file(
     with: &Materialization<'_>,
     gave_up: &std::cell::Cell<bool>,
@@ -565,7 +537,6 @@ pub(super) fn place_file(
     }
 }
 
-/// Materializes one file and offers it to the cache.
 pub(super) fn through_cache(
     digester: &mut hashing::Digester,
     cache: &Cache<NativePlatform>,
@@ -586,11 +557,6 @@ pub(super) fn through_cache(
     Ok((size, digests))
 }
 
-/// Puts a local file into the cache, where the run resolves it as one object.
-///
-/// # Errors
-///
-/// Fails when the source cannot be read into the cache.
 pub(super) fn object_to_resolve(
     with: &Materialization<'_>,
     source: &Path,

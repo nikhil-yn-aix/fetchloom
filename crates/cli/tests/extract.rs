@@ -35,7 +35,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// Builds a gzip-wrapped tar holding a directory and two files.
 fn corpus_archive() -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(&TarHeader::ustar(b"docs/", TYPEFLAG_DIRECTORY), b"");
@@ -171,7 +170,6 @@ fn a_name_that_disagrees_with_the_bytes_is_refused() {
     );
 }
 
-/// The directory every command in this file runs in.
 fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()

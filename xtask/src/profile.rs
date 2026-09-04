@@ -14,16 +14,11 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::threads::ThreadBudget;
 use sha2::{Digest as _, Sha256};
 
-/// One shape the pairing can take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
-    /// What the engine does now: enter the pool once per chunk.
     InstallPerChunk,
-    /// Enter the pool once for the whole stream.
     InstallOnce,
-    /// Never enter the pool.
     Inline,
-    /// Enter the pool once and hash the content digest across it.
     InstallOnceParallelContent,
 }
 
@@ -38,10 +33,8 @@ impl Shape {
     }
 }
 
-/// How many bytes one chunk of a stream carries.
 const CHUNK: usize = 1 << 20;
 
-/// Runs the profile and prints one line per measurement.
 pub fn run(arguments: &[String]) -> std::process::ExitCode {
     let rounds: u32 = crate::argument_value(arguments, "--rounds")
         .and_then(|value| value.parse().ok())
@@ -106,7 +99,6 @@ pub fn run(arguments: &[String]) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// Hashes one stream's worth of bytes in the given shape.
 fn hash(shape: Shape, processor: &Processor, bytes: &[u8]) -> [u8; 32] {
     let mut content = Hasher::new();
     let mut interop = Sha256::new();

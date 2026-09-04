@@ -464,8 +464,6 @@ fn writes_shorter_than_one_window_are_gathered_rather_than_judged_one_at_a_time(
     );
 }
 
-/// A window's worth of bytes, which is the least a host must deliver at a count
-/// before that count's rate says anything.
 const A_WINDOW: u64 = fetchloom_engine::tuning::WINDOW_BYTES;
 
 #[test]

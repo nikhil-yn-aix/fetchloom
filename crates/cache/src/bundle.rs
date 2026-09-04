@@ -12,29 +12,18 @@ use fetchloom_engine::seam::store::Store;
 use crate::Cache;
 use crate::layout::{digest_of, name_of};
 
-/// The size of one tar block.
 const BLOCK: usize = 512;
 
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
-/// What one export or import did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleReport {
-    /// The objects the bundle holds.
     pub objects: u64,
-    /// The bytes those objects hold.
     pub bytes: u64,
-    /// The objects the cache already had, which import left alone.
     pub already_held: u64,
 }
 
 impl<P: Platform> Cache<P> {
-    /// Writes every object the cache holds into a bundle.
-    ///
-    /// # Errors
-    ///
-    /// Fails when an object cannot be read and when the bundle cannot be
-    /// written.
     pub fn export(&self, to: &Path) -> Result<BundleReport, Error> {
         let mut digests = self.list()?;
         digests.sort_by(|left, right| left.bytes().cmp(right.bytes()));
@@ -82,15 +71,6 @@ impl<P: Platform> Cache<P> {
         Ok(report)
     }
 
-    /// Reads a bundle into the cache, publishing nothing until all of it checks
-    /// out.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `archive.unsafe_path` for a member named like a path, with
-    /// `cache.corrupt` for a member named anything else, with
-    /// `integrity.mismatch` for bytes that do not hash to their name, and with
-    /// whatever the tar reader found for a bundle that is not one.
     pub fn import(&self, from: &Path, format: BundleReader) -> Result<BundleReport, Error> {
         let mut staged: Vec<Staged> = Vec::new();
         let outcome = self.stage_bundle(from, format, &mut staged);
@@ -192,23 +172,16 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// One member of a bundle, written and hashed but not yet published.
 struct Staged {
-    /// What the member's own bytes produced.
     digests: hashing::Digests,
-    /// Where those bytes are waiting.
     scratch: PathBuf,
 }
 
-/// One member a bundle holds.
 struct BundleMember {
-    /// The name the member arrived under, which is a claim and not a path.
     name: String,
-    /// How many bytes the member holds.
     size: u64,
 }
 
-/// Returns the digest a member's name claims.
 fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
     if name.contains(['/', '\\']) || name.contains("..") || name.starts_with('.') {
         return Err(Error::new(
@@ -230,7 +203,6 @@ fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
     })
 }
 
-/// Reads the members of a bundle in the order they were written.
 pub struct BundleReader {
     file: std::fs::File,
     path: std::path::PathBuf,
@@ -238,11 +210,6 @@ pub struct BundleReader {
 }
 
 impl BundleReader {
-    /// Opens a bundle.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the bundle cannot be opened.
     pub fn open(path: &Path) -> Result<Self, Error> {
         let file = std::fs::File::open(path)
             .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;

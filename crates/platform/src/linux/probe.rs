@@ -13,13 +13,10 @@ use fetchloom_engine::degrade::DegradeQueue;
 
 use crate::probe_tag;
 
-/// The ratio above which writing many small files is called expensive.
 const SMALL_WRITE_COST_RATIO: f64 = 2.0;
 
-/// How many small files the scanner measurement writes.
 const SCANNER_FILES: usize = 64;
 
-/// How many bytes each of those files holds.
 const SCANNER_FILE_BYTES: usize = 4096;
 
 fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
@@ -27,11 +24,6 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Detects everything about the volume behind a directory.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be written to.
 pub(super) fn capabilities(
     directory: &Path,
     degradations: &DegradeQueue,
@@ -94,9 +86,6 @@ fn measure(
     })
 }
 
-/// The path lengths a volume is measured against, longest first. The first is
-/// what the kernel interface permits and the second is what a filesystem that
-/// bounds a path more tightly than the interface does permits.
 const PATH_LENGTHS: [u32; 2] = [4096, 255];
 
 fn fold_probe(

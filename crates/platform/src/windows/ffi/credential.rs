@@ -11,10 +11,8 @@ use windows_sys::Win32::Security::Credentials::{
     CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
 };
 
-/// What the credential store returns when it holds nothing under a target.
 const ERROR_NOT_FOUND: i32 = 1168;
 
-/// Reads the blob a generic credential holds, when the store holds one.
 pub(crate) fn read_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
     let wide: Vec<u16> = std::ffi::OsStr::new(target)
         .encode_wide()

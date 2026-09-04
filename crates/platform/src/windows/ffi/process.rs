@@ -16,17 +16,12 @@ use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-/// What a query about a process found.
 pub(crate) enum ProcessQuery {
-    /// The process exists and started at this instant.
     Started(u64),
-    /// No process with that identifier exists.
     Gone,
-    /// A process with that identifier exists and could not be inspected.
     Unreadable,
 }
 
-/// Reads when a process started.
 pub(crate) fn process_start(pid: u32) -> ProcessQuery {
     // SAFETY: the call takes no pointer and returns a handle this function owns and closes.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -63,7 +58,6 @@ pub(crate) fn process_start(pid: u32) -> ProcessQuery {
     ProcessQuery::Started(started)
 }
 
-/// Counts the processors this process may actually run on.
 pub(crate) fn usable_processors() -> Option<usize> {
     let mut process_mask = 0usize;
     let mut system_mask = 0usize;

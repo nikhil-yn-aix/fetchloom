@@ -17,18 +17,13 @@ use crate::diagnosis::{Diagnosis, NotLocalized, spans_of};
 
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
-/// Where the bytes of an object this cache knows about are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Held {
-    /// In `objects/`, where everything has been verified.
     Published(PathBuf),
-    /// In `quarantine/`, where it is kept as evidence and as the input a
-    /// localized repair needs.
     Quarantined(PathBuf),
 }
 
 impl Held {
-    /// Returns where the bytes are.
     #[must_use]
     pub fn path(&self) -> &std::path::Path {
         match self {
@@ -37,19 +32,14 @@ impl Held {
     }
 }
 
-/// What a walk of an object against its tree found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Localized {
-    /// How long the object on disk is.
     pub object_len: u64,
-    /// The byte ranges that do not match the tree, ascending and merged.
     pub damaged: Vec<Range<u64>>,
-    /// Why the damage could not be narrowed, when it could not.
     pub not_localized: Option<NotLocalized>,
 }
 
 impl<P: Platform> Cache<P> {
-    /// Returns where the bytes of an object are, when this cache holds them.
     #[must_use]
     pub fn locate(&self, digest: ContentDigest) -> Option<Held> {
         if let Some(placed) = self.placement(digest) {
@@ -62,12 +52,6 @@ impl<P: Platform> Cache<P> {
         None
     }
 
-    /// Finds which byte ranges of an object this cache holds do not match its
-    /// tree.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the cache holds no such object.
     pub fn localize(&self, digest: ContentDigest) -> Result<Localized, Error> {
         let Some(held) = self.locate(digest) else {
             return Err(Error::new(
@@ -115,11 +99,6 @@ impl<P: Platform> Cache<P> {
         }
     }
 
-    /// Moves an object into quarantine and writes the diagnosis beside it.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the object cannot be moved.
     pub fn quarantine(
         &self,
         digest: ContentDigest,
@@ -153,12 +132,6 @@ impl<P: Platform> Cache<P> {
         Ok(diagnosis)
     }
 
-    /// Opens a copy of a damaged object for patching.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the cache holds no such object and when the copy cannot be
-    /// made.
     pub fn begin_repair(&self, digest: ContentDigest) -> Result<RepairWriter, Error> {
         let Some(held) = self.locate(digest) else {
             return Err(Error::new(
@@ -187,12 +160,6 @@ impl<P: Platform> Cache<P> {
         })
     }
 
-    /// Writes one span of bytes into a repair at its own offset.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the span cannot be written and when fewer bytes arrive than
-    /// the span holds.
     pub fn patch(
         &self,
         writer: &mut RepairWriter,
@@ -236,13 +203,6 @@ impl<P: Platform> Cache<P> {
         Ok(moved)
     }
 
-    /// Rereads a repaired object whole, and publishes it when it hashes to the
-    /// digest it is named by.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `integrity.mismatch` when the repaired bytes still do not
-    /// hash to the digest, leaving the object where it was.
     pub fn finish_repair(
         &self,
         writer: RepairWriter,
@@ -292,7 +252,6 @@ impl<P: Platform> Cache<P> {
         Ok(digests)
     }
 
-    /// Reads one leaf group of an object, counting what it read.
     pub(crate) fn hash_object(&self, digest: ContentDigest) -> Result<ContentDigest, Error> {
         let Some(held) = self.locate(digest) else {
             return Err(Error::new(
@@ -324,7 +283,6 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// A copy of a damaged object, open for patching.
 pub struct RepairWriter {
     file: std::fs::File,
     path: PathBuf,
@@ -333,14 +291,12 @@ pub struct RepairWriter {
 }
 
 impl RepairWriter {
-    /// Returns how many bytes the patches wrote.
     #[must_use]
     pub fn written(&self) -> u64 {
         self.written
     }
 }
 
-/// Reads one leaf group of an object into a buffer the walk reuses.
 fn read_group(
     object: &mut std::fs::File,
     path: &Path,
@@ -375,7 +331,6 @@ fn read_group(
     Ok(())
 }
 
-/// Returns the object length a stored tree records, when it can be read.
 fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     let mut header = [0u8; 8];
     tree.seek(SeekFrom::Start(0)).ok()?;
@@ -384,12 +339,6 @@ fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     Some(u64::from_le_bytes(header))
 }
 
-/// Returns how many bytes at the start of a partial transfer match the object's
-/// outboard tree.
-///
-/// # Errors
-///
-/// Fails when the partial cannot be read.
 pub fn verified_prefix<P: Platform>(
     cache: &Cache<P>,
     key: fetchloom_engine::partial_key::PartialKey,

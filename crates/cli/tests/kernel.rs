@@ -38,10 +38,8 @@ mod support;
 
 use tempfile::TempDir;
 
-/// How large the object each run materializes is.
 const OBJECT_BYTES: u64 = 8 * 1024 * 1024;
 
-/// What the `--json` result carries that this suite reads.
 #[derive(serde::Deserialize)]
 struct Reported {
     work: Work,
@@ -56,7 +54,6 @@ fn object_at(root: &Path) {
     std::fs::write(root.join("obj.bin"), &bytes).unwrap();
 }
 
-/// What one run reported and what the operating system counted for it.
 struct Observed {
     reported: Work,
     kernel_read: u64,
@@ -201,7 +198,6 @@ fn the_reported_writes_are_the_bytes_left_on_disk() {
     }
 }
 
-/// How many bytes of content a tree holds.
 fn occupied(root: &Path) -> u64 {
     let mut total = 0;
     let Ok(entries) = std::fs::read_dir(root) else {

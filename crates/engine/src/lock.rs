@@ -9,57 +9,36 @@ use crate::digest::{ContentDigest, InteropDigest, ManifestDigest, TreeDigest};
 use crate::error::{Error, ErrorKind};
 use crate::selection::{Glob, Layout};
 
-/// One artifact as a lock pins it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedArtifact {
-    /// The content digest the bytes must have.
     pub digest: ContentDigest,
-    /// The interop digest recorded alongside it.
     pub interop: InteropDigest,
-    /// The length of the artifact in bytes.
     pub size: u64,
-    /// The member paths the lock entry covers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub select: Vec<Glob>,
-    /// How member paths are rewritten.
     #[serde(default)]
     pub layout: Layout,
 }
 
-/// One dataset as a lock pins it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedDataset {
-    /// The manifest the entry was resolved from.
     pub manifest: ManifestDigest,
-    /// The release the entry was resolved at, when the manifest names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
-    /// The artifacts, by the name the manifest gave each one.
     pub artifacts: BTreeMap<String, LockedArtifact>,
-    /// The tree the artifacts materialized to, present only after a successful
-    /// materialization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeDigest>,
 }
 
-/// The portable record of what a run resolved to.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
-    /// The datasets pinned, by name.
     pub datasets: BTreeMap<String, LockedDataset>,
 }
 
 impl LockedDataset {
-    /// Checks what a run resolved against what the lock pins.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `integrity.mismatch` naming the field, the value the lock
-    /// pins, and the value the run resolved, and with `alias.unstable` for a
-    /// difference in identity.
     pub fn check(&self, resolved: &Self) -> Result<(), Error> {
         for (id, found) in &resolved.artifacts {
             let Some(pinned) = self.artifacts.get(id) else {
@@ -100,12 +79,6 @@ impl LockedDataset {
 }
 
 impl LockedDataset {
-    /// Checks the request a run is about to make against what the lock pins.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `alias.unstable` naming the field, what the lock states, and
-    /// what the run asks for.
     pub fn check_request(
         &self,
         manifest: ManifestDigest,
@@ -142,12 +115,6 @@ impl LockedDataset {
 }
 
 impl LockedArtifact {
-    /// Checks one artifact a run resolved against what the lock pins.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `integrity.mismatch` for a difference in the bytes and with
-    /// `alias.unstable` for a difference in what was selected.
     pub fn check(&self, id: &str, resolved: &Self) -> Result<(), Error> {
         if self.digest != resolved.digest {
             return Err(Error::new(
@@ -203,11 +170,6 @@ fn moved(field: &str, pinned: &impl std::fmt::Display, found: &impl std::fmt::Di
 }
 
 impl Lock {
-    /// Reads the lock at a path, returning an empty lock when there is none.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the file is present and cannot be read or does not parse.
     pub fn read(path: &Path, limits: &crate::limits::Limits) -> Result<Self, Error> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
@@ -224,11 +186,6 @@ impl Lock {
         crate::document::read_model(&bytes, "lock", limits)
     }
 
-    /// Writes the lock at a path, in the one canonical form.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the lock cannot be written.
     pub fn write(&self, path: &Path) -> Result<(), Error> {
         let rendered = crate::document::render_model(self)?;
         let mut beside = path.as_os_str().to_owned();

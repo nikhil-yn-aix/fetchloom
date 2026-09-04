@@ -39,8 +39,6 @@ fn symlink(text: &str, target: &str) -> TreeEntry {
     }
 }
 
-/// The entries a conforming implementation must materialize identically, byte
-/// for byte, on Windows and Linux.
 #[must_use]
 pub fn portable_core() -> Vec<TreeEntry> {
     vec![
@@ -79,22 +77,14 @@ pub fn portable_core() -> Vec<TreeEntry> {
     ]
 }
 
-/// One combination the target filesystem or platform cannot represent, with the
-/// exact kind and reason a conforming implementation reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclaredFailure {
-    /// What this case demonstrates.
     pub description: &'static str,
-    /// The entries that together cannot be represented.
     pub entries: Vec<TreeEntry>,
-    /// The error kind a conforming implementation reports.
     pub kind: ErrorKind,
-    /// Why representation is impossible, named for the error's next action.
     pub reason: &'static str,
 }
 
-/// The entries a conforming implementation must reject, each with the exact
-/// kind and reason.
 #[must_use]
 pub fn declared_failures() -> Vec<DeclaredFailure> {
     vec![

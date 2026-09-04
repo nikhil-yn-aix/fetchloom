@@ -20,15 +20,6 @@ pub(super) enum SelectionCandidate {
     File(materialize::SourceFile),
 }
 
-/// Applies a selection to what a walk of a source found.
-///
-/// # Errors
-///
-/// Fails with `reference.unresolved` when the selection matches nothing, and
-/// with `destination.unrepresentable` when the layout leaves a member with no
-/// path, and with `archive.collision` when two members land on the same path.
-/// Returns every member of a walked tree and what each one is, in the order a
-/// selection is applied to them.
 pub(super) fn offer(walked: &materialize::Walked) -> (Vec<String>, Vec<SelectionCandidate>) {
     let mut members: Vec<String> = Vec::new();
     let mut candidates: Vec<SelectionCandidate> = Vec::new();
@@ -147,17 +138,6 @@ pub(super) fn apply_selection(
     })
 }
 
-/// Asserts, before any byte moves, that a manifest's recorded terms have been
-/// accepted.
-///
-/// Returns what to record in the receipt: `Some` when the manifest required
-/// acceptance and it was asserted, `None` when the manifest recorded nothing
-/// to accept.
-///
-/// # Errors
-///
-/// Fails with `policy.terms_required` when acceptance is required and was
-/// neither asserted with `--yes` nor confirmed interactively.
 pub fn assert_terms(
     policy: &dyn Policy,
     license: Option<&fetchloom_engine::license::License>,
@@ -179,13 +159,6 @@ pub fn assert_terms(
     }
 }
 
-/// Refuses a reference that would need the network while the network is
-/// forbidden.
-///
-/// # Errors
-///
-/// Fails with a policy failure when the reference names a network location and
-/// the run forbids network activity.
 pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error> {
     if !policy.offline() {
         return Ok(());
@@ -203,7 +176,6 @@ pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error
     ))
 }
 
-/// Returns the entries a listing contributes after a selection is applied.
 pub(super) fn selected_entries(
     location: &str,
     listed: Vec<fetchloom_engine::seam::source::ListingEntry>,

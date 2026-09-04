@@ -18,169 +18,67 @@ use crate::redact::SafeUrl;
 use crate::reference::Host;
 use crate::resume::ResumeRung;
 use crate::seam::observer::Observer;
-use crate::seam::source::{
-    ByteRange, Revalidated, Source, SourceIdentity, SourceMetadata, Validator,
-};
+use crate::seam::source::{ByteRange, Revalidated, Source, SourceMetadata, Validator};
 use crate::seam::store::Store;
 use crate::source_record::SourceRecord;
 use crate::split::{Refused, parts_for, spans};
-use crate::tuning::{Answer, Controller, HostMeasurement, Meter, WriteRate};
+use crate::tuning::{Answer, HostMeasurement, Meter, WriteRate};
 
 use crate::limits::STREAM_BUFFER_BYTES as BUFFER;
 
-/// How many buffers one span of a split holds, which is what bounds how far
-/// ahead of the writer a span may run.
+mod copy;
+mod resume;
+mod retry;
+
+pub use resume::{Prior, rung_for};
+pub use retry::{Retry, SleepingPause, backoff, body_failure, honors};
+
+use copy::{Asked, Backpressure, Either, copy};
+use resume::{held, record_of, validator_for};
+use retry::{ended_early, taking};
+
 const SPAN_BUFFERS: usize = 2;
 
-/// What one transfer did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transferred {
-    /// The digest the bytes hash to.
     pub digest: ContentDigest,
-    /// The interop digest of the same bytes, taken in the same pass.
     pub interop: Option<crate::digest::InteropDigest>,
-    /// How many bytes arrived from the source in this run.
     pub bytes_transferred: u64,
-    /// How many bytes were already on disk and kept.
     pub bytes_kept: u64,
-    /// The rung the transfer stood on.
     pub rung: ResumeRung,
-    /// How many attempts were made.
     pub attempts: u32,
-    /// What the source said identifies these bytes. Empty when the run learned
-    /// nothing.
     pub validator: Validator,
-    /// The location that answered with the bytes, which is where the chain of
-    /// redirects ended and not where it started.
     pub served: SafeUrl,
-    /// The source this transfer took and why, when a run selected one.
     pub chosen: Option<Chosen>,
 }
 
-/// The two impure things a retry needs: a random fraction and a wait.
 pub trait Pause: Send + Sync {
-    /// Returns a value between zero and one for the jitter.
     fn fraction(&self) -> f64;
 
-    /// Waits for the given duration.
     fn sleep(&self, duration: Duration);
 }
 
-/// How long to wait before an attempt, with full jitter.
-#[must_use]
-pub fn backoff(limits: &Limits, attempt: u32, fraction: f64) -> Duration {
-    let exponent = attempt.saturating_sub(1).min(16);
-    let full = Duration::from_secs(1u64 << exponent).min(limits.retry_ceiling);
-    full.mul_f64(fraction.clamp(0.0, 1.0))
-}
-
-/// Reports whether a wait a source asked for is one this run may honor.
-#[must_use]
-pub fn honors(limits: &Limits, retry_after: Duration) -> bool {
-    retry_after <= limits.retry_ceiling
-}
-
-/// What a run already holds for a reference no digest pins.
-pub struct Prior {
-    /// What the reference resolved to last time.
-    pub digest: ContentDigest,
-    /// What the source said identified those bytes.
-    pub validator: Validator,
-}
-
-/// Decides where a transfer starts, given what is on disk and what the source
-/// says now.
-///
-/// # Errors
-///
-/// Fails with `source.identity_changed` when the partial stands on the second
-/// rung and the source has since served a different immutable identity for the
-/// same location.
-pub fn rung_for(
-    recorded: Option<&SourceRecord>,
-    now: &SourceMetadata,
-    on_disk: u64,
-    verified: u64,
-) -> Result<(ResumeRung, u64), Error> {
-    if verified > 0 {
-        return Ok((ResumeRung::Outboard, verified));
-    }
-    if on_disk == 0 {
-        return Ok((rung_of(&now.identity), 0));
-    }
-    let Some(recorded) = recorded else {
-        return Ok((ResumeRung::NoValidator, 0));
-    };
-    if rung_of(&recorded.identity) == ResumeRung::ImmutableIdentity
-        && rung_of(&now.identity) == ResumeRung::ImmutableIdentity
-        && recorded.identity != now.identity
-    {
-        return Err(Error::new(
-            ErrorKind::SourceIdentityChanged,
-            "fetch this object from a source whose immutable identity is immutable, because this \
-             one served a different one for the same location and so the identity it promised does \
-             not hold",
-        ));
-    }
-    if !now.supports_ranges || !recorded.identifies_the_same_bytes_as(&now.identity) {
-        return Ok((ResumeRung::NoValidator, 0));
-    }
-    Ok((rung_of(&now.identity), on_disk))
-}
-
-fn rung_of(identity: &SourceIdentity) -> ResumeRung {
-    match identity {
-        SourceIdentity::ContentAddress(_) | SourceIdentity::ImmutableVersion(_) => {
-            ResumeRung::ImmutableIdentity
-        }
-        SourceIdentity::StrongValidator(_) => ResumeRung::StrongValidator,
-        SourceIdentity::WeakValidator(_) => ResumeRung::WeakValidator,
-        SourceIdentity::None => ResumeRung::NoValidator,
-    }
-}
-
-/// Everything one transfer runs against.
 pub struct Transfer<'a, S, T, P> {
-    /// The store the bytes are written into.
     pub store: &'a T,
-    /// The source the bytes are read from.
     pub source: &'a S,
-    /// How long to wait and how far to jitter.
     pub pause: &'a P,
-    /// The bounds this run may not exceed.
     pub limits: &'a Limits,
-    /// Where a fallback is recorded.
     pub degradations: &'a DegradeQueue,
-    /// What this run has measured about a candidate's host, when it has
-    /// measured anything.
     pub measurement: &'a (dyn Fn(&str) -> Option<HostMeasurement> + Sync),
-    /// Where the event stream is written.
     pub observer: &'a dyn Observer,
-    /// The numbers the events are ordered by.
     pub sequence: &'a Sequence,
-    /// The in-flight counts and per-host controllers this run is held inside.
     pub flights: &'a Flights<'a>,
-    /// The ceiling on how fast the run may move bytes, when one was set.
     pub meter: Option<&'a Meter>,
-    /// Finds the credential a request to a host may carry, so that a transfer
-    /// moving to a second host resolves that host's own.
     pub credential: &'a (dyn Fn(&str) -> Result<Option<Credential>, Error> + Sync),
-    /// Names a host whose credential the run does not hold, and how much time
-    /// holding it would have saved, so that the policy may offer it.
     pub offer: &'a (dyn Fn(&str, Duration) + Sync),
 }
 
-/// The source a transfer took, and why it took that one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chosen {
-    /// The source the bytes came from.
     pub source: SafeUrl,
-    /// Why it was chosen over the alternatives.
     pub reason: String,
 }
 
-/// Returns a candidate no probe was spent on, which is scored on what the run
-/// already knows about its host and nothing the source said.
 fn unprobed(index: usize, location: &str, headroom: u32) -> Probed {
     Probed {
         index,
@@ -194,12 +92,6 @@ fn unprobed(index: usize, location: &str, headroom: u32) -> Probed {
 }
 
 impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
-    /// Moves one object from the source that scored best into the store.
-    ///
-    /// # Errors
-    ///
-    /// Fails when every source is exhausted, when a source's bytes do not hash
-    /// to the expected digest, and when the store cannot be written.
     pub fn run(
         &self,
         expected: Option<ContentDigest>,
@@ -251,8 +143,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }))
     }
 
-    /// Probes the candidates this run may probe, scores every candidate, and
-    /// reports which input decided.
     fn select(&self, locations: &[String]) -> (Vec<Probed>, Separator) {
         let Some(first) = locations.first() else {
             return (Vec::new(), Separator::TheOnlyOne);
@@ -291,14 +181,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         (probed, separator)
     }
 
-    /// Offers a credential for a candidate the run could not read, when what
-    /// that candidate's host has been measured at would save more time than the
-    /// offer threshold allows to pass in silence.
-    ///
-    /// A refused probe says nothing about the object, so the only difference
-    /// there is to measure is between the two hosts, over the length the taken
-    /// candidate stated. With no measurement behind either host, or no stated
-    /// length, nothing is projected and nothing is offered.
     fn offer_what_a_credential_would_save(&self, taken: &Probed, probed: &[Probed]) {
         let Some(length) = taken.metadata.as_ref().and_then(|found| found.size) else {
             return;
@@ -318,8 +200,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
-    /// Makes one bounded metadata request against each candidate at once, so
-    /// that scoring costs one round trip rather than one for every candidate.
     fn probe_all(&self, locations: &[String]) -> Vec<Probed> {
         let mut found: Vec<Probed> = std::thread::scope(|scope| {
             let asked: Vec<_> = locations
@@ -394,20 +274,15 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
-    /// Makes a bounded metadata request carrying whatever credential this run
-    /// resolved for the location's own host.
     fn probe(&self, location: &str) -> Result<SourceMetadata, Error> {
         let credential = self.credential_for(location)?;
         self.source.probe(location, credential.as_ref())
     }
 
-    /// Returns the credential a request to a location's host may carry.
     fn credential_for(&self, location: &str) -> Result<Option<Credential>, Error> {
         (self.credential)(Host::of_location(location).as_str())
     }
 
-    /// Takes the single-writer claim on a key, reporting a wait for another
-    /// writer as `cache.wait`.
     fn claim(&self, key: PartialKey) -> Result<T::Lease, Error> {
         let lease = self.store.lease(key)?;
         if self.store.waited(&lease) {
@@ -527,14 +402,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
-    /// Publishes what arrived, reporting the verification the publication is
-    /// conditional on, because the digest is checked here and a reader of the
-    /// stream has no other place to learn that it was checked.
-    ///
-    /// # Errors
-    ///
-    /// Fails with whatever the store failed to publish for, including the
-    /// mismatch it reports when the bytes hash to something else.
     fn committed(
         &self,
         lease: T::Lease,
@@ -562,13 +429,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
-    /// Returns the rung a transfer stands on and how many bytes already on disk
-    /// it keeps, dropping a partial the source no longer identifies.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the store cannot be read and when the source has served a
-    /// different immutable identity for the same location.
     fn where_it_starts(
         &self,
         key: PartialKey,
@@ -590,8 +450,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         Ok((rung, keep))
     }
 
-    /// Records why the bytes already on disk were dropped rather than resumed
-    /// from.
     fn report_the_partial_dropped(
         &self,
         recorded: Option<&SourceRecord>,
@@ -616,12 +474,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
-    /// Returns how many spans this run fetches one object as, recording a
-    /// degradation when a split was wanted and a condition failed.
-    ///
-    /// A split is wanted once the object is long enough for the extra requests
-    /// to pay for themselves; below that there is nothing to report, because
-    /// nothing was given up.
     fn split_into(&self, metadata: &SourceMetadata, location: &str) -> Option<NonZeroU32> {
         let measured = (self.measurement)(location).map_or(0, |found| found.concurrency);
         let permitted = self
@@ -644,9 +496,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
-    /// Fetches the missing bytes of one object as several spans at once and
-    /// writes them in order, so that the digests taken as the bytes arrive are
-    /// the digests of the object.
     fn copy_split(
         &self,
         location: &str,
@@ -715,8 +564,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
     }
 
-    /// Streams one span into the channel the writer drains, reusing the buffers
-    /// it gets back rather than allocating one for every chunk.
     fn fill(
         &self,
         location: &str,
@@ -770,7 +617,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         }
         Ok(())
     }
-    /// Returns the location that answered and the bytes it answered with.
     fn body_from(
         &self,
         arrived: Option<(SourceMetadata, S::Body)>,
@@ -790,8 +636,6 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         Ok((answered.metadata.location, Either::Fetched(answered.body)))
     }
 
-    /// Asks a source in one request whether an object this run already holds is
-    /// still what the reference names.
     fn ask_whether_it_changed(
         &self,
         expected: Option<ContentDigest>,
@@ -827,284 +671,4 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
     fn emit(&self, payload: EventPayload) {
         self.observer.emit(&Event::new(self.sequence, payload));
     }
-}
-
-/// What one conditional question produced.
-enum Asked<B> {
-    /// No question was asked.
-    Silence,
-    /// The source restated the validator it already gave.
-    Unchanged(ContentDigest),
-    /// The bytes changed, and the response carries them.
-    Changed(SourceMetadata, B),
-}
-
-/// The bytes of a transfer, whichever request produced them.
-enum Either<B> {
-    /// A fetch, which may have carried a range.
-    Fetched(B),
-    /// The body a conditional request answered with, always from zero.
-    Revalidated(B),
-}
-
-impl<B: Read> Read for Either<B> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Fetched(body) | Self::Revalidated(body) => body.read(buffer),
-        }
-    }
-}
-
-/// What a run reports for an object the cache already holds.
-fn held(digest: ContentDigest) -> Transferred {
-    Transferred {
-        digest,
-        interop: None,
-        bytes_transferred: 0,
-        bytes_kept: 0,
-        rung: ResumeRung::Outboard,
-        attempts: 0,
-        validator: Validator::default(),
-        served: SafeUrl::new(""),
-        chosen: None,
-    }
-}
-
-/// Returns what a response said identifies the bytes it served.
-fn validator_for(metadata: &SourceMetadata) -> Validator {
-    Validator {
-        etag: validator_of(&metadata.identity),
-        last_modified: metadata.last_modified.clone(),
-    }
-}
-
-fn record_of(metadata: &SourceMetadata, rung: ResumeRung, written: u64) -> SourceRecord {
-    SourceRecord {
-        location: metadata.location.clone(),
-        host: metadata.host.as_str().to_owned(),
-        size: metadata.size,
-        etag: validator_of(&metadata.identity),
-        identity: metadata.identity.clone(),
-        last_modified: metadata.last_modified.clone(),
-        accepts_ranges: metadata.supports_ranges,
-        written,
-        rung,
-    }
-}
-
-fn validator_of(identity: &SourceIdentity) -> Option<String> {
-    match identity {
-        SourceIdentity::StrongValidator(tag) | SourceIdentity::WeakValidator(tag) => {
-            Some(tag.clone())
-        }
-        _ => None,
-    }
-}
-
-/// The three things that decide how fast a copy loop is allowed to go: the
-/// bandwidth ceiling, the wait it is served with, and the controller the volume
-/// answers when it collapses.
-struct Backpressure<'a, P> {
-    meter: Option<&'a Meter>,
-    pause: &'a P,
-    controller: &'a Mutex<Controller>,
-}
-
-fn copy(
-    mut body: impl Read,
-    writer: &mut impl Write,
-    location: &str,
-    moved: &mut u64,
-    buffer: &mut [u8],
-    backpressure: &Backpressure<'_, impl Pause>,
-) -> Result<(), Error> {
-    let Backpressure {
-        meter,
-        pause,
-        controller,
-    } = backpressure;
-    let mut rate = WriteRate::default();
-    loop {
-        if crate::cancel::requested() {
-            return Ok(());
-        }
-        let filled = body
-            .read(buffer)
-            .map_err(|reason| body_failure(location, &reason))?;
-        if filled == 0 {
-            return Ok(());
-        }
-        let accepting = Instant::now();
-        writer.write_all(&buffer[..filled]).map_err(|reason| {
-            Error::new(
-                ErrorKind::CacheCorrupt,
-                format!("make room in the cache, because the bytes could not be written: {reason}"),
-            )
-        })?;
-        if rate.observed(filled as u64, accepting.elapsed()) {
-            controller
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .answered(Answer::Faltered);
-        }
-        *moved += filled as u64;
-        if let Some(meter) = meter {
-            let owed = meter.moved(filled as u64);
-            if !owed.is_zero() {
-                pause.sleep(owed);
-            }
-        }
-    }
-}
-
-/// Everything an attempt is retried against.
-pub struct Retry<'a, P> {
-    /// The bounds this run may not exceed.
-    pub limits: &'a Limits,
-    /// How long to wait and how far to jitter.
-    pub pause: &'a P,
-    /// Where the event stream is written.
-    pub observer: &'a dyn Observer,
-    /// The numbers the events are ordered by.
-    pub sequence: &'a Sequence,
-    /// How many transfers this host permits, moved as the host answers.
-    pub controller: &'a Mutex<Controller>,
-    /// The host being retried, which every retry event is filed under.
-    pub host: crate::reference::Host,
-}
-
-impl<P: Pause> Retry<'_, P> {
-    /// Runs an attempt until it succeeds, fails terminally, or runs out.
-    ///
-    /// # Errors
-    ///
-    /// Returns the last failure, carrying how many attempts were made.
-    pub fn until_spent<T>(
-        &self,
-        mut work: impl FnMut(u32) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            let failure = match work(attempt) {
-                Ok(done) => {
-                    if attempt == 1 {
-                        self.answered(Answer::Clean);
-                    }
-                    return Ok(done);
-                }
-                Err(failure) => failure,
-            };
-            self.answered(if failure.retry_after().is_some() {
-                Answer::RateLimited
-            } else {
-                Answer::Faltered
-            });
-            if !failure.retryable() || attempt >= self.limits.retry_attempts {
-                return Err(failure.with_attempts(attempt));
-            }
-            self.observer.emit(&Event::new(
-                self.sequence,
-                EventPayload::TransferRetry {
-                    host: self.host.clone(),
-                    attempt,
-                    reason: failure.next_action().to_owned(),
-                },
-            ));
-            let backing_off = backoff(self.limits, attempt, self.pause.fraction());
-            let asked = failure
-                .retry_after()
-                .filter(|wait| honors(self.limits, *wait));
-            self.pause.sleep(backing_off.max(asked.unwrap_or_default()));
-        }
-    }
-
-    /// Moves the host's permitted count for what it answered.
-    fn answered(&self, answer: Answer) {
-        self.controller
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .answered(answer);
-    }
-}
-
-/// A pause that really sleeps, with jitter drawn from the clock.
-#[derive(Debug, Default)]
-pub struct SleepingPause;
-
-impl Pause for SleepingPause {
-    fn fraction(&self) -> f64 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.subsec_nanos());
-        f64::from(nanos) / f64::from(u32::MAX)
-    }
-
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
-}
-
-/// Names why a body stopped arriving.
-#[must_use]
-pub fn body_failure(location: &str, reason: &std::io::Error) -> Error {
-    let quiet = matches!(
-        reason.kind(),
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-    ) || reason.to_string().to_lowercase().contains("timeout");
-    let kind = if quiet {
-        ErrorKind::NetworkTimeout
-    } else {
-        ErrorKind::NetworkRefused
-    };
-    Error::new(
-        kind,
-        format!("try the source again, because the body stopped arriving: {reason}"),
-    )
-    .with_source(location)
-    .with_retryable(true)
-}
-
-/// Fails when a body stopped before the length the source stated, or when the
-/// copy itself failed.
-///
-/// # Errors
-///
-/// Fails with `integrity.truncated` when the source ended a body early, and
-/// with whatever ended the copy otherwise.
-fn ended_early(
-    arrived: &Result<(), Error>,
-    metadata: &SourceMetadata,
-    location: &str,
-    have: u64,
-) -> Result<(), Error> {
-    let short = metadata.size.is_some_and(|expected| have < expected);
-    let timed_out = arrived
-        .as_ref()
-        .err()
-        .is_some_and(|failure| failure.kind() == ErrorKind::NetworkTimeout);
-    if !short && arrived.is_ok() {
-        return Ok(());
-    }
-    if short && !timed_out {
-        return Err(Error::new(
-            ErrorKind::IntegrityTruncated,
-            format!(
-                "fetch the rest, because the source ended the body after {have} of the {} bytes it said the object holds",
-                metadata.size.unwrap_or_default()
-            ),
-        )
-        .with_source(location)
-        .with_retryable(true));
-    }
-    match arrived {
-        Ok(()) => Ok(()),
-        Err(failure) => Err(failure.clone()),
-    }
-}
-
-/// Returns how long a length takes to move at a rate in bytes per second.
-fn taking(length: u64, rate: u64) -> Duration {
-    let nanos = u128::from(length) * 1_000_000_000 / u128::from(rate.max(1));
-    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }

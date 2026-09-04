@@ -11,13 +11,6 @@ use fetchloom_engine::tree::TreeEntry;
 use std::io::Read;
 use std::path::Path;
 
-/// Returns the archive format an object holds, when it holds one this build
-/// extracts.
-///
-/// # Errors
-///
-/// Fails with `archive.unsupported` when the name and the object's own leading
-/// bytes disagree about what the object is.
 pub(super) fn packed_format(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -26,8 +19,6 @@ pub(super) fn packed_format(
     recognized_format(with, digest, name, None)
 }
 
-/// Returns the archive format an object holds, honoring a format a manifest
-/// declared.
 pub(super) fn recognized_format(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -66,11 +57,6 @@ pub(super) fn read_up_to(file: &mut impl Read, into: &mut [u8]) -> Result<usize,
     Ok(filled)
 }
 
-/// Opens a reader over a cached archive object.
-///
-/// # Errors
-///
-/// Fails when the run has no cache and when the object cannot be opened.
 pub(super) fn open_archive(
     with: &Materialization<'_>,
     digest: ContentDigest,
@@ -87,12 +73,6 @@ pub(super) fn open_archive(
     fetchloom_archive::ArchiveReader::new(file, format, name.to_owned(), Limits::default())
 }
 
-/// Extracts a cached archive into a staging directory.
-///
-/// # Errors
-///
-/// Fails with the archive or destination failure the reader or the extraction
-/// named, and publishes nothing.
 pub(super) fn extract_into(
     with: &Materialization<'_>,
     digest: ContentDigest,

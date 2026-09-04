@@ -42,7 +42,6 @@ fn scratch() -> &'static Path {
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }
 
-/// A gzip-wrapped tar holding one `0644` file and one `0755` file.
 fn archive() -> Vec<u8> {
     let mut writer = TarWriter::new();
     writer.push(&TarHeader::ustar(b"tools/", TYPEFLAG_DIRECTORY), b"");
@@ -255,7 +254,6 @@ struct Hostile {
     bundle: PathBuf,
 }
 
-/// A cache holding one object, and the bundle exported from it.
 fn exported() -> Hostile {
     let temporary = TempDir::new().unwrap();
     let cache = temporary.path().join("cache");

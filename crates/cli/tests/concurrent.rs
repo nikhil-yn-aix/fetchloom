@@ -35,11 +35,8 @@ mod support;
 
 use tempfile::TempDir;
 
-/// The wait each request is charged, which is what makes a loopback socket
-/// behave like a remote one.
 const CHARGED: Duration = Duration::from_millis(150);
 
-/// How many objects one manifest names.
 const OBJECTS: usize = 8;
 
 struct Workspace {
@@ -83,9 +80,6 @@ fn object(index: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Writes a manifest naming one distinct object per server, every server on the
-/// one loopback host, every request charged a wait and counted in the one
-/// recorder, and returns the servers so they outlive the run.
 fn delayed_host(workspace: &Workspace, objects: usize, flight: &Arc<Flight>) -> Vec<TestServer> {
     let mut servers = Vec::with_capacity(objects);
     let mut artifacts = String::new();
@@ -111,8 +105,6 @@ fn delayed_host(workspace: &Workspace, objects: usize, flight: &Arc<Flight>) -> 
     servers
 }
 
-/// Runs the eight-object manifest under one setting and returns the most
-/// requests the hosts were answering at the same moment.
 fn in_flight_under(settings: &[&str]) -> usize {
     let workspace = Workspace::new();
     let flight = Flight::new();

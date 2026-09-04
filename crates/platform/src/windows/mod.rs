@@ -16,18 +16,12 @@ use fetchloom_engine::degrade::DegradeQueue;
 
 use crate::ProcessState;
 
-/// The interval the Windows epoch counts in, relative to the Unix epoch.
 const WINDOWS_TO_UNIX_INTERVALS: i64 = 116_444_736_000_000_000;
 
-/// The path lengths a volume is measured against, longest first. The first is
-/// what the platform permits with long paths enabled and the second is what it
-/// permits without them.
 pub(crate) const PATH_LENGTHS: [u32; 2] = [32_767, 260];
 
-/// The registry location of this machine's identity.
 const MACHINE_KEY: &str = "SOFTWARE\\Microsoft\\Cryptography";
 
-/// The registry location of the counter the session manager raises each boot.
 const BOOT_KEY: &str =
     "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters";
 
@@ -35,11 +29,6 @@ fn nanos_from_windows(value: i64) -> i128 {
     i128::from(value - WINDOWS_TO_UNIX_INTERVALS) * 100
 }
 
-/// Returns the identifier of the volume a path is on.
-///
-/// # Errors
-///
-/// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
     let file = ffi::open_for_query(path)
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
@@ -48,11 +37,6 @@ pub(crate) fn volume_id(path: &Path) -> Result<VolumeId, Error> {
     Ok(VolumeId::new(serial))
 }
 
-/// Returns the identifier of the file at a path within its volume.
-///
-/// # Errors
-///
-/// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
     let file = ffi::open_for_query(path)
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
@@ -61,11 +45,6 @@ pub(crate) fn file_id(path: &Path) -> Result<FileId, Error> {
     Ok(FileId::new(id))
 }
 
-/// Returns the tuple recording that a file is probably unchanged.
-///
-/// # Errors
-///
-/// Fails when the path cannot be opened or the platform refuses the query.
 pub(crate) fn fingerprint(path: &Path) -> Result<Fingerprint, Error> {
     let file = ffi::open_for_query(path)
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
@@ -86,11 +65,6 @@ pub(crate) fn fingerprint(path: &Path) -> Result<Fingerprint, Error> {
     })
 }
 
-/// Detects what the volume behind a directory can do.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be written to.
 pub(crate) fn volume_capabilities(
     probe_directory: &Path,
     degradations: &DegradeQueue,
@@ -98,14 +72,12 @@ pub(crate) fn volume_capabilities(
     probe::capabilities(probe_directory, degradations)
 }
 
-/// Returns how many threads this process may actually run on.
 pub(crate) fn detected_parallelism() -> NonZeroUsize {
     let standard = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let corrected = ffi::usable_processors().map_or(standard, |usable| usable.min(standard));
     NonZeroUsize::new(corrected.max(1)).unwrap_or(NonZeroUsize::MIN)
 }
 
-/// Returns the vector instruction level selected for the content digest.
 pub(crate) fn vector_level() -> VectorLevel {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -129,8 +101,6 @@ pub(crate) fn vector_level() -> VectorLevel {
     }
 }
 
-/// Reports whether the interop digest can use a hardware instruction, or that
-/// this target cannot detect one.
 pub(crate) fn interop_acceleration(degradations: &DegradeQueue) -> InteropAcceleration {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -157,11 +127,6 @@ pub(crate) fn interop_acceleration(degradations: &DegradeQueue) -> InteropAccele
     }
 }
 
-/// Reserves the full length of a file before anything is written to it.
-///
-/// # Errors
-///
-/// Fails when the volume has no room.
 pub(crate) fn preallocate(
     file: &File,
     length: u64,
@@ -175,11 +140,6 @@ pub(crate) fn preallocate(
     })
 }
 
-/// Pushes a file's bytes as far as a durability tier requires.
-///
-/// # Errors
-///
-/// Fails when the platform reports the flush did not complete.
 pub(crate) fn flush(
     file: &File,
     tier: DurabilityTier,
@@ -196,12 +156,6 @@ pub(crate) fn flush(
     }
 }
 
-/// Releases a file's written range from the page cache, which this platform
-/// has no way to do without constraining every write to sector alignment.
-///
-/// # Errors
-///
-/// Never fails.
 #[expect(
     clippy::unnecessary_wraps,
     reason = "the shape is the seam's, and the Linux side of it can fail"
@@ -210,11 +164,6 @@ pub(crate) fn release_written(_file: &File, _from: u64, _length: u64) -> Result<
     Ok(false)
 }
 
-/// Makes a directory's own entries durable.
-///
-/// # Errors
-///
-/// Never fails.
 #[expect(
     clippy::unnecessary_wraps,
     reason = "the shape is the seam's, and the Unix side of it can fail"
@@ -223,23 +172,12 @@ pub(crate) fn flush_directory(_directory: &Path, _tier: DurabilityTier) -> Resul
     Ok(())
 }
 
-/// Renames one path onto another on the same volume.
-///
-/// # Errors
-///
-/// Fails when the rename does not complete.
 pub(crate) fn rename(from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
     let write_through = matches!(tier, DurabilityTier::Strict | DurabilityTier::Normal);
     ffi::rename(from, to, write_through)
         .map_err(|reason| filesystem_failure(Surface::Destination, to, &reason))
 }
 
-/// Shares the blocks of one file with another rather than writing them again.
-///
-/// # Errors
-///
-/// Fails on every volume that does not reference-count blocks, which the caller
-/// turns into a copy and reports.
 pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
     let source = File::open(from)
         .map_err(|reason| filesystem_failure(Surface::Destination, from, &reason))?;
@@ -292,7 +230,6 @@ pub(crate) fn clone_file(from: &Path, to: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Writes the bytes past the last whole cluster, which a clone cannot cover.
 fn write_tail(source: &File, target: &File, at: u64, span: u64) -> std::io::Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -305,12 +242,6 @@ fn write_tail(source: &File, target: &File, at: u64, span: u64) -> std::io::Resu
     writing.write_all(&bytes)
 }
 
-/// Creates a symbolic link with the given target bytes.
-///
-/// # Errors
-///
-/// Fails when the name exists, when the volume has no symbolic links, and when
-/// this process is not permitted to create one.
 pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
     let text = std::str::from_utf8(target).map_err(|_| {
         Error::new(
@@ -322,17 +253,14 @@ pub(crate) fn create_symlink(target: &[u8], link: &Path) -> Result<(), Error> {
         .map_err(|reason| filesystem_failure(Surface::Destination, link, &reason))
 }
 
-/// Returns this machine's own identity.
 pub(crate) fn machine_id() -> Option<MachineId> {
     ffi::registry_string(MACHINE_KEY, "MachineGuid").map(MachineId::new)
 }
 
-/// Returns the identity of this boot of this machine.
 pub(crate) fn boot_id() -> Option<BootId> {
     ffi::registry_number(BOOT_KEY, "BootId").map(|value| BootId::new(value.to_string()))
 }
 
-/// Returns when a process started.
 pub(crate) fn process_start(pid: u32) -> ProcessState {
     match ffi::process_start(pid) {
         ffi::ProcessQuery::Started(start) => ProcessState::Started(start),
@@ -341,11 +269,6 @@ pub(crate) fn process_start(pid: u32) -> ProcessState {
     }
 }
 
-/// Returns the identifier of an open file within its volume.
-///
-/// # Errors
-///
-/// Fails when the platform refuses the query.
 pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
     let (_, id) = ffi::id_info(file).map_err(|reason| {
         Error::new(
@@ -356,11 +279,6 @@ pub(crate) fn file_id_of(file: &File) -> Result<FileId, Error> {
     Ok(FileId::new(id))
 }
 
-/// Reports whether a file belongs to the user this process runs as.
-///
-/// # Errors
-///
-/// Fails when the path cannot be opened and when the platform reports no owner.
 pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     let file = ffi::open_for_query(path)
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
@@ -374,7 +292,6 @@ pub(crate) fn owns(path: &Path) -> Result<bool, Error> {
     })?;
     Ok(ours.contains(&found))
 }
-/// Reports what the volume behind a path sits on.
 pub(crate) fn volume_backing(path: &Path) -> Backing {
     if ffi::is_remote_drive(path) {
         Backing::Network
@@ -383,12 +300,6 @@ pub(crate) fn volume_backing(path: &Path) -> Backing {
     }
 }
 
-/// Reads the token the Windows Credential Manager holds for a host.
-///
-/// # Errors
-///
-/// Fails with `policy.credential_invalid` when the store is present and the
-/// credential cannot be read.
 pub fn stored_token(host: &str) -> Result<Option<String>, Error> {
     let target = format!("fetchloom:{host}");
     let held = ffi::read_credential(&target).map_err(|reason| {
@@ -402,8 +313,6 @@ pub fn stored_token(host: &str) -> Result<Option<String>, Error> {
     held.map(|blob| decode(&blob, &target)).transpose()
 }
 
-/// Reads a credential blob, which the Credential Manager stores as UTF-16
-/// little endian, the encoding its own tools write.
 fn decode(blob: &[u8], target: &str) -> Result<String, Error> {
     if !blob.len().is_multiple_of(2) {
         return Err(Error::new(
@@ -424,11 +333,6 @@ fn decode(blob: &[u8], target: &str) -> Result<String, Error> {
         .to_owned())
 }
 
-/// Returns how many bytes the volume a path is on has free for this user.
-///
-/// # Errors
-///
-/// Fails when the path is not there or the platform refuses the query.
 pub(crate) fn free_space(path: &Path) -> Result<u64, Error> {
     ffi::free_space(path).map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }

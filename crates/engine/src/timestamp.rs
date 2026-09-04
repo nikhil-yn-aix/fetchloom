@@ -5,8 +5,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// An instant written as a coordinated universal time stamp with second
-/// precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct Timestamp {
@@ -14,13 +12,11 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
-    /// Builds an instant from a count of seconds since the epoch.
     #[must_use]
     pub fn from_epoch_seconds(seconds: i64) -> Self {
         Self { seconds }
     }
 
-    /// Reads the current wall clock.
     #[must_use]
     pub fn now() -> Self {
         let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -30,7 +26,6 @@ impl Timestamp {
         Self { seconds }
     }
 
-    /// Returns the count of seconds since the epoch.
     #[must_use]
     pub fn epoch_seconds(self) -> i64 {
         self.seconds
@@ -58,8 +53,6 @@ impl From<Timestamp> for String {
     }
 }
 
-/// A timestamp string was not a coordinated universal time stamp with second
-/// precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParseTimestampError;
 

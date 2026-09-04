@@ -16,7 +16,6 @@ use fetchloom_engine::seam::source::{
 };
 use fetchloom_engine::work::WorkCounter;
 
-/// The bytes of one span of a local file.
 #[derive(Debug)]
 pub struct FileBody {
     reader: Take<std::fs::File>,
@@ -28,20 +27,17 @@ impl Read for FileBody {
     }
 }
 
-/// A source that is a path on this machine.
 #[derive(Debug)]
 pub struct FileSource {
     work: Arc<WorkCounter>,
 }
 
 impl FileSource {
-    /// Builds a source over the local filesystem.
     #[must_use]
     pub fn new(work: Arc<WorkCounter>) -> Self {
         Self { work }
     }
 
-    /// Reports whether a reference names a path this source can serve.
     #[must_use]
     pub fn names_a_file(location: &str) -> bool {
         !location.contains("://") && Path::new(location).is_file()

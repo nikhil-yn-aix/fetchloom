@@ -20,10 +20,8 @@ use fetchloom_engine::identity::{BootId, MachineId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_platform::NativePlatform;
 
-/// The variable the child holding a lock reads.
 const LOCK_PATH: &str = "FETCHLOOM_TEST_LOCK_PATH";
 
-/// The variable the child writes to say it has the lock.
 const READY_PATH: &str = "FETCHLOOM_TEST_READY_PATH";
 
 fn ours() -> OwnerToken {

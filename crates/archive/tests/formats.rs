@@ -25,7 +25,6 @@ use fetchloom_faults::{Corpus, TYPEFLAG_REGULAR, TarHeader, TarWriter};
 use flate2::Compression as GzCompression;
 use flate2::write::GzEncoder;
 
-/// The bytes of `xz -9` over one greeting, embedded rather than encoded.
 const GREETING_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 28, 24, 33, 1, 28, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 211, 125, 61, 97, 1, 0, 23, 102, 101, 116, 99, 104, 108, 111, 111, 109, 32, 120, 122,
@@ -33,8 +32,6 @@ const GREETING_XZ: &[u8] = &[
     103, 0, 1, 56, 24, 134, 145, 117, 36, 31, 182, 243, 125, 1, 0, 0, 0, 0, 4, 89, 90,
 ];
 
-/// The bytes of `xz -9` over a ustar tar holding `hello.txt`, whose content is
-/// `hello\n`, embedded for the same reason.
 const TAR_XZ: &[u8] = &[
     253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 4, 192, 126, 128, 80, 33, 1, 28, 0, 0, 0, 0,
     0, 0, 0, 0, 134, 159, 55, 227, 224, 39, 255, 0, 118, 93, 0, 52, 25, 73, 238, 141, 240, 186,
@@ -47,11 +44,8 @@ const TAR_XZ: &[u8] = &[
     1, 128, 80, 0, 0, 195, 80, 45, 195, 177, 196, 103, 251, 2, 0, 0, 0, 0, 4, 89, 90,
 ];
 
-/// The greeting the embedded xz fixture decompresses to.
 const GREETING: &[u8] = b"fetchloom xz round trip\n";
 
-/// Wraps bytes in a zstd frame of one raw block, which is a frame the format
-/// permits and the decoder must accept without any encoder existing here.
 fn zstd_frame(content: &[u8]) -> Vec<u8> {
     assert!(
         content.len() < 256,

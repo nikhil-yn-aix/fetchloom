@@ -42,18 +42,14 @@ use fetchloom_engine::work::WorkCounter;
 
 use crate::layout::{DIRECTORIES, Layout};
 
-/// The mode a cache directory carries.
 #[cfg(unix)]
 const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 
-/// The mode a published object carries.
 #[cfg(unix)]
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
-/// The name a probe writes to learn whether a volume locks.
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
-/// A cache directory this process may read and write.
 #[derive(Debug)]
 pub struct Cache<P: Platform> {
     layout: Layout,
@@ -65,20 +61,11 @@ pub struct Cache<P: Platform> {
     token: OwnerToken,
     work: Arc<WorkCounter>,
     processor: Arc<Processor>,
-    /// Held across an append to this process's pack, so that two appends never
-    /// record the same offset.
     appending: std::sync::Mutex<()>,
     packed: std::sync::Mutex<Option<Arc<crate::pack::Index>>>,
 }
 
 impl<P: Platform> Cache<P> {
-    /// Opens the cache at a root, creating it when it is absent.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the directory cannot be created or written to, when the
-    /// format on disk is not the one this build writes, when the root spans
-    /// volumes, and when the volume cannot express advisory locking.
     pub fn open(
         root: impl AsRef<Path>,
         platform: P,
@@ -121,66 +108,51 @@ impl<P: Platform> Cache<P> {
         Ok(cache)
     }
 
-    /// Returns where the cache is.
     #[must_use]
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
 
-    /// Returns the platform the cache calls.
     #[must_use]
     pub fn platform(&self) -> &P {
         &self.platform
     }
 
-    /// Returns the durability tier every publication uses.
     #[must_use]
     pub fn tier(&self) -> DurabilityTier {
         self.tier
     }
 
-    /// Returns the check applied to an object already present.
     #[must_use]
     pub fn policy(&self) -> VerificationPolicy {
         self.policy
     }
 
-    /// Returns the write path mode this cache resolved at open, from the
-    /// mode requested and what the cache volume can do.
     #[must_use]
     pub fn io_mode(&self) -> IoMode {
         self.io_mode
     }
 
-    /// Removes and returns the degradations the write path resolution made.
     #[must_use]
     pub fn take_io_degradations(&self) -> Vec<Degradation> {
         self.io_degradations.take()
     }
 
-    /// Returns where the run counts the file bytes it moves.
     #[must_use]
     pub fn work(&self) -> &Arc<WorkCounter> {
         &self.work
     }
 
-    /// Returns the pool the two digests of an object are taken on.
     #[must_use]
     pub fn processor(&self) -> &Arc<Processor> {
         &self.processor
     }
 
-    /// Returns what this process records about itself.
     #[must_use]
     pub fn token(&self) -> &OwnerToken {
         &self.token
     }
 
-    /// Removes every entry a previous boot of this machine left behind.
-    ///
-    /// # Errors
-    ///
-    /// Fails when an entry cannot be removed.
     fn recover(&self) -> Result<(), Error> {
         if already_recovered(&self.layout, &self.token.boot)? {
             return Ok(());
@@ -195,12 +167,6 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-/// Removes the whole cache at a root, whatever wrote it.
-///
-/// # Errors
-///
-/// Fails when the directory cannot be removed. A root that is already absent
-/// succeeds.
 pub fn clear(root: &Path) -> Result<(), Error> {
     match std::fs::remove_dir_all(root) {
         Ok(()) => Ok(()),
@@ -209,7 +175,6 @@ pub fn clear(root: &Path) -> Result<(), Error> {
     }
 }
 
-/// The name a source record for an entry is written under.
 fn source_record_of(entry: &Path) -> PathBuf {
     let mut name = entry.as_os_str().to_owned();
     name.push(".source");
@@ -234,8 +199,6 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
     }
 }
 
-/// Removes the entries in a directory that this machine wrote in a previous
-/// boot, along with their owner records.
 fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error> {
     let entries = std::fs::read_dir(directory)
         .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
@@ -261,7 +224,6 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
     Ok(())
 }
 
-/// Removes a file or a directory, whichever the path is.
 fn remove(path: &Path) -> Result<(), Error> {
     let outcome = if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -275,7 +237,6 @@ fn remove(path: &Path) -> Result<(), Error> {
     }
 }
 
-/// Creates the cache root and every directory it holds.
 fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
     let mut wanted = vec![layout.root().to_path_buf()];
     for name in DIRECTORIES {
@@ -298,7 +259,6 @@ fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> 
     Ok(())
 }
 
-/// Gives a cache directory the mode every user of the cache needs.
 #[cfg(unix)]
 fn share_directory(directory: &Path) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
@@ -310,7 +270,6 @@ fn share_directory(directory: &Path) -> Result<(), Error> {
     .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))
 }
 
-/// Leaves a cache directory with the entries it inherited.
 #[cfg(windows)]
 #[expect(
     clippy::unnecessary_wraps,
@@ -320,7 +279,6 @@ fn share_directory(_directory: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Makes a published object read-only.
 #[cfg(unix)]
 pub(crate) fn seal_object(path: &Path) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
@@ -329,7 +287,6 @@ pub(crate) fn seal_object(path: &Path) -> Result<(), Error> {
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }
 
-/// Leaves a published object with the entries it inherited.
 #[cfg(windows)]
 #[expect(
     clippy::unnecessary_wraps,
@@ -339,7 +296,6 @@ pub(crate) fn seal_object(_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Writes the format fingerprint, or checks the one already there.
 fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
     let ours = format::render(format::fingerprint());
     match std::fs::read_to_string(layout.format()) {
@@ -369,7 +325,6 @@ fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
     }
 }
 
-/// Refuses a cache whose directories are not all on one volume.
 fn check_one_volume<P: Platform>(platform: &P, layout: &Layout) -> Result<(), Error> {
     let objects = platform.volume_id(&layout.objects())?;
     for other in [layout.partial(), layout.staging(), layout.locks()] {
@@ -387,7 +342,6 @@ fn check_one_volume<P: Platform>(platform: &P, layout: &Layout) -> Result<(), Er
     Ok(())
 }
 
-/// Refuses a volume that cannot express advisory locking across users.
 fn check_locking<P: Platform>(platform: &P, layout: &Layout) -> Result<(), Error> {
     if platform.volume_backing(&layout.locks())? == Backing::Network {
         return Err(Error::new(

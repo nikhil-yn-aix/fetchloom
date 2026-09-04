@@ -40,7 +40,6 @@ fn processor() -> Processor {
     .unwrap()
 }
 
-/// Hashes bytes in one pass the way every write path does.
 fn hash_stream(object: &[u8]) -> fetchloom_engine::hashing::Digests {
     let processor = processor();
     let mut pair = Pair::new();
@@ -50,8 +49,6 @@ fn hash_stream(object: &[u8]) -> fetchloom_engine::hashing::Digests {
     pair.finish()
 }
 
-/// Builds an object of the given length with bytes that differ everywhere, so a
-/// group swapped for another group is caught rather than matching by accident.
 fn pattern(len: usize) -> Vec<u8> {
     let mut bytes = vec![0u8; len];
     for (index, byte) in bytes.iter_mut().enumerate() {
@@ -60,8 +57,6 @@ fn pattern(len: usize) -> Vec<u8> {
     bytes
 }
 
-/// An object of `groups` whole leaf groups plus a partial final one, with its
-/// tree.
 fn large(groups: u64) -> (Vec<u8>, Outboard, fetchloom_engine::digest::ContentDigest) {
     let len = (OUTBOARD_CHUNK_GROUP * groups + 4097) as usize;
     assert!(len as u64 > OUTBOARD_THRESHOLD, "the object needs a tree");

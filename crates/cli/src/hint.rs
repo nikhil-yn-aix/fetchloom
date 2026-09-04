@@ -3,36 +3,24 @@
 
 use std::time::Duration;
 
-/// One thing the user could have done differently in the run that just
-/// happened.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hint {
-    /// The name a recorded hint is filed under, so it is never repeated.
     pub key: String,
-    /// The one line printed, which names an action rather than a fact.
     pub line: String,
 }
 
-/// Everything about the run that just happened that a hint may be drawn from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Observed {
-    /// The provider a credential was offered for and declined, when one was.
     pub declined_provider: Option<String>,
-    /// How much shorter the run would have been with that credential.
     pub projected_gain: Option<Duration>,
-    /// The variable that credential would be placed in.
     pub placement: Option<String>,
-    /// Whether the run restarted a transfer from zero for want of a validator.
     pub restarted_from_zero: bool,
-    /// Whether the cache was unusable, so nothing this run fetched was kept.
     pub cache_unusable: bool,
 }
 
-/// The threshold below which a difference is not worth a line.
 const WORTH_SAYING: Duration = Duration::from_secs(120);
 
 impl Observed {
-    /// Returns the one hint this run earned, and nothing when it earned none.
     #[must_use]
     pub fn hint(&self) -> Option<Hint> {
         if let (Some(provider), Some(gain), Some(placement)) = (
@@ -69,7 +57,6 @@ impl Observed {
     }
 }
 
-/// Returns a duration the way a person says one.
 fn spoken(duration: Duration) -> String {
     let seconds = duration.as_secs();
     if seconds < 120 {
@@ -81,11 +68,8 @@ fn spoken(duration: Duration) -> String {
     }
 }
 
-/// What this run observed that a hint may be drawn from, which every part of
-/// the run adds to and nothing reads until the run has ended.
 static TAKEN: std::sync::Mutex<Option<Observed>> = std::sync::Mutex::new(None);
 
-/// Records something about this run that a hint could be drawn from.
 pub fn record(change: impl FnOnce(&mut Observed)) {
     let mut held = TAKEN
         .lock()
@@ -93,7 +77,6 @@ pub fn record(change: impl FnOnce(&mut Observed)) {
     change(held.get_or_insert_with(Observed::default));
 }
 
-/// Returns what this run observed.
 #[must_use]
 pub fn taken() -> Observed {
     TAKEN
@@ -103,17 +86,12 @@ pub fn taken() -> Observed {
         .unwrap_or_default()
 }
 
-/// Returns where a said hint is recorded, so it is never said twice.
 fn said_at(cache: &std::path::Path, key: &str) -> std::path::PathBuf {
     let digest = fetchloom_engine::hashing::hash_bytes(key.as_bytes()).to_string();
     let named = digest.rsplit(':').next().unwrap_or(&digest).to_owned();
     cache.join("meta").join("hints").join(named)
 }
 
-/// Reports whether this hint has already been said to this user.
-///
-/// A cache that cannot be read answers yes, because contracts says a hint is
-/// suppressed rather than repeated when nothing can record it.
 #[must_use]
 pub fn already_said(cache: &std::path::Path, key: &str) -> bool {
     if !cache.is_dir() {
@@ -122,7 +100,6 @@ pub fn already_said(cache: &std::path::Path, key: &str) -> bool {
     said_at(cache, key).exists()
 }
 
-/// Records that this hint has been said, so it is not said again.
 pub fn remember(cache: &std::path::Path, key: &str) {
     let at = said_at(cache, key);
     if let Some(parent) = at.parent() {

@@ -326,8 +326,6 @@ fn the_configuration_location_is_not_the_cache_location() {
     assert_ne!(cache, configuration);
 }
 
-/// What a test's machine is said to have measured, so a row's origin is the
-/// level that supplied it rather than the machine the test runs on.
 fn measured(threads: u32) -> fetchloom_cli::explain::Measured {
     fetchloom_cli::explain::Measured {
         threads,

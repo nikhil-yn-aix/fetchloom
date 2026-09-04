@@ -29,13 +29,6 @@ use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_platform::NativePlatform;
 use std::path::Path;
 
-/// Lists a container, transfers every entry it holds, and materializes them
-/// into one destination.
-///
-/// # Errors
-///
-/// Fails when the container cannot be listed, when an entry cannot be
-/// transferred, and when the destination cannot be published.
 #[expect(
     clippy::too_many_arguments,
     reason = "a container materialization is decided by what it runs under, where it reads, where it writes, what it selects, the two flags that govern an existing destination, and both observers"
@@ -149,7 +142,6 @@ pub fn materialize_remote_container(
     )
 }
 
-/// Returns the tree a container's transferred entries resolve to.
 pub(super) fn container_tree(
     placements: &[(String, ContentDigest, u64)],
 ) -> Result<Vec<TreeEntry>, Error> {
@@ -168,8 +160,6 @@ pub(super) fn container_tree(
         .collect()
 }
 
-/// Transfers every listed entry of a container into the cache, holding the run
-/// inside its global and per-host in-flight bounds.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument names a piece of the transfer a container's entries share"
@@ -265,8 +255,6 @@ pub(super) fn transfer_container_entries(
         .collect())
 }
 
-/// Builds a fresh staging directory holding every transferred entry, at its
-/// listed path.
 pub(super) fn place_container_entries(
     with: &Materialization<'_>,
     destination: &Path,

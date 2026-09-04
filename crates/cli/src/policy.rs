@@ -26,13 +26,10 @@ use crate::settings::{Environment, Settings};
 use crate::surface::{DurabilityChoice, IoChoice, TransferFlags, VerifyChoice};
 use crate::terminal::Streams;
 
-/// Asks a yes or no question on the terminal a run is attached to.
 pub trait Prompter: Send + Sync {
-    /// Asks the question and reports whether the answer was yes.
     fn confirm(&self, question: &str) -> bool;
 }
 
-/// A prompter that reads the answer from the process's own standard input.
 #[derive(Debug, Default)]
 pub struct StdinPrompter;
 
@@ -44,8 +41,6 @@ impl Prompter for StdinPrompter {
     }
 }
 
-/// Writes a provider's fixed help record to standard error, exactly as it is
-/// stated, never improvised.
 fn print_help(help: &ProviderHelp) {
     eprintln!("{}: {}", help.provider, help.unlocks);
     for (index, step) in help.steps.iter().enumerate() {
@@ -56,7 +51,6 @@ fn print_help(help: &ProviderHelp) {
     eprintln!("  scope: {}", help.scope);
 }
 
-/// Renders a duration the way a person reads it, in whole seconds or minutes.
 fn human_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
     if seconds < 60 {
@@ -66,7 +60,6 @@ fn human_duration(duration: Duration) -> String {
     }
 }
 
-/// The Policy the command line resolves to.
 pub struct CommandLinePolicy<'a> {
     settings: Settings,
     verification: VerificationPolicy,
@@ -93,7 +86,6 @@ impl std::fmt::Debug for CommandLinePolicy<'_> {
 }
 
 impl<'a> CommandLinePolicy<'a> {
-    /// Builds the policy for a run.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -139,13 +131,6 @@ impl<'a> CommandLinePolicy<'a> {
         }
     }
 
-    /// Reads the signing keys the host-scoped variables hold, which is the
-    /// first tier and wins over every other.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `policy.credential_invalid` when an access key is set without
-    /// the region a signature is computed over.
     fn host_scoped_keys(&self, host: &Host) -> Result<Option<SigningKeys>, Error> {
         let Some(access_key) = self
             .environment
@@ -183,13 +168,6 @@ impl<'a> CommandLinePolicy<'a> {
         }))
     }
 
-    /// Reads the signing keys a provider's own convention holds, which is the
-    /// third tier and is asked only after the two above answered nothing.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `policy.credential_invalid` when the provider's own variables
-    /// name a key without the region a signature is computed over.
     fn helper_keys(&self, host: &Host) -> Result<Option<(SigningKeys, String)>, Error> {
         if !fetchloom_sources::signs_requests(host.as_str()) {
             return Ok(None);
@@ -219,7 +197,6 @@ impl<'a> CommandLinePolicy<'a> {
     }
 }
 
-/// Returns the failure a half-set signing credential states.
 fn missing_half(host: &Host, variable: &str, what: &str) -> Error {
     Error::new(
         ErrorKind::PolicyCredentialInvalid,
@@ -230,8 +207,6 @@ fn missing_half(host: &Host, variable: &str, what: &str) -> Error {
     .with_source(host.as_str())
 }
 
-/// Returns the failure a signing credential with no region states, which is
-/// never guessed because a signature is computed over one.
 fn missing_region(host: &Host, variable: &str) -> Error {
     Error::new(
         ErrorKind::PolicyCredentialInvalid,
@@ -242,21 +217,12 @@ fn missing_region(host: &Host, variable: &str) -> Error {
     .with_source(host.as_str())
 }
 
-/// This platform's own credential store, which is the second place a run looks.
 pub trait CredentialStore: Send + Sync {
-    /// Reads the token the store holds for a host.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `policy.credential_invalid` when the store is present and
-    /// cannot be read.
     fn token(&self, host: &Host) -> Result<Option<String>, Error>;
 
-    /// Names where the store keeps a credential, without the secret.
     fn describe(&self) -> String;
 }
 
-/// The credential store this platform ships.
 #[derive(Debug, Default)]
 pub struct NativeCredentialStore;
 
@@ -456,8 +422,6 @@ impl Policy for CommandLinePolicy<'_> {
 }
 
 impl CommandLinePolicy<'_> {
-    /// Reports whether this provider's optional credential was already
-    /// declined earlier in this run.
     fn already_declined(&self, provider: &str) -> bool {
         self.declined
             .lock()
@@ -465,8 +429,6 @@ impl CommandLinePolicy<'_> {
             .contains(provider)
     }
 
-    /// Records that this provider's optional credential was declined, so it
-    /// is never offered again in this run.
     fn remember_declined(&self, provider: &str) {
         crate::hint::record(|observed| {
             observed.declined_provider = Some(provider.to_owned());
@@ -478,7 +440,6 @@ impl CommandLinePolicy<'_> {
     }
 }
 
-/// Returns the check a run applies to a cache hit and to a destination entry.
 fn verification_of(transfer: &TransferFlags) -> VerificationPolicy {
     match transfer.verify {
         Some(VerifyChoice::Always) => VerificationPolicy::Always,
@@ -487,7 +448,6 @@ fn verification_of(transfer: &TransferFlags) -> VerificationPolicy {
     }
 }
 
-/// Returns how far a write is pushed before publication.
 fn durability_of(transfer: &TransferFlags) -> DurabilityTier {
     match transfer.durability {
         Some(DurabilityChoice::Strict) => DurabilityTier::Strict,

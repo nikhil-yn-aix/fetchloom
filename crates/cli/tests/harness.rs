@@ -26,11 +26,8 @@ use toml as _;
 #[cfg(windows)]
 use windows_sys as _;
 
-/// What names the binary, which only the harness may do, spelled in halves so
-/// this walk does not report the file the walk lives in.
 const NAMES_THE_BINARY: &str = concat!("CARGO_BIN", "_EXE_fetchloom");
 
-/// The one file allowed to name it.
 const HARNESS: &str = "mod.rs";
 
 #[test]

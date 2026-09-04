@@ -15,16 +15,11 @@ use ruzstd::decoding::StreamingDecoder;
 use crate::bomb::BombGuard;
 use crate::shared::SharedSource;
 
-/// Which compression a bare compressed object uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BareCompression {
-    /// A gzip member.
     Gzip,
-    /// A zstd frame.
     Zstd,
-    /// An xz stream.
     Xz,
-    /// A bzip2 stream.
     Bzip2,
 }
 
@@ -56,7 +51,6 @@ fn build_decompressor<R: Read + 'static>(
     }
 }
 
-/// Derives the member name for a bare compressed object.
 #[must_use]
 pub fn member_name(location: &str, extension: &str) -> String {
     let file_name = location.rsplit(['/', '\\']).next().unwrap_or(location);
@@ -66,13 +60,6 @@ pub fn member_name(location: &str, extension: &str) -> String {
         .to_owned()
 }
 
-/// Decompresses a bare compressed object fully to learn its one member,
-/// checking the entry, byte, and ratio limits as bytes are produced.
-///
-/// # Errors
-///
-/// Fails when the stream is truncated or malformed, and when the object exceeds
-/// the byte or ratio limit.
 pub fn list_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: BareCompression,
@@ -108,12 +95,6 @@ pub fn list_member<R: Read + Seek + 'static>(
     })
 }
 
-/// Opens the one member a bare compressed object holds, streaming from the
-/// start.
-///
-/// # Errors
-///
-/// Fails when the stream cannot be rewound or is truncated or malformed.
 pub fn open_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: BareCompression,

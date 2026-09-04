@@ -14,15 +14,10 @@ use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
 
-/// What a query about a recorded lock holder found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProcessState {
-    /// The process exists and started at this instant.
     Started(u64),
-    /// No process with that identifier exists.
     Gone,
-    /// A process with that identifier exists and could not be inspected, which
-    /// is never treated as the process being gone.
     Unreadable,
 }
 
@@ -41,7 +36,6 @@ use crate::linux as imp;
 #[cfg(windows)]
 use crate::windows as imp;
 
-/// A name fragment no other probe uses at the same moment.
 pub(crate) fn probe_tag() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -52,7 +46,6 @@ pub(crate) fn probe_tag() -> String {
     )
 }
 
-/// A held advisory lock. Releasing it is dropping it.
 #[derive(Debug)]
 pub struct PlatformLock {
     file: File,
@@ -64,7 +57,6 @@ impl Drop for PlatformLock {
     }
 }
 
-/// The Platform seam as this machine implements it.
 #[derive(Debug)]
 pub struct NativePlatform {
     degradations: DegradeQueue,
@@ -73,7 +65,6 @@ pub struct NativePlatform {
 }
 
 impl NativePlatform {
-    /// Builds the platform for this machine.
     #[must_use]
     pub fn new(work: std::sync::Arc<fetchloom_engine::work::WorkCounter>) -> Self {
         Self {
@@ -83,13 +74,11 @@ impl NativePlatform {
         }
     }
 
-    /// Returns where this platform counts the file operations it performs.
     #[must_use]
     pub fn work(&self) -> &std::sync::Arc<fetchloom_engine::work::WorkCounter> {
         &self.work
     }
 
-    /// Returns the volume a path is on, as far as its own text says.
     fn volume_key(path: &Path) -> std::ffi::OsString {
         path.components()
             .next()
@@ -98,7 +87,6 @@ impl NativePlatform {
             })
     }
 
-    /// Reports whether this volume has already refused to clone.
     fn volume_refused_cloning(&self, path: &Path) -> bool {
         self.refused_cloning
             .lock()
@@ -106,7 +94,6 @@ impl NativePlatform {
             .contains(&Self::volume_key(path))
     }
 
-    /// Records that this volume cannot clone.
     fn remember_refusal(&self, path: &Path) {
         self.refused_cloning
             .lock()
@@ -114,7 +101,6 @@ impl NativePlatform {
             .insert(Self::volume_key(path));
     }
 
-    /// Copies the bytes of one file into a path that does not exist.
     fn copy_bytes(&self, from: &Path, to: &Path) -> Result<CopyMechanism, Error> {
         let copied = std::fs::copy(from, to)
             .map_err(|error| filesystem_failure(Surface::Destination, to, &error))?;
@@ -124,15 +110,12 @@ impl NativePlatform {
         Ok(CopyMechanism::Copy)
     }
 
-    /// Renames a path onto another, counting the operation.
     fn rename(&self, from: &Path, to: &Path, tier: DurabilityTier) -> Result<(), Error> {
         imp::rename(from, to, tier)?;
         self.work.touched_file();
         Ok(())
     }
 
-    /// Flushes a directory as far as a durability tier requires, counting the
-    /// operation when the tier issues one.
     fn flush_directory(&self, directory: &Path, tier: DurabilityTier) -> Result<(), Error> {
         imp::flush_directory(directory, tier)?;
         if tier == DurabilityTier::Strict {
@@ -141,7 +124,6 @@ impl NativePlatform {
         Ok(())
     }
 
-    /// Removes and returns every fallback performed since the last call.
     #[must_use]
     pub fn take_degradations(&self) -> Vec<Degradation> {
         self.degradations.take()
@@ -442,19 +424,14 @@ impl Platform for NativePlatform {
     }
 }
 
-/// Whether a lock admits other holders.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sharing {
-    /// One holder at a time.
     Exclusive,
-    /// Any number of readers, and no writer.
     Shared,
 }
 
-/// How many times an acquisition is retried when the name is replaced under it.
 const LOCK_ATTEMPTS: u32 = 16;
 
-/// Takes an advisory lock over the file a path currently names.
 fn waited_for(path: &Path, sharing: Sharing) -> Result<PlatformLock, Error> {
     for _ in 0..LOCK_ATTEMPTS {
         let file = open_lock_file(path)?;
@@ -470,8 +447,6 @@ fn waited_for(path: &Path, sharing: Sharing) -> Result<PlatformLock, Error> {
     Err(replaced_under_every_attempt(path))
 }
 
-/// Takes an advisory lock over the file a path currently names, or reports
-/// that a holder has it, without ever waiting for one.
 fn attempted(path: &Path, sharing: Sharing) -> Result<Option<PlatformLock>, Error> {
     for _ in 0..LOCK_ATTEMPTS {
         let file = open_lock_file(path)?;
@@ -494,8 +469,6 @@ fn attempted(path: &Path, sharing: Sharing) -> Result<Option<PlatformLock>, Erro
     Err(replaced_under_every_attempt(path))
 }
 
-/// The failure an acquisition reports when the name it locked kept being
-/// replaced by another one.
 fn replaced_under_every_attempt(path: &Path) -> Error {
     Error::new(
         ErrorKind::CacheLocked,
@@ -516,15 +489,6 @@ fn open_lock_file(path: &Path) -> Result<File, Error> {
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }
 
-/// Reads the token this platform's own credential store holds for a host.
-///
-/// The configuration directory is where the store lives on a platform whose
-/// store is a file, and is unread on a platform whose store is not.
-///
-/// # Errors
-///
-/// Fails with `policy.credential_invalid` when the store is present and cannot
-/// be read, and when a file store is readable by any user but its owner.
 pub fn stored_token(host: &str, configuration: &Path) -> Result<Option<String>, Error> {
     #[cfg(windows)]
     {

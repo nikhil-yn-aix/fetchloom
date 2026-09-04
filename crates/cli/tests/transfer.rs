@@ -55,7 +55,6 @@ mod support;
 
 use support::NoCredentialPolicy;
 
-/// A pause that records what it was asked to wait and never waits.
 #[derive(Debug, Default)]
 struct CountedPause {
     waits: Mutex<Vec<Duration>>,
@@ -160,7 +159,6 @@ fn at(server: &TestServer) -> Vec<String> {
     vec![format!("{}/object", server.origin())]
 }
 
-/// A run with nothing recorded for the reference.
 fn nothing_prior(_location: &str) -> Option<fetchloom_engine::transfer::Prior> {
     None
 }
@@ -475,7 +473,6 @@ fn a_large_transfer_interrupted_twenty_times_completes_and_never_restarts_from_z
     );
 }
 
-/// The tuning a test runs under: one transfer in flight, adapting, unmetered.
 fn test_tuning() -> fetchloom_cli::run::Tuning {
     fetchloom_cli::run::Tuning {
         ceilings: Ceilings {
@@ -686,7 +683,6 @@ fn a_container_reference_lists_and_materializes_every_entry() {
     assert!(listed, "the container was materialized without listing it");
 }
 
-/// The processor pool every cache in a test is opened with.
 fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     let budget = fetchloom_engine::threads::ThreadBudget::resolve(
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
@@ -695,23 +691,16 @@ fn test_processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }
 
-/// A store that writes through the real cache and takes longer to accept each
-/// buffer than the one before, which is what a volume collapsing under a
-/// transfer looks like from inside the copy loop.
 struct CollapsingVolume<'a> {
     inner: &'a Cache<NativePlatform>,
     buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// A writer that accepts bytes at speed and then collapses part way through,
-/// which is the shape a volume takes when something else starts using it.
 struct SlowWriter {
     inner: fetchloom_cache::store::PartialWriter,
     buffers: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// How many bytes this writer accepts before it collapses, chosen so that at
-/// least one whole window is judged at speed first.
 const BEFORE_THE_COLLAPSE: u64 = 2 * 1024 * 1024;
 
 impl std::io::Write for SlowWriter {
@@ -1088,8 +1077,6 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
     );
 }
 
-/// Ceilings that hold one transfer in flight, which is what a harness driving
-/// one transfer directly is bounded by.
 fn one_at_a_time() -> fetchloom_engine::tuning::Ceilings {
     fetchloom_engine::tuning::Ceilings {
         global: std::num::NonZeroU32::MIN,

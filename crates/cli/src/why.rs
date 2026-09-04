@@ -11,66 +11,44 @@ use serde::Serialize;
 
 use crate::run;
 
-/// How many independent witnesses `corroborated` requires.
 const REQUIRED_FOR_CORROBORATED: usize = 2;
 
-/// How a reference was resolved, without reaching the network.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Resolution {
-    /// Which reference form this is.
     pub form: String,
-    /// What the reference resolved to.
     pub resolved_to: String,
-    /// Where a run would materialize it by default.
     pub destination: String,
 }
 
-/// What a receipt says was chosen, when one exists.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SourceChoice {
-    /// Whether a run has been recorded for this destination.
     pub recorded: bool,
-    /// The source a run used, when one was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// The reason recorded for choosing it, when one was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-/// What is known about the trust class recorded for a reference.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TrustReasoning {
-    /// Whether a trust class has been recorded.
     pub recorded: bool,
-    /// The class recorded, when one was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class: Option<String>,
-    /// The mechanical reason for that class.
     pub reason: String,
-    /// The independent witnesses found for the recorded digest, when the
-    /// class is `tofu`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses_found: Option<usize>,
-    /// The independent witnesses `corroborated` requires, when the class is
-    /// `tofu`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses_required: Option<usize>,
 }
 
-/// Everything `why` reports about one reference.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Explanation {
-    /// How the reference was resolved.
     pub resolution: Resolution,
-    /// What a receipt says was chosen.
     pub source: SourceChoice,
-    /// What is known about the trust class recorded.
     pub trust: TrustReasoning,
 }
 
 impl Explanation {
-    /// Renders this explanation as aligned text.
     #[must_use]
     pub fn render(&self) -> String {
         let mut lines = vec![
@@ -150,13 +128,6 @@ fn trust_reason(class: TrustClass) -> String {
     }
 }
 
-/// Explains the resolution, source choice, and trust reasoning already
-/// recorded for a reference.
-///
-/// # Errors
-///
-/// Fails with `reference.unresolved` when the reference cannot be resolved at
-/// all.
 pub fn explain(
     reference: &str,
     adapters: &Adapters,

@@ -192,18 +192,9 @@ fn parse_manifest(bytes: &[u8], context: &Context<'_>) -> Result<Vec<Entry>, Err
     Ok(entries)
 }
 
-/// Reads a `BagIt` payload manifest, with an optional fetch file beside it, into a manifest.
 pub struct BagIt;
 
 impl BagIt {
-    /// Reads the payload manifest into a manifest, taking source and size from
-    /// `fetch.txt` when one is supplied.
-    ///
-    /// # Errors
-    ///
-    /// Fails with `manifest.invalid` when either document does not parse, and
-    /// when the payload manifest was hashed with an algorithm the manifest
-    /// does not carry.
     pub fn read_with_fetch(
         manifest_bytes: &[u8],
         fetch_bytes: Option<&[u8]>,

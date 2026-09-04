@@ -29,7 +29,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// The byte every styled run writes and every plain one does not.
 const ESCAPE: &str = "\u{1b}[";
 
 fn failing_run(arguments: &[&str], environment: &[(&str, &str)]) -> String {

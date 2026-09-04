@@ -257,7 +257,6 @@ fn a_thread_ceiling_above_the_detected_budget_is_clamped_and_says_so() {
     );
 }
 
-/// A corpus of several files, so a run has more than one object to move.
 fn corpus(workspace: &Workspace, files: usize) -> PathBuf {
     for index in 0..files {
         let body: Vec<u8> = (0..1024_usize)
@@ -268,8 +267,6 @@ fn corpus(workspace: &Workspace, files: usize) -> PathBuf {
     workspace.path().join("corpus")
 }
 
-/// Runs the same fetch under a setting and returns the tree digest and the
-/// four deterministic counters.
 fn shape(run: &Run) -> (String, serde_json::Value) {
     let body = run.json();
     (
@@ -382,15 +379,12 @@ fn a_measurement_a_run_recorded_never_changes_what_the_next_run_produces() {
     );
 }
 
-/// Returns the measurement records a cache holds.
 fn measurement_files(cache: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(cache.join("meta").join("host"))
         .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
         .unwrap_or_default()
 }
 
-/// Copies the measurements one workspace recorded into another, so the two
-/// differ in the measurement state and in nothing else.
 fn seed_measurements(from: &Workspace, into: &Workspace) {
     let target = into.cache().join("meta").join("host");
     std::fs::create_dir_all(&target).unwrap();
@@ -442,8 +436,6 @@ fn a_rate_limit_reduces_the_recorded_concurrency_in_the_run_it_happened_in() {
     );
 }
 
-/// Returns the concurrency the cache recorded for the one host a test fetched
-/// from.
 fn recorded_concurrency(workspace: &Workspace) -> u64 {
     let directory = workspace.cache().join("meta").join("host");
     let mut found = Vec::new();
@@ -654,9 +646,6 @@ fn auto_io_never_emits_a_write_path_degradation() {
     );
 }
 
-/// Every file a run materialized, paired with the content digest of its bytes,
-/// so two configurations are compared on what reached the disk rather than on
-/// what the receipt said reached it.
 fn digests_under(root: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];

@@ -28,7 +28,6 @@ fn ceilings(global: u32, per_host: u32) -> Ceilings {
     }
 }
 
-/// Counts how many jobs were running at once, and the most that ever were.
 #[derive(Debug, Default)]
 struct Watermark {
     now: AtomicU32,

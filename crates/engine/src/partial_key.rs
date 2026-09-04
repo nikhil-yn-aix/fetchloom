@@ -4,7 +4,6 @@
 use crate::digest::{ContentDigest, PARTIAL_KEY_CONTEXT};
 use crate::seam::source::{SourceIdentity, SourceMetadata};
 
-/// The key a run's in-progress transfer is claimed and stored under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartialKey {
     name: ContentDigest,
@@ -12,7 +11,6 @@ pub struct PartialKey {
 }
 
 impl PartialKey {
-    /// Names a partial by the content digest a run already states.
     #[must_use]
     pub fn of_content(digest: ContentDigest) -> Self {
         Self {
@@ -21,8 +19,6 @@ impl PartialKey {
         }
     }
 
-    /// Names a partial by the identity a source published, for a run that
-    /// states no digest.
     #[must_use]
     pub fn of_source(metadata: &SourceMetadata) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(PARTIAL_KEY_CONTEXT);
@@ -35,15 +31,11 @@ impl PartialKey {
         }
     }
 
-    /// Returns the name a partial, its lease, its source record and its owner
-    /// record are stored under.
     #[must_use]
     pub fn name(&self) -> ContentDigest {
         self.name
     }
 
-    /// Returns the digest the object this key names must hash to, when the run
-    /// that named this key stated one.
     #[must_use]
     pub fn expected(&self) -> Option<ContentDigest> {
         self.expected

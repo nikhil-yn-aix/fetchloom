@@ -10,42 +10,27 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
-/// The mode every file a filesystem walk finds is recorded under, on every
-/// platform.
 pub const WALKED_MODE: Mode = Mode::ReadWrite;
 
-/// One file found while walking a source tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceFile {
-    /// Where the file sits under the source root.
     pub relative: PathBuf,
-    /// The entry path the tree digest records it under.
     pub entry: EntryPath,
-    /// The mode the entry is recorded under, always [`WALKED_MODE`].
     pub mode: Mode,
 }
 
-/// One symbolic link found while walking a source tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLink {
-    /// The entry path the tree digest records it under.
     pub entry: EntryPath,
-    /// The target bytes, canonicalized to forward slashes.
     pub target: Vec<u8>,
 }
 
-/// Everything a walk of a source tree found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Walked {
-    /// The entries, unsorted; the tree digest sorts them itself.
     pub entries: Vec<TreeEntry>,
-    /// The files whose bytes still have to be copied.
     pub files: Vec<SourceFile>,
-    /// The symbolic links, with the target bytes needed to recreate them.
     pub links: Vec<SourceLink>,
-    /// How many bytes those files hold.
     pub bytes: u64,
-    /// The directory every relative path is taken from.
     pub root: PathBuf,
 }
 
@@ -74,11 +59,6 @@ fn entry_path_of(relative: &Path) -> Result<EntryPath, Error> {
     EntryPath::new(&joined).map_err(|reason| unrepresentable(relative, &reason.to_string()))
 }
 
-/// Walks a source tree and returns the entries and files it holds.
-///
-/// # Errors
-///
-/// Returns the entry that cannot be represented, or the read that failed.
 pub fn walk(root: &Path) -> Result<Walked, Error> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|reason| filesystem_failure(Surface::Source, root, &reason))?;
@@ -153,11 +133,6 @@ fn walk_one(
     Ok(())
 }
 
-/// Copies one file and returns its length and both its digests.
-///
-/// # Errors
-///
-/// Fails when the source cannot be read or the destination cannot be written.
 pub fn copy_file(
     digester: &mut hashing::Digester,
     processor: &Processor,

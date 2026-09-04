@@ -13,12 +13,6 @@ use fetchloom_engine::seam::observer::Observer;
 
 use crate::run::ResolvedArtifact;
 
-/// Returns what the lock pins for a dataset.
-///
-/// # Errors
-///
-/// Fails with `policy.trust_refused` when the run is locked and the lock states
-/// nothing about this dataset. Fails when the lock cannot be read.
 pub fn pinned(
     path: &Path,
     dataset: &str,
@@ -43,18 +37,13 @@ pub fn pinned(
     Ok(entry)
 }
 
-/// Why a run needs the lock to already pin a dataset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Requirement {
-    /// The run was given `--locked`.
     LockedRun,
-    /// The run is a plan, which states resolved digests and moves no bytes to
-    /// learn one.
     Plan,
 }
 
 impl Requirement {
-    /// Returns what the reader should do next.
     fn remedy(self) -> &'static str {
         match self {
             Self::LockedRun => "run once without --locked to record what it resolves to",
@@ -62,7 +51,6 @@ impl Requirement {
         }
     }
 
-    /// Returns why the lock had to pin it already.
     fn because(self) -> &'static str {
         match self {
             Self::LockedRun => "a locked run never accepts a first use",
@@ -71,11 +59,6 @@ impl Requirement {
     }
 }
 
-/// Returns what a run resolved, in the form a lock pins it.
-///
-/// # Errors
-///
-/// Fails when the manifest digest cannot be taken.
 pub fn resolved(
     manifest: &Manifest,
     artifacts: &[ResolvedArtifact],
@@ -105,12 +88,6 @@ pub fn resolved(
     }))
 }
 
-/// Holds a locked run to the lock, or records what an unlocked run resolved.
-///
-/// # Errors
-///
-/// Fails with whatever the comparison found, and when the lock cannot be
-/// written.
 pub fn settle(
     path: &Path,
     dataset: &str,

@@ -388,16 +388,10 @@ fn a_timestamp_is_written_and_read_as_one_form() {
     assert!("2026-08-29 04:11:02".parse::<Timestamp>().is_err());
 }
 
-/// Where a kind is defined, which naming it there is not construction.
 const DEFINITION: &str = "error.rs";
 
-/// Where a unit test module begins, past which a mention is a test's and not
-/// a producer's. Every crate in the workspace puts its unit tests in one
-/// module of this name at the end of the file.
 const TESTS_BEGIN: &str = "\nmod tests {";
 
-/// Returns every line of production source in the workspace, with each file cut
-/// at its unit tests.
 fn production_source() -> String {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

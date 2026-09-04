@@ -22,20 +22,10 @@ use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_platform::NativePlatform;
 use serde_json as _;
 
-/// Opens a cache under a directory, which is where every test puts one.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened.
 pub fn open_cache(under: &Path) -> Result<Cache<NativePlatform>, Error> {
     open_cache_with(under, VerificationPolicy::Fingerprint)
 }
 
-/// Opens a cache under a directory with a given check on a hit.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened.
 pub fn open_cache_with(
     under: &Path,
     policy: VerificationPolicy,
@@ -43,12 +33,6 @@ pub fn open_cache_with(
     open_cache_with_io(under, policy, IoMode::Buffered)
 }
 
-/// Opens a cache under a directory with a given check on a hit and write path
-/// mode.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened.
 pub fn open_cache_with_io(
     under: &Path,
     policy: VerificationPolicy,
@@ -67,19 +51,16 @@ pub fn open_cache_with_io(
     )
 }
 
-/// Opens a cache under a directory, failing the test when it cannot be opened.
 pub fn cache_in(under: &Path) -> Cache<NativePlatform> {
     open_cache(under).unwrap()
 }
 
-/// A cache in a directory that is removed when the test ends.
 pub fn cache() -> (tempfile::TempDir, Cache<NativePlatform>) {
     let scratch = tempfile::TempDir::new().unwrap();
     let held = cache_in(scratch.path());
     (scratch, held)
 }
 
-/// Bytes that differ from every other seed.
 pub fn bytes_of(length: usize, seed: u8) -> Vec<u8> {
     (0..length)
         .map(|index| {
@@ -89,7 +70,6 @@ pub fn bytes_of(length: usize, seed: u8) -> Vec<u8> {
         .collect()
 }
 
-/// Publishes bytes into a cache and returns their digest.
 pub fn publish(into: &Cache<NativePlatform>, bytes: &[u8]) -> ContentDigest {
     let digest = hash_bytes(bytes);
     let lease = into.lease(PartialKey::of_content(digest)).unwrap();
@@ -99,7 +79,6 @@ pub fn publish(into: &Cache<NativePlatform>, bytes: &[u8]) -> ContentDigest {
     digest
 }
 
-/// Makes a published object writable.
 pub fn make_writable(path: &Path) {
     let mut permissions = std::fs::metadata(path).unwrap().permissions();
     #[expect(
@@ -110,11 +89,6 @@ pub fn make_writable(path: &Path) {
     std::fs::set_permissions(path, permissions).unwrap();
 }
 
-/// Opens a cache at an exact path.
-///
-/// # Errors
-///
-/// Fails when the cache cannot be opened.
 pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         root,
@@ -129,9 +103,6 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
     )
 }
 
-/// Reports whether the cache holds nothing that fails its own verification,
-/// asked of the cache rather than of a second reader that would have to know
-/// the pack layout to answer.
 pub fn digests_are_their_bytes(root: &Path) -> bool {
     let Ok(held) = open_cache_at(root) else {
         return false;
@@ -139,7 +110,6 @@ pub fn digests_are_their_bytes(root: &Path) -> bool {
     fetchloom_cache::verify::run(&held).is_ok_and(|report| report.quarantined.is_empty())
 }
 
-/// Lists the entries in a directory, ignoring the owner records beside them.
 pub fn entries_in(directory: &Path) -> Vec<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(directory)
         .map(|entries| {
@@ -154,7 +124,6 @@ pub fn entries_in(directory: &Path) -> Vec<std::path::PathBuf> {
     found
 }
 
-/// Rewrites every owner record in the cache as though a previous boot wrote it.
 pub fn pretend_a_previous_boot(layout: &fetchloom_cache::layout::Layout) {
     let _ = std::fs::remove_file(layout.recovered());
     for directory in [layout.partial(), layout.staging()] {
@@ -176,7 +145,6 @@ pub fn pretend_a_previous_boot(layout: &fetchloom_cache::layout::Layout) {
     }
 }
 
-/// Writes an owner record naming a machine that is not this one.
 pub fn write_foreign_owner(entry: &Path) {
     let mut name = entry.as_os_str().to_owned();
     name.push(".owner");
@@ -193,16 +161,11 @@ pub fn write_foreign_owner(entry: &Path) {
     .unwrap();
 }
 
-/// A property a test needs from a volume, rather than a filesystem name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
-    /// The volume is reached over a network protocol.
     Network,
-    /// The volume cannot be written to.
     ReadOnly,
-    /// The volume is small enough to fill.
     Small,
-    /// The volume is not the one the temporary directory is on.
     Second,
 }
 
@@ -226,7 +189,6 @@ impl Property {
     }
 }
 
-/// Every volume the environment offers with the given property.
 pub fn volumes(property: Property) -> Vec<std::path::PathBuf> {
     let named = std::env::var_os(property.variable()).unwrap_or_default();
     let found: Vec<std::path::PathBuf> = std::env::split_paths(&named)
@@ -242,7 +204,6 @@ pub fn volumes(property: Property) -> Vec<std::path::PathBuf> {
     found
 }
 
-/// A directory inside each volume offering the given property.
 pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
     volumes(property)
         .iter()
@@ -253,7 +214,6 @@ pub fn scratch_on(property: Property) -> Vec<tempfile::TempDir> {
         .collect()
 }
 
-/// Points a name at a directory on another volume.
 pub fn link_directory(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -265,7 +225,6 @@ pub fn link_directory(target: &Path, link: &Path) -> bool {
     }
 }
 
-/// The user a test hands an object to, when the environment names one.
 pub fn another_owner() -> Option<String> {
     let named = std::env::var("FETCHLOOM_TEST_OTHER_OWNER").ok();
     assert!(
@@ -277,7 +236,6 @@ pub fn another_owner() -> Option<String> {
     named
 }
 
-/// Gives a file to another user through the platform s own tool.
 pub fn give_away(path: &Path, owner: &str) {
     let status = std::process::Command::new("chown")
         .arg(owner)
@@ -291,12 +249,10 @@ pub fn give_away(path: &Path, owner: &str) {
     );
 }
 
-/// Reports whether a directory holds no entries at all.
 pub fn is_empty(directory: &std::path::Path) -> bool {
     std::fs::read_dir(directory).is_ok_and(|mut entries| entries.next().is_none())
 }
 
-/// Lists the names a directory holds, sorted.
 pub fn names(directory: &std::path::Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(directory)
         .map(|entries| {
@@ -310,7 +266,6 @@ pub fn names(directory: &std::path::Path) -> Vec<String> {
     found
 }
 
-/// A source record a test writes beside a partial.
 pub fn a_source_record() -> fetchloom_engine::source_record::SourceRecord {
     fetchloom_engine::source_record::SourceRecord {
         location: fetchloom_engine::redact::SafeUrl::new("https://example.invalid/object"),
@@ -327,7 +282,6 @@ pub fn a_source_record() -> fetchloom_engine::source_record::SourceRecord {
     }
 }
 
-/// The processor pool every cache in a test is opened with.
 pub fn processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     let budget = fetchloom_engine::threads::ThreadBudget::resolve(
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
@@ -336,7 +290,6 @@ pub fn processor() -> std::sync::Arc<fetchloom_engine::pool::Processor> {
     std::sync::Arc::new(fetchloom_engine::pool::Processor::new(budget).unwrap())
 }
 
-/// Overwrites an object's bytes wherever the cache put them.
 pub fn damage(cache: &Cache<NativePlatform>, digest: ContentDigest, with: &[u8]) {
     use std::io::{Seek, SeekFrom, Write};
 
@@ -353,21 +306,12 @@ pub fn damage(cache: &Cache<NativePlatform>, digest: ContentDigest, with: &[u8])
     file.write_all(with).unwrap();
 }
 
-/// Every object this checker has already found to hash to the name it is stored
-/// under.
-///
-/// An object is content addressed and is never rewritten once it is published,
-/// so reading one a second time proves nothing the first read did not. A loop
-/// that publishes in rounds asks this after each round and pays for each object
-/// once rather than once per round.
 #[derive(Debug, Default)]
 pub struct Checked {
     seen: std::collections::BTreeSet<String>,
 }
 
 impl Checked {
-    /// Reads every object the cache holds that has not been read before, and
-    /// reports whether each hashed to the name it is stored under.
     pub fn newly_published_are_their_bytes(&mut self, root: &Path) -> bool {
         let Ok(held) = open_cache_at(root) else {
             return false;

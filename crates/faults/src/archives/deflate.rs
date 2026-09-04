@@ -65,11 +65,6 @@ fn fixed_length_symbol_code(symbol: u32) -> (u32, u8) {
     }
 }
 
-/// Encodes `count` repeated copies of `byte` as a raw DEFLATE stream (RFC 1951,
-/// one fixed-Huffman block), using a length-258 distance-1 back-reference for
-/// every run of 258 bytes after an initial literal, so a handful of compressed
-/// bytes legitimately decompresses to far more than the archive's own on-disk
-/// size.
 pub(super) fn deflate_repeated_byte(byte: u8, count: u32) -> Vec<u8> {
     let mut writer = BitWriter::new();
     writer.push_value(1, 1);

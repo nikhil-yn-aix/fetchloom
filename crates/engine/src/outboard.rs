@@ -12,40 +12,25 @@ use crate::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
 const NODE_LEN: usize = 64;
 const HEADER_LEN: usize = 8;
 
-/// The length in bytes of one outboard leaf group.
 pub const GROUP_LEN: u64 = OUTBOARD_CHUNK_GROUP;
 
-/// A stored outboard tree: a length header followed by parent nodes in
-/// pre-order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outboard {
     bytes: Vec<u8>,
 }
 
 impl Outboard {
-    /// Returns the encoded outboard bytes: an eight-byte little-endian length
-    /// followed by sixty-four-byte parent nodes in pre-order.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Returns the number of leaf groups this outboard covers.
     #[must_use]
     pub fn leaf_count(&self) -> u64 {
         u64::try_from((self.bytes.len() - HEADER_LEN) / NODE_LEN).unwrap_or(u64::MAX) + 1
     }
 }
 
-/// Returns the content digest of an object and, when it is large enough, its
-/// outboard tree, from the chaining value of each of its leaf groups.
-///
-/// # Panics
-///
-/// Panics when `leaves` does not hold exactly one entry per group, or when the
-/// object holds one group or none, both of which are bugs in the caller rather
-/// than inputs to validate. An object of one group has no parent node to build
-/// a digest out of and is hashed directly.
 #[must_use]
 pub fn tree_of(object_len: u64, leaves: &[ChainingValue]) -> (ContentDigest, Option<Outboard>) {
     let whole = Subtree::whole(object_len);
@@ -194,15 +179,10 @@ enum Expectation {
     Cv(ChainingValue),
 }
 
-/// Fills the raw bytes of one leaf group into a buffer the walk owns and
-/// reuses.
 type GroupBytes<'a> = &'a mut dyn FnMut(u64, &mut Vec<u8>) -> Result<(), Error>;
 
-/// Why a walk stopped before it finished.
 enum Stopped {
-    /// The tree or the object could not be read.
     Unreadable(Error),
-    /// A node of the tree does not check out against the digest.
     TreeCorrupt(Range<u64>),
 }
 
@@ -219,16 +199,6 @@ fn tree_corrupt(range: &Range<u64>) -> Error {
     ))
 }
 
-/// Verifies that the bytes in `range` match the outboard tree, walking only the
-/// nodes needed to authenticate that range.
-///
-/// # Errors
-///
-/// Returns `cache.corrupt` when the outboard's recorded length disagrees with
-/// `object_len` or when the outboard cannot be read; nothing has been
-/// authenticated yet in either case. Returns `integrity.range_mismatch`, naming
-/// the byte range of the node that failed, when a node or a leaf does not match
-/// the chaining value its parent named.
 pub fn verify_range(
     outboard: &mut (impl Read + Seek),
     object_len: u64,
@@ -257,14 +227,6 @@ pub fn verify_range(
     }
 }
 
-/// Returns every byte range of an object whose bytes do not match the tree,
-/// ascending, with adjacent ranges merged.
-///
-/// # Errors
-///
-/// Returns `cache.corrupt` when the tree cannot be read, when its recorded
-/// length disagrees with `object_len`, and when any node in it does not check
-/// out against the digest. Returns whatever the callback fails with.
 pub fn find_damage(
     outboard: &mut (impl Read + Seek),
     object_len: u64,
@@ -288,8 +250,6 @@ pub fn find_damage(
     }
 }
 
-/// Turns ascending group indices into ascending byte ranges, joining ones that
-/// touch.
 fn merge(groups: &[u64], object_len: u64) -> Vec<Range<u64>> {
     let mut spans: Vec<Range<u64>> = Vec::new();
     for group in groups {
@@ -344,15 +304,10 @@ fn walk(
     )
 }
 
-/// Everything the descent carries down the tree that is not the node itself.
 struct Descent<'a> {
-    /// The byte range the walk is filtered to.
     range: &'a Range<u64>,
-    /// Where the bytes of one leaf group come from.
     group_bytes: GroupBytes<'a>,
-    /// The buffer those bytes are read into, allocated once.
     buffer: &'a mut Vec<u8>,
-    /// The leaf groups found not to match, ascending.
     damaged: &'a mut Vec<u64>,
 }
 
@@ -405,7 +360,6 @@ fn verify_subtree(
     )
 }
 
-/// Checks one leaf group against the chaining value its parent stores for it.
 fn check_leaf(
     group: u64,
     expectation: Expectation,

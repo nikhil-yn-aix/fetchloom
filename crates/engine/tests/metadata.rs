@@ -28,7 +28,6 @@ fn context<'a>(limits: &'a Limits) -> Context<'a> {
     }
 }
 
-/// Every reader, with a document it reads and a document it must refuse.
 fn readers() -> Vec<(Box<dyn MetadataReader>, &'static [u8], &'static [u8])> {
     vec![
         (

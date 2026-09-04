@@ -67,22 +67,6 @@ impl WriteGuard {
     }
 }
 
-/// Extracts the selected members of an archive into an empty staging directory.
-///
-/// # Errors
-///
-/// Fails with `archive.collision` naming both members when two staged names
-/// collide under the destination volume's own case folding or Unicode
-/// normalization. Fails with `destination.unrepresentable` naming the member
-/// and what the volume said when the volume refuses a name for another reason.
-/// Fails with `archive.unsafe_path` naming the member and both lengths when a
-/// staged path or one of its components is longer than the volume allows. Fails
-/// with `archive.link_escape` naming the member and the target when a hard link
-/// names a member this archive does not hold. Fails with `archive.bomb` when
-/// more entries are written than the entry limit, or more bytes are written
-/// than the expanded-bytes limit. Fails when the archive or the selection
-/// itself fails. Every failure removes everything this call staged, leaving the
-/// staging directory as it was given.
 pub fn extract<A, P>(
     archive: &mut A,
     selection: &Selection,
@@ -111,7 +95,6 @@ where
     result
 }
 
-/// Returns the member path as an entry path names it.
 pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
     let raw = if member.kind == MemberKind::Directory {
         member.path.trim_end_matches('/')
@@ -124,7 +107,6 @@ pub(crate) fn canonical_member_path(member: &ArchiveMember) -> String {
         .join("/")
 }
 
-/// Empties the staging directory this call was given.
 fn cleanup(staging: &Path) {
     let Ok(entries) = std::fs::read_dir(staging) else {
         return;
@@ -139,7 +121,6 @@ fn cleanup(staging: &Path) {
     }
 }
 
-/// Applies a selection to an archive's members under their canonical paths.
 pub(crate) fn select_members(
     members: &[ArchiveMember],
     selection: &Selection,
@@ -404,7 +385,6 @@ const WINDOWS_RESERVED_BASE_NAMES: [&str; 22] = [
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Reports whether a name is one this platform is known to store as another.
 #[cfg(windows)]
 fn worth_confirming(component: &str) -> bool {
     if component.contains(':') || component.ends_with('.') || component.ends_with(' ') {
@@ -419,12 +399,6 @@ fn worth_confirming(_component: &str) -> bool {
     false
 }
 
-/// Confirms that the volume stored the name that was asked for.
-///
-/// # Errors
-///
-/// Fails with `destination.unrepresentable` naming the member when the name the
-/// volume stored is not the name the archive holds.
 fn confirm_stored_name(member: &str, full: &Path) -> Result<(), Error> {
     let Some(name) = full.file_name() else {
         return Ok(());

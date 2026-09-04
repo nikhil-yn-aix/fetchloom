@@ -51,11 +51,8 @@ use tempfile::TempDir;
 mod support;
 use support::NoCredentialPolicy;
 
-/// The scheme the third adapter answers for, which no adapter this build ships
-/// answers for.
 const SCHEME: &str = "invented://";
 
-/// A third adapter, whole, serving fixed bytes over a scheme of its own.
 struct InventedSource {
     bytes: Vec<u8>,
 }

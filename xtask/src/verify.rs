@@ -5,48 +5,30 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// The target linted on the host with the whole workspace.
 const LINT_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"];
 
-/// The targets the host compiles and cannot run.
 const COMPILE_ONLY_TARGETS: [&str; 1] = ["aarch64-pc-windows-msvc"];
 
-/// The Linux targets the container lane builds and runs.
 const LINUX_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"];
 
-/// The Linux targets the emulated lane builds and runs.
 const ARM_TARGETS: [&str; 2] = ["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"];
 
-/// What one step of the matrix did.
 struct Step {
-    /// What the step is called in the report.
     name: String,
-    /// Whether the command succeeded.
     passed: bool,
-    /// Whether the step declined to run at all, which is neither a pass nor a
-    /// failure and is never counted as either.
     skipped: bool,
-    /// How long the command took.
     took: Duration,
-    /// Why the step declined to run, when it declined.
     declined: String,
 }
 
-/// One thing the matrix wanted and did not get.
 struct Degrade {
-    /// What was wanted.
     requested: String,
-    /// What happened instead.
     used: String,
-    /// Why.
     reason: String,
 }
 
-/// Everything one run of the matrix produced.
 struct Report {
-    /// Every step, in the order it ran.
     steps: Vec<Step>,
-    /// Every fallback, in the order it happened.
     degrades: Vec<Degrade>,
 }
 
@@ -93,7 +75,6 @@ impl Report {
         passed
     }
 
-    /// Records a step whose work already ran, with the time it actually took.
     fn already_ran(&mut self, name: &str, passed: bool, took: Duration) {
         println!("--- {name}");
         println!(
@@ -110,7 +91,6 @@ impl Report {
         });
     }
 
-    /// Records a step that declined to run, with the reason it declined.
     fn skipped(&mut self, name: &str, took: Duration, reason: &str) {
         println!("skip {name} in {:.1} s: {reason}", took.as_secs_f64());
         self.steps.push(Step {
@@ -127,7 +107,6 @@ impl Report {
     }
 }
 
-/// Runs the verification matrix.
 pub fn run(workspace: &Path, arguments: &[String]) -> bool {
     if arguments
         .iter()
@@ -316,7 +295,6 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
     offline(workspace, report, arch, &image, &platform, lane);
 }
 
-/// Runs the plan, bundle and apply sequence with the network physically absent.
 fn offline(
     workspace: &Path,
     report: &mut Report,
@@ -362,7 +340,6 @@ fn offline(
     report.step(&format!("{lane} offline apply"), apply);
 }
 
-/// Records the targets this matrix names and never runs.
 fn unreachable(report: &mut Report) {
     report.degrade(
         "aarch64-pc-windows-msvc compiled and run",

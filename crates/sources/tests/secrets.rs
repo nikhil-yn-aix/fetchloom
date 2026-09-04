@@ -21,7 +21,6 @@ use fetchloom_sources::{HttpSource, ObjectStoreSource};
 
 use std::sync::Arc;
 
-/// The value that must never appear anywhere a source writes.
 const SECRET: &str = "s3cr3t-value-do-not-print";
 
 fn http() -> HttpSource {

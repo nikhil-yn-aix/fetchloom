@@ -4,24 +4,14 @@ use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::source::{Listing, ListingEntry};
 
-/// The namespace an object store's list response carries.
 const OBJECT_STORE_NAMESPACE: &str = "http://s3.amazonaws.com/doc/2006-03-01/";
 
-/// The root element an object store's list response carries.
 const OBJECT_STORE_ROOT: &str = "<ListBucketResult";
 
-/// The namespace a multi-status response carries.
 const WEBDAV_NAMESPACE: &str = "DAV:";
 
-/// The heading a generated index carries.
 const GENERATED_HEADING: &str = "<h1>Index of ";
 
-/// Reads a listing out of a body whose format is recognized.
-///
-/// # Errors
-///
-/// Fails with `reference.unresolved` when the body matches no recognized
-/// signature.
 pub fn parse(location: &str, status: u16, body: &str) -> Result<Listing, Error> {
     if body.contains(OBJECT_STORE_ROOT) && body.contains(OBJECT_STORE_NAMESPACE) {
         return Ok(entries(location, &between_all(body, "<Key>", "</Key>")));

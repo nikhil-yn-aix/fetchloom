@@ -31,7 +31,6 @@ mod support;
 
 use tempfile::TempDir;
 
-/// What a tar holding `hello.txt` decompresses to.
 const GREETING: &[u8] = b"hello\n";
 
 fn greeting_tar() -> Vec<u8> {
@@ -42,7 +41,6 @@ fn greeting_tar() -> Vec<u8> {
     writer.finish()
 }
 
-/// A tar whose one member climbs out of the destination.
 fn escaping_tar() -> Vec<u8> {
     let mut header = TarHeader::ustar(b"../escape.txt", TYPEFLAG_REGULAR);
     header.set_size(GREETING.len() as u64);

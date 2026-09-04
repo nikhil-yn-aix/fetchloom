@@ -6,7 +6,6 @@ use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::tree::{Mode, TreeEntry};
 use std::path::{Path, PathBuf};
 
-/// Returns the entry paths that carry the executable mode, in ascending order.
 #[must_use]
 pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
     let mut paths: Vec<String> = entries
@@ -24,11 +23,6 @@ pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
     paths
 }
 
-/// Turns a reference into the local path it names.
-///
-/// # Errors
-///
-/// Returns a resolution failure naming what could not be resolved.
 pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
     if let Some(rest) = reference.strip_prefix("file://") {
         let trimmed = rest.strip_prefix('/').unwrap_or(rest);
@@ -72,7 +66,6 @@ pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
     }
 }
 
-/// Returns the default destination for a source path.
 #[must_use]
 pub fn default_destination(source: &Path) -> PathBuf {
     let name = source
@@ -81,11 +74,6 @@ pub fn default_destination(source: &Path) -> PathBuf {
     PathBuf::from(".").join(name)
 }
 
-/// Resolves a path the user named against the working directory.
-///
-/// # Errors
-///
-/// Fails when the working directory cannot be read.
 pub fn resolve_path(path: &Path) -> Result<PathBuf, Error> {
     std::path::absolute(path).map_err(|reason| {
         Error::new(
@@ -95,8 +83,6 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf, Error> {
     })
 }
 
-/// Returns the directory a path sits in, treating a single-component relative
-/// path as sitting in the working directory.
 pub(super) fn containing_directory(path: &Path) -> PathBuf {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
@@ -120,11 +106,6 @@ pub(super) fn staging_beside(destination: &Path) -> PathBuf {
     destination.with_file_name(format!(".{name}.fetchloom-staging"))
 }
 
-/// Reports whether a reference names something this machine already holds.
-///
-/// Every other shape needs the network, so a shape added to the grammar later
-/// is refused offline until it is shown to be local, rather than permitted
-/// until someone remembers to name it.
 pub(super) fn names_something_here(reference: &str) -> bool {
     if let Some(path) = reference.strip_prefix("file://") {
         return !path.is_empty();
@@ -135,7 +116,6 @@ pub(super) fn names_something_here(reference: &str) -> bool {
     std::path::Path::new(reference).exists()
 }
 
-/// Returns the dataset name a container reference is recorded under.
 pub(super) fn container_name(location: &str) -> String {
     let after_scheme = location
         .split_once("://")
@@ -165,13 +145,11 @@ pub(super) fn object_name(location: &str) -> String {
     last.map_or_else(|| "object".to_owned(), str::to_owned)
 }
 
-/// Returns the name the object at a remote location is materialized under.
 #[must_use]
 pub fn remote_name(location: &str) -> String {
     object_name(location)
 }
 
-/// Returns the path a manifest's source names, relative to the manifest.
 pub(super) fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
     let stated = PathBuf::from(source.strip_prefix("file://").unwrap_or(source));
     if stated.is_absolute() {

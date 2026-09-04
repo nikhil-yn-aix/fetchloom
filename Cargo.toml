@@ -45,7 +45,6 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2"]
 [workspace.lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
-missing_docs = "deny"
 unused_crate_dependencies = "deny"
 
 [workspace.lints.clippy]
@@ -61,5 +60,5 @@ unimplemented = "deny"
 dbg_macro = "deny"
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
-missing_errors_doc = "deny"
-missing_panics_doc = "deny"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

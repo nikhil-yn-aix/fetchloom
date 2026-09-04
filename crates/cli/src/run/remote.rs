@@ -26,12 +26,6 @@ use fetchloom_engine::transfer::{SleepingPause, Transfer};
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use std::path::Path;
 
-/// Materializes one object named by an HTTP or HTTPS reference.
-///
-/// # Errors
-///
-/// Fails when the source is unreachable or refuses the request, when the cache
-/// cannot be written, and when the destination already exists.
 #[expect(
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
@@ -147,14 +141,6 @@ pub fn materialize_remote(
     )
 }
 
-/// Lists a container, transfers every entry into the cache, and returns what
-/// each one's bytes hashed to, which is the only digest inference ever records
-/// for a source that stated none.
-///
-/// # Errors
-///
-/// Fails when the container cannot be listed, when an entry cannot be
-/// transferred, or when the run has no store to put the bytes in.
 pub fn infer_remote(
     with: &Materialization<'_>,
     location: &str,
@@ -243,7 +229,6 @@ pub(super) fn publish_one_object(
     Ok(entries)
 }
 
-/// Moves one artifact's bytes from the source that scored best.
 pub(super) fn transfer_object(
     with: &Materialization<'_>,
     source: &AnySource,
@@ -337,8 +322,6 @@ pub(super) fn transfer_object(
     })
 }
 
-/// Returns the origin that served an artifact's bytes, when this run moved
-/// them.
 pub(super) fn observation(transferred: &fetchloom_engine::transfer::Transferred) -> Option<String> {
     if transferred.bytes_transferred == 0 {
         return None;

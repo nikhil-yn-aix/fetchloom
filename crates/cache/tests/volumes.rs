@@ -182,11 +182,8 @@ fn a_volume_whose_locks_are_refused_is_refused_as_a_cache() {
     );
 }
 
-/// What a filesystem with no lock manager answers, which is the one condition
-/// no volume in the verification lane can be made to produce.
 #[cfg(unix)]
 const ENOLCK: i32 = 37;
 
-/// What a Windows volume answers when the function is not implemented for it.
 #[cfg(windows)]
 const ENOLCK: i32 = 1;

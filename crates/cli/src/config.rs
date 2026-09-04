@@ -6,38 +6,25 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The name of a project configuration file.
 pub const PROJECT_FILE: &str = "fetchloom.toml";
 
-/// The name of a user configuration file inside the configuration location.
 pub const USER_FILE: &str = "config.toml";
 
-/// The directory name Fetchloom uses inside the platform's configuration
-/// location.
 pub const CONFIGURATION_DIRECTORY: &str = "fetchloom";
 
-/// The directory name Fetchloom uses on Windows, where the convention is
-/// capitalized.
 pub const WINDOWS_CONFIGURATION_DIRECTORY: &str = "Fetchloom";
 
-/// Which of the five precedence levels supplied a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
-    /// The command line, which wins over every other level.
     CommandLine,
-    /// An environment variable.
     Environment,
-    /// The project configuration file.
     ProjectConfig,
-    /// The user configuration file.
     UserConfig,
-    /// The value built into the binary.
     Default,
 }
 
 impl Origin {
-    /// Returns the name this origin is reported with.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -56,80 +43,52 @@ impl fmt::Display for Origin {
     }
 }
 
-/// A value together with the level that supplied it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Sourced<T> {
-    /// The effective value.
     pub value: T,
-    /// The level that supplied it.
     pub origin: Origin,
 }
 
 impl<T> Sourced<T> {
-    /// Pairs a value with the level that supplied it.
     #[must_use]
     pub fn new(value: T, origin: Origin) -> Self {
         Self { value, origin }
     }
 }
 
-/// Everything a configuration file may set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ConfigFile {
-    /// Forbid all network activity.
     pub offline: Option<bool>,
-    /// Ceiling on threads used for processor work.
     pub threads: Option<NonZeroU32>,
-    /// Progress presentation.
     pub display: Option<String>,
-    /// Where the cache is.
     pub cache: Option<CacheSection>,
-    /// Ceiling on transfers in flight across every host.
     pub concurrency: Option<NonZeroU32>,
-    /// Ceiling on transfers in flight for one host.
     pub per_host: Option<NonZeroU32>,
-    /// Ceiling on how fast a run may transfer.
     pub bandwidth: Option<String>,
-    /// Which write path a run takes.
     pub io: Option<String>,
-    /// How much of the event stream is rendered to standard error.
     pub log: Option<String>,
-    /// Attempts per transient failure.
     pub retries: Option<NonZeroU32>,
-    /// Idle timeout per connection.
     pub timeout: Option<String>,
-    /// The base locations a bare name resolves against, in order.
     pub sources: Option<Vec<String>>,
-    /// When output carries color.
     pub color: Option<String>,
-    /// Whether a hint may be printed at all.
     pub hints: Option<bool>,
 }
 
-/// Everything the cache table of a configuration file may set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CacheSection {
-    /// Where the cache is. Relative in a project file.
     pub dir: Option<PathBuf>,
 }
 
-/// Why a configuration file could not be used.
 #[derive(Debug)]
 pub enum ConfigError {
-    /// The named file could not be read.
     Unreadable {
-        /// The file that could not be read.
         path: PathBuf,
-        /// What the platform reported.
         reason: std::io::Error,
     },
-    /// The file was not valid configuration.
     Malformed {
-        /// The file that did not parse.
         path: PathBuf,
-        /// What the parser reported.
         reason: Box<toml::de::Error>,
     },
 }
@@ -149,20 +108,12 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// A configuration file and where it was found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedConfig {
-    /// The file that was read.
     pub path: PathBuf,
-    /// What it set.
     pub values: ConfigFile,
 }
 
-/// Reads one configuration file.
-///
-/// # Errors
-///
-/// Returns the path and the reason.
 pub fn read(path: &Path) -> Result<LoadedConfig, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|reason| ConfigError::Unreadable {
         path: path.to_path_buf(),
@@ -178,7 +129,6 @@ pub fn read(path: &Path) -> Result<LoadedConfig, ConfigError> {
     })
 }
 
-/// Searches a directory and then each parent for a project configuration file.
 #[must_use]
 pub fn find_project_file(start: &Path) -> Option<PathBuf> {
     let mut directory = Some(start);
@@ -192,7 +142,6 @@ pub fn find_project_file(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Returns the platform's configuration location for Fetchloom.
 #[must_use]
 pub fn user_config_directory() -> Option<PathBuf> {
     if cfg!(windows) {
@@ -211,20 +160,12 @@ pub fn user_config_directory() -> Option<PathBuf> {
     }
 }
 
-/// The two configuration files a run read, in precedence order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Discovered {
-    /// The project file, when one was found.
     pub project: Option<LoadedConfig>,
-    /// The user file, when one was found.
     pub user: Option<LoadedConfig>,
 }
 
-/// Finds and reads the configuration files a run should use.
-///
-/// # Errors
-///
-/// Fails when a file that was found cannot be read or does not parse.
 pub fn discover(
     working_directory: &Path,
     named: Option<&Path>,
