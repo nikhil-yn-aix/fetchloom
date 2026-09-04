@@ -126,8 +126,8 @@ were never workflow steps.
 
 | Lane | Targets | What runs |
 |---|---|---|
-| Native | `x86_64-pc-windows-msvc` | fmt, `cargo deny check`, clippy over both lint targets, build, the whole suite against the filesystems `verify/volumes-windows.ps1` builds, the workspace built at its rust-version, the recorded network subjects, `bench --compare` |
-| Container | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` | clippy, build, the whole suite against the loopback images `verify/volumes-linux.sh` builds inside a privileged container |
+| Native | `x86_64-pc-windows-msvc` | fmt, `cargo deny check`, clippy over both lint targets, build, the whole suite against the filesystems `xtask/verify/volumes-windows.ps1` builds, the workspace built at its rust-version, the recorded network subjects, `bench --compare` |
+| Container | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` | clippy, build, the whole suite against the loopback images `xtask/verify/volumes-linux.sh` builds inside a privileged container |
 | Emulated | `aarch64-unknown-linux-musl`, `aarch64-unknown-linux-gnu` | The container lane again under qemu binfmt, behind `--arm`, because it is slow |
 | Compiled only | `aarch64-pc-windows-msvc` | `cargo check --workspace --all-targets`, and a degrade-shaped line in the output saying nothing ran there |
 
@@ -181,7 +181,7 @@ Uncertain: whether a privileged container on Docker Desktop can create loopback
 devices and mount btrfs and XFS. That is the first thing step 1 has to prove and
 the reason step 2 does not start until it has.
 
-Sources: the deleted workflow at `04c3c14`; `verify/volumes-linux.sh`;
+Sources: the deleted workflow at `04c3c14`; `xtask/verify/volumes-linux.sh`;
 standards.md Measure; the phase 1 gate record for what stopped running.
 
 ## Thread pool sizing policy
@@ -254,13 +254,13 @@ No unwrap outside enforced invariants. `unwrap_used` and `expect_used` are denie
 
 No new dependency without review. `deny.toml` uses `[bans] allow = [...]` listing every crate permitted in the graph, direct and transitive, each with a reason. The cargo-deny documentation states that "if the `allow` list has one or more entries, then any crate not in that list will be denied". A new dependency, or a version bump that changes the transitive graph, fails `cargo deny check` until the list is edited, which makes the review a diff a human must approve. `multiple-versions = "deny"` and `wildcards = "deny"` are also set, and the `advisories`, `licenses` and `sources` checks run in the same invocation. `unused_crate_dependencies` catches the opposite direction, a dependency declared and no longer used.
 
-No comments. No lint expresses this. `cargo xtask check-comments` scans every `.rs` file in the workspace with a small state machine that tracks string, char and raw-string literals so a `//` inside a literal is not a false positive, and rejects every comment except `///`, `//!` and a `// SAFETY:` line immediately preceding an `unsafe` block. `/* */` in any form is rejected. It also rejects the decorative forms standards.md names: banners, section dividers and emoji, anywhere in `.rs` and `.md`.
+No comments. Nothing enforces this. No lint expresses it, and `cargo xtask check-comments`, which once did, was deleted at `5bebc92` because a checker for it is code shipped to police taste. `clippy::undocumented_unsafe_blocks` requires the one comment form standards.md permits, and `clippy::unnecessary_safety_comment` rejects it where it does not belong, so the `// SAFETY:` line is the only part of the rule a tool holds. The rest is held in review.
 
 Budget enforcement. `cargo xtask bench --compare baseline` fails on a regression above five percent on any regime, and the no-op regime plus the recorded binary size is what mechanically bounds the cost of a dependency existing, which is the rule standards.md states but cannot express as a lint.
 
 Because: every rule in standards.md that a tool can check is checked by a tool, and the ones no tool checks are named as such rather than left to reviewer memory. `#[expect]` with a mandatory reason is the mechanism that turns each exception into a written invariant that expires on its own, which is what the unwrap and unsafe rules actually ask for. The cargo-deny allow-list is the only mechanism found that makes an unreviewed transitive dependency fail a build rather than merely appear in a lockfile diff.
 
-Costs: an exhaustive `[bans] allow` list must be edited on every dependency version bump that changes the graph, including bumps that change nothing else. That is deliberate friction and it will be felt on routine `cargo update` runs. `clippy::pedantic` denied at the workspace level will produce exceptions that need reasons, and each one is a small argument. `missing_docs` denied means no item can be added without a docstring, including during exploratory work. The comment checker is code written and maintained here, and a hand-written scanner over Rust source is a place bugs can hide; it needs its own tests over adversarial inputs, including raw strings containing `//` and doc comments containing `/*`.
+Costs: an exhaustive `[bans] allow` list must be edited on every dependency version bump that changes the graph, including bumps that change nothing else. That is deliberate friction and it will be felt on routine `cargo update` runs. `clippy::pedantic` denied at the workspace level will produce exceptions that need reasons, and each one is a small argument. The no-comment rule costs a reviewer's attention on every change, which is what removing its checker bought.
 
 Uncertain: whether `clippy::pedantic` at `deny` produces a tolerable number of exceptions on this codebase or a stream of noise. If it is noise, the answer is to demote it to `warn` in CI with a separate gate rather than to sprinkle allows. That call is made in slice 0.2 against real code, not now.
 
@@ -1044,7 +1044,7 @@ The on-access scanner threshold of two is a provisional constant with no measure
 
 Whether the musl allocator choice helps is unmeasured, as the toolchain record already states, and needs one run with the feature and one without on each musl runner.
 
-Where each of these is verified now, since there are no runners. The verification matrix record names the lanes. The two musl targets, `x86_64-unknown-linux-gnu`, and every Linux execution entry above are covered by the container lane, which links and runs them. The aarch64 Linux pair is covered by the same lane under emulation behind `--arm`, which proves the code and not the machine. Every filesystem entry that names ext4, btrfs, XFS, FAT or tmpfs is covered by the images `verify/volumes-linux.sh` builds inside that container.
+Where each of these is verified now, since there are no runners. The verification matrix record names the lanes. The two musl targets, `x86_64-unknown-linux-gnu`, and every Linux execution entry above are covered by the container lane, which links and runs them. The aarch64 Linux pair is covered by the same lane under emulation behind `--arm`, which proves the code and not the machine. Every filesystem entry that names ext4, btrfs, XFS, FAT or tmpfs is covered by the images `xtask/verify/volumes-linux.sh` builds inside that container.
 
 Permanently unproven from this machine, and stated as such rather than deferred. Nothing on macOS is executed: `aarch64-apple-darwin` is compiled and linted only, `x86_64-apple-darwin` is not installed and is not checked, the NEON build is never run, APFS in either form and HFS+ are never mounted, and every Apple constant confirmed against the C library's source stays confirmed only there. A network-backed volume is not built, so the network magic set, the conservative locking path and the FUSE row stay unproven. Locking across two users stays unproven. The two Windows on ARM targets have no machine here at all.
 
@@ -6038,7 +6038,7 @@ both tests failed there while passing when run alone. They wait for the run to
 say `plan.ready` on its own event stream now, which is true whatever the run
 publishes and when, and they finish in three seconds rather than twenty.
 
-`verify/volumes-linux.sh` mounted six images with `mount -o loop`, which takes a
+`xtask/verify/volumes-linux.sh` mounted six images with `mount -o loop`, which takes a
 loop device and never gives it back. The machine has eight and Docker holds two
 for its own images, so the first run of the day passed and every run after it
 failed on a mount, with a different image named each time. The script releases
@@ -9070,7 +9070,7 @@ mystery failure.
 
 What Linux proved. The `x86_64-unknown-linux-musl` half ran end to end: clippy
 over the whole workspace, the whole suite against the loopback btrfs, XFS, ext4,
-FAT, fuse, small, read-only and second volumes that `verify/volumes-linux.sh`
+FAT, fuse, small, read-only and second volumes that `xtask/verify/volumes-linux.sh`
 builds inside the privileged container, and `xtask network` against real hosts
 from inside it. Every test result line in that half reads `ok`.
 
@@ -9103,3 +9103,144 @@ statement that Linux is not green: eleven of twelve steps passed and
 Sources: `cargo xtask verify` on this machine; the container lane rerun for the
 gnu target alone; `crates/platform/src/linux/probe.rs:33-50` and `:237-270`;
 `crates/platform/tests/capability.rs:269-291`.
+
+## The seam between `run` and `command`, and which side of the library wall it sits on
+
+Question: `crates/cli/src/command/`, eleven command bodies totalling 1,372 lines
+including `get.rs` at 422 and `plan.rs` at 314, was declared by `mod command;` in
+`main.rs` and was therefore private to the binary. No integration test could name
+it. `crates/cli/src/run/`, 3,127 lines, is `pub mod run` in `lib.rs` and is fully
+reachable. Is that the right place for the wall?
+
+What the seam is, read from the code rather than from the names. `run/` holds one
+module per reference shape: `local`, `remote`, `object`, `archive`, `container`,
+`dataset`, with `selection`, `verify`, `paths`, `adapters`, `cached` and `context`
+under them. It answers "given a reference that turns out to be this shape, produce
+the tree". `command/` holds one module per subcommand: `get`, `plan`, `verify`,
+`repair`, `why`, `explain`, `doctor`, `cache`, `init`, `completions`. It answers
+"given parsed flags and resolved settings, open what the command needs, call the
+engine, and turn the outcome into output and an exit code".
+
+They are not peers. `command/get.rs` calls `run::materialize_manifest`; nothing in
+`run/` calls `command/`. The dependency runs one way, so `command/` is the layer
+above `run/`, not a sibling of it. The per-subcommand and per-reference-shape
+split the two names suggest is real, but it is a layering, and the layering is the
+seam: `command/` is where a command line becomes an engine call, and `run/` is
+where an engine call becomes bytes on disk.
+
+Options: leave `command/` private to the binary and test it only through the
+compiled executable; move `command/` into the library; move `run/` back out of the
+library so both sides are private and symmetric.
+
+Chosen: `command/` moves into the library as `pub mod command`, and the eleven
+entry points become `pub`. The plumbing every command opens moved with it, out of
+`main.rs` and into `command/mod.rs`: `write_json`, `thread_budget`, `report_clamp`,
+`open_cache`, `Scratch`, `scratch_beside`, `Opened`, `open_for`, `get_policy`,
+`Requested` and `open_request`, 259 lines of it.
+
+Because: no reason was found for `command/` to be private. Nothing in it is a
+composition-root concern; it holds no `main`, no signal handler, no argument
+parse, and no global wiring. It was private because `mod command;` was written in
+`main.rs` rather than in `lib.rs`, and that is where the 259 lines of shared
+plumbing ended up too, because that was the only place both `main.rs` and
+`command/` could see. The wall was in the wrong place and the plumbing followed it
+there.
+
+What `main.rs` keeps is the wiring, and only the wiring: `main`,
+`listen_for_interrupts`, `execute` (which parses, discovers configuration,
+resolves settings, builds the observer fan-out, and brackets the run with
+`RunStart` and `RunEnd`), `dispatch`, `transfer_flags`, `offer_a_hint` and
+`warn_about_aggressive`. It went from 528 lines to 269.
+
+Costs: eleven entry points and the `command` module are public API and carry the
+crate's lint burden. `clippy::pedantic` is denied at the workspace level, so each
+public entry point that returns a value needed a real `#[must_use]`; none of it is
+papered over with an allow. The shared plumbing stayed `pub(crate)`, so the public
+surface is the eleven commands and nothing else.
+
+Uncertain: whether `command/mod.rs` is the right home for the shared plumbing, or
+whether it wants a name of its own once a second thing besides a command opens a
+cache and a processor pool. Nothing needs that today.
+
+Sources: `crates/cli/src/main.rs` before this change; `crates/cli/src/lib.rs`;
+`crates/cli/src/command/mod.rs`; the one-way call graph between `command/` and
+`run/`.
+
+## Where the build lives: `verify/` and `benchmarks/`
+
+Question: `verify/` at the repository root held `Dockerfile`, `linux.sh`,
+`offline.sh`, `volumes-linux.sh` and `volumes-windows.ps1`. `benchmarks/` at the
+root held `x86_64-pc-windows-msvc.json`, the committed baseline that the five
+percent gate compares against. Both are read only by `xtask`. Do they belong at
+the root?
+
+Chosen: both move under `xtask/`, to `xtask/verify/` and `xtask/benchmarks/`.
+
+Because, for `verify/`: nothing but `xtask/src/verify.rs` invokes those five
+files, and a root directory named `verify/` sits next to a `fetchloom verify`
+subcommand. The root listing is the first thing a reader sees, and there it reads
+as though the product's verification lives there, which it does not: the product's
+verify command is `crates/cli/src/command/verify.rs`. A name collision in the one
+place a reader looks first is worth a move on its own, and the ownership question
+answers the same way.
+
+Because, for `benchmarks/`: the baseline is the gate's input. It is written by
+`cargo xtask bench --save-baseline`, read by `cargo xtask bench --compare`, and is read
+by nothing else. Its format is defined by `xtask` and by nothing else. It is
+per-target machine output whose only job is to make a command fail, which is what
+build data is. The repository's statement about what this tool costs is
+`docs/benchmarks.md`, which is published from the same measurements and stays
+where it is. Splitting the two apart is the point: the published page is for
+readers and the baseline is for the gate.
+
+The counter-argument, which was weighed and rejected: a committed baseline is
+reviewed in diffs like source, so it could be called repository data. But being
+reviewed is true of `deny.toml` and of `xtask` itself, and neither is at the root
+for that reason. What decides ownership here is who reads the file, and for both
+directories that is `xtask` alone.
+
+Costs: two paths change in `xtask/src/verify.rs`, one in `xtask/src/main.rs`, the
+container mount paths inside `xtask/verify/linux.sh`, and one line of
+`CONTRIBUTING.md`. Records in this file that name the old paths as evidence for an
+earlier decision were left as they were written, because a decision log records
+what was decided at the time and rewriting it makes the record less true, not
+more.
+
+Sources: `xtask/src/verify.rs`; `xtask/src/main.rs:262`; `xtask/verify/linux.sh`;
+`CONTRIBUTING.md`.
+
+## Crate folder names keep the stripped form
+
+Question: an audit item asked for `crates/archive` to be renamed
+`crates/fetchloom-archive`, and the other six likewise, on the rule that a folder
+name should equal its crate name.
+
+Chosen: no rename. The folders keep `archive`, `cache`, `cli`, `engine`, `faults`,
+`platform`, `sources` and `view`, and the packages keep `fetchloom-archive` and the
+rest.
+
+Because the closest analogue in the ecosystem does exactly what this workspace
+does. ripgrep is a workspace that ships one binary from several libraries, which
+is this shape. Its workspace members are `crates/globset`, `crates/grep`,
+`crates/cli`, `crates/index`, `crates/matcher`, `crates/pcre2`, `crates/printer`,
+`crates/regex`, `crates/searcher` and `crates/ignore`. `crates/cli` is package
+`grep-cli`, `crates/pcre2` is `grep-pcre2`, and `crates/searcher` is
+`grep-searcher`. The project prefix is stripped from the folder in exactly the way
+fetchloom strips it.
+
+What the rule is actually for. A folder that does not match its crate name makes a
+path in a backtrace, a `cargo` diagnostic or a `Cargo.lock` entry hard to trace
+back to a directory. That failure mode needs an arbitrary mapping between the two.
+A uniform prefix stripped from every folder in one directory is not arbitrary: the
+prefix is the workspace, `crates/` is the workspace, and so the prefix carries no
+information inside `crates/`. Repeating it eight times adds ten characters to
+every path and distinguishes nothing. The rule is served by the mapping being
+mechanical, which it is.
+
+Costs: none found. The two names differ, so a reader coming from a package name to
+a directory strips one prefix.
+
+Sources: `BurntSushi/ripgrep` workspace `Cargo.toml` members list, and the
+`name` fields of `crates/cli/Cargo.toml` (`grep-cli`), `crates/pcre2/Cargo.toml`
+(`grep-pcre2`) and `crates/searcher/Cargo.toml` (`grep-searcher`), read at
+`master`.

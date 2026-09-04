@@ -1,12 +1,13 @@
 //! The `cache` command and its subcommands.
 
-use crate::thread_budget;
-use fetchloom_cli::{Reporter, cache, run, settings, surface};
+use crate::command::thread_budget;
+use crate::{Reporter, cache, run, settings, surface};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use std::sync::Arc;
 
-pub(crate) fn run_cache(
+#[must_use]
+pub fn run_cache(
     resolved: &settings::Settings,
     command: &surface::CacheCommand,
     reporter: &Reporter<'_>,

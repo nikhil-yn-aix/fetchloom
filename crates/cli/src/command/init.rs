@@ -1,11 +1,11 @@
 //! The `init` command: walking a source and writing the manifest it implies.
 
 use crate::command::explain::tuning_for;
-use crate::{open_cache, thread_budget};
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::surface::CommandLine;
-use fetchloom_cli::terminal::Streams;
-use fetchloom_cli::{Reporter, policy, run, settings, surface};
+use crate::command::{open_cache, thread_budget};
+use crate::settings::ProcessEnvironment;
+use crate::surface::CommandLine;
+use crate::terminal::Streams;
+use crate::{Reporter, policy, run, settings, surface};
 use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::outcome::ExitCode;
@@ -18,7 +18,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-pub(crate) fn run_init(
+#[must_use]
+pub fn run_init(
     reference: &str,
     output: Option<&Path>,
     force: bool,
@@ -59,9 +60,9 @@ pub(crate) fn run_init(
         )
     } else {
         match run::local_path(reference) {
-            Ok(path) if path.is_dir() => Ok(fetchloom_cli::inference::from_directory(
-                &path, &processor, &limits,
-            )),
+            Ok(path) if path.is_dir() => {
+                Ok(crate::inference::from_directory(&path, &processor, &limits))
+            }
             Ok(path) => Ok(Err(fetchloom_engine::error::Error::new(
                 fetchloom_engine::error::ErrorKind::ReferenceUnresolved,
                 format!(
@@ -170,9 +171,9 @@ pub(crate) fn infer_over_the_network(
         Ok(placements) => placements,
         Err(error) => return Ok(Err(error)),
     };
-    let read: Vec<fetchloom_cli::inference::Observed> = placements
+    let read: Vec<crate::inference::Observed> = placements
         .into_iter()
-        .map(|(path, content, size)| fetchloom_cli::inference::Observed {
+        .map(|(path, content, size)| crate::inference::Observed {
             interop: held
                 .as_deref()
                 .and_then(|cache| cache.recorded_interop(content).ok().flatten()),
@@ -181,7 +182,5 @@ pub(crate) fn infer_over_the_network(
             size,
         })
         .collect();
-    Ok(fetchloom_cli::inference::from_observed(
-        reference, &read, limits,
-    ))
+    Ok(crate::inference::from_observed(reference, &read, limits))
 }

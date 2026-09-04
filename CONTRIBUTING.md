@@ -16,7 +16,7 @@ matrix needs on top of that.
 | The dependency gate | `cargo install cargo-deny` | The allow list, the advisories, the licences, the registries |
 | The rust-version gate | `rustup toolchain install 1.89.0` | That the workspace builds at the version its manifest states |
 | The Linux lanes | Docker Desktop, running, with its Linux engine | Every Linux behavior in this repository |
-| ReFS, a small volume, a case-sensitive directory | An elevated PowerShell, and Hyper-V for the virtual disks, which `verify/volumes-windows.ps1` needs | Block cloning, the small-volume rows, the case-sensitive rows |
+| ReFS, a small volume, a case-sensitive directory | An elevated PowerShell, and Hyper-V for the virtual disks, which `xtask/verify/volumes-windows.ps1` needs | Block cloning, the small-volume rows, the case-sensitive rows |
 
 A missing tool is a skipped step with a `NOT VERIFIED` line naming what the run
 did not prove. It is never a silent pass. Run `cargo xtask verify` and read those

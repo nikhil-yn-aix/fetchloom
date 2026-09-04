@@ -1,12 +1,19 @@
 //! The canonical entry stream and the tree and manifest digests over it.
 
+use std::cmp::Ordering;
+
 use crate::digest::{MANIFEST_DIGEST_CONTEXT, ManifestDigest, TREE_DIGEST_CONTEXT, TreeDigest};
 use crate::tree::TreeEntry;
 
 #[must_use]
+pub fn compare(left: &[u8], right: &[u8]) -> Ordering {
+    left.cmp(right)
+}
+
+#[must_use]
 pub fn encode_entries(entries: &[TreeEntry]) -> Vec<u8> {
     let mut sorted: Vec<&TreeEntry> = entries.iter().collect();
-    sorted.sort_by(|left, right| left.path().as_bytes().cmp(right.path().as_bytes()));
+    sorted.sort_by(|left, right| compare(left.path().as_bytes(), right.path().as_bytes()));
 
     let mut stream = Vec::new();
     for entry in sorted {
@@ -42,7 +49,7 @@ fn encode_entry(entry: &TreeEntry, out: &mut Vec<u8>) {
 #[must_use]
 pub fn tree_digest(entries: &[TreeEntry]) -> TreeDigest {
     let mut sorted: Vec<&TreeEntry> = entries.iter().collect();
-    sorted.sort_by(|left, right| left.path().as_bytes().cmp(right.path().as_bytes()));
+    sorted.sort_by(|left, right| compare(left.path().as_bytes(), right.path().as_bytes()));
 
     let mut hasher = blake3::Hasher::new_derive_key(TREE_DIGEST_CONTEXT);
     let mut entry_bytes = Vec::new();

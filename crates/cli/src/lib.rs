@@ -1,18 +1,21 @@
 //! The command surface, configuration precedence, and the observers behind it.
 
-pub mod cache;
-pub mod config;
-
 use clap_complete as _;
 use ctrlc as _;
 #[cfg(test)]
 use fetchloom_faults as _;
+#[cfg(test)]
+use flate2 as _;
 #[cfg(all(test, unix))]
 use rustix as _;
 #[cfg(test)]
 use tempfile as _;
 #[cfg(all(test, windows))]
 use windows_sys as _;
+
+pub mod cache;
+pub mod command;
+pub mod config;
 pub mod doctor;
 pub mod explain;
 pub mod hint;
@@ -96,6 +99,3 @@ impl<'a> Reporter<'a> {
         fetchloom_engine::outcome::ExitCode::from(error.layer())
     }
 }
-
-#[cfg(test)]
-use flate2 as _;

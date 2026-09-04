@@ -14,15 +14,15 @@ use fetchloom_engine::identity::{FileId, Fingerprint, VolumeId};
 use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
 
+#[cfg(test)]
+use tempfile as _;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProcessState {
     Started(u64),
     Gone,
     Unreadable,
 }
-
-#[cfg(test)]
-use tempfile as _;
 
 mod pathlen;
 

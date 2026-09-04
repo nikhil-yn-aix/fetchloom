@@ -88,27 +88,53 @@ pub fn resolved(
     }))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unpinned {
+    Tree,
+    InteropUnknown,
+    RunFailed,
+}
+
+impl Unpinned {
+    fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Tree => Some(
+                "this reference resolves to a tree rather than to an object, which is what a \
+                 directory and a container image do, and a lock pins objects rather than trees",
+            ),
+            Self::InteropUnknown => Some(
+                "no interop digest is recorded for the object this reference resolves to, and a \
+                 lock entry pins both digests of what it names",
+            ),
+            Self::RunFailed => None,
+        }
+    }
+}
+
 pub fn settle(
     path: &Path,
     dataset: &str,
     pinned: Option<&LockedDataset>,
-    resolved: Option<&LockedDataset>,
+    resolved: Result<&LockedDataset, Unpinned>,
     locked: bool,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<(), Error> {
-    let Some(resolved) = resolved else {
-        observer.emit(&Event::new(
-            sequence,
-            EventPayload::Degrade {
-                requested: format!("a lock pinning what {dataset} resolves to"),
-                used: "no lock entry at all".to_owned(),
-                reason: "this reference names a directory, which resolves to no object, and a \
-                         lock pins objects rather than trees"
-                    .to_owned(),
-            },
-        ));
-        return Ok(());
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(unpinned) => {
+            if let Some(reason) = unpinned.reason() {
+                observer.emit(&Event::new(
+                    sequence,
+                    EventPayload::Degrade {
+                        requested: format!("a lock pinning what {dataset} resolves to"),
+                        used: "no lock entry at all".to_owned(),
+                        reason: reason.to_owned(),
+                    },
+                ));
+            }
+            return Ok(());
+        }
     };
     if locked {
         return match pinned {

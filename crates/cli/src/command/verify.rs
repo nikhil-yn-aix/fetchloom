@@ -1,9 +1,9 @@
 //! The `verify` command: recomputing a materialized tree against its receipt.
 
-use crate::{open_cache, thread_budget};
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::terminal::Streams;
-use fetchloom_cli::{Reporter, cache, policy, run, settings, surface};
+use crate::command::{open_cache, thread_budget};
+use crate::settings::ProcessEnvironment;
+use crate::terminal::Streams;
+use crate::{Reporter, cache, policy, run, settings, surface};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
@@ -11,7 +11,8 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::work::WorkCounter;
 use std::sync::Arc;
 
-pub(crate) fn run_verify(
+#[must_use]
+pub fn run_verify(
     target: &str,
     resolved: &settings::Settings,
     json: bool,

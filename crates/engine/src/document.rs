@@ -148,7 +148,7 @@ fn write_json(value: &Value, out: &mut Vec<u8>) {
 
 fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut entries: Vec<(&String, &Value)> = fields.iter().collect();
-    entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    entries.sort_by(|left, right| crate::canonical::compare(left.0.as_bytes(), right.0.as_bytes()));
     entries
 }
 

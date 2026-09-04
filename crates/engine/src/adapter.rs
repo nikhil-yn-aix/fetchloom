@@ -343,9 +343,13 @@ fn check_listing_supported<S: Source>(
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect();
-            found.sort_unstable();
+            found.sort_by(|left, right| {
+                crate::canonical::compare(left.as_bytes(), right.as_bytes())
+            });
             let mut expected: Vec<&str> = entries.to_vec();
-            expected.sort_unstable();
+            expected.sort_by(|left, right| {
+                crate::canonical::compare(left.as_bytes(), right.as_bytes())
+            });
             if found != expected {
                 findings.push(finding(
                     "listing_supported",

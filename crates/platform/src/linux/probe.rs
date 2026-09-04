@@ -35,19 +35,21 @@ pub(super) fn capabilities(
         .unwrap_or_else(PoisonError::into_inner)
         .get(&volume.value())
         .cloned();
-    let answer = if let Some(found) = held {
-        VolumeCapabilities {
-            case_folding: folding.0,
-            normalization: folding.1,
-            ..found
-        }
+    let decided = if let Some(found) = held {
+        found
     } else {
         let measured = measure(directory, folding)?;
         cache()
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(volume.value(), measured.clone());
-        measured
+            .entry(volume.value())
+            .or_insert(measured)
+            .clone()
+    };
+    let answer = VolumeCapabilities {
+        case_folding: folding.0,
+        normalization: folding.1,
+        ..decided
     };
     if let Scanner::Unknown { cost_ratio } = answer.scanner {
         degradations.record(

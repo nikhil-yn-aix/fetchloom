@@ -2,10 +2,10 @@
 
 use crate::command::explain::tuning_for;
 use crate::command::plan::locked_selection;
-use crate::{Opened, Requested, get_policy, open_for, open_request};
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::surface::CommandLine;
-use fetchloom_cli::{Reporter, locked, run, settings, surface};
+use crate::command::{Opened, Requested, get_policy, open_for, open_request};
+use crate::settings::ProcessEnvironment;
+use crate::surface::CommandLine;
+use crate::{Reporter, locked, run, settings, surface};
 use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::outcome::ExitCode;
@@ -16,7 +16,8 @@ use fetchloom_platform::NativePlatform;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub(crate) fn run_get(
+#[must_use]
+pub fn run_get(
     reference: &str,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,
@@ -198,6 +199,16 @@ pub(crate) struct Recording<'a> {
     selected: bool,
 }
 
+fn unpinned(produced: &run::DatasetRun) -> locked::Unpinned {
+    match &produced.outcome {
+        Err(_) => locked::Unpinned::RunFailed,
+        Ok(result) => match result.artifact {
+            None => locked::Unpinned::Tree,
+            Some(_) => locked::Unpinned::InteropUnknown,
+        },
+    }
+}
+
 pub(crate) fn record(
     produced: &run::DatasetRun,
     into: &Recording<'_>,
@@ -210,7 +221,7 @@ pub(crate) fn record(
             into.lock_path,
             into.dataset,
             into.pinned,
-            recorded.as_ref(),
+            recorded.as_ref().ok_or_else(|| unpinned(produced)),
             into.locked,
             observer,
             sequence,
@@ -222,7 +233,7 @@ pub(crate) fn record(
     }
     match &produced.outcome {
         Ok(result) => {
-            fetchloom_cli::hint::record(|observed| {
+            crate::hint::record(|observed| {
                 observed.lock_written = Some(into.lock_path.display().to_string());
                 if !into.selected {
                     observed.entries_taken_whole = Some(result.entries);
@@ -393,8 +404,8 @@ pub(crate) fn finish_get(
     } else {
         println!(
             "{}  {}  {}",
-            fetchloom_cli::style::accent(&result.tree.to_string()),
-            fetchloom_cli::style::dimmed(&format!("{} entries", result.entries)),
+            crate::style::accent(&result.tree.to_string()),
+            crate::style::dimmed(&format!("{} entries", result.entries)),
             result.destination.display()
         );
     }

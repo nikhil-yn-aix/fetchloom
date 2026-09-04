@@ -318,7 +318,10 @@ fn host_volumes(workspace: &Path, report: &mut Report) -> BTreeMap<String, Strin
     if !cfg!(windows) {
         return BTreeMap::new();
     }
-    let script = workspace.join("verify").join("volumes-windows.ps1");
+    let script = workspace
+        .join("xtask")
+        .join("verify")
+        .join("volumes-windows.ps1");
     let file = workspace.join("target").join("volumes.env");
     let built = Command::new("powershell")
         .args([
@@ -367,7 +370,7 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
         &format!("RUST_TARGETS={}", targets.join(" ")),
         "--tag",
         &image,
-        &workspace.join("verify").display().to_string(),
+        &workspace.join("xtask").join("verify").display().to_string(),
     ]);
     if !report.step(&format!("{lane} image"), build) {
         report.degrade(
@@ -391,7 +394,7 @@ fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str]
         &format!("fetchloom-target-{arch}:/target"),
         &image,
         "bash",
-        "/workspace/verify/linux.sh",
+        "/workspace/xtask/verify/linux.sh",
     ]);
     run.args(targets);
     if !report.step(&format!("{lane} suite"), run) {
@@ -418,7 +421,12 @@ fn offline(
     for mount in &mounts {
         prepare.args(["--volume", mount]);
     }
-    prepare.args([image, "bash", "/workspace/verify/offline.sh", "prepare"]);
+    prepare.args([
+        image,
+        "bash",
+        "/workspace/xtask/verify/offline.sh",
+        "prepare",
+    ]);
     if !report.step(&format!("{lane} offline prepare"), prepare) {
         report.degrade(
             "a plan and a bundle prepared from a real host",
@@ -441,7 +449,7 @@ fn offline(
     for mount in &mounts {
         apply.args(["--volume", mount]);
     }
-    apply.args([image, "bash", "/workspace/verify/offline.sh", "apply"]);
+    apply.args([image, "bash", "/workspace/xtask/verify/offline.sh", "apply"]);
     report.step(&format!("{lane} offline apply"), apply);
 }
 

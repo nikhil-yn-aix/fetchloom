@@ -1,7 +1,7 @@
 //! The `explain` command: the effective settings and where each came from.
 
-use crate::{thread_budget, write_json};
-use fetchloom_cli::{cache, config, explain, run, settings};
+use crate::command::{thread_budget, write_json};
+use crate::{cache, config, explain, run, settings};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
@@ -67,7 +67,8 @@ pub(crate) fn measured_for(resolved: &settings::Settings) -> explain::Measured {
     }
 }
 
-pub(crate) fn run_explain(
+#[must_use]
+pub fn run_explain(
     resolved: &settings::Settings,
     discovered: &config::Discovered,
     key: Option<&str>,

@@ -1,11 +1,12 @@
 //! The `completions` command: a shell completion script on standard output.
 
+use crate::surface::{CommandLine, Shell};
 use clap::CommandFactory;
-use fetchloom_cli::surface::{CommandLine, Shell};
 use fetchloom_engine::outcome::ExitCode;
 use std::io::Write;
 
-pub(crate) fn write_completions(shell: Shell) -> ExitCode {
+#[must_use]
+pub fn write_completions(shell: Shell) -> ExitCode {
     let generator = match shell {
         Shell::Bash => clap_complete::aot::Shell::Bash,
         Shell::Elvish => clap_complete::aot::Shell::Elvish,

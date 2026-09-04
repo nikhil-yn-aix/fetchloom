@@ -343,9 +343,12 @@ fails on integrity without falling back.
 A locked run writes no lock, because a run that may not differ from the lock has
 nothing to add to it.
 
-An unlocked run records what it resolved. A reference resolving to no object,
-which is what a directory does, writes no lock entry and emits `degrade` saying
-so, because a lock pins objects and a tree alone states no bytes.
+An unlocked run records what it resolved. A run that resolved no object writes no
+lock entry and emits `degrade` naming which of the two reasons it was: the
+reference resolved to a tree, which is what a directory and a container image do,
+or no interop digest is recorded for the object it resolved to. A run that failed
+writes no lock entry and emits no `degrade`, because it gave nothing up that the
+failure it already reports does not say.
 
 ## Bundles
 
@@ -1102,6 +1105,8 @@ A document larger than the manifest size limit is refused with `resource.limit` 
 ## Platform capabilities
 
 Detected per destination and per cache volume, reported in plans and results: case sensitivity, Unicode normalization behavior, clone support, sparse file support, symlink permission, hard link support, maximum path length, whether the volume is network-backed, and whether an on-access malware scanner is inspecting writes.
+
+A volume's capability answer is decided once. The first detection for a volume decides it and every later question about that volume in the same run is given that answer, so two callers asking at the same time are never given different ones. Case folding and normalization are measured per directory, so an answer carries the pair measured for the directory asked about.
 
 An on-access scanner is reported, never worked around. `doctor` states the measured cost and the exclusion the user may choose to configure.
 

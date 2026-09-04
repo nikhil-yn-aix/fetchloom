@@ -53,6 +53,8 @@ pub fn reconcile(resolved: &[TreeEntry], destination: &[TreeEntry]) -> Vec<Recon
         }
     }
 
-    found.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    found.sort_by(|left, right| {
+        crate::canonical::compare(left.path.as_bytes(), right.path.as_bytes())
+    });
     found
 }

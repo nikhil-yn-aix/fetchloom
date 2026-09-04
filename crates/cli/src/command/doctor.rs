@@ -1,11 +1,12 @@
 //! The `doctor` command: checking the environment and changing nothing.
 
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::{config, policy, run, settings};
+use crate::settings::ProcessEnvironment;
+use crate::{config, policy, run, settings};
 use fetchloom_engine::outcome::ExitCode;
 use std::io::Write;
 
-pub(crate) fn run_doctor(
+#[must_use]
+pub fn run_doctor(
     resolved: &settings::Settings,
     discovered: &config::Discovered,
     json: bool,
@@ -18,7 +19,7 @@ pub(crate) fn run_doctor(
         }
     };
     let environment = ProcessEnvironment;
-    let report = fetchloom_cli::doctor::run(
+    let report = crate::doctor::run(
         discovered,
         &root,
         &environment,

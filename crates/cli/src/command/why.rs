@@ -1,8 +1,8 @@
 //! The `why` command: the resolution, the source choice, and the trust reasoning.
 
-use crate::thread_budget;
-use fetchloom_cli::surface::CommandLine;
-use fetchloom_cli::{Reporter, cache, run, settings};
+use crate::command::thread_budget;
+use crate::surface::CommandLine;
+use crate::{Reporter, cache, run, settings};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::outcome::ExitCode;
@@ -13,7 +13,8 @@ use fetchloom_engine::work::WorkCounter;
 use std::io::Write;
 use std::sync::Arc;
 
-pub(crate) fn run_why(
+#[must_use]
+pub fn run_why(
     reference: &str,
     parsed: &CommandLine,
     resolved: &settings::Settings,
@@ -42,7 +43,7 @@ pub(crate) fn run_why(
         cache::Opened::Ready(held) => Some(held),
         cache::Opened::Degraded { .. } | cache::Opened::Refused(_) => None,
     };
-    let explained = match fetchloom_cli::why::explain(reference, &adapters, held.as_deref()) {
+    let explained = match crate::why::explain(reference, &adapters, held.as_deref()) {
         Ok(explained) => explained,
         Err(error) => return reporter.report(&error),
     };

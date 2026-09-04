@@ -259,7 +259,10 @@ fn record_and_gate(
 }
 
 fn baseline_path(workspace: &Path, target: &str) -> PathBuf {
-    workspace.join("benchmarks").join(format!("{target}.json"))
+    workspace
+        .join("xtask")
+        .join("benchmarks")
+        .join(format!("{target}.json"))
 }
 
 fn generate_completions(workspace: &Path, arguments: &[String]) -> ExitCode {

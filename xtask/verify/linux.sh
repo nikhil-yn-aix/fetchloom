@@ -2,7 +2,7 @@
 set -euo pipefail
 
 env_file=/tmp/fetchloom-volumes.env
-bash /workspace/verify/volumes-linux.sh "$env_file"
+bash /workspace/xtask/verify/volumes-linux.sh "$env_file"
 set -a
 . "$env_file"
 set +a

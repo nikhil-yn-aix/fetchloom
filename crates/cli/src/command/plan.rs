@@ -2,11 +2,11 @@
 
 use crate::command::explain::tuning_for;
 use crate::command::get::{finish_get, held_to_lock, resolve_places, selection_of};
-use crate::{Opened, open_cache, open_for, thread_budget};
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::surface::CommandLine;
-use fetchloom_cli::terminal::Streams;
-use fetchloom_cli::{Reporter, locked, planning, policy, run, settings, surface};
+use crate::command::{Opened, open_cache, open_for, thread_budget};
+use crate::settings::ProcessEnvironment;
+use crate::surface::CommandLine;
+use crate::terminal::Streams;
+use crate::{Reporter, locked, planning, policy, run, settings, surface};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
@@ -27,7 +27,8 @@ pub(crate) fn inert_on_plan(transfer: &surface::TransferFlags) -> Option<&'stati
     None
 }
 
-pub(crate) fn run_plan(
+#[must_use]
+pub fn run_plan(
     reference: &str,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,
@@ -126,7 +127,8 @@ pub(crate) fn run_plan(
     }
 }
 
-pub(crate) fn run_apply(
+#[must_use]
+pub fn run_apply(
     plan_path: &std::path::Path,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,

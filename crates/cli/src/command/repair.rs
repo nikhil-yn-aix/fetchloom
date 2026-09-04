@@ -1,11 +1,11 @@
 //! The `repair` command: refetching the damaged ranges of a cached object.
 
 use crate::command::plan::lock_path_of;
-use crate::thread_budget;
-use fetchloom_cli::settings::ProcessEnvironment;
-use fetchloom_cli::surface::CommandLine;
-use fetchloom_cli::terminal::Streams;
-use fetchloom_cli::{Reporter, cache, locked, policy, run, settings, surface};
+use crate::command::thread_budget;
+use crate::settings::ProcessEnvironment;
+use crate::surface::CommandLine;
+use crate::terminal::Streams;
+use crate::{Reporter, cache, locked, policy, run, settings, surface};
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
@@ -13,7 +13,8 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::work::WorkCounter;
 use std::sync::Arc;
 
-pub(crate) fn run_repair(
+#[must_use]
+pub fn run_repair(
     reference: &str,
     transfer: &surface::TransferFlags,
     parsed: &CommandLine,
@@ -65,12 +66,12 @@ pub(crate) fn run_repair(
         }),
         Err(error) => return reporter.report(&error),
     };
-    let digest = match fetchloom_cli::repair::digest_for(&held, reference, pinned) {
+    let digest = match crate::repair::digest_for(&held, reference, pinned) {
         Ok(digest) => digest,
         Err(error) => return reporter.report(&error),
     };
 
-    let outcome = fetchloom_cli::repair::Repair {
+    let outcome = crate::repair::Repair {
         cache: &held,
         location: reference,
         work: &work,
@@ -78,5 +79,5 @@ pub(crate) fn run_repair(
         sequence,
     }
     .run(digest);
-    fetchloom_cli::repair::report(&outcome, &reporter)
+    crate::repair::report(&outcome, &reporter)
 }

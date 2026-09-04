@@ -167,7 +167,7 @@ pub fn explain(
         return Ok(not_recorded(
             resolution,
             &format!(
-                "a run materialized the tree {} here and resolved no object, because this reference names a directory and a directory states no bytes to choose a source for",
+                "a run materialized the tree {} here and recorded no object under {dataset}, and a source is chosen for an object",
                 receipt
                     .tree
                     .map_or_else(|| "it recorded".to_owned(), |tree| tree.to_string())
