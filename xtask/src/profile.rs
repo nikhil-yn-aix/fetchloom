@@ -36,6 +36,12 @@ impl Shape {
 const CHUNK: usize = 1 << 20;
 
 pub fn run(arguments: &[String]) -> std::process::ExitCode {
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "run this as `cargo run --release --package xtask -- profile`, because the dev profile \n             measures an unoptimized build and the numbers it prints are not the numbers the \n             shipped binary has"
+        );
+        return std::process::ExitCode::from(1);
+    }
     let rounds: u32 = crate::argument_value(arguments, "--rounds")
         .and_then(|value| value.parse().ok())
         .unwrap_or(7);

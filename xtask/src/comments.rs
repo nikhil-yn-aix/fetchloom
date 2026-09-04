@@ -19,7 +19,6 @@ impl fmt::Display for Finding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
     Comment,
-    Docstring,
     BlockComment,
     SafetyOnSafeCode,
     Decoration,
@@ -29,8 +28,7 @@ pub enum Rule {
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
-            Self::Comment => "comment that is not a module header",
-            Self::Docstring => "docstring",
+            Self::Comment => "comment that is not a docstring",
             Self::BlockComment => "block comment",
             Self::SafetyOnSafeCode => "safety line that does not precede an unsafe block",
             Self::Decoration => "decorative symbol",
@@ -102,12 +100,7 @@ pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
                 let end = end_of_line(&bytes, index);
                 let body: String = bytes[index..end].iter().collect();
                 match kind {
-                    LineComment::Module => {}
-                    LineComment::Docstring => findings.push(Finding {
-                        file: file.to_path_buf(),
-                        line: start_line,
-                        rule: Rule::Docstring,
-                    }),
+                    LineComment::Doc => {}
                     LineComment::Safety => safety_lines.push(start_line),
                     LineComment::Plain => {
                         let rule = if body
@@ -182,8 +175,7 @@ fn is_banner(content: &str) -> bool {
 }
 
 enum LineComment {
-    Module,
-    Docstring,
+    Doc,
     Safety,
     Plain,
 }
@@ -191,11 +183,8 @@ enum LineComment {
 fn line_comment_kind(bytes: &[char], index: usize) -> LineComment {
     let third = bytes.get(index + 2).copied();
     let fourth = bytes.get(index + 3).copied();
-    if third == Some('!') {
-        return LineComment::Module;
-    }
-    if third == Some('/') && fourth != Some('/') {
-        return LineComment::Docstring;
+    if third == Some('!') || (third == Some('/') && fourth != Some('/')) {
+        return LineComment::Doc;
     }
     let end = end_of_line(bytes, index);
     let body: String = bytes[index + 2..end].iter().collect();
@@ -329,11 +318,8 @@ mod tests {
     }
 
     #[test]
-    fn a_docstring_is_rejected() {
-        assert_eq!(
-            rules("/// Reads a thing.\npub fn read() {}\n"),
-            vec![Rule::Docstring]
-        );
+    fn a_docstring_is_permitted() {
+        assert_eq!(rules("/// Reads a thing.\npub fn read() {}\n"), Vec::new());
     }
 
     #[test]

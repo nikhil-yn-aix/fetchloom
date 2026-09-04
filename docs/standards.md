@@ -86,7 +86,7 @@ No comments. No commented-out code. No banners, no section dividers, no decorati
 
 ## Docstrings
 
-There are none. No item carries a `///` docstring, and the lint policy no longer asks for one.
+Not required anywhere, and no lint asks for one. A `///` line is permitted only where a block genuinely needs it, and then it is one short sentence in plain words, never a restatement of the signature.
 
 A name is the documentation. An item whose purpose is not clear from its name, its signature and its body is renamed or split until it is, which is the same rule the No comments section states and the reason that rule exists. What a thing is for belongs in contracts.md, and why it is that way belongs in decisions.md, where each is read once instead of once per call site.
 
