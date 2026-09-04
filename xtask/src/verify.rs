@@ -119,7 +119,15 @@ pub fn run(workspace: &Path, arguments: &[String]) -> bool {
 
     let mut report = Report::new();
     native(workspace, &mut report, fast);
-    if !fast {
+    if fast {
+        for lane in ["network", "benchmark", "linux suite", "linux arm suite"] {
+            report.skipped(
+                lane,
+                Duration::ZERO,
+                "the push gate runs only what is fast enough to run on every push. cargo xtask verify runs this",
+            );
+        }
+    } else {
         container(workspace, &mut report, "amd64", &LINUX_TARGETS, "linux");
         if arm {
             container(workspace, &mut report, "arm64", &ARM_TARGETS, "linux arm");
@@ -141,6 +149,7 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         "format",
         cargo(workspace, &["fmt", "--all", "--", "--check"]),
     );
+    dependencies(workspace, report);
     for target in LINT_TARGETS {
         let lint = cargo(
             workspace,
@@ -169,18 +178,30 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         report.step(&format!("compile {target}"), check);
     }
 
-    let volumes = host_volumes(workspace, report);
-    let mut test = cargo(workspace, &["test", "--workspace"]);
-    test.env("FETCHLOOM_VERIFY", "1");
-    for (name, value) in &volumes {
-        test.env(name, value);
-    }
-    if !volumes.is_empty() {
-        test.env("FETCHLOOM_VERIFY_VOLUMES", "1");
-    }
-    report.step("test x86_64-pc-windows-msvc", test);
+    if fast {
+        report.skipped(
+            "test x86_64-pc-windows-msvc",
+            Duration::ZERO,
+            "the suite takes about ten minutes here, and a gate nobody waits for is a gate that gets bypassed. cargo xtask verify runs it",
+        );
+        report.skipped(
+            &format!("msrv {}", rust_version(workspace)),
+            Duration::ZERO,
+            "building the workspace a second time at its rust-version costs as much as building it once. cargo xtask verify runs it",
+        );
+    } else {
+        let volumes = host_volumes(workspace, report);
+        let mut test = cargo(workspace, &["test", "--workspace"]);
+        test.env("FETCHLOOM_VERIFY", "1");
+        for (name, value) in &volumes {
+            test.env(name, value);
+        }
+        if !volumes.is_empty() {
+            test.env("FETCHLOOM_VERIFY_VOLUMES", "1");
+        }
+        report.step("test x86_64-pc-windows-msvc", test);
 
-    if !fast {
+        msrv(workspace, report);
         let started = Instant::now();
         match crate::network::run(workspace, None) {
             crate::network::Outcome::Skipped(reason) => {
@@ -204,6 +225,93 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
                 == std::process::ExitCode::SUCCESS
         });
     }
+}
+
+fn dependencies(workspace: &Path, report: &mut Report) {
+    let started = Instant::now();
+    if !answers(
+        Command::new(cargo_program())
+            .current_dir(workspace)
+            .args(["deny", "--version"]),
+    ) {
+        report.skipped(
+            "dependencies",
+            started.elapsed(),
+            "cargo-deny is not installed, so nothing checked the graph against the allow list, the advisory database, the licences, or the registries",
+        );
+        report.degrade(
+            "every crate in the graph checked against the allow list, the advisories, the licences and the registries",
+            "nothing",
+            "cargo-deny is not installed on this machine",
+        );
+        return;
+    }
+    report.step("dependencies", cargo(workspace, &["deny", "check"]));
+}
+
+fn msrv(workspace: &Path, report: &mut Report) {
+    let version = rust_version(workspace);
+    let name = format!("msrv {version}");
+    let started = Instant::now();
+    if !answers(&mut at_version(
+        workspace,
+        &version,
+        &["cargo", "--version"],
+    )) {
+        report.skipped(
+            &name,
+            started.elapsed(),
+            &format!(
+                "the {version} toolchain is not installed, so the rust-version this workspace states was not built. Install it with rustup toolchain install {version}"
+            ),
+        );
+        report.degrade(
+            "the workspace built at the rust-version it states",
+            "nothing",
+            &format!("the {version} toolchain is not installed on this machine"),
+        );
+        return;
+    }
+    let check = at_version(
+        workspace,
+        &version,
+        &["cargo", "check", "--workspace", "--all-targets"],
+    );
+    report.step(&name, check);
+}
+
+fn at_version(workspace: &Path, version: &str, arguments: &[&str]) -> Command {
+    let mut command = Command::new("rustup");
+    command.current_dir(workspace);
+    command.arg("run").arg(version).args(arguments);
+    for inherited in ["CARGO", "RUSTC", "RUSTDOC", "RUSTUP_TOOLCHAIN"] {
+        command.env_remove(inherited);
+    }
+    command
+}
+
+fn answers(command: &mut Command) -> bool {
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn rust_version(workspace: &Path) -> String {
+    let path = workspace.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return "stable".to_owned();
+    };
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("rust-version"))
+        .and_then(|rest| rest.split('"').nth(1))
+        .unwrap_or("stable")
+        .to_owned()
+}
+
+fn cargo_program() -> String {
+    std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned())
 }
 
 fn host_volumes(workspace: &Path, report: &mut Report) -> BTreeMap<String, String> {
@@ -390,7 +498,7 @@ fn summary(report: &Report) {
 }
 
 fn cargo(workspace: &Path, arguments: &[&str]) -> Command {
-    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()));
+    let mut command = Command::new(cargo_program());
     command.current_dir(workspace);
     command.args(arguments);
     command
@@ -408,6 +516,8 @@ fn channel(workspace: &Path) -> String {
         .to_owned()
 }
 
+const HOOK: &str = "#!/bin/sh\nexec cargo xtask verify --fast\n";
+
 fn install_hook(workspace: &Path) -> bool {
     let directory = workspace.join(".git").join("hooks");
     if std::fs::create_dir_all(&directory).is_err() {
@@ -415,8 +525,25 @@ fn install_hook(workspace: &Path) -> bool {
         return false;
     }
     let path = directory.join("pre-push");
-    let body = "#!/bin/sh\nexec cargo xtask verify --fast\n";
-    if std::fs::write(&path, body).is_err() {
+    match std::fs::read_to_string(&path) {
+        Ok(found) if found == HOOK => {
+            println!("{} is already this hook", path.display());
+            return true;
+        }
+        Ok(_) => {
+            eprintln!(
+                "{} exists and is not the hook this installs, so nothing was written. Read it, then either delete it and run this again, or add the line `exec cargo xtask verify --fast` to it yourself.",
+                path.display()
+            );
+            return false;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            eprintln!("could not read {}: {error}", path.display());
+            return false;
+        }
+    }
+    if std::fs::write(&path, HOOK).is_err() {
         eprintln!("could not write {}", path.display());
         return false;
     }
@@ -434,4 +561,43 @@ fn make_executable(path: &Path) {
 #[cfg(windows)]
 fn make_executable(path: &Path) {
     let _ = path;
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(
+        clippy::unwrap_used,
+        reason = "test setup, where a failure to build the input is the assertion"
+    )]
+
+    use super::{HOOK, install_hook};
+
+    #[test]
+    fn installing_into_a_repository_with_no_hook_writes_the_hook() {
+        let scratch = tempfile::TempDir::new().unwrap();
+        assert!(install_hook(scratch.path()));
+        let written = std::fs::read_to_string(scratch.path().join(".git/hooks/pre-push")).unwrap();
+        assert_eq!(written, HOOK);
+    }
+
+    #[test]
+    fn installing_twice_leaves_one_hook_and_reports_success() {
+        let scratch = tempfile::TempDir::new().unwrap();
+        assert!(install_hook(scratch.path()));
+        assert!(install_hook(scratch.path()));
+        let written = std::fs::read_to_string(scratch.path().join(".git/hooks/pre-push")).unwrap();
+        assert_eq!(written, HOOK);
+    }
+
+    #[test]
+    fn installing_over_somebody_elses_hook_refuses_and_keeps_theirs() {
+        let scratch = tempfile::TempDir::new().unwrap();
+        let path = scratch.path().join(".git/hooks/pre-push");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let theirs = "#!/bin/sh\nexec ./their-own-gate\n";
+        std::fs::write(&path, theirs).unwrap();
+
+        assert!(!install_hook(scratch.path()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    }
 }

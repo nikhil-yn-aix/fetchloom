@@ -10,7 +10,7 @@
 
 [roadmap.md](roadmap.md) is the ten phases, in order, with exit criteria.
 
-[build-protocol.md](build-protocol.md) is how sessions are run, and the prompt templates.
+How sessions are run, and the prompt shapes, are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 [decisions.md](decisions.md) is every decision taken, with its reason and the evidence behind it.
 

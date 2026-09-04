@@ -1414,6 +1414,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 

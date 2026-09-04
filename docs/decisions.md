@@ -10,7 +10,7 @@ Chosen:
 
 | Job | Chosen | Version | Cost | Maintenance | Rules out |
 |---|---|---|---|---|---|
-| Argument parsing | `clap` derive | 4.6.6 | 574 KiB release overhead, 2 ms parse | 2026-08-06, 222M recent downloads, MSRV 1.85 | Sets the workspace MSRV floor at 1.85. Largest single contributor to binary size |
+| Argument parsing | `clap` derive | 4.6.6 | 574 KiB release overhead, 2 ms parse | 2026-08-06, 222M recent downloads, MSRV 1.85 | Needed 1.85, and no longer sets the floor: the workspace rust-version is 1.89.0, set by `graviola` and by `File::lock`, recorded under the minimum supported Rust version. Largest single contributor to binary size |
 | Shell completion | `clap_complete` static generation (`aot`) | 4.6.9 | Build-time only, no runtime cost | 2026-08-06 | Dynamic completion (`env::CompleteEnv`) is still `unstable-dynamic`, so completions must be emitted by a command, which the command surface does not define |
 | Terminal styling | `anstream` + `anstyle` | 1.0.0 / 1.0.14 | Already in the graph via clap's `color` feature | 2026-02-11 / 2026-03-13 | Nothing. Provides Windows console VT enabling and stripping on non-terminal streams, which a hand-rolled writer would have to reimplement |
 | Progress rendering | none, written here | n/a | n/a | n/a | Rules out `indicatif`'s draw target and steady-tick thread as a second renderer |
@@ -126,10 +126,10 @@ were never workflow steps.
 
 | Lane | Targets | What runs |
 |---|---|---|
-| Native | `x86_64-pc-windows-msvc` | fmt, clippy over the three lint targets, build, the whole suite against the filesystems `verify/volumes-windows.ps1` builds, check-comments, `bench --compare` |
+| Native | `x86_64-pc-windows-msvc` | fmt, `cargo deny check`, clippy over both lint targets, build, the whole suite against the filesystems `verify/volumes-windows.ps1` builds, the workspace built at its rust-version, the recorded network subjects, `bench --compare` |
 | Container | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` | clippy, build, the whole suite against the loopback images `verify/volumes-linux.sh` builds inside a privileged container |
 | Emulated | `aarch64-unknown-linux-musl`, `aarch64-unknown-linux-gnu` | The container lane again under qemu binfmt, behind `--arm`, because it is slow |
-| Compiled only | `aarch64-apple-darwin` | clippy and build, and a degrade-shaped line in the output saying macOS was not run |
+| Compiled only | `aarch64-pc-windows-msvc` | `cargo check --workspace --all-targets`, and a degrade-shaped line in the output saying nothing ran there |
 
 Because: the two properties that decide correctness here are what a real
 filesystem does and what a real kernel does, and both survive a container and
@@ -161,10 +161,10 @@ therefore unproven from here, and the same is true of the conservative locking
 path a network volume selects.
 
 The hook. `cargo xtask verify --install-hook` writes a `pre-push` hook running
-fmt, clippy over the three lint targets, the native suite and check-comments. The
-full matrix is minutes; the hook is the part that is fast enough to be run every
-time, and it exists because nothing else now stands between a broken change and
-`main`.
+the fast lane. The full matrix is minutes; the hook is the part that is fast
+enough to be run every time, and it exists because nothing else now stands
+between a broken change and `main`. What the fast lane runs, and why it stops
+where it does, is recorded under the push gate.
 
 Timing baselines. The standards say a timing gate runs only on continuous
 integration, against a baseline from that runner. There is no runner, so the
@@ -687,7 +687,7 @@ Costs: the tree does not match the layout record until phase three, so the recor
 
 Uncertain: nothing.
 
-Sources: the layout record; standards.md on placeholders; build-protocol.md on the foundation session.
+Sources: the layout record; standards.md on placeholders; CONTRIBUTING.md on the foundation session.
 
 ## Exit code for a failure, derived rather than chosen
 
@@ -8818,3 +8818,288 @@ after the first megabyte, which is a duration the code under test measures and
 reacts to rather than a wait for a race to settle.
 
 Sources: standards.md Tests, "No test sleeps. Wait on a condition or a channel."
+
+## Phase 3. The dependency gate had never been run, and what it caught
+
+`deny.toml` has existed since phase 0 and nothing ever invoked it. The record
+above calls the `[bans] allow` list "the only mechanism found that makes an
+unreviewed transitive dependency fail a build rather than merely appear in a
+lockfile diff", which is true of the mechanism and was not true of this
+repository, because the mechanism was never asked.
+
+The first run failed `bans` with six crates in the graph and not in the list.
+
+`fetchloom-view` is a workspace crate. Every other `fetchloom-` crate is listed
+and this one was added later and never was. Apache-2.0, like the rest of the
+workspace.
+
+`ctrlc` 3.5.2 is a direct dependency of `fetchloom-cli`, which installs the
+handler the cancel contract is served by. MIT or Apache-2.0. `nix` 0.31.3 is its
+Unix backend, MIT, and `cfg_aliases` 0.2.2 is the build dependency nix selects
+targets with, MIT. None of the three is reachable on the Windows lane at run
+time and all three are in the graph for the musl targets, which is why the graph
+carries them on every target the file names.
+
+`rustls-graviola` 0.4.0 and `graviola` 0.4.1 are the cryptography provider that
+replaced `ring`, recorded above in the Windows on ARM record. Both are
+Apache-2.0 or ISC or MIT-0, and the licence check passed on Apache-2.0 without
+the licence list needing to change.
+
+The stale side was larger than the failing side. Five crates were allowed that
+the graph no longer holds: `ring`, `r-efi`, `windows-targets`,
+`windows_aarch64_msvc` and `windows_x86_64_msvc`, every one of them there
+because of `ring`. cargo-deny does not report an allow entry nothing matched, so
+these were invisible; they were found by removing them and confirming the check
+still passes. The skip entry for `windows-sys` 0.52.0 was the one stale entry the
+tool did report, as `unmatched-skip`, and it named `ring` in its reason. It is
+deleted, and the graph now holds one `windows-sys`, 0.61.2.
+
+Three crates were listed twice with different reasons, because the network
+dependencies were appended as a second block rather than merged into the first:
+`getrandom`, `itoa` and `once_cell`. The list is now one alphabetically ordered
+block with one entry per crate. Four reasons that named `ring`, or a parent that
+no longer pulls the crate, were corrected against `cargo tree`: `getrandom` is
+seeded by `graviola`, `untrusted` is parsed through by `rustls-webpki`, `libc` is
+reached by `filetime`, `getrandom`, `nix` and `tar`, and `once_cell` serves both
+`cpufeatures` and the rustls and ureq initialization.
+
+`cargo deny check` is now the `dependencies` step of `cargo xtask verify`, placed
+second, after `format` and before the lint arms, because it costs 1.9 s and a
+crate nobody reviewed should fail before a minute of compiling is spent. It runs
+in the fast lane as well as the full one, since a dependency arrives by editing a
+manifest and that is exactly what a push carries.
+
+A missing `cargo-deny` is a skipped step with a `NOT VERIFIED` line and a
+`degrade` event, never a pass. The step asks `cargo deny --version` first and
+declines on anything but a successful exit.
+
+Sources: `cargo deny check` on this machine, `advisories ok, bans FAILED,
+licenses ok, sources ok` before and `advisories ok, bans ok, licenses ok,
+sources ok` after; `cargo deny list`; `cargo tree -i` per crate; cargo-deny
+0.20.2.
+
+## Phase 3. The minimum supported Rust version is 1.89.0, and it is now built
+
+Three documents stated three different versions. `Cargo.toml` said
+`rust-version = "1.89"`, `rust-toolchain.toml` pins 1.98.0, and the toolchain
+record said clap "sets the workspace MSRV floor at 1.85". Nothing built at any of
+them, so all three were claims.
+
+1.89 is right, and clap is no longer what sets it. Two things need it.
+`File::lock`, `File::try_lock` and `File::try_lock_shared`, which
+`crates/platform/src/lib.rs` calls for advisory locking, were stabilized in
+1.89.0 according to the standard library documentation for `std::fs::File`.
+Independently, `graviola` 0.4.1 declares `rust-version = "1.89"`, which is the
+highest in the graph: reading `rust-version` from every crate in `Cargo.lock`
+that is vendored here gives 1.89 for graviola, 1.88 for `zip`, 1.87 for
+`ruzstd`, and 1.85 for clap, ureq, sha2, lzma-rust2 and rustls-graviola. The
+1.85 in the toolchain record was true when it was written and has been overtaken
+twice.
+
+The field is now `1.89.0` rather than `1.89`, because the same string is handed
+to `rustup run`, and `rustup run 1.89` asks for a toolchain named `1.89` and
+reports that it is not installed. One string that both cargo and rustup accept is
+one string.
+
+`cargo xtask verify` now runs `rustup run 1.89.0 cargo check --workspace
+--all-targets` as the `msrv 1.89.0` step. It clears `CARGO`, `RUSTC`, `RUSTDOC`
+and `RUSTUP_TOOLCHAIN` from the child, because xtask is itself run by cargo and
+an inherited `RUSTC` would silently compile the whole thing with 1.98 while the
+step reported a version it never used. A missing toolchain is a skipped step
+with a `NOT VERIFIED` line naming the `rustup toolchain install` that fixes it.
+
+The step is not in the fast lane. It is a second full compile of the workspace at
+a second compiler, and a push gate that costs as much as building twice is the
+thing this phase removed rather than added.
+
+The step does not gate warnings. 1.89 reports one that 1.98 does not, an
+unfulfilled `dead_code` expectation in `crates/cli/tests/surface`, and lint
+output is not stable across compiler versions. What is being proven is that the
+workspace compiles at the version its manifest states.
+
+Sources: `std::fs::File` documentation, where `lock`, `try_lock`, `lock_shared`,
+`try_lock_shared` and `unlock` are all marked 1.89.0; `rust-version` read from
+every vendored crate in `Cargo.lock`; `cargo +1.89.0 check --workspace
+--all-targets` finishing in 23.17 s on this machine.
+
+## Phase 3. What kills the suite is not the test it lands in
+
+Phase 2 recorded five attempts at `cargo xtask verify` killed for low memory,
+every one of them inside `crates/cache/tests/concurrency.rs`, at 2.5 GB free of
+16 GB with `MsMpEng` holding 1.8 GB. The memory fix at cb60932 had already
+replaced `process::abort` with `TerminateProcess`, which removed the Windows
+error reporting process from the picture, and the kills continued. Running
+`verify` detached was a workaround rather than an answer.
+
+Measured rather than guessed.
+`a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery` was run
+alone, sampled every 400 ms across the whole process tree, on a machine with
+16,781,885,440 bytes of physical memory. It passed in 332.83 s over 668 samples.
+
+The test costs almost nothing. At most nine processes were alive at once, which
+is the parent and its eight children, and their combined working set peaked at
+65.7 MB. Their combined private commit peaked at 22.3 MB. The strongest
+adversarial test in the repository fits inside a sixteenth of a gigabyte.
+
+The numbers the machine reported over the same window: available memory bottomed
+at 1569.5 MB, of which 1542.9 MB was standby cache, so the free and zeroed page
+lists were down to 0.5 MB at their lowest and the reclaimable standby cache was
+what stood between the machine and nothing. Standby cache reached 4044.4 MB at
+its highest. Committed bytes peaked at 20,567.5 MB against a commit limit of
+32,008.9 MB, so there was no commit exhaustion at any point. Defender peaked at
+3509.4 MB.
+
+The answer is both halves of the question, and neither is about this test.
+Windows counts standby cache as available, so a low reading of available memory
+is not by itself evidence of exhaustion; but the free and zero lists at 0.5 MB
+say the pressure was real, and that every page beyond that had to be taken from
+something. What was holding those pages was not the eight children. It was
+Defender at 3.5 GB, and, under `verify`, the rest of the suite: many test
+binaries alive at once beside a cargo build.
+
+The kill test is the process that is alive when the machine runs short, not the
+process that made it short. It runs for five and a half minutes; almost every
+other test in the workspace finishes in under one second. A killer arriving at an
+arbitrary moment lands in the long test nearly every time.
+
+Nothing about the test changed. A thousand kills under concurrent load is
+roadmap.md's phase 1 exit criterion, and the measurement says there was never a
+reason to weaken it. What is documented instead, in CONTRIBUTING.md, is how the
+suite is run here: one crate at a time, in the foreground, which bounds how many
+test binaries are alive at once.
+
+Sources: a 400 ms sampler over `Win32_PerfRawData_PerfOS_Memory` and the process
+tree, on this machine, over one run of the kill test alone.
+
+## Phase 3. The push gate runs what a person will wait for, and says what it did not
+
+`install_hook` has written a `pre-push` hook since phase 0 and
+`.git/hooks/pre-push` did not exist. One hundred and ten commits reached `main`
+through no gate at all, and the last push was a week before this was found. The
+mechanism was written and never installed, which is the same shape as the
+dependency gate this phase also found unrun.
+
+What it would have installed was `cargo xtask verify --fast`, and `--fast` kept
+the whole Windows suite. Measured in the run this record is written from, that
+suite is 700.6 s. Eleven and a half minutes is not a gate. It is a thing a person
+types `--no-verify` past, and a bypassed gate is worse than no gate, because it
+also states that something was checked.
+
+The other steps, warm, in the same run: format 0.9 s, dependencies 1.9 s, lint
+`x86_64-pc-windows-msvc` 30.2 s, lint `x86_64-unknown-linux-musl` 21.1 s, build
+0.3 s, compile `aarch64-pc-windows-msvc` 22.1 s. Seventy-seven seconds for
+everything the suite is not. The suite is ninety percent of the cost of the fast
+lane and it is the part the full matrix exists to run.
+
+`--fast` is now those six steps. It has one caller, the hook, so changing what it
+means is changing the gate rather than adding a second one, which is what a third
+mode would have been. Run against a fully warm tree it is 16.0 s: format 1.1 s,
+dependencies 7.8 s, both lint arms 1.1 s and 1.2 s, build 4.5 s, compile 0.3 s.
+Seventy-seven is what it costs when the lint arms have work to do, and sixteen is
+what it costs when they do not, which is the common case on a push.
+
+The gate declines four things and says so. A fast run pushes a skipped step, not
+an omission, for the Windows suite, the build at rust-version, the network
+subjects, the benchmark comparison and both container lanes, so the existing
+`NOT VERIFIED` lines name every one of them in the hook's own output. A gate that
+silently ran less than the full matrix would be exactly the silent degradation
+standards.md forbids everywhere else.
+
+What the hook buys is the classes that are cheap and certain: unformatted code, a
+lint arm red on either target, a workspace that does not build, a cross-compile
+that does not compile, and a crate that entered the graph without a reviewed
+entry in `deny.toml`. What it does not buy is behavior. `cargo xtask verify` buys
+that, it takes about half an hour here, and it is what a change is finished
+against.
+
+`--install-hook` is now idempotent and refuses to overwrite. An existing
+`pre-push` whose bytes are the hook this installs is reported as already
+installed and nothing is written. An existing `pre-push` that is anything else is
+left alone and the command fails, naming the file and the line to add. Blindly
+overwriting a file in `.git/hooks` is destroying work that somebody wrote by
+hand, and a gate that does that on the way in is not a gate anybody keeps.
+
+Proof: `xtask/src/verify.rs` tests. The third test, installing over a foreign
+hook, fails against the previous implementation with
+`assertion failed: !install_hook(scratch.path())` and the foreign hook already
+overwritten.
+
+Sources: `cargo xtask verify` on this machine, step timings as quoted; 110
+unpushed commits on `main` at the time this was found.
+
+## Phase 3. The container lane takes half the machine, and that is a second cause
+
+The measurement above was taken with Docker stopped, which is the state every
+previous run of this project was in, because the `linux image` step had never
+succeeded. The first run in which it did succeed was killed for low memory during
+`linux suite`, so the container lane was sampled too, every 5 s, over 474 samples.
+
+Docker Desktop reports 8,128,204,800 bytes and 16 CPUs to the daemon, on a
+machine with 16,781,885,440 bytes of physical memory. It takes what it says it
+will. The Linux virtual machine's working set peaked at 7322.1 MB, which is
+forty-four percent of the machine. Over the same window available memory bottomed
+at 542.3 MB with the free and zero page lists at 2.8 MB, and committed bytes
+peaked at 23,611.2 MB against a 32,008.9 MB limit. Defender peaked at 788.4 MB
+and was not a factor.
+
+So there are two different things and they were being called one thing. The five
+kills phase 2 recorded happened with no container running, and they are the
+Windows suite plus Defender plus whatever else the desktop was holding. The kill
+in this run happened with a container holding 7.3 GB, and no arrangement of the
+Windows side would have prevented it. Both land in whatever is running longest,
+which is why both looked like the same failure in the same test.
+
+The container outlived the run that started it. `docker run` had its client
+killed with the rest of the process tree; the daemon kept the container, the
+Linux suite finished inside it, and the virtual machine released its memory
+half an hour later. Nothing was listening, so the lane produced no verdict. That
+is a property of `docker run` rather than a defect here, and it is the reason a
+killed `verify` cannot be assumed to have stopped the work it started.
+
+Sources: a 5 s sampler over `Win32_PerfRawData_PerfOS_Memory` and the Docker
+process set, 474 samples across the container lane on this machine;
+`docker info` reporting `MemTotal` 8128204800 and `NCPU` 16.
+
+## Phase 3. Linux ran for the first time, and it found one thing
+
+The `linux image` step had failed in every run this project has made, always with
+`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`.
+Docker Desktop was installed and not started. Starting it is the whole fix. It is
+now written down as a prerequisite in CONTRIBUTING.md rather than left as a
+mystery failure.
+
+What Linux proved. The `x86_64-unknown-linux-musl` half ran end to end: clippy
+over the whole workspace, the whole suite against the loopback btrfs, XFS, ext4,
+FAT, fuse, small, read-only and second volumes that `verify/volumes-linux.sh`
+builds inside the privileged container, and `xtask network` against real hosts
+from inside it. Every test result line in that half reads `ok`.
+
+What it found. The `x86_64-unknown-linux-gnu` half failed one test:
+`a_capability_answer_is_the_same_every_time_it_is_asked` at
+`crates/platform/tests/capability.rs:288`, with `Scanner::Absent` the first time
+a volume was asked and `Scanner::Unknown` the second. It reproduces only under
+whole-suite load: six runs of that binary alone in the same container, with the
+same volumes mounted, all pass.
+
+Two things combine, and both are in `crates/platform/src/linux/probe.rs`. The
+scanner probe decides from a wall clock: it writes 64 files of 4 KiB, then one
+file of 256 KiB, and calls the volume `Scanner::Unknown` when the ratio of the
+two exceeds 2.0, `Scanner::Absent` otherwise. That ratio is a property of how
+busy the machine is, which is what standards.md says about every timing number
+here. The answer is meant to be measured once per volume and cached, and the
+cache does not hold: `capabilities` returns the value it just measured and
+`insert`s it unconditionally, so two threads that both miss on the same volume
+both measure and the second overwrites the first. The call that measured
+`Absent` then reads `Unknown` back out of the cache on its next call, which is
+exactly the pair the assertion prints.
+
+Not fixed here. The first half is a design question about whether a capability
+may be decided by a clock at all, and the second changes what a cache miss
+returns. Both belong with the correctness work rather than with a phase whose
+subject is the gate. What this phase owes is the finding, its diagnosis, and the
+statement that Linux is not green: eleven of twelve steps passed and
+`linux suite` is the one that did not.
+
+Sources: `cargo xtask verify` on this machine; the container lane rerun for the
+gnu target alone; `crates/platform/src/linux/probe.rs:33-50` and `:237-270`;
+`crates/platform/tests/capability.rs:269-291`.
