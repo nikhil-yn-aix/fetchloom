@@ -235,10 +235,10 @@ network.
 
 ```
 $ fetchloom cache export bundle.tar
-1 objects  233 bytes  0 already held
+1 objects  197 bytes  0 already held
 
 $ FETCHLOOM_CACHE_DIR=./other fetchloom cache import bundle.tar
-1 objects  233 bytes  0 already held
+1 objects  197 bytes  0 already held
 ```
 
 The whole air-gapped sequence, run end to end:
@@ -250,7 +250,7 @@ $ fetchloom cache export bundle.tar
                                                                  # carry dataset.plan and bundle.tar
 $ FETCHLOOM_CACHE_DIR=./cache2 fetchloom cache import bundle.tar
 $ FETCHLOOM_CACHE_DIR=./cache2 fetchloom apply dataset.plan --offline --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:7f0bdb6db1fb6d9a6377abcf8eb3cb0b5a01b00f9fa844d7f0d435e7c89a5df3","destination":"C:\\Users\\you\\flref\\data2","entries":4,"bytes":233,"work":{"bytes_read":0,"bytes_written":0,"requests":0,"file_operations":6}}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flref\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
 ```
 
 Same tree digest, zero requests.

@@ -163,7 +163,7 @@ pub(super) fn materialize_fresh(
         tree,
         destination: destination.to_path_buf(),
         entries: entries.len() as u64,
-        bytes: walked.bytes,
+        bytes: entries.iter().map(entry_size).sum(),
         work: with.work.taken(),
         trust: provisional_trust(with, None),
         executable: executable_paths(&entries),

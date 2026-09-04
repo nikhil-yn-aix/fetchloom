@@ -3,7 +3,7 @@
 use super::adapters::{host_of, is_served};
 use super::archive::{extract_into, open_archive, recognized_format};
 use super::context::{Materialization, RecordedArtifact, RunResult};
-use super::local::{Settlement, settle};
+use super::local::{Settlement, entry_size, settle};
 use super::object::place_object;
 use super::paths::{
     containing_directory, entry_path_str, executable_paths, object_name, remote_name,
@@ -499,7 +499,6 @@ pub(super) fn publish_dataset(
     adopt: bool,
     emit: &dyn Fn(EventPayload),
 ) -> Result<RunResult, Error> {
-    let bytes = resolved.iter().map(|artifact| artifact.size).sum();
     let build = || -> Result<RunResult, Error> {
         let entries = build_dataset_staging(with, resolved, destination, emit)?;
         emit(EventPayload::PublishCommit);
@@ -509,7 +508,7 @@ pub(super) fn publish_dataset(
             tree: canonical::tree_digest(&entries),
             destination: destination.to_path_buf(),
             entries: entries.len() as u64,
-            bytes,
+            bytes: entries.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, None),
             executable: executable_paths(&entries),

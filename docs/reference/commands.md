@@ -42,7 +42,7 @@ reference per run.
 
 ```
 $ fetchloom get file://$PWD/sample.tar.gz --output data --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:7f0bdb6db1fb6d9a6377abcf8eb3cb0b5a01b00f9fa844d7f0d435e7c89a5df3","destination":"C:\\Users\\you\\flgo\\data","entries":4,"bytes":234,"work":{"bytes_read":468,"bytes_written":234,"requests":0,"file_operations":27}}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flgo\data","entries":4,"bytes":234,"work":{"bytes_read":591,"bytes_written":700,"requests":0,"file_operations":29},"trust":"tofu"}
 ```
 
 `status` is one of four words. `materialized` means the destination did not
@@ -233,7 +233,7 @@ names the destination when the plan's own is not this machine's.
 
 ```
 $ fetchloom apply dataset.plan --offline --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:7f0bdb6db1fb6d9a6377abcf8eb3cb0b5a01b00f9fa844d7f0d435e7c89a5df3","destination":"C:\\Users\\you\\flref\\data2","entries":4,"bytes":233,"work":{"bytes_read":0,"bytes_written":0,"requests":0,"file_operations":6}}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flref\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
 ```
 
 That run reached no network and issued no request, because `cache import` had

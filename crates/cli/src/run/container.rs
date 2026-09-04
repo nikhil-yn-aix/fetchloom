@@ -6,7 +6,7 @@ use super::adapters::{
 };
 use super::context::{Materialization, RunResult};
 use super::dataset::{prior_from, provisional_trust, remember};
-use super::local::{Settlement, settle};
+use super::local::{Settlement, entry_size, settle};
 use super::object::place_object;
 use super::paths::{container_name, containing_directory, executable_paths, staging_beside};
 use super::selection::selected_entries;
@@ -121,7 +121,7 @@ pub fn materialize_remote_container(
             tree,
             destination: destination.to_path_buf(),
             entries: built.len() as u64,
-            bytes: placements.iter().map(|(_, _, size)| *size).sum(),
+            bytes: built.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, None),
             executable: executable_paths(&built),

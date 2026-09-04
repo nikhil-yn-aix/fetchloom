@@ -56,7 +56,7 @@ outright:
 ```
 $ fetchloom --cache-dir C:\work\cache get "file://C:/work/refs/sample.tar.gz" --output C:\work\out2 --aggressive --json
 --aggressive raises the transfers in flight for one host past the 4 a run holds itself to, so a source may answer with a rate limit or refuse the run outright
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:1d0119a5d9ddce4b1490473ebdf1ed4bb734e7bc9c4f72a445fbf984f0aa0042","destination":"C:\work\out2","entries":1,"bytes":139,"work":{"bytes_read":278,"bytes_written":17,"requests":0,"file_operations":4},"trust":"tofu"}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:7f658925430b5d4e84a6008343fa3fbc01f6dc9e2e2f43f4046d0179fe2f9ef1","destination":"C:\\work\\out2","entries":1,"bytes":139,"work":{"bytes_read":525,"bytes_written":561,"requests":0,"file_operations":26},"trust":"tofu"}
 ```
 
 ## Bandwidth

@@ -1156,3 +1156,75 @@ fn a_second_reference_is_a_usage_error_rather_than_a_declared_capability() {
     let run = workspace.run(&["get", "./one.txt", "./two.txt"]);
     assert_eq!(run.code(), 2, "{} {}", run.out(), run.err());
 }
+
+/// Adds up the length of every file under a directory.
+fn bytes_under(root: &Path) -> u64 {
+    let mut total = 0;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(listing) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in listing.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(found) = path.metadata() {
+                total += found.len();
+            }
+        }
+    }
+    total
+}
+
+#[test]
+fn the_byte_count_a_run_reports_is_what_its_destination_holds() {
+    for (name, content) in [
+        ("sample.tar.gz", gzip(&greeting_tar())),
+        ("package.zip", package_zip()),
+        ("greeting.txt.gz", gzip(GREETING)),
+    ] {
+        let workspace = Workspace::new();
+        let archive = workspace.write(name, &content);
+        let run = workspace.run(&[
+            "get",
+            archive.to_str().unwrap(),
+            "--output",
+            "out",
+            "--json",
+        ]);
+        assert_eq!(run.code(), 0, "{}", run.err());
+        let body = run.json();
+        let destination = workspace.path().join("out");
+        assert_eq!(
+            body["bytes"].as_u64(),
+            Some(bytes_under(&destination)),
+            "{name} reported a byte count that is not the length of what it materialized"
+        );
+    }
+}
+
+#[test]
+fn the_byte_count_a_manifest_run_reports_is_what_its_destination_holds() {
+    let workspace = Workspace::new();
+    workspace.write("one.tar.gz", &gzip(&greeting_tar()));
+    workspace.write("two.tar.gz", &gzip(&package_tar()));
+    let manifest = workspace.write(
+        "data.yaml",
+        b"name: sample\nartifacts:\n  - id: one\n    sources:\n      - ./one.tar.gz\n  - id: two\n    sources:\n      - ./two.tar.gz\n",
+    );
+    let run = workspace.run(&[
+        "get",
+        manifest.to_str().unwrap(),
+        "--output",
+        "out",
+        "--json",
+    ]);
+    assert_eq!(run.code(), 0, "{}", run.err());
+    let body = run.json();
+    assert_eq!(
+        body["bytes"].as_u64(),
+        Some(bytes_under(&workspace.path().join("out"))),
+        "a manifest run reported a byte count that is not the length of what it materialized"
+    );
+}

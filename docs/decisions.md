@@ -8352,3 +8352,36 @@ audit, not to a phase whose job was to add the surface.
 
 Sources: `docs/standards.md` Measure; `docs/benchmarks.md`; the phase 4 record on
 the TOML parser.
+
+## Audit. One definition of the `bytes` a run reports
+
+Question: `RunResult.bytes` documents itself as "how many bytes those entries
+hold", and four of the five places that build a `RunResult` computed it that way.
+The fifth, the single-object path, reported the size of the object the run
+fetched, and the manifest path reported the sum of its artifacts' object sizes.
+
+For anything that is not extracted those are the same number, which is why the
+disagreement survived. For an extracted archive they are not. `get` on a 105-byte
+gzip holding six bytes reported `"entries":1,"bytes":105`, and the reference
+documents held two transcripts of the same tree digest reporting 234 bytes in one
+place and 233 in the other.
+
+contracts.md does not define the field, so this is not a contract change. It is
+the field being made to mean what its own docstring says and what four of its six
+call sites already computed: the sum of the sizes of the entries the run reports.
+The alternative, defining it as the transferred object size, would have needed a
+second field for the tree total and would have made `entries` and `bytes` describe
+different things in the same object.
+
+Costs: the number moves for every extracted archive, so every transcript in
+`docs/reference/` that showed one was regenerated from a real run. Anything that
+had parsed `bytes` as a download size now reads a materialized size instead;
+nothing in this repository did.
+
+Proof: `crates/cli/tests/surface.rs` asserts, over three archive shapes and over a
+manifest, that the reported count is the total length of the files the run left in
+the destination. Both tests fail on the code as it stood, one at 105 against 6 and
+one at 20 against a different total.
+
+Sources: `crates/cli/src/run/context.rs` for the field; `crates/cli/src/run/`
+`object.rs`, `dataset.rs`, `container.rs` and `local.rs` for the six call sites.
