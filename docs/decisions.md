@@ -8725,3 +8725,96 @@ already in memory. Both now fail `resource.limit`.
 
 Sources: contracts.md Limits; `crates/cli/src/resolve.rs`;
 `crates/cli/src/run/dataset.rs`; `crates/cli/src/planning.rs`.
+
+## Phase 2. Thirty-seven command line test targets became four
+
+Each file under `crates/cli/tests` was its own integration target, so each one
+statically linked clap, ureq, rustls and the whole workspace. Measured on this
+machine: touching `crates/cli/src/lib.rs` and running
+`cargo test -p fetchloom-cli --no-run` took 42.4 s, and `target/debug/deps` held
+26 GB. The engine's 18 targets relink in about 7 s and sources' 7 in about 6 s,
+so the command line crate was the whole cost and the other crates were left
+alone.
+
+The 37 files are grouped into four targets balanced by line count, roughly 3,700
+lines each: `surface` for the command surface and what it prints, `policy` for
+what a run is permitted to do and what it proves, `transfer` for getting bytes
+across the network, and `materialize` for turning those bytes into files. The
+same touch now costs 9.4 s.
+
+`tests/support` stays a directory without a `main.rs`, so cargo still does not
+treat it as a target, and each group reaches it with a `#[path]` declaration.
+The crate-dependency imports that satisfy `unused_crate_dependencies` moved out
+of the 37 files into the four `main.rs` files, because that lint is per-crate and
+the union belongs once per target. That is the only edit
+`crates/cli/tests/materialize/harness.rs` took: its walk and its assertions are
+unchanged, and it is what proves no test escaped `support::fetchloom` in the
+move.
+
+Test count is 365 before and 365 after.
+
+Sources: standards.md Measure; `crates/cli/tests/*/main.rs`.
+
+## Phase 2. Glob split its pattern once per path rather than once
+
+`Glob::matches` split `self.0` on `/` into a `Vec<&str>` on every call. The split
+is loop-invariant: one pattern is matched against every entry of a tree, and
+contracts.md under Limits permits 500,000 listing entries. Measured in release on
+this machine, 200,000 paths against `data/**/train/*.parquet`: 46.2 ms and
+50.2 ms across two runs, 230 and 251 ns per path.
+
+`Glob` now holds its components, split once in `new`. That costs the derived
+traits: the struct was `#[serde(transparent)]` over a `String` with `PartialEq`,
+`Eq`, `PartialOrd`, `Ord` and `Hash` derived, and every one of those is now
+written by hand against the pattern string alone, so the serialized form stays a
+bare string and the ordering stays the ordering of the patterns. Locks,
+manifests and `Manifest::select` depend on both. After: 24.4 ms, 26.9 ms and
+35.5 ms, 122 to 177 ns per path.
+
+The path side keeps its `Vec<&str>`, measured at about 100 ns of the remaining
+135. Removing it needs the component boundaries as byte offsets, because a `**`
+restart seeks backwards to a component already passed, and the restart then
+cannot name the offset it must resume from without either an `unwrap` on an
+invariant no type carries or a lookup that re-splits. Neither reads as clearly as
+the `Vec`, so the `Vec` stays.
+
+Proof: `crates/engine/tests/selection.rs`
+`a_glob_is_written_and_read_as_the_bare_pattern` and
+`globs_order_and_hash_by_their_pattern`, which pin the serialized form and the
+ordering the hand-written traits could have moved. Both were written before the
+change and pass on either side of it, because this is a refactor with no new
+behavior to fail for: what they guard is the form, and the form did not move.
+
+Sources: standards.md Measure and Memory; contracts.md Manifest and Lock;
+`crates/engine/src/selection.rs`.
+
+## Phase 2. The in-flight ceiling tests stopped asking the scheduler to cooperate
+
+`crates/engine/tests/flights.rs` proved each ceiling by holding every job in a
+`thread::sleep` and asserting the watermark reached the ceiling exactly. The
+lower bound was the scheduler's to give: three jobs had to be admitted inside one
+20 ms window or the assertion failed. It is the same shape as the assertion
+removed from the command line transfer tests, which compared two measured
+quantities and failed one run in four under load.
+
+Each job now arrives at a gate wanting one more than the ceiling. With a correct
+pool the gate never opens: the ceiling's worth of jobs sit in it together, which
+is what makes the watermark reach the ceiling, and they leave when the wait times
+out. A pool admitting one too many opens the gate at once, and the extra job has
+already been counted. Both bounds are then the pool's, and neither is the
+clock's. The patience is 250 ms and is paid once per test, because the gate stays
+open after enough jobs have passed through it in total.
+
+Verified by mutation. With the per-host ceiling raised to four the assertion
+reports `left: 4, right: 3`; lowered to two it reports `left: 2, right: 3`. The
+file runs in 0.26 s.
+
+The fourth sleep in that file ordered two failures so the reported one would not
+be the one that failed first by the clock. It is now an announcement the later
+job makes and the earlier one waits for, which is the same ordering without a
+duration. One test sleep remains in the repository, in
+`crates/cli/tests/transfer/transfer.rs`: `SlowWriter` charges 500 ns per byte
+after the first megabyte, which is a duration the code under test measures and
+reacts to rather than a wait for a race to settle.
+
+Sources: standards.md Tests, "No test sleeps. Wait on a condition or a channel."

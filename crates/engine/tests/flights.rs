@@ -14,7 +14,7 @@ use toml as _;
 
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use fetchloom_engine::error::{Error, ErrorKind};
@@ -53,16 +53,68 @@ fn fixed(at: u32) -> impl Fn(&str) -> Controller + Sync {
     move |_| Controller::fixed(NonZeroU32::new(at).unwrap())
 }
 
+const PATIENCE: Duration = Duration::from_millis(250);
+
+struct Gate {
+    arrived: Mutex<u32>,
+    opened: Condvar,
+    wanted: u32,
+}
+
+impl Gate {
+    fn wanting(wanted: u32) -> Self {
+        Self {
+            arrived: Mutex::new(0),
+            opened: Condvar::new(),
+            wanted,
+        }
+    }
+
+    fn arrive(&self) {
+        let mut arrived = self.arrived.lock().unwrap();
+        *arrived += 1;
+        if *arrived >= self.wanted {
+            self.opened.notify_all();
+            return;
+        }
+        let (_held, _timed_out) = self
+            .opened
+            .wait_timeout_while(arrived, PATIENCE, |count| *count < self.wanted)
+            .unwrap();
+    }
+}
+
+#[derive(Default)]
+struct Announcement {
+    made: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Announcement {
+    fn make(&self) {
+        *self.made.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+
+    fn hear(&self) {
+        let (_held, _timed_out) = self
+            .changed
+            .wait_timeout_while(self.made.lock().unwrap(), PATIENCE, |made| !*made)
+            .unwrap();
+    }
+}
+
 #[test]
 fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
     let flights = Flights::new(ceilings(8, 3), fixed(3));
     let seen = Watermark::default();
+    let one_too_many = Gate::wanting(4);
     let items: Vec<u32> = (0..16).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         seen.entered();
-        std::thread::sleep(Duration::from_millis(20));
+        one_too_many.arrive();
         seen.left();
         Ok::<u32, Error>(*item)
     });
@@ -87,6 +139,7 @@ fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
 fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
     let flights = Flights::new(ceilings(2, 4), fixed(4));
     let seen = Watermark::default();
+    let one_too_many = Gate::wanting(3);
     let items: Vec<u32> = (0..12).collect();
     let hosts: Vec<String> = items
         .iter()
@@ -95,7 +148,7 @@ fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
 
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         seen.entered();
-        std::thread::sleep(Duration::from_millis(20));
+        one_too_many.arrive();
         seen.left();
         Ok::<u32, Error>(*item)
     });
@@ -112,12 +165,13 @@ fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
 fn one_ceiling_admits_one_job_at_a_time() {
     let flights = Flights::new(ceilings(1, 1), fixed(1));
     let seen = Watermark::default();
+    let one_too_many = Gate::wanting(2);
     let items: Vec<u32> = (0..6).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
     flights.each(&items, &hosts, &|_: &u32| {
         seen.entered();
-        std::thread::sleep(Duration::from_millis(10));
+        one_too_many.arrive();
         seen.left();
         Ok::<u32, Error>(0)
     });
@@ -135,12 +189,15 @@ fn the_failure_reported_is_the_first_in_order_however_the_jobs_finished() {
     let items: Vec<u32> = (0..8).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
+    let the_later_one_failed = Announcement::default();
+
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         if *item == 5 {
+            the_later_one_failed.make();
             return Err(Error::new(ErrorKind::NetworkRefused, "the later one"));
         }
         if *item == 2 {
-            std::thread::sleep(Duration::from_millis(40));
+            the_later_one_failed.hear();
             return Err(Error::new(ErrorKind::NetworkRefused, "the earlier one"));
         }
         Ok::<u32, Error>(*item)

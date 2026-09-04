@@ -282,3 +282,36 @@ fn a_pattern_of_many_recursive_wildcards_is_decided_rather_than_explored() {
         );
     }
 }
+
+#[test]
+fn a_glob_is_written_and_read_as_the_bare_pattern() {
+    let selection = Selection {
+        include: vec![Glob::new("**/*.txt")],
+        exclude: vec![Glob::new("notes/**")],
+        layout: Layout::Keep,
+    };
+    let written = serde_json::to_value(&selection).unwrap();
+    assert_eq!(written["include"], serde_json::json!(["**/*.txt"]));
+    assert_eq!(written["exclude"], serde_json::json!(["notes/**"]));
+    let read: Selection = serde_json::from_value(written).unwrap();
+    assert_eq!(read, selection);
+}
+
+#[test]
+fn globs_order_and_hash_by_their_pattern() {
+    let mut sorted = [
+        Glob::new("data/**"),
+        Glob::new("**/*.txt"),
+        Glob::new("data/a"),
+    ];
+    sorted.sort();
+    assert_eq!(
+        sorted.iter().map(Glob::as_str).collect::<Vec<&str>>(),
+        vec!["**/*.txt", "data/**", "data/a"]
+    );
+    let mut seen = std::collections::HashSet::new();
+    assert!(seen.insert(Glob::new("data/**")));
+    assert!(!seen.insert(Glob::new("data/**")));
+    assert_eq!(Glob::new("data/**"), Glob::new("data/**"));
+    assert_ne!(Glob::new("data/**"), Glob::new("data/*"));
+}

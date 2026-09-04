@@ -7,41 +7,86 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, ErrorKind};
 use crate::tree::EntryPath;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Glob(String);
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct Glob {
+    pattern: String,
+    components: Box<[Box<str>]>,
+}
 
 impl Glob {
     #[must_use]
     pub fn new(pattern: impl Into<String>) -> Self {
-        Self(pattern.into())
+        let pattern = pattern.into();
+        let components = pattern.split('/').map(Box::from).collect();
+        Self {
+            pattern,
+            components,
+        }
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.pattern
     }
 
     #[must_use]
     pub fn matches(&self, path: &str) -> bool {
-        let pattern: Vec<&str> = self.0.split('/').collect();
         let components: Vec<&str> = path.split('/').collect();
-        matches_components(&pattern, &components)
+        matches_components(&self.components, &components)
     }
 }
 
-fn matches_components(pattern: &[&str], path: &[&str]) -> bool {
+impl From<String> for Glob {
+    fn from(pattern: String) -> Self {
+        Self::new(pattern)
+    }
+}
+
+impl From<Glob> for String {
+    fn from(glob: Glob) -> Self {
+        glob.pattern
+    }
+}
+
+impl PartialEq for Glob {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern == other.pattern
+    }
+}
+
+impl Eq for Glob {}
+
+impl PartialOrd for Glob {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Glob {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.pattern.cmp(&other.pattern)
+    }
+}
+
+impl std::hash::Hash for Glob {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pattern.hash(state);
+    }
+}
+
+fn matches_components(pattern: &[Box<str>], path: &[&str]) -> bool {
     let mut at_pattern = 0;
     let mut at_path = 0;
     let mut star = None;
     let mut resumed = 0;
     while at_path < path.len() {
-        if at_pattern < pattern.len() && pattern[at_pattern] == "**" {
+        if at_pattern < pattern.len() && &*pattern[at_pattern] == "**" {
             star = Some(at_pattern);
             resumed = at_path;
             at_pattern += 1;
         } else if at_pattern < pattern.len()
-            && matches_component(pattern[at_pattern], path[at_path])
+            && matches_component(&pattern[at_pattern], path[at_path])
         {
             at_pattern += 1;
             at_path += 1;
@@ -53,7 +98,7 @@ fn matches_components(pattern: &[&str], path: &[&str]) -> bool {
             return false;
         }
     }
-    pattern[at_pattern..].iter().all(|part| *part == "**")
+    pattern[at_pattern..].iter().all(|part| &**part == "**")
 }
 
 fn matches_component(pattern: &str, name: &str) -> bool {
