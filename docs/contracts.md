@@ -779,9 +779,10 @@ Flags for `init`.
 
 ### Log levels
 
-A log level decides which of the events the run already emits are rendered to
-standard error as human lines. It never decides which events exist, and the
-stream `--events` writes is byte-identical at every level.
+A log level decides which of the events the run already emits are written to
+standard error, each as one JSON object carrying fields and never a formatted
+sentence. It never decides which events exist, and the stream `--events` writes
+is byte-identical at every level.
 
 | Level | Rendered |
 |---|---|

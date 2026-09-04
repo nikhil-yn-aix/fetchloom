@@ -116,7 +116,7 @@ Purpose. Turning measurement into defaults, so users never tune anything, withou
 
 Decide. What is measured, how a decision is scored, and how it is stored per host. The increase and backoff policy for concurrency. How protocol choice is evaluated. When ranged splitting of a single object is worthwhile. How disk write rate applies backpressure to network concurrency. Which I/O mode is chosen per platform and volume. How user limits and core counts bound every decision.
 
-Build. Adaptive concurrency controller with politeness ceilings. Per-host measurement cache. Protocol selection. I/O mode selection. Backpressure from disk to network. `--deterministic-io`. The published benchmark suite covering all seven regimes the harness runs.
+Build. Adaptive concurrency controller with politeness ceilings. Per-host measurement cache. Protocol selection. I/O mode selection. Backpressure from disk to network. `--deterministic-io`. The published benchmark suite covering every regime the harness runs.
 
 Prove. Adaptation changes throughput and never changes bytes, digests, or tree digests. Rate-limit responses reduce concurrency immediately. Deterministic mode reproduces identical timing-independent results. Published numbers include the regimes where Fetchloom is slower.
 
@@ -133,6 +133,18 @@ Build. Object storage, then the providers that demand justifies. Credential reso
 Prove. Every adapter satisfies the same contract test suite, including its degraded trust behavior. No adapter emits a secret in any output stream under fault injection. Sources without range support degrade honestly and say so. A run needing a required credential fails with steps a first-time user can follow, and a run offered an optional one completes correctly when it is declined.
 
 Done when. A new adapter can be added by implementing the seam and passing the shared suite, with no change to the engine.
+
+## Phase 7.5. Concurrency
+
+Purpose. Phase 6 built adaptation against a harness that issued one request at a time, so the sentences features.md wrote about concurrency, probing, splitting and the credential offer were contracted and unproven. This phase makes the run actually do several things at once and holds each of those sentences to a test.
+
+Decide. What the two in-flight ceilings bound and what they may never change. How several candidates are probed without racing them. Which four conditions together make splitting one object worthwhile, and how wide. What raises a per-host count and what lowers it. Which credential is resolved for which host when a transfer moves between hosts.
+
+Build. The scheduler behind the global and per-host ceilings. The probe phase and the fixed scoring order. Ranged splitting of a single object. The adaptive count that rises only when a wider count delivered more. Per-candidate credential resolution. The two seam counts and the dispatch that names adapters.
+
+Prove. Ceilings bound what is in flight, asserted against what the fault server was answering at once rather than against a clock. No setting changes bytes, digests, or the tree digest. A losing candidate is never asked for bytes. A split object has the digest the whole object has, and a refusal names the condition that failed. No output stream carries a secret when a transfer moves to a second host.
+
+Done when. Every sentence features.md writes about concurrency is either true and tested or corrected. Closed. Four defects that concurrency made observable are recorded in decisions.md under this phase, and phase 6's performance half is explicitly not closed by it.
 
 ## Phase 8. Ingest
 

@@ -184,7 +184,7 @@ Identity mobility: locks travel and contain no machine facts. Tree digests eithe
 
 ## Observability
 
-Nothing degrades silently. Every fallback, skip, retry, weakened trust class, unsupported filesystem capability, and unavailable optimization emits an event and appears in the result.
+Nothing degrades silently. Every fallback, skip, retry, weakened trust class, unsupported filesystem capability, and unavailable optimization emits a `degrade` event naming what was requested, what was used, and why.
 
 Errors are typed and carry the failing layer, the dataset, the artifact, the source, the retry state, and the recommended next action.
 

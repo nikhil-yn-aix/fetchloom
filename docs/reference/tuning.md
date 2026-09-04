@@ -165,13 +165,19 @@ user config: none found
 offline = false (default)
 threads = 16 (measured)
 display = plain (default)
-cache.dir = C:/work/cache (command line)
+cache.dir = C:\work\cache (command line)
 concurrency = 5 (project config)
 per-host = 3 (project config)
 bandwidth = 2097152 bytes per second (project config)
 io = buffered (project config)
 aggressive = false (default)
 deterministic-io = false (default)
+log = info (default)
+retries = 5 (default)
+timeout = 30s (default)
+sources = none configured (default)
+color = auto (default)
+hints = true (default)
 
 $ FETCHLOOM_CONCURRENCY=7 fetchloom --cache-dir C:\work\cache explain concurrency
 concurrency = 7 (environment)
@@ -228,7 +234,8 @@ command line or in configuration.
 
 `explain` reports the effective value of `concurrency`, `per-host`,
 `bandwidth`, `io`, `aggressive` and `deterministic-io`, alongside `offline`,
-`threads`, `display` and `cache.dir`, ten settings in total. A tuning setting
+`threads`, `display`, `cache.dir`, `log`, `retries`, `timeout`, `sources`,
+`color` and `hints`, sixteen settings in total. A tuning setting
 no level supplied is reported as `measured`, with what was measured and when.
 
 For `concurrency`, the measurement is the global ceiling this run computed

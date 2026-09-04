@@ -332,16 +332,23 @@ bandwidth = ? (default)
 io = auto (default)
 aggressive = false (default)
 deterministic-io = false (default)
+log = info (default)
+retries = 5 (default)
+timeout = 30s (default)
+sources = none configured (default)
+color = auto (default)
+hints = true (default)
 
 $ fetchloom --threads 3 explain threads
 threads = 3 (command line)
 ```
 
-This build reports ten settings: `offline`, `threads`, `display`, `cache.dir`,
-`concurrency`, `per-host`, `bandwidth`, `io`, `aggressive` and
-`deterministic-io`. `measured` means no level named a value and the number was
-taken from this machine or this cache. See [tuning.md](tuning.md) for what each
-of the six tuning settings means and what its measurement is.
+This build reports sixteen settings: `offline`, `threads`, `display`,
+`cache.dir`, `concurrency`, `per-host`, `bandwidth`, `io`, `aggressive`,
+`deterministic-io`, `log`, `retries`, `timeout`, `sources`, `color` and `hints`.
+`measured` means no level named a value and the number was taken from this
+machine or this cache. See [tuning.md](tuning.md) for what each of the six
+tuning settings means and what its measurement is.
 
 Under `--json` the same answer is one object, with the config files it found and
 every setting:
@@ -358,7 +365,13 @@ $ fetchloom --json explain
              {"key":"bandwidth","value":"?","origin":"default"},
              {"key":"io","value":"auto","origin":"default"},
              {"key":"aggressive","value":"false","origin":"default"},
-             {"key":"deterministic-io","value":"false","origin":"default"}]}
+             {"key":"deterministic-io","value":"false","origin":"default"},
+             {"key":"log","value":"info","origin":"default"},
+             {"key":"retries","value":"5","origin":"default"},
+             {"key":"timeout","value":"30s","origin":"default"},
+             {"key":"sources","value":"none configured","origin":"default"},
+             {"key":"color","value":"auto","origin":"default"},
+             {"key":"hints","value":"true","origin":"default"}]}
 ```
 
 Every command-line tuning flag documented in [tuning.md](tuning.md) belongs to

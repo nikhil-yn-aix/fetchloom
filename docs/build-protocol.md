@@ -121,7 +121,7 @@ Check, and answer each with evidence from the code:
 3. Can any test pass while the feature is broken? Name it if so.
 4. Are the adversarial cases real: failure, corruption, interruption,
    concurrency, hostile input?
-5. Did it run green on all three platforms? Show the evidence, not the claim.
+5. Did it run green on both platforms? Show the evidence, not the claim.
 6. Any comment, version field, compatibility path, second way of doing an
    existing thing, dead code, or placeholder?
 7. Any silent fallback without a degrade event?
@@ -142,11 +142,11 @@ Research runs immediately before the build that depends on it, so decisions are 
 
 ## Phase 0 sessions
 
-R1 Research. Toolchain and crate selection for parsing, styling, progress, hashing, platform calls, structured events, testing, and benchmarking. Repository and crate layout matching the six seams. Continuous integration for three platforms. Thread pool sizing policy, including how core counts, affinity, container limits, and user limits are read and honored. Lint and dependency policy that mechanically enforces the standards.
+R1 Research. Toolchain and crate selection for parsing, styling, progress, hashing, platform calls, structured events, testing, and benchmarking. Repository and crate layout matching the six seams. A local verification matrix covering both platforms. Thread pool sizing policy, including how core counts, affinity, container limits, and user limits are read and honored. Lint and dependency policy that mechanically enforces the standards.
 
 R2 Research. Content hash chunk size and outboard threshold. The exact canonical entry stream for the tree digest, including symlinks, empty directories, zero-byte files, and mode reduction. Atomic publication primitive and durability tier calls per platform. Filesystem capability detection method per platform. Advisory locking primitive, including cross-user and network filesystem limits.
 
-B0 Build, alone. Workspace and crate layout, lint and dependency policy, continuous integration green on all six targets, the benchmark harness and comment checker, every seam trait and domain type, the error and event types with redaction at construction, and the fault injection crate. No behavior beyond what a signature requires. Everything after this compiles against it.
+B0 Build, alone. Workspace and crate layout, lint and dependency policy, the verification matrix green on every target it builds, the benchmark harness and comment checker, every seam trait and domain type, the error and event types with redaction at construction, and the fault injection crate. No behavior beyond what a signature requires. Everything after this compiles against it.
 
 B1, B2, B3 Build, in parallel, one crate each.
 
