@@ -4,7 +4,7 @@ Nothing here is aspirational: each command was run to produce the output
 shown. This covers the seven settings that bound how a run moves and writes
 bytes: `--threads`, and the six flags `get`, `plan` and `apply` share --
 `--concurrency`, `--per-host`, `--bandwidth`, `--io`, `--aggressive` and
-`--deterministic-io` -- plus the four environment variables that also set
+`--deterministic-io`, plus the four environment variables that also set
 them, and how `explain` reports all seven.
 
 ## The flags
@@ -207,7 +207,7 @@ For more information, try '--help'.
 ```
 
 What `explain` reports for those six therefore comes from the environment, a
-configuration file, a measurement, or the default -- never from a flag on the
+configuration file, a measurement, or the default, never from a flag on the
 `explain` invocation itself.
 
 ## Environment variables

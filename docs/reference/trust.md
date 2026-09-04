@@ -26,7 +26,7 @@ Fetchloom records content integrity. It makes no claim about the other two.
 
 Bytes are hashed as they arrive, in the same pass that writes them, and nothing
 enters the cache until the digest matches. `--verify` governs what happens when
-an object is *reused* — a cache hit, or a destination entry a later run finds
+an object is *reused*: a cache hit, or a destination entry a later run finds
 already in place. It never turns off the check during a transfer.
 
 `--verify never` therefore does not mean "accept bad bytes". It means the reuse

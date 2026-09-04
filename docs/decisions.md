@@ -6105,7 +6105,7 @@ seconds, and the cost of being several too fast is a host that stops answering.
 
 ### How protocol choice is evaluated
 
-It is not evaluated separately. contracts.md under Source selection already fixes the order —
+It is not evaluated separately. contracts.md under Source selection already fixes the order:
 reachable, supports ranges, exposes immutable identity, recorded throughput for
 that host, time to first byte, egress cost, remaining politeness headroom, ties
 broken by manifest order. Phase 6 supplies two of those inputs from the
@@ -6125,7 +6125,7 @@ fallback, and a fallback that is not in the degrade list is a fallback the
 Never, in this phase, and this is a decision rather than an omission. Splitting
 one object across several ranged requests to one host spends the politeness
 budget on a single object, so it can only pay when that budget is otherwise
-idle — a run fetching exactly one large artifact. The regime that would show the
+idle, a run fetching exactly one large artifact. The regime that would show the
 gain is `one-large-file`, and on this machine that regime is bounded by hashing
 and by the write path rather than by the network. Building the split now would
 add a second way to transfer an object, which this project forbids, for a gain
@@ -8441,7 +8441,7 @@ left to widen and nothing left that lies.
 adapter fails `resource.limit` naming a narrower prefix, and past the size bound
 the HTTP client refuses to read further. But the size refusal was classified as
 `network.refused`, retryable, layer transfer, telling the user to try the source
-again — advice that can never work, because the index will be that size on every
+again, advice that can never work, because the index will be that size on every
 attempt. It is now `resource.limit`, not retryable, naming a narrower prefix, the
 same answer the entry bound already gave. So the seam does not need a new field:
 what it could not say, it never had to, because the condition is terminal and an
@@ -8451,7 +8451,7 @@ The same question asked of the document reader found the sharper case.
 `read_document` took `manifest_size` bytes with `Read::take`, which truncates in
 silence, and handed the prefix to the parser. A 17 MiB Croissant document failed
 with `manifest.invalid` and the next action "correct the JSON, because EOF while
-parsing a string at line 1 column 16777216" — the run telling the user their
+parsing a string at line 1 column 16777216", the run telling the user their
 document is malformed when the run is the thing that cut it. It now reads one
 byte past the bound and fails `resource.limit` if that byte is there, on the
 local path as well as the remote one, because contracts.md states the bound
