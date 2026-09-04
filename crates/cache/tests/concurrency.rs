@@ -5,6 +5,13 @@
     clippy::panic,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
+#![cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "killing this process outright is a Win32 call, and it is what the test is for"
+    )
+)]
 
 use blake3 as _;
 use fetchloom_faults as _;
@@ -210,7 +217,7 @@ fn publish_until_killed() {
     let mut done = 0;
     loop {
         if done == after {
-            std::process::abort();
+            killed_now();
         }
         let bytes = bytes_of(1 << 16, u8::try_from((first + done) % 251).unwrap_or(1));
         let digest = hash_bytes(&bytes);
@@ -218,7 +225,7 @@ fn publish_until_killed() {
         let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
         writer.write_all(&bytes).unwrap();
         if done + 1 == after {
-            std::process::abort();
+            killed_now();
         }
         held.commit(lease, writer).unwrap();
         done += 1;
@@ -341,4 +348,20 @@ fn objects_published_at_once_by_one_process_each_read_back_as_themselves() {
              recorded one place in the pack"
         );
     }
+}
+
+#[cfg(windows)]
+fn killed_now() -> ! {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+
+    // SAFETY: the pseudo handle GetCurrentProcess returns needs no closing, and terminating this process cannot outlive it.
+    unsafe {
+        TerminateProcess(GetCurrentProcess(), 137);
+    }
+    unreachable!("the process was told to end and did not")
+}
+
+#[cfg(not(windows))]
+fn killed_now() -> ! {
+    std::process::abort()
 }

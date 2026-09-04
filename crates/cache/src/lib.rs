@@ -6,6 +6,8 @@ use fetchloom_faults as _;
 use fetchloom_platform as _;
 #[cfg(test)]
 use tempfile as _;
+#[cfg(all(test, windows))]
+use windows_sys as _;
 
 pub mod bundle;
 pub mod diagnosis;

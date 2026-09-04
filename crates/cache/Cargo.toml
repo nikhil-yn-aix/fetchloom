@@ -22,3 +22,6 @@ workspace = true
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "windows"))'.dependencies]
 blake3 = { workspace = true, features = ["no_neon"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Threading"] }

@@ -12,6 +12,8 @@ use fetchloom_platform as _;
 use serde as _;
 use serde_json as _;
 use tempfile as _;
+#[cfg(windows)]
+use windows_sys as _;
 
 mod support;
 

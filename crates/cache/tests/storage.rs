@@ -9,6 +9,8 @@ use blake3 as _;
 use fetchloom_faults as _;
 use serde as _;
 use serde_json as _;
+#[cfg(windows)]
+use windows_sys as _;
 
 mod support;
 
