@@ -95,7 +95,7 @@ error: invalid value '5t' for '--bandwidth <rate>': write 5t as a count of bytes
 ```
 
 With no `--bandwidth`, no `FETCHLOOM_BANDWIDTH`, and no `bandwidth` key in a
-configuration file, the ceiling is unlimited, and `explain` reports it as `?`.
+configuration file, the ceiling is unlimited.
 
 ## I/O path
 

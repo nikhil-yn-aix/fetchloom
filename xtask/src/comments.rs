@@ -19,6 +19,7 @@ impl fmt::Display for Finding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
     Comment,
+    Docstring,
     BlockComment,
     SafetyOnSafeCode,
     Decoration,
@@ -28,7 +29,8 @@ pub enum Rule {
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
-            Self::Comment => "comment that is not a docstring",
+            Self::Comment => "comment that is not a module header",
+            Self::Docstring => "docstring",
             Self::BlockComment => "block comment",
             Self::SafetyOnSafeCode => "safety line that does not precede an unsafe block",
             Self::Decoration => "decorative symbol",
@@ -100,7 +102,12 @@ pub fn check_rust(file: &Path, text: &str) -> Vec<Finding> {
                 let end = end_of_line(&bytes, index);
                 let body: String = bytes[index..end].iter().collect();
                 match kind {
-                    LineComment::Doc => {}
+                    LineComment::Module => {}
+                    LineComment::Docstring => findings.push(Finding {
+                        file: file.to_path_buf(),
+                        line: start_line,
+                        rule: Rule::Docstring,
+                    }),
                     LineComment::Safety => safety_lines.push(start_line),
                     LineComment::Plain => {
                         let rule = if body
@@ -175,7 +182,8 @@ fn is_banner(content: &str) -> bool {
 }
 
 enum LineComment {
-    Doc,
+    Module,
+    Docstring,
     Safety,
     Plain,
 }
@@ -183,8 +191,11 @@ enum LineComment {
 fn line_comment_kind(bytes: &[char], index: usize) -> LineComment {
     let third = bytes.get(index + 2).copied();
     let fourth = bytes.get(index + 3).copied();
-    if third == Some('!') || (third == Some('/') && fourth != Some('/')) {
-        return LineComment::Doc;
+    if third == Some('!') {
+        return LineComment::Module;
+    }
+    if third == Some('/') && fourth != Some('/') {
+        return LineComment::Docstring;
     }
     let end = end_of_line(bytes, index);
     let body: String = bytes[index + 2..end].iter().collect();
@@ -218,7 +229,12 @@ fn skip_string(bytes: &[char], from: usize, line: &mut usize) -> usize {
     let mut index = from;
     while index < bytes.len() {
         match bytes[index] {
-            '\\' => index += 2,
+            '\\' => {
+                if bytes.get(index + 1) == Some(&'\n') {
+                    *line += 1;
+                }
+                index += 2;
+            }
             '"' => return index + 1,
             '\n' => {
                 *line += 1;
@@ -313,8 +329,23 @@ mod tests {
     }
 
     #[test]
-    fn a_docstring_is_permitted() {
-        assert_eq!(rules("/// Reads a thing.\npub fn read() {}\n"), Vec::new());
+    fn a_docstring_is_rejected() {
+        assert_eq!(
+            rules("/// Reads a thing.\npub fn read() {}\n"),
+            vec![Rule::Docstring]
+        );
+    }
+
+    #[test]
+    fn a_line_a_string_was_continued_over_is_still_counted() {
+        let text = "let text = \"one \\\n    two\";\n// set x\n";
+        let found = check_rust(Path::new("probe.rs"), text);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].line, 3,
+            "a string continued across a line was counted as one line, so every finding after \
+             one is reported against a line it is not on"
+        );
     }
 
     #[test]
@@ -343,11 +374,8 @@ mod tests {
     }
 
     #[test]
-    fn a_doc_comment_containing_a_block_opener_is_permitted() {
-        assert_eq!(
-            rules("/// mentions /* and nothing else\npub fn f() {}\n"),
-            Vec::new()
-        );
+    fn a_module_header_containing_a_block_opener_is_permitted() {
+        assert_eq!(rules("//! mentions /* and nothing else\n"), Vec::new());
     }
 
     #[test]
@@ -399,18 +427,12 @@ mod tests {
 
     #[test]
     fn a_decorative_symbol_is_rejected() {
-        assert_eq!(
-            rules("/// a rocket \u{1F680}\npub fn f() {}\n"),
-            vec![Rule::Decoration]
-        );
+        assert_eq!(rules("//! a rocket \u{1F680}\n"), vec![Rule::Decoration]);
     }
 
     #[test]
     fn an_arrow_is_rejected() {
-        assert_eq!(
-            rules("/// a to b \u{2192}\npub fn f() {}\n"),
-            vec![Rule::Decoration]
-        );
+        assert_eq!(rules("//! a to b \u{2192}\n"), vec![Rule::Decoration]);
     }
 
     #[test]

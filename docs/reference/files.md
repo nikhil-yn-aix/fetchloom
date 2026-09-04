@@ -96,7 +96,7 @@ Two runs of the same dataset with different `--select` pin different entries.
 The receipt is local. It may contain absolute paths, it is never committed, and
 it is never read as an authority for identity. It lives in the cache, keyed by
 the digest of the destination it describes, so it is found from any working
-directory and a destination you moved is simply not found.
+directory and a destination you moved is not found.
 
 ```yaml
 artifacts: {}

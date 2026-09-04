@@ -115,8 +115,8 @@ The first run wrote three things:
 
 - `data/`, the destination. This is yours. Fetchloom reconciles it and never
   clobbers it.
-- `fetchloom.lock`, beside your working directory. It pins the digest of what
-  the reference resolved to, and contains nothing about this machine. Commit it.
+- `fetchloom.lock`, beside your working directory. It contains nothing about
+  this machine.
 - A receipt inside the cache, keyed by the destination's path. It records what
   this run did here, and it never leaves this machine.
 

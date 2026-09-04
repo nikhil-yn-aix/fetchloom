@@ -133,26 +133,29 @@ An access token from `az` expires, usually within an hour.
 
 ### Amazon S3
 
-**Unlocks.** Nothing this build can use. Amazon S3 authenticates a request by
-signing it with an access key and a secret key, which is not a token that can be
-sent, and this build sends a token. A private Amazon S3 bucket cannot be fetched
-by name here.
+**Unlocks.** A private bucket. Amazon S3 authenticates a request by signing it
+with an access key and a secret key rather than by sending a token, and this
+build computes that signature itself.
 
 **Steps.**
 
-1. If the bucket is public, no token is needed. Fetch it by its endpoint, for
-   example `https://s3.amazonaws.com/<bucket>/<prefix>/`.
-2. If the bucket is private, ask whoever owns it for a presigned link to each
-   object you need. A presigned link is an ordinary web address that already
-   carries its own authorization and expires after a set time.
-3. Fetch each presigned link directly. Quote the address, because it contains
-   characters a terminal would otherwise read as instructions.
+1. If the bucket is public, no credential is needed. Fetch it by its endpoint,
+   for example `https://s3.amazonaws.com/<bucket>/<prefix>/`.
+2. For a private bucket, create an access key for a user or role that may read
+   it, in the AWS console under Security credentials.
+3. Set `FETCHLOOM_ACCESS_KEY_<HOST>`, `FETCHLOOM_SECRET_KEY_<HOST>` and
+   `FETCHLOOM_REGION_<HOST>`. All three are required together: an access key
+   without a secret key or without a region is refused by name rather than sent.
+4. A session token from a temporary credential goes in the matching
+   `FETCHLOOM_SESSION_TOKEN_<HOST>` and is signed over with the rest.
 
-**Scope.** For a presigned link, one object, for the shortest time that covers
-the transfer.
+The secret key is never written to any file, log, event or message and never
+leaves the process: only the signature computed from it is sent.
 
-Signed request support is not in this build. It is the second credential shape
-Fetchloom will carry.
+**Verification.** `fetchloom plan https://s3.amazonaws.com/<bucket>/<prefix>/`
+
+**Scope.** The narrowest policy that works, which for one dataset is read access
+to one bucket prefix.
 
 ### Any other object storage endpoint
 

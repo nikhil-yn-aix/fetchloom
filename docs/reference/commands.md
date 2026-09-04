@@ -211,11 +211,10 @@ unknown:
 
 ```
 
-`unknown` lists what the source could not tell it. A field there is never turned
-into a number. `cost` is there because no source in this build states who is
-billed for its bytes; when one does, an artifact carries `egress_charged` and
-`requester_pays`, and never a sum of money. `cached`, `disk`, `conflicts` and `destination` describe the
-machine the plan was made on; `apply` reports them and acts on none of them.
+`cost` is in `unknown` because no source in this build states who is billed for
+its bytes; when one does, an artifact carries `egress_charged` and
+`requester_pays`, and never a sum of money. See [files.md](files.md) for what
+each plan field means.
 
 `plan` accepts `get`'s flags. `--force` and `--adopt` are among them and have
 nothing to act on, because a plan writes no destination.
@@ -342,9 +341,6 @@ $ fetchloom --threads 3 explain threads
 threads = 3 (command line)
 ```
 
-This build reports sixteen settings: `offline`, `threads`, `display`,
-`cache.dir`, `concurrency`, `per-host`, `bandwidth`, `io`, `aggressive`,
-`deterministic-io`, `log`, `retries`, `timeout`, `sources`, `color` and `hints`.
 `measured` means no level named a value and the number was taken from this
 machine or this cache. See [tuning.md](tuning.md) for what each of the six
 tuning settings means and what its measurement is.

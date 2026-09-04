@@ -1230,9 +1230,9 @@ fn peak_of(child: &std::process::Child, _watching: Watcher) -> Result<u64, Bench
     };
     let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS>())
         .map_err(|_| BenchError::NoPeak)?;
-    // SAFETY: the child handle is owned and still open, and the structure is a live local of exactly the size passed.
-    let ok =
-        unsafe { GetProcessMemoryInfo(child.as_raw_handle() as HANDLE, &raw mut counters, size) };
+    let handle = child.as_raw_handle() as HANDLE;
+    // SAFETY: the handle is owned and still open, and the structure is a live local of exactly the size passed.
+    let ok = unsafe { GetProcessMemoryInfo(handle, &raw mut counters, size) };
     if ok == 0 {
         return Err(BenchError::NoPeak);
     }
