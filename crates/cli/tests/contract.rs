@@ -783,3 +783,19 @@ fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }
+
+#[test]
+fn a_failure_says_what_to_do_first_and_names_the_kind_and_the_code_second() {
+    let output = run(&["get", "./definitely-missing-path"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('{'))
+        .collect();
+    assert_eq!(lines.len(), 2, "stderr was {stderr}");
+    assert!(
+        !lines[0].contains("reference.unresolved"),
+        "the first line spent itself on the kind rather than the action: {stderr}"
+    );
+    assert_eq!(lines[1], "reference.unresolved, exit 10", "stderr was {stderr}");
+}

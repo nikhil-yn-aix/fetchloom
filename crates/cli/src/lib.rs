@@ -86,7 +86,12 @@ impl<'a> Reporter<'a> {
                 Err(_) => eprintln!("{}", crate::style::failure(&error.to_string())),
             }
         } else {
-            eprintln!("{}", crate::style::failure(&error.to_string()));
+            let code = fetchloom_engine::outcome::ExitCode::from(error.layer());
+            eprintln!("{}", crate::style::failure(error.next_action()));
+            eprintln!(
+                "{}",
+                crate::style::dimmed(&format!("{}, exit {}", error.kind(), code.code()))
+            );
         }
         fetchloom_engine::outcome::ExitCode::from(error.layer())
     }

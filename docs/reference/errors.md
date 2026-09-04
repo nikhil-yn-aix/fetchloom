@@ -1,8 +1,10 @@
 # When a run stops
 
-Every failure names a kind and exits with a code you can branch on. Under
-`--json` the failure is one object on standard output; otherwise it is one line
-on standard error.
+Every failure names a kind and exits with a code you can branch on.
+
+Under `--json` the failure is one object on standard output. Otherwise it is two
+lines on standard error: what to do about it, then, dimmed, the kind and the
+exit code, which are what you search for and what you branch on.
 
 ```
 $ fetchloom get ./nope.tar --json
