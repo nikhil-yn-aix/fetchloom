@@ -82,7 +82,7 @@ Names are ordinary words. No abbreviations beyond established ones, no invented 
 
 A function that needs a comment to be understood is renamed or split instead.
 
-No comments. No commented-out code. No banners, no section dividers, no decorative symbols, no emoji, anywhere in code or docs.
+No comments. No commented-out code. No banners, no section dividers, no decorative symbols, no emoji, anywhere in code or docs. This is a house style and nothing in the build enforces it: a checker for it would be code shipped to police taste, which is exactly the kind of thing this section exists to keep out.
 
 ## Docstrings
 

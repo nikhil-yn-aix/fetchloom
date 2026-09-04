@@ -25,7 +25,6 @@ pub(crate) fn run_get(
     sequence: &Sequence,
 ) -> ExitCode {
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
-    let json = parsed.global.json;
     let work = Arc::new(WorkCounter::new());
     let limits = settings::limits_for(resolved);
     let adapters = run::adapters_for(&work, &limits);
@@ -123,8 +122,9 @@ pub(crate) fn run_get(
             locked: transfer.locked,
             cache: held.as_deref(),
             policy: &policy,
-            json,
+            json: parsed.global.json,
             accepted_terms,
+            selected: !transfer.select.is_empty() || !transfer.exclude.is_empty(),
         },
         observer,
         sequence,
@@ -195,6 +195,7 @@ pub(crate) struct Recording<'a> {
     policy: &'a dyn fetchloom_engine::seam::policy::Policy,
     json: bool,
     accepted_terms: Option<fetchloom_engine::license::Acceptance>,
+    selected: bool,
 }
 
 pub(crate) fn record(
@@ -220,15 +221,23 @@ pub(crate) fn record(
         return reporter.report(&error);
     }
     match &produced.outcome {
-        Ok(result) => finish_get(
-            result,
-            into.cache,
-            into.manifest,
-            &produced.resolved,
-            into.policy,
-            into.accepted_terms,
-            &reporter,
-        ),
+        Ok(result) => {
+            fetchloom_cli::hint::record(|observed| {
+                observed.lock_written = Some(into.lock_path.display().to_string());
+                if !into.selected {
+                    observed.entries_taken_whole = Some(result.entries);
+                }
+            });
+            finish_get(
+                result,
+                into.cache,
+                into.manifest,
+                &produced.resolved,
+                into.policy,
+                into.accepted_terms,
+                &reporter,
+            )
+        }
         Err(error) => reporter.report(error),
     }
 }

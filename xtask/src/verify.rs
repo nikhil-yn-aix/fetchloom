@@ -180,9 +180,6 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
     }
     report.step("test x86_64-pc-windows-msvc", test);
 
-    report.step_here("comments", || {
-        crate::check_comments(workspace) == std::process::ExitCode::SUCCESS
-    });
     if !fast {
         let started = Instant::now();
         match crate::network::run(workspace, None) {

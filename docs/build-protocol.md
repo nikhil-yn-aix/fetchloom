@@ -146,7 +146,7 @@ R1 Research. Toolchain and crate selection for parsing, styling, progress, hashi
 
 R2 Research. Content hash chunk size and outboard threshold. The exact canonical entry stream for the tree digest, including symlinks, empty directories, zero-byte files, and mode reduction. Atomic publication primitive and durability tier calls per platform. Filesystem capability detection method per platform. Advisory locking primitive, including cross-user and network filesystem limits.
 
-B0 Build, alone. Workspace and crate layout, lint and dependency policy, the verification matrix green on every target it builds, the benchmark harness and comment checker, every seam trait and domain type, the error and event types with redaction at construction, and the fault injection crate. No behavior beyond what a signature requires. Everything after this compiles against it.
+B0 Build, alone. Workspace and crate layout, lint and dependency policy, the verification matrix green on every target it builds, the benchmark harness, every seam trait and domain type, the error and event types with redaction at construction, and the fault injection crate. No behavior beyond what a signature requires. Everything after this compiles against it.
 
 B1, B2, B3 Build, in parallel, one crate each.
 

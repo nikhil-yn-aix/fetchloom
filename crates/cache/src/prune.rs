@@ -1,5 +1,7 @@
 //! Mark, grace, sweep.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fetchloom_engine::digest::ContentDigest;
@@ -9,12 +11,20 @@ use fetchloom_engine::seam::store::{PruneReport, Store};
 
 use crate::Cache;
 use crate::record::{self, Mark};
+use crate::storage::Placement;
 
 pub const GRACE: Duration = Duration::from_secs(60);
+
+struct Removable<L> {
+    digest: ContentDigest,
+    size: u64,
+    held: L,
+}
 
 pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport, Error> {
     let mut report = PruneReport::default();
     let now = nanos_now();
+    let mut removable = Vec::new();
 
     for digest in cache.list()? {
         if cache.layout().pin_of(digest).exists() {
@@ -55,7 +65,35 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
         }
 
         let size = cache.size_of(digest).unwrap_or_default();
-        cache.remove_object(digest)?;
+        removable.push(Removable { digest, size, held });
+    }
+
+    remove_all(cache, removable, &mut report)?;
+
+    sweep_quarantine(cache, &mut report)?;
+    Ok(report)
+}
+
+fn remove_all<P: Platform>(
+    cache: &Cache<P>,
+    removable: Vec<Removable<P::Lock>>,
+    report: &mut PruneReport,
+) -> Result<(), Error> {
+    let mut packed: BTreeMap<PathBuf, BTreeSet<ContentDigest>> = BTreeMap::new();
+    for candidate in &removable {
+        if let Some(Placement::Packed { pack, .. }) = cache.placement(candidate.digest) {
+            packed.entry(pack).or_default().insert(candidate.digest);
+        }
+    }
+    for (pack, digests) in &packed {
+        cache.rewrite_pack(pack, digests)?;
+    }
+
+    for candidate in removable {
+        let Removable { digest, size, held } = candidate;
+        if !packed.values().any(|digests| digests.contains(&digest)) {
+            cache.remove_object(digest)?;
+        }
         remove(&cache.layout().outboard_of(digest))?;
         remove(&cache.object_record(digest))?;
         remove(&cache.layout().mark_of(digest))?;
@@ -67,8 +105,7 @@ pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport
         remove(&cache.layout().lock_owner_of(digest))?;
     }
 
-    sweep_quarantine(cache, &mut report)?;
-    Ok(report)
+    Ok(())
 }
 
 fn sweep_quarantine<P: Platform>(cache: &Cache<P>, report: &mut PruneReport) -> Result<(), Error> {

@@ -16,9 +16,13 @@ pub struct Observed {
     pub placement: Option<String>,
     pub restarted_from_zero: bool,
     pub cache_unusable: bool,
+    pub lock_written: Option<String>,
+    pub entries_taken_whole: Option<u64>,
 }
 
 const WORTH_SAYING: Duration = Duration::from_secs(120);
+
+const CROWDED: u64 = 200;
 
 impl Observed {
     #[must_use]
@@ -51,6 +55,26 @@ impl Observed {
                 line: "this transfer restarted from zero because the source states nothing that \
                        identifies its bytes; a source that does can resume instead"
                     .to_owned(),
+            });
+        }
+        if let Some(path) = self.lock_written.as_ref() {
+            return Some(Hint {
+                key: "lock-written".to_owned(),
+                line: format!(
+                    "{path} records exactly what you got; commit it and any later run, on any \
+                     machine, can check the source still serves the same thing"
+                ),
+            });
+        }
+        if let Some(entries) = self.entries_taken_whole
+            && entries >= CROWDED
+        {
+            return Some(Hint {
+                key: "selection".to_owned(),
+                line: format!(
+                    "that was {entries} files; you can take part of it next time with \
+                     --select '<pattern>', which is faster and writes less"
+                ),
             });
         }
         None
@@ -158,10 +182,34 @@ mod tests {
                 );
             }
             assert!(
-                said.contains("would have") || said.contains("set ") || said.contains("can resume"),
+                said.contains("would have")
+                    || said.contains("set ")
+                    || said.contains("can resume")
+                    || said.contains("commit it")
+                    || said.contains("you can take"),
                 "the hint names no action the user could take: {said}"
             );
         }
+    }
+
+    #[test]
+    fn a_lock_a_run_wrote_is_worth_saying_once() {
+        let written = Observed {
+            lock_written: Some("fetchloom.lock".to_owned()),
+            ..Observed::default()
+        };
+        let hint = written.hint().unwrap_or_else(|| unreachable!());
+        assert_eq!(hint.key, "lock-written");
+        assert!(hint.line.contains("fetchloom.lock"), "{}", hint.line);
+    }
+
+    #[test]
+    fn a_small_tree_earns_no_selection_hint() {
+        let small = Observed {
+            entries_taken_whole: Some(3),
+            ..Observed::default()
+        };
+        assert_eq!(small.hint(), None);
     }
 
     #[test]
@@ -184,6 +232,8 @@ mod tests {
             placement: Some("FETCHLOOM_TOKEN_X".to_owned()),
             restarted_from_zero: true,
             cache_unusable: true,
+            lock_written: Some("fetchloom.lock".to_owned()),
+            entries_taken_whole: Some(4000),
         };
         let hint = everything.hint();
         assert!(hint.is_some());

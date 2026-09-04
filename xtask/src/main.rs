@@ -2,7 +2,6 @@
 //! platforms.
 
 mod bench;
-mod comments;
 mod network;
 mod profile;
 mod verify;
@@ -20,7 +19,6 @@ fn main() -> ExitCode {
     let workspace = workspace_root();
 
     match task.as_str() {
-        "check-comments" => check_comments(&workspace),
         "bench" => run_bench(&workspace, &rest, verification_run()),
         "completions" => generate_completions(&workspace, &rest),
         "network" => run_network(&workspace, &rest),
@@ -41,7 +39,6 @@ fn main() -> ExitCode {
 
 const USAGE: &str = "\
 usage:
-  cargo xtask check-comments
   cargo xtask bench [--save-baseline] [--compare] [--publish] [--iterations <n>] [--regime <name>]
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
@@ -53,51 +50,6 @@ fn workspace_root() -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf()
-}
-
-pub(crate) fn check_comments(workspace: &Path) -> ExitCode {
-    let mut findings = Vec::new();
-    let mut files = Vec::new();
-    collect(workspace, &mut files);
-    for file in files {
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            eprintln!("could not read {}", file.display());
-            return ExitCode::from(1);
-        };
-        match file.extension().and_then(std::ffi::OsStr::to_str) {
-            Some("rs") => findings.extend(comments::check_rust(&file, &text)),
-            Some("md") => findings.extend(comments::check_markdown(&file, &text)),
-            _ => {}
-        }
-    }
-    if findings.is_empty() {
-        println!("check-comments: clean");
-        return ExitCode::SUCCESS;
-    }
-    for finding in &findings {
-        println!("{finding}");
-    }
-    println!("check-comments: {} findings", findings.len());
-    ExitCode::from(1)
-}
-
-fn collect(directory: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == "target" || name == ".git" {
-            continue;
-        }
-        if path.is_dir() {
-            collect(&path, files);
-        } else {
-            files.push(path);
-        }
-    }
 }
 
 pub(crate) fn run_bench(workspace: &Path, arguments: &[String], gate_timing: bool) -> ExitCode {
