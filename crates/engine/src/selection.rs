@@ -31,16 +31,29 @@ impl Glob {
 }
 
 fn matches_components(pattern: &[&str], path: &[&str]) -> bool {
-    let Some((first, rest)) = pattern.split_first() else {
-        return path.is_empty();
-    };
-    if *first == "**" {
-        return (0..=path.len()).any(|skipped| matches_components(rest, &path[skipped..]));
+    let mut at_pattern = 0;
+    let mut at_path = 0;
+    let mut star = None;
+    let mut resumed = 0;
+    while at_path < path.len() {
+        if at_pattern < pattern.len() && pattern[at_pattern] == "**" {
+            star = Some(at_pattern);
+            resumed = at_path;
+            at_pattern += 1;
+        } else if at_pattern < pattern.len()
+            && matches_component(pattern[at_pattern], path[at_path])
+        {
+            at_pattern += 1;
+            at_path += 1;
+        } else if let Some(last) = star {
+            at_pattern = last + 1;
+            resumed += 1;
+            at_path = resumed;
+        } else {
+            return false;
+        }
     }
-    match path.split_first() {
-        Some((head, tail)) if matches_component(first, head) => matches_components(rest, tail),
-        _ => false,
-    }
+    pattern[at_pattern..].iter().all(|part| *part == "**")
 }
 
 fn matches_component(pattern: &str, name: &str) -> bool {

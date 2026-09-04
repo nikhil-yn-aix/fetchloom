@@ -191,15 +191,9 @@ pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::M
     if !source.is_file() {
         return None;
     }
-    let read = std::fs::read(source).map_err(|reason| {
-        Error::new(
-            ErrorKind::ManifestInvalid,
-            format!("make {} readable: {reason}", source.display()),
-        )
-    });
-    Some(read.and_then(|bytes| {
-        fetchloom_engine::manifest::Manifest::parse(&bytes, syntax, &Limits::default())
-    }))
+    let limits = Limits::default();
+    let read = crate::resolve::read_bounded_document(source, &limits);
+    Some(read.and_then(|bytes| fetchloom_engine::manifest::Manifest::parse(&bytes, syntax, &limits)))
 }
 
 #[expect(

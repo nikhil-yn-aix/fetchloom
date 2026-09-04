@@ -379,6 +379,7 @@ pub fn list_members<R: Read + Seek + 'static>(
         } else {
             MemberKind::File
         };
+        guard.observe_bytes(size)?;
         let target = if matches!(kind, MemberKind::Symlink) {
             let mut body = open_body(source.clone(), offset)?;
             let mut bytes = Vec::new();
@@ -390,7 +391,6 @@ pub fn list_members<R: Read + Seek + 'static>(
         } else {
             None
         };
-        guard.observe_bytes(size)?;
         members.push(ArchiveMember {
             path,
             kind,

@@ -162,6 +162,37 @@ pub fn manifest_from_metadata(
     )
 }
 
+pub fn read_bounded_document(
+    path: &std::path::Path,
+    limits: &fetchloom_engine::limits::Limits,
+) -> Result<Vec<u8>, fetchloom_engine::error::Error> {
+    use std::io::Read as _;
+
+    let unreadable = |reason: &dyn std::fmt::Display| {
+        fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::ManifestInvalid,
+            format!("make {} readable: {reason}", path.display()),
+        )
+    };
+    let opened = std::fs::File::open(path).map_err(|reason| unreadable(&reason))?;
+    let mut bytes = Vec::new();
+    opened
+        .take(limits.manifest_size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|reason| unreadable(&reason))?;
+    if bytes.len() as u64 > limits.manifest_size {
+        return Err(fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::ResourceLimit,
+            format!(
+                "publish a smaller document, because {} is larger than the {} bytes a run reads and a document is never read in part",
+                path.display(),
+                limits.manifest_size
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
 pub fn read_document(
     location: &str,
     adapters: &Adapters,
@@ -172,7 +203,10 @@ pub fn read_document(
 
     crate::run::allowed_offline(location, policy)?;
     let mut bytes = Vec::new();
-    if let Some((source, _)) = adapters.serving(location) {
+    let Some((source, _)) = adapters.serving(location) else {
+        return read_bounded_document(&crate::run::local_path(location)?, limits);
+    };
+    {
         let credential = policy.credential(
             &fetchloom_engine::reference::Host::new(crate::run::host_of(location)),
             fetchloom_engine::credential::Necessity::Optional,
@@ -186,23 +220,6 @@ pub fn read_document(
                 fetchloom_engine::error::Error::new(
                     fetchloom_engine::error::ErrorKind::ManifestInvalid,
                     format!("serve the document again, because it could not be read: {reason}"),
-                )
-            })?;
-    } else {
-        let path = crate::run::local_path(location)?;
-        let opened = std::fs::File::open(&path).map_err(|reason| {
-            fetchloom_engine::error::Error::new(
-                fetchloom_engine::error::ErrorKind::ManifestInvalid,
-                format!("make {} readable: {reason}", path.display()),
-            )
-        })?;
-        opened
-            .take(limits.manifest_size + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|reason| {
-                fetchloom_engine::error::Error::new(
-                    fetchloom_engine::error::ErrorKind::ManifestInvalid,
-                    format!("make {} readable: {reason}", path.display()),
                 )
             })?;
     }

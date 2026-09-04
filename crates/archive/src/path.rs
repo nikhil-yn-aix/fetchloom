@@ -9,14 +9,14 @@ fn unsafe_path(member: &str, next_action: String) -> Error {
 
 pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
     if raw.contains(&0) {
-        let lossy = String::from_utf8_lossy(raw).into_owned();
+        let lossy = String::from_utf8_lossy(raw);
         return Err(unsafe_path(
             &lossy,
             format!("member path \"{lossy}\" holds a NUL byte"),
         ));
     }
     let Ok(text) = std::str::from_utf8(raw) else {
-        let lossy = String::from_utf8_lossy(raw).into_owned();
+        let lossy = String::from_utf8_lossy(raw);
         return Err(unsafe_path(
             &lossy,
             format!("member path \"{lossy}\" is not valid UTF-8"),
@@ -76,7 +76,7 @@ pub fn claim_member_path(
 }
 
 pub fn validate_link_target(member: &str, raw: &[u8]) -> Result<(), Error> {
-    let target = String::from_utf8_lossy(raw).into_owned();
+    let target = String::from_utf8_lossy(raw);
     let escape = |reason: &str| {
         Err(Error::new(
             ErrorKind::ArchiveLinkEscape,

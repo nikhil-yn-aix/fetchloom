@@ -426,21 +426,21 @@ fn production_source() -> String {
 }
 
 #[test]
-fn every_error_kind_is_constructed_by_something_that_is_not_a_test() {
+fn every_error_kind_appears_in_production_source() {
     let source = production_source();
     assert!(
         source.len() > 100_000,
         "the walk read {} bytes of source, so it proves nothing",
         source.len()
     );
-    let unreachable: Vec<&str> = ErrorKind::ALL
+    let absent: Vec<&str> = ErrorKind::ALL
         .iter()
         .filter(|kind| !source.contains(&format!("ErrorKind::{kind:?}")))
         .map(|kind| kind.label())
         .collect();
     assert!(
-        unreachable.is_empty(),
-        "these kinds are defined and no production path builds one, so no run can ever report \
-         them: {unreachable:?}"
+        absent.is_empty(),
+        "these kinds are defined and their name is written nowhere outside the tests, which is a \
+         grep over the source and not a proof that any run reaches them: {absent:?}"
     );
 }

@@ -23,11 +23,16 @@ pub struct Reconciled {
 pub fn reconcile(resolved: &[TreeEntry], destination: &[TreeEntry]) -> Vec<Reconciled> {
     let mut found: Vec<Reconciled> = Vec::with_capacity(resolved.len() + destination.len());
     let mut named = std::collections::HashSet::with_capacity(resolved.len());
+    let mut held: std::collections::HashMap<&str, &TreeEntry> =
+        std::collections::HashMap::with_capacity(destination.len());
+    for entry in destination {
+        held.entry(entry.path().as_str()).or_insert(entry);
+    }
 
     for entry in resolved {
         let path = entry.path();
         named.insert(path.as_str());
-        let outcome = match destination.iter().find(|holds| holds.path() == path) {
+        let outcome = match held.get(path.as_str()).copied() {
             None => ReconcileOutcome::Restored,
             Some(holds) if holds == entry => ReconcileOutcome::Unchanged,
             Some(_) => ReconcileOutcome::Modified,

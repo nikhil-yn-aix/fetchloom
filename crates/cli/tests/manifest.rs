@@ -254,3 +254,25 @@ fn two_artifacts_landing_on_one_path_is_a_collision() {
     );
     assert!(!scene.destination.exists());
 }
+
+#[test]
+fn a_local_manifest_past_the_bound_is_refused_rather_than_read_whole() {
+    let scene = two_artifacts("a,b\n");
+    let padded = format!(
+        "name: {}\nartifacts:\n  - id: tools\n    sources: [tools.tar.gz]\n",
+        "x".repeat(17 * 1024 * 1024)
+    );
+    std::fs::write(&scene.manifest, padded).unwrap();
+    let run = get(&scene, &[]);
+    assert_ne!(
+        run.status.code(),
+        Some(0),
+        "a manifest larger than the bound was accepted"
+    );
+    let said = stderr(&run);
+    assert!(
+        said.contains("resource.limit"),
+        "a local manifest larger than the bound failed as {said} rather than a resource limit, so \
+         a document is read whole before its size is judged"
+    );
+}

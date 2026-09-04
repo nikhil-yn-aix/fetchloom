@@ -103,3 +103,22 @@ fn no_entries_at_all_produces_no_outcomes() {
     let outcome = reconcile(&[], &[]);
     assert!(outcome.is_empty());
 }
+
+#[test]
+fn reconciling_a_large_tree_costs_time_proportional_to_its_size() {
+    let count = 100_000;
+    let resolved: Vec<TreeEntry> = (0..count)
+        .map(|index| file(&format!("data/{index}.bin"), b"same"))
+        .collect();
+    let destination = resolved.clone();
+    let (report, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = report.send(reconcile(&resolved, &destination).len());
+    });
+    let counted = answer.recv_timeout(std::time::Duration::from_secs(20)).ok();
+    assert_eq!(
+        counted,
+        Some(count),
+        "reconciling {count} entries against the same {count} did not finish in twenty seconds"
+    );
+}

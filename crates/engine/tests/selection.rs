@@ -258,3 +258,27 @@ fn flattening_every_member_to_nothing_fails_rather_than_emptying_the_tree() {
     assert_eq!(error.kind(), ErrorKind::DestinationUnrepresentable);
     assert!(error.next_action().contains('1'), "{}", error.next_action());
 }
+
+fn matches_within_a_second(pattern: &str, path: &str) -> bool {
+    let (report, answer) = std::sync::mpsc::channel();
+    let glob = Glob::new(pattern);
+    let owned = path.to_owned();
+    std::thread::spawn(move || {
+        let _ = report.send(glob.matches(&owned));
+    });
+    answer
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .is_ok()
+}
+
+#[test]
+fn a_pattern_of_many_recursive_wildcards_is_decided_rather_than_explored() {
+    let path = &("a/".repeat(23) + "b");
+    for stars in [8, 16] {
+        let pattern = "**/".repeat(stars) + "c";
+        assert!(
+            matches_within_a_second(&pattern, path),
+            "a pattern of {stars} recursive wildcards did not decide {path} within a second"
+        );
+    }
+}

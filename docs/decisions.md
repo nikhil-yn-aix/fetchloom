@@ -8608,3 +8608,120 @@ it once it does; `two_hosts_treated_alike_decide_nothing_where_one_was_rate_limi
 and `a_host_left_where_it_started_decides_nothing` hold the checks that stayed.
 
 Sources: standards.md Measure; `xtask/src/bench.rs` `decided`.
+
+## Audit. A zip symlink was read before the guard was asked about it
+
+`list_members` asked `BombGuard::observe_bytes` after it had already read the
+member body, and for a symlink that body was read in full by `read_to_end`.
+`open_body` bounds the compressed side with `take(compressed_size)` and hands it
+to `DeflateDecoder`, so the decompressed side had no bound at all: deflate
+reaches 1032 to 1, and a 100 MB zip could force a decompression of about 100 GB
+before either the 1 TiB expanded-byte limit or the ratio of 200 was consulted.
+`validate_link_target` then took an owned copy of those bytes, so the peak was
+twice the expansion.
+
+The guard is now asked with the declared size before the member kind is acted
+on. It runs once per member either way, so what changed is when it is asked, not
+how often. `validate_link_target` and the two failure arms of
+`validate_member_path` now hold the `Cow` that `String::from_utf8_lossy` returns
+rather than calling `into_owned` on the success path.
+
+Tar needed no change and got none. `tar_reader.rs` takes a link target from
+`entry.link_name_bytes()`, which is a header field bounded by the header, never
+the member body.
+
+Proof: `crates/archive/tests/bomb.rs`. Both cases declare a size past a limit on
+a symlink whose deflate stream is deliberately corrupt. Against cb60932 both
+failed with `archive.unsupported`, "is truncated or malformed: corrupt deflate
+stream", which is the body being decompressed before the declared size was
+judged. Both now fail `archive.bomb` and name the archive.
+
+Sources: contracts.md Rejections; `crates/archive/src/zip_reader.rs`;
+`crates/archive/src/path.rs`.
+
+## Audit. Glob matching backtracked into every earlier recursive wildcard
+
+`matches_components` handled a `**` component by recursing over every suffix of
+the remaining path, and a mismatch deeper in the pattern re-entered the wildcards
+above it. The cost is the number of ways the wildcards can divide the path, which
+grows without bound in the number of `**` components: measured on this machine in
+release, one path against one pattern, 2 stars 0.003 ms, 4 stars 0.137 ms, 6
+stars 4.692 ms, 8 stars 142.761 ms. `Manifest::select` is `Vec<Glob>` and
+manifests are fetched from remote URLs, so the pattern was hostile input and the
+cost was paid before a byte was transferred.
+
+`matches_component` in the same file already had the answer for a single `*`:
+remember where the last star was and the path index tried there, and on a
+mismatch restart from that star with the index advanced by one, never re-entering
+an earlier one. `matches_components` now does the same across components, which
+makes it linear in the pattern and the path. Consecutive `**` components match
+the same set as one, so keeping only the most recent is exact.
+
+No bound was added on the number of `**` components. A linear matcher needs none
+and contracts.md bounds nothing here.
+
+The four selection rules did not move. Every case in
+`crates/engine/tests/selection.rs` still passes, including the ones separating a
+`**` component from a `**` inside a component.
+
+Proof: `crates/engine/tests/selection.rs`
+`a_pattern_of_many_recursive_wildcards_is_decided_rather_than_explored`, which
+bounds 8 and 16 recursive wildcards against a 24-component path at one second
+each. Against cb60932 the 16-star arm did not answer within its second; the
+8-star arm answered, because at that path length the old cost is about ten
+million steps rather than the billions the 16-star arm needs. Both arms now
+answer, and the whole file runs in 0.01 s where it took 1.71 s.
+
+Sources: standards.md Measure; Russ Cox, "Glob Matching Can Be Simple And Fast
+Too", https://research.swtch.com/glob; `crates/engine/src/selection.rs`.
+
+## Audit. Reconcile scanned the destination once per resolved entry
+
+`reconcile` found each resolved entry's counterpart with
+`destination.iter().find(...)`, a linear scan inside a loop over the resolved
+tree. Measured in release: n=1,000 2.96 ms, n=2,000 5.04 ms, n=4,000 22.69 ms,
+n=8,000 84.58 ms, n=16,000 275.96 ms, with the cost per entry doubling at every
+step. contracts.md under Limits permits 500,000 listing entries, which
+extrapolates to minutes of CPU on a locked run that may move no bytes at all.
+
+The destination is now indexed into a `HashMap` once, before the loop. The second
+loop in the same function already built a `HashSet`, and `with_resolved_modes` in
+`crates/cli/src/run/local.rs` already built a `HashMap`, so this direction was the
+one that was missed rather than a technique that had to be introduced. Duplicate
+destination paths keep the first entry, which is what `find` returned.
+
+Proof: `crates/engine/tests/reconcile.rs`
+`reconciling_a_large_tree_costs_time_proportional_to_its_size`, 100,000 entries
+against an identical destination, bounded at twenty seconds. Against cb60932 it
+did not finish in twenty seconds. It now runs, with the tree construction
+included, in 0.29 s.
+
+Sources: standards.md Measure; contracts.md Limits;
+`crates/engine/src/reconcile.rs`.
+
+## Audit. Two document reads took the whole file and judged the size afterwards
+
+`manifest_at` called `std::fs::read` with no bound and handed the result to
+`Manifest::parse`. `planning::read` accepted a `limits` argument, called
+`std::fs::read` with no bound, and passed `limits` only to the parser. In both,
+a document past the 16 MiB manifest limit was read whole into memory and then
+reported as `manifest.invalid`, blaming the document's author for a size the
+reader was supposed to refuse. Plans are designed to be carried between machines,
+so a plan file is untrusted input exactly as a manifest is.
+
+`read_document` in `crates/cli/src/resolve.rs` already had the right shape for
+its remote branch: read the limit plus one byte, and fail `resource.limit` if the
+extra byte arrived, because a document is never read in part. That shape is now
+one function, `read_bounded_document`, taking a path. `read_document`'s local
+branch, `manifest_at`, and `planning::read` all call it, so there is one bounded
+local document read rather than three unbounded ones and a correct one.
+
+Proof: `crates/cli/tests/manifest.rs`
+`a_local_manifest_past_the_bound_is_refused_rather_than_read_whole` and
+`crates/cli/tests/portable.rs` `a_plan_past_the_bound_is_refused_rather_than_read_whole`.
+Against cb60932 both failed with `manifest.invalid`, "shorten the document,
+because it is 17825852 bytes and the limit is 16777216", which is the whole file
+already in memory. Both now fail `resource.limit`.
+
+Sources: contracts.md Limits; `crates/cli/src/resolve.rs`;
+`crates/cli/src/run/dataset.rs`; `crates/cli/src/planning.rs`.

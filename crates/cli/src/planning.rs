@@ -111,12 +111,7 @@ pub fn build(
 }
 
 pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
-    let bytes = std::fs::read(path).map_err(|reason| {
-        Error::new(
-            ErrorKind::ReferenceUnresolved,
-            format!("make {} readable: {reason}", path.display()),
-        )
-    })?;
+    let bytes = crate::resolve::read_bounded_document(path, limits)?;
     let syntax = fetchloom_engine::document::Syntax::of_path(path)
         .unwrap_or(fetchloom_engine::document::Syntax::Yaml);
     Plan::parse(&bytes, syntax, limits)

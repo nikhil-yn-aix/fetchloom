@@ -1069,6 +1069,8 @@ Every error carries: layer, dataset, artifact, source, attempt count, whether it
 
 Defaults. All configurable. None may be raised past a hard ceiling that would allow unbounded memory or disk use.
 
+A document larger than the manifest size limit is refused with `resource.limit` and is never read in part, wherever it is read from: a served URL, a manifest on disk, or a plan file.
+
 | Limit | Default |
 |---|---|
 | Archive entries | 1,000,000 |

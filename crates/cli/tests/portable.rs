@@ -410,3 +410,36 @@ fn a_bundle_imports_the_objects_it_carries() {
         "an imported cache holds a different number of objects than the one it came from"
     );
 }
+
+#[test]
+fn a_plan_past_the_bound_is_refused_rather_than_read_whole() {
+    let temporary = TempDir::new().unwrap();
+    let plan_file = temporary.path().join("oversized.plan");
+    let padded = format!(
+        "destination: out\nartifacts: []\nnote: {}\n",
+        "x".repeat(17 * 1024 * 1024)
+    );
+    std::fs::write(&plan_file, padded).unwrap();
+    let applied = run(
+        &[
+            "apply",
+            plan_file.to_str().unwrap(),
+            "--output",
+            temporary.path().join("out").to_str().unwrap(),
+            "--offline",
+            "--json",
+        ],
+        &temporary.path().join("cache"),
+    );
+    assert_ne!(
+        applied.status.code(),
+        Some(0),
+        "a plan larger than the bound was accepted"
+    );
+    let said = stderr(&applied);
+    assert!(
+        said.contains("resource.limit"),
+        "a plan larger than the bound failed as {said} rather than a resource limit, so a plan is \
+         read whole before its size is judged"
+    );
+}
