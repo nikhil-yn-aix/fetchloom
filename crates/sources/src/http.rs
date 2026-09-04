@@ -223,7 +223,11 @@ fn build_agent(limits: &Limits) -> ureq::Agent {
         .timeout_connect(Some(limits.connect_timeout))
         .timeout_recv_response(Some(limits.response_timeout))
         .timeout_recv_body(Some(limits.idle_timeout))
-        .max_idle_connections_per_host(limits.connections_per_host)
+        .max_idle_connections_per_host(
+            usize::try_from(fetchloom_engine::tuning::TRANSFERS_CEILING)
+                .unwrap_or(usize::MAX)
+                .max(limits.connections_per_host),
+        )
         .max_idle_age(limits.idle_connection_age)
         .tls_config(
             ureq::tls::TlsConfig::builder()
@@ -648,7 +652,19 @@ pub fn trust_store_loads() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ErrorKind, classify};
+    use super::{ErrorKind, Limits, build_agent, classify};
+
+    #[test]
+    fn the_idle_pool_holds_every_connection_a_run_may_open_to_one_host() {
+        let kept = build_agent(&Limits::default())
+            .config()
+            .max_idle_connections_per_host();
+        let most = usize::try_from(fetchloom_engine::tuning::TRANSFERS_CEILING).unwrap_or(usize::MAX);
+        assert!(
+            kept >= most,
+            "a run may open {most} connections to one host and the pool keeps {kept} of them, so the rest hand back their handshake"
+        );
+    }
 
     #[test]
     fn a_name_nothing_resolves_is_terminal() {
