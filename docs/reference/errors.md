@@ -83,7 +83,7 @@ $ echo $?
 ```
 $ echo tampered >> out3/one
 $ fetchloom verify out3 --json
-{"kind":"integrity.mismatch","layer":"verify", ... ,"next_action":"fetch ...\\out3 again, because it now holds blake3:21659c9076455da14c944d262c46da17ae7125dcbb682a0d9a76db3cc2355d4d where the run that wrote it reported blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87"}
+{"kind":"integrity.mismatch","layer":"verify", ... ,"next_action":"fetch ...\\out3 again, because it now holds blake3:cb7d8739486d77a44b2835d23dd582dfd1f769df3bd53c3274ccb7c0d8c06549 where the run that wrote it reported blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964"}
 $ echo $?
 30
 ```

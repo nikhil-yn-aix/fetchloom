@@ -106,8 +106,8 @@ quarantined            0
 
 ```
 $ fetchloom cache ls
-blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632           130
-blake3:f7cccdd9d72f756232e20f080a37ef0dc352b525ff73f6b58f2952b0615091d0           128
+blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6           130
+blake3:6ce2f3af4671c518acc720b0c90462390119bf87bb435f36dba944de65d7b6cf           128
 ```
 
 These are the digests `pin` and `unpin` take.
@@ -130,26 +130,26 @@ $ fetchloom cache verify
 verified               1
 quarantined            1
 held                   0
-blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632 was quarantined
+blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6 was quarantined
 ```
 
 The object is not deleted: those bytes are the evidence of what went wrong and
 the input a localized repair needs. Beside it goes a diagnosis:
 
 ```json
-{"digest":"blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632",
- "found":"blake3:263e9e009f51aa2121beeb44ce00b958815c25281a064081495bc1b131c91fc5",
- "size":130,
+{"digest":"blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6",
+ "found":"blake3:fe48f2eea0780d805fb6da5a760facc4d3515739f0f5c9b89dcd105a6f2be444",
+ "size":127,
  "damaged":[],
  "localized":"no_tree_stored",
  "source":null,
  "validator":null,
- "quarantined_at":"2026-08-30T21:26:24Z",
- "next_action":"fetchloom repair blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632"}
+ "quarantined_at":"2026-09-04T07:41:36Z",
+ "next_action":"fetchloom repair blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6"}
 ```
 
 `damaged` lists the byte ranges that failed against the chunk tree, ascending.
-It is empty here because this object is 130 bytes, far below the 64 MiB
+It is empty here because this object is 127 bytes, far below the 64 MiB
 threshold at which a tree is stored, and `localized` says which of the three
 reasons applies. An empty `damaged` is never read as no damage: the object is in
 quarantine because it failed.
@@ -161,11 +161,11 @@ counted as `held`.
 ### pin and unpin
 
 ```
-$ fetchloom cache pin blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632
-blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632 is pinned
+$ fetchloom cache pin blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6
+blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6 is pinned
 
-$ fetchloom cache unpin blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632
-blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632 is not pinned
+$ fetchloom cache unpin blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6
+blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6 is not pinned
 ```
 
 A pinned object always survives a prune. Both take a digest rather than a
@@ -250,7 +250,7 @@ $ fetchloom cache export bundle.tar
                                                                  # carry dataset.plan and bundle.tar
 $ FETCHLOOM_CACHE_DIR=./cache2 fetchloom cache import bundle.tar
 $ FETCHLOOM_CACHE_DIR=./cache2 fetchloom apply dataset.plan --offline --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flref\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\\Users\\you\\flref\\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
 ```
 
 Same tree digest, zero requests.

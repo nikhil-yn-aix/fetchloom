@@ -54,7 +54,7 @@ decides it. A directory is never searched for one. See [files.md](files.md).
 
 ```
 $ fetchloom get ./data.yaml --output out --json
-{"status":"materialized","dataset":"sample","tree":"blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87","entries":2, ... }
+{"status":"materialized","dataset":"sample","tree":"blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964","entries":2, ... }
 ```
 
 **An object store prefix.** A remote location ending in `/` is a container. It

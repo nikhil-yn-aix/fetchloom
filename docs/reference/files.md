@@ -48,7 +48,7 @@ Fetching that file:
 
 ```
 $ fetchloom get ./data.yaml --output out --json
-{"status":"materialized","dataset":"sample","tree":"blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87","destination":"C:\\Users\\you\\flman\\out","entries":2,"bytes":258,"work":{"bytes_read":516,"bytes_written":258,"requests":0,"file_operations":30}}
+{"status":"materialized","dataset":"sample","tree":"blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964","destination":"C:\\Users\\you\\flman\\out","entries":2,"bytes":261,"work":{"bytes_read":512,"bytes_written":917,"requests":0,"file_operations":31},"trust":"tofu"}
 ```
 
 ## Lock
@@ -64,18 +64,18 @@ datasets:
   sample:
     artifacts:
       one:
-        digest: "blake3:e17fbafc370dc4ba3552a31486adaa43fdf5d5d9e32884887f346caacb05a632"
-        interop: "sha256:4cf5c3a80bd9d0bde4ccc2729aa281cf752a8c40766771a28252168d7532f01f"
+        digest: "blake3:468143fafe02746206d16bed24d1af2e42c3e958c93c2b0bb0314f6faa4b74e6"
+        interop: "sha256:ca423e79be9b78f89ec764e2ea1f2a11203a1bdf855c97a01d999a471d2e2ccf"
         layout: "keep"
-        size: 130
+        size: 127
       two:
-        digest: "blake3:f7cccdd9d72f756232e20f080a37ef0dc352b525ff73f6b58f2952b0615091d0"
-        interop: "sha256:9956c188b4ed6b0a32a87ec3adfb978d71cf972878fc8feea164852b1d07e460"
+        digest: "blake3:6ce2f3af4671c518acc720b0c90462390119bf87bb435f36dba944de65d7b6cf"
+        interop: "sha256:3fb1ac41f84ba4195207bc2898fc4b74bb79f82557cd526be299153bc130ccff"
         layout: "keep"
-        size: 128
+        size: 129
     manifest: "blake3:64b8fb67085ff4b90adf48a4e8938b8543256d99ae2bcbabcf15ed4e75cca122"
     release: "2026-08"
-    tree: "blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87"
+    tree: "blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964"
 ```
 
 `digest` is the cache key and the resume authority: a BLAKE3 root over the
@@ -142,10 +142,10 @@ with no network and executed there. Its digests come from the lock.
 artifacts:
   -
     cached: true
-    digest: "blake3:20c467cfd6cb266f9989b52976de9ba69d612debad82efb15608d67e3d3207d7"
+    digest: "blake3:d5ffe72da208c4d7eecd7ebe1167426c7ea4b2c8a22135f984c904d9780c967d"
     id: "sample.tar.gz"
     layout: "keep"
-    size: 233
+    size: 197
     source: "file:///C:/Users/you/flref/sample.tar.gz"
 conflicts: []
 credentials: []
@@ -156,21 +156,22 @@ disk:
     bytes: 0
     volume: "C:"
   destination:
-    bytes: 0
     volume: "C:"
   partial:
     bytes: 0
     volume: "C:"
   staging:
-    bytes: 0
     volume: "C:"
 network:
-  hosts: [] 
+  hosts: []
   required: false
 terms: []
 trust: "verified"
 unknown:
   - "expanded"
+  - "staging"
+  - "destination"
+  - "cost"
 ```
 
 `network.hosts` names who would be contacted and `required` says whether the run

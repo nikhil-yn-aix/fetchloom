@@ -42,7 +42,7 @@ reference per run.
 
 ```
 $ fetchloom get file://$PWD/sample.tar.gz --output data --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flgo\data","entries":4,"bytes":234,"work":{"bytes_read":591,"bytes_written":700,"requests":0,"file_operations":29},"trust":"tofu"}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\\Users\\you\\flgo\\data","entries":4,"bytes":234,"work":{"bytes_read":591,"bytes_written":700,"requests":0,"file_operations":29},"trust":"tofu"}
 ```
 
 `status` is one of four words. `materialized` means the destination did not
@@ -178,10 +178,10 @@ $ cat dataset.plan
 artifacts:
   -
     cached: true
-    digest: "blake3:20c467cfd6cb266f9989b52976de9ba69d612debad82efb15608d67e3d3207d7"
+    digest: "blake3:d5ffe72da208c4d7eecd7ebe1167426c7ea4b2c8a22135f984c904d9780c967d"
     id: "sample.tar.gz"
     layout: "keep"
-    size: 233
+    size: 197
     source: "file:///C:/Users/you/flref/sample.tar.gz"
 conflicts: []
 credentials: []
@@ -192,13 +192,11 @@ disk:
     bytes: 0
     volume: "C:"
   destination:
-    bytes: 0
     volume: "C:"
   partial:
     bytes: 0
     volume: "C:"
   staging:
-    bytes: 0
     volume: "C:"
 network:
   hosts: []
@@ -210,6 +208,7 @@ unknown:
   - "staging"
   - "destination"
   - "cost"
+
 ```
 
 `unknown` lists what the source could not tell it. A field there is never turned
@@ -233,7 +232,7 @@ names the destination when the plan's own is not this machine's.
 
 ```
 $ fetchloom apply dataset.plan --offline --json
-{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\Users\you\flref\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
+{"status":"materialized","dataset":"sample.tar.gz","tree":"blake3:9cd1f02513d1c38dc46bb4d965127f9da74a82eac42276f9c35f091d7e03fce7","destination":"C:\\Users\\you\\flref\\data2","entries":4,"bytes":234,"work":{"bytes_read":197,"bytes_written":234,"requests":0,"file_operations":7},"trust":"tofu"}
 ```
 
 That run reached no network and issued no request, because `cache import` had
@@ -251,7 +250,7 @@ that wrote it left behind.
 
 ```
 $ fetchloom verify out3 --json
-{"entries":2,"path":"C:\\Users\\you\\flman\\out3","status":"verified","tree":"blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87"}
+{"entries":2,"path":"C:\\Users\\you\\flman\\out3","status":"verified","tree":"blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964"}
 ```
 
 A tree that no longer matches its receipt fails, and says both digests:
@@ -259,7 +258,7 @@ A tree that no longer matches its receipt fails, and says both digests:
 ```
 $ echo tampered >> out3/one
 $ fetchloom verify out3 --json
-{"kind":"integrity.mismatch","layer":"verify", ... ,"next_action":"fetch ...\\out3 again, because it now holds blake3:21659c9076455da14c944d262c46da17ae7125dcbb682a0d9a76db3cc2355d4d where the run that wrote it reported blake3:cc6d1e52b3589084fb184dffd1ec06e79d9176e193ba43f2103c800ede49dc87"}
+{"kind":"integrity.mismatch","layer":"verify", ... ,"next_action":"fetch ...\\out3 again, because it now holds blake3:cb7d8739486d77a44b2835d23dd582dfd1f769df3bd53c3274ccb7c0d8c06549 where the run that wrote it reported blake3:a57d80c2c45d8758434b86dad1d4f2733f3ce2950d35ef7d090ac0c951786964"}
 $ echo $?
 30
 ```
