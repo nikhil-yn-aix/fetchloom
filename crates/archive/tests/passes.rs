@@ -75,11 +75,12 @@ fn compressed_bytes_read(count: usize) -> (u64, u64) {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let entries = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),

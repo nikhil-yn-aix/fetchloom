@@ -1,5 +1,5 @@
 //! Tracks an archive against the entry, expanded-byte, and expansion-ratio
-//! limits while it is being read.
+//! limits, both while it is listed and while its bytes move.
 
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;
@@ -8,19 +8,19 @@ fn bomb(next_action: String) -> Error {
     Error::new(ErrorKind::ArchiveBomb, next_action)
 }
 
-pub struct BombGuard<'a> {
-    name: &'a str,
+pub struct BombGuard {
+    name: String,
     on_disk_bytes: u64,
     entries: u64,
     expanded_bytes: u64,
     limits: Limits,
 }
 
-impl<'a> BombGuard<'a> {
+impl BombGuard {
     #[must_use]
-    pub fn new(name: &'a str, on_disk_bytes: u64, limits: Limits) -> Self {
+    pub fn new(name: impl Into<String>, on_disk_bytes: u64, limits: Limits) -> Self {
         Self {
-            name,
+            name: name.into(),
             on_disk_bytes,
             entries: 0,
             expanded_bytes: 0,

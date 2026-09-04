@@ -9,13 +9,13 @@ use fetchloom_engine::capability::VolumeCapabilities;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::hashing::hash_bytes;
-use fetchloom_engine::limits::Limits;
 use fetchloom_engine::seam::archive::{Archive, ArchiveMember, MemberKind};
 use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::selection::{Applied, AppliedMember, Candidate, Selection};
 use fetchloom_engine::tree::{EntryPath, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
+use crate::bomb::BombGuard;
 pub(crate) use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER_LEN;
 
 struct Created {
@@ -23,55 +23,11 @@ struct Created {
     member: String,
 }
 
-struct WriteGuard {
-    entries: u64,
-    bytes: u64,
-    limits: Limits,
-}
-
-impl WriteGuard {
-    fn new(limits: Limits) -> Self {
-        Self {
-            entries: 0,
-            bytes: 0,
-            limits,
-        }
-    }
-
-    fn observe_entry(&mut self) -> Result<(), Error> {
-        self.entries += 1;
-        if self.entries > self.limits.archive_entries {
-            return Err(Error::new(
-                ErrorKind::ArchiveBomb,
-                format!(
-                    "this archive holds more than {} entries, {} written to staging so far",
-                    self.limits.archive_entries, self.entries
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    fn observe_bytes(&mut self, count: u64) -> Result<(), Error> {
-        self.bytes = self.bytes.saturating_add(count);
-        if self.bytes > self.limits.expanded_bytes {
-            return Err(Error::new(
-                ErrorKind::ArchiveBomb,
-                format!(
-                    "this archive expands past {} bytes, {} written to staging so far",
-                    self.limits.expanded_bytes, self.bytes
-                ),
-            ));
-        }
-        Ok(())
-    }
-}
-
 pub fn extract<A, P>(
     archive: &mut A,
     selection: &Selection,
     staging: &Path,
-    limits: Limits,
+    guard: BombGuard,
     platform: &P,
     work: &WorkCounter,
 ) -> Result<Vec<TreeEntry>, Error>
@@ -84,7 +40,7 @@ where
         archive,
         selection,
         staging,
-        limits,
+        guard,
         platform,
         work,
         &mut created,
@@ -217,7 +173,7 @@ struct Site<'a, P> {
 }
 
 struct WriteState<'a> {
-    guard: &'a mut WriteGuard,
+    guard: &'a mut BombGuard,
     created: &'a mut Vec<Created>,
     entries: &'a mut Vec<TreeEntry>,
 }
@@ -322,7 +278,7 @@ fn run<A, P>(
     archive: &mut A,
     selection: &Selection,
     staging: &Path,
-    limits: Limits,
+    mut guard: BombGuard,
     platform: &P,
     work: &WorkCounter,
     created: &mut Vec<Created>,
@@ -348,7 +304,6 @@ where
     };
 
     let mut entries: Vec<TreeEntry> = Vec::new();
-    let mut guard = WriteGuard::new(limits);
     let mut buffer = vec![0_u8; BUFFER_LEN];
     let mut state = WriteState {
         guard: &mut guard,

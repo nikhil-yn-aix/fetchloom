@@ -545,7 +545,8 @@ pub(super) fn dataset_entries(
         }]);
     };
     let mut reader = open_archive(with, artifact.digest, format, &artifact.name)?;
-    let result = fetchloom_archive::resolve(&mut reader, &artifact.selection, Limits::default());
+    let guard = reader.bomb_guard(Limits::default());
+    let result = fetchloom_archive::resolve(&mut reader, &artifact.selection, guard);
     for entry in reader.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,

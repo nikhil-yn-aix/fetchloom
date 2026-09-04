@@ -8469,3 +8469,115 @@ run against the code as it stood and each failing there for the reason above.
 
 Sources: audit2.md F81; contracts.md under Limits; `crates/sources/src/http.rs`
 `classify`; `crates/cli/src/resolve.rs` `read_document`.
+
+## Audit. One bomb guard, and the ratio the other two never checked
+
+F49 said three implementations enforce the archive bomb limits and disagree.
+They did, and the disagreement was worse than duplication. `BombGuard` runs
+while an archive is listed and checks entries, expanded bytes and the expansion
+ratio, and names the archive in every message. `Counted` in `resolve.rs` and
+`WriteGuard` in `extract.rs` run on the two paths that actually move bytes, and
+each checks entries and expanded bytes and not the ratio, and says "this
+archive" where contracts.md under Rejections requires the archive be named.
+
+The listing guard counts what the headers declare. The other two count what the
+bodies produce, which is the point of them: a header that lies about a member's
+size is caught on the byte path and nowhere else. So the second pass is real and
+the fix is not to delete it but to make it the same guard. `BombGuard` now owns
+its name rather than borrowing it, so a reader can hand one out while it is
+itself borrowed mutably, and `ArchiveReader::bomb_guard` builds one carrying the
+archive's name and its size on disk. `resolve` and `extract` take that guard
+where they took `Limits`, which they used for nothing else.
+
+The ratio on the byte path is measured against the same size on disk and only
+the selected members' bytes, so it can read lower than the listing's ratio and
+never higher. It cannot refuse an archive the listing accepted unless a header
+lied, which is the case it exists for.
+
+Proof: `crates/archive/tests/extract.rs`
+`the_expansion_ratio_is_enforced_where_the_bytes_are_written_and_the_archive_is_named`,
+which extracted the ratio bomb without complaint before this change, and
+`crates/archive/tests/resolve.rs`
+`resolving_reports_an_archive_that_expands_past_the_ratio_and_names_it`.
+
+Sources: audit2.md F49; contracts.md under Rejections and under Limits.
+
+## Audit. The idle pool was sized by politeness rather than by concurrency
+
+`build_agent` sized the connection pool by `connections_per_host`, four, the
+politeness ceiling contracts.md states. A run under `--aggressive` opens up to
+`TRANSFERS_CEILING`, eight, to one host. The four beyond the pool were closed
+when their request finished, so half an aggressive run's requests paid for a TLS
+handshake they had already paid for once.
+
+The pool is a cache of idle sockets, not a permit to open more: `Ceilings` still
+decides how many a run opens, and nothing about politeness moves. Sizing the
+pool by the ceiling only keeps what the run already opened.
+
+Proof: `crates/sources/src/http.rs`
+`the_idle_pool_holds_every_connection_a_run_may_open_to_one_host`, which read 4
+against a required 8 before this change.
+
+Sources: contracts.md under Limits; ureq 3.4.0 `Config::max_idle_connections_per_host`.
+
+## Audit. The one branch of the format check that decided for itself
+
+Every branch of `check_format` asks `filesystem_failure` what an io error means,
+except the branch that writes the format file, which mapped every failure to
+`cache.corrupt`. `cache.corrupt` tells the user to run `cache clear`. A full
+disk and a cache reached across a volume boundary both arrived there, so the
+advice was to throw away a cache that was fine.
+
+Not proved by a test: no portable way exists in this suite to fill a volume or
+to cross one on a write to a file that does not exist yet, which are the two
+verdicts the bypass was discarding. The decider's own mapping is covered by
+`crates/engine/tests/filesystem_failure.rs`. The change is that the decider is
+now the only thing that maps an io error in that function.
+
+Sources: audit2.md F85; `crates/cache/src/lib.rs` `check_format`.
+
+## Audit. The failure line put the identifier where the sentence belonged
+
+A failure printed one line, `kind: next_action`. The kind is what a script
+greps for and what a person cannot act on, and it was taking the front of the
+line from the sentence that says what to do. It is now the action on its own
+line, then the kind and the exit code dimmed on the next, which keeps both the
+thing you search for and the thing you branch on and stops leading with them.
+
+`--json` is unchanged: the object carries both fields and always did.
+
+Proof: `crates/cli/tests/contract.rs`
+`a_failure_says_what_to_do_first_and_names_the_kind_and_the_code_second`, which
+found one line where it required two.
+
+Sources: docs/reference/errors.md.
+
+## Audit. A collapse test that measured the machine as much as the code
+
+`a_volume_that_collapses_mid_transfer_lowers_concurrency_and_moves_the_same_bytes`
+failed about one run in four, but only when the rest of its file ran beside it.
+Instrumenting `WriteRate::observed` said why: run alone, the windows before the
+injected slowdown clocked 42 to 53 MB/s and the windows after clocked 1.9, a
+factor of twenty-five, far past the quarter a collapse is. Run under load, the
+same windows clocked 2.6 MB/s and 0.94, a factor of 1.8, and nothing collapsed
+because on that machine at that moment nothing had. The test was measuring how
+busy the machine was.
+
+Chasing it by making the injected slowdown harsher does not end: whatever
+factor is chosen, a machine loaded enough closes it, and a slowdown slow enough
+to be safe costs the suite ten seconds and more.
+
+The assertion is gone rather than repaired, because it was the only part of that
+test that was not already covered deterministically. `crates/engine/tests/tuning.rs`
+`a_write_rate_that_collapses_answers_the_controller_once_per_window` feeds
+`WriteRate` a fast window and a slow one and asserts it answers, with times
+passed in rather than measured, and
+`a_collapsed_write_rate_lowers_what_the_controller_permits` asserts the
+controller lowers on that answer. What the integration test alone can say, and
+still says, is that a volume collapsing under a live transfer changes neither
+the digest nor the bytes moved, which is the rule that tuning may never break.
+
+Proof: eight runs of the file under deliberate load, all green, where the same
+eight before the change failed two to four times.
+
+Sources: standards.md Measure; `crates/cli/tests/transfer.rs`.

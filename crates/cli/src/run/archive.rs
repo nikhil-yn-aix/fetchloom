@@ -85,11 +85,12 @@ pub(super) fn extract_into(
     let unpacking = Span::start();
     emit(EventPayload::ExtractStart);
     let mut reader = open_archive(with, digest, format, name)?;
+    let guard = reader.bomb_guard(Limits::default());
     let result = fetchloom_archive::extract(
         &mut reader,
         selection,
         staging,
-        Limits::default(),
+        guard,
         with.platform,
         with.work,
     );

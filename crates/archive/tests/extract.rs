@@ -97,11 +97,12 @@ fn extract_entry(
     platform: &NativePlatform,
 ) -> Result<Vec<TreeEntry>, Error> {
     let mut reader = reader_for(entry, reader_limits);
+    let guard = reader.bomb_guard(extract_limits);
     extract(
         &mut reader,
         &Selection::default(),
         staging,
-        extract_limits,
+        guard,
         platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -364,11 +365,12 @@ fn a_symlink_member_is_created_only_after_every_regular_member_exists() {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let error = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -400,11 +402,12 @@ fn a_hard_link_to_a_member_the_archive_does_not_hold_is_a_link_escape() {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let error = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -436,11 +439,12 @@ fn a_hard_link_member_materializes_the_bytes_of_its_target() {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let entries = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -474,11 +478,12 @@ fn many_members_extract_correctly_through_one_reused_buffer() {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let entries = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -581,11 +586,12 @@ fn a_colon_in_a_member_name_is_refused_rather_than_hidden_in_an_alternate_data_s
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let error = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -632,11 +638,12 @@ fn tree_of(bytes: Vec<u8>) -> fetchloom_engine::digest::TreeDigest {
         Limits::default(),
     )
     .unwrap();
+    let guard = reader.bomb_guard(Limits::default());
     let entries = extract(
         &mut reader,
         &Selection::default(),
         staging.path(),
-        Limits::default(),
+        guard,
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
@@ -657,4 +664,36 @@ fn every_tar_dialect_of_one_tree_produces_one_tree_digest() {
         plain, paxed,
         "a writer that records a timestamp in a pax header named a different tree"
     );
+}
+
+#[test]
+fn the_expansion_ratio_is_enforced_where_the_bytes_are_written_and_the_archive_is_named() {
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let corpus = Corpus::build();
+    let entry = corpus
+        .entries()
+        .iter()
+        .find(|candidate| candidate.name() == "zip_bomb_expansion_ratio")
+        .unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let tiny = Limits {
+        expansion_ratio: 50,
+        ..Limits::default()
+    };
+    let error =
+        extract_entry(entry, staging.path(), Limits::default(), tiny, &platform).unwrap_err();
+    assert_eq!(error.kind().label(), "archive.bomb");
+    assert!(
+        error.next_action().contains("50"),
+        "{}",
+        error.next_action()
+    );
+    assert!(
+        error.next_action().contains(entry.name()),
+        "the archive is not named: {}",
+        error.next_action()
+    );
+    assert!(is_empty(staging.path()));
 }

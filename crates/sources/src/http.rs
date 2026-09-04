@@ -659,7 +659,8 @@ mod tests {
         let kept = build_agent(&Limits::default())
             .config()
             .max_idle_connections_per_host();
-        let most = usize::try_from(fetchloom_engine::tuning::TRANSFERS_CEILING).unwrap_or(usize::MAX);
+        let most =
+            usize::try_from(fetchloom_engine::tuning::TRANSFERS_CEILING).unwrap_or(usize::MAX);
         assert!(
             kept >= most,
             "a run may open {most} connections to one host and the pool keeps {kept} of them, so the rest hand back their handshake"

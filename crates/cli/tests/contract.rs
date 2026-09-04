@@ -797,5 +797,8 @@ fn a_failure_says_what_to_do_first_and_names_the_kind_and_the_code_second() {
         !lines[0].contains("reference.unresolved"),
         "the first line spent itself on the kind rather than the action: {stderr}"
     );
-    assert_eq!(lines[1], "reference.unresolved, exit 10", "stderr was {stderr}");
+    assert_eq!(
+        lines[1], "reference.unresolved, exit 10",
+        "stderr was {stderr}"
+    );
 }

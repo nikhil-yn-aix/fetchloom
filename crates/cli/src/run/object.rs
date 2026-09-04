@@ -119,7 +119,8 @@ pub(super) fn object_tree(
         }]);
     };
     let mut reader = open_archive(with, digest, format, name)?;
-    let result = fetchloom_archive::resolve(&mut reader, selection, Limits::default());
+    let guard = reader.bomb_guard(Limits::default());
+    let result = fetchloom_archive::resolve(&mut reader, selection, guard);
     for entry in reader.take_degradations() {
         emit(EventPayload::Degrade {
             requested: entry.requested,

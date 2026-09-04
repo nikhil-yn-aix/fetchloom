@@ -7,6 +7,12 @@ lines on standard error: what to do about it, then, dimmed, the kind and the
 exit code, which are what you search for and what you branch on.
 
 ```
+$ fetchloom get ./nope.tar
+check that ./nope.tar names a path that exists
+reference.unresolved, exit 10
+```
+
+```
 $ fetchloom get ./nope.tar --json
 {"kind":"reference.unresolved","layer":"resolve","dataset":null,"artifact":null,"source":null,"attempts":0,"retryable":false,"next_action":"check that ./nope.tar names a path that exists"}
 $ echo $?

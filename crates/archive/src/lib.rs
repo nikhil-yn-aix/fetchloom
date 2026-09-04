@@ -1,7 +1,7 @@
 //! Enumeration and bounded reading of the archive formats this build reads.
 
 mod bare;
-mod bomb;
+pub mod bomb;
 mod extract;
 mod path;
 mod reader;

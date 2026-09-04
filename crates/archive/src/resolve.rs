@@ -6,17 +6,17 @@ use std::io::Read;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::hashing::hash_bytes;
-use fetchloom_engine::limits::Limits;
 use fetchloom_engine::seam::archive::{Archive, ArchiveMember, MemberKind};
 use fetchloom_engine::selection::Selection;
 use fetchloom_engine::tree::TreeEntry;
 
+use crate::bomb::BombGuard;
 use crate::extract::{BUFFER_LEN, build_plan, io_failure, select_members};
 
 pub fn resolve<A: Archive>(
     archive: &mut A,
     selection: &Selection,
-    limits: Limits,
+    mut counted: BombGuard,
 ) -> Result<Vec<TreeEntry>, Error> {
     let members = archive.members()?;
     let applied = select_members(&members, selection)?;
@@ -27,7 +27,6 @@ pub fn resolve<A: Archive>(
         .collect();
     let plan = build_plan(&members, &applied)?;
 
-    let mut counted = Counted::new(limits);
     let mut entries: Vec<TreeEntry> = Vec::new();
 
     for path in &plan.directories {
@@ -109,48 +108,4 @@ fn hash_body(
         total,
         ContentDigest::from_bytes(*hasher.finalize().as_bytes()),
     ))
-}
-
-struct Counted {
-    entries: u64,
-    bytes: u64,
-    limits: Limits,
-}
-
-impl Counted {
-    fn new(limits: Limits) -> Self {
-        Self {
-            entries: 0,
-            bytes: 0,
-            limits,
-        }
-    }
-
-    fn observe_entry(&mut self) -> Result<(), Error> {
-        self.entries += 1;
-        if self.entries > self.limits.archive_entries {
-            return Err(Error::new(
-                ErrorKind::ArchiveBomb,
-                format!(
-                    "this archive holds more than {} entries, {} read so far",
-                    self.limits.archive_entries, self.entries
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    fn observe_bytes(&mut self, count: u64) -> Result<(), Error> {
-        self.bytes = self.bytes.saturating_add(count);
-        if self.bytes > self.limits.expanded_bytes {
-            return Err(Error::new(
-                ErrorKind::ArchiveBomb,
-                format!(
-                    "this archive expands past {} bytes, {} read so far",
-                    self.limits.expanded_bytes, self.bytes
-                ),
-            ));
-        }
-        Ok(())
-    }
 }

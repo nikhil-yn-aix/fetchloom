@@ -71,6 +71,11 @@ impl<R: Read + Seek + 'static> ArchiveReader<R> {
     }
 
     #[must_use]
+    pub fn bomb_guard(&self, limits: Limits) -> crate::bomb::BombGuard {
+        crate::bomb::BombGuard::new(self.name.clone(), self.on_disk_bytes, limits)
+    }
+
+    #[must_use]
     pub fn take_degradations(&self) -> Vec<Degradation> {
         self.degradations.take()
     }

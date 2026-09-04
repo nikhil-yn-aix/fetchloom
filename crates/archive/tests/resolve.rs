@@ -51,6 +51,10 @@ fn reader(bytes: Vec<u8>) -> ArchiveReader<Cursor<Vec<u8>>> {
     .unwrap()
 }
 
+fn guard(limits: Limits) -> fetchloom_archive::bomb::BombGuard {
+    fetchloom_archive::bomb::BombGuard::new("subject.tar", subject().len() as u64, limits)
+}
+
 fn sorted(mut entries: Vec<TreeEntry>) -> Vec<TreeEntry> {
     entries.sort_by(|left, right| path_of(left).cmp(path_of(right)));
     entries
@@ -76,12 +80,12 @@ fn resolving_answers_what_extracting_answers() {
         &mut reader(subject()),
         &selection,
         staging.path(),
-        Limits::default(),
+        guard(Limits::default()),
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
-    let read = resolve(&mut reader(subject()), &selection, Limits::default()).unwrap();
+    let read = resolve(&mut reader(subject()), &selection, guard(Limits::default())).unwrap();
 
     assert_eq!(
         sorted(read),
@@ -102,7 +106,7 @@ fn resolving_writes_nothing_into_a_directory_it_is_not_given() {
     resolve(
         &mut reader(subject()),
         &Selection::default(),
-        Limits::default(),
+        guard(Limits::default()),
     )
     .unwrap();
 
@@ -128,12 +132,12 @@ fn resolving_honors_the_selection_extraction_honors() {
         &mut reader(subject()),
         &selection,
         staging.path(),
-        Limits::default(),
+        guard(Limits::default()),
         &platform,
         &fetchloom_engine::work::WorkCounter::new(),
     )
     .unwrap();
-    let read = resolve(&mut reader(subject()), &selection, Limits::default()).unwrap();
+    let read = resolve(&mut reader(subject()), &selection, guard(Limits::default())).unwrap();
 
     assert_eq!(sorted(read), sorted(written));
 }
@@ -144,6 +148,22 @@ fn resolving_reports_an_archive_that_expands_past_the_limit() {
         expanded_bytes: 4,
         ..Limits::default()
     };
-    let error = resolve(&mut reader(subject()), &Selection::default(), limits).unwrap_err();
+    let error = resolve(&mut reader(subject()), &Selection::default(), guard(limits)).unwrap_err();
     assert_eq!(error.kind().label(), "archive.bomb");
+}
+
+#[test]
+fn resolving_reports_an_archive_that_expands_past_the_ratio_and_names_it() {
+    let limits = Limits {
+        expansion_ratio: 0,
+        ..Limits::default()
+    };
+    let tight = fetchloom_archive::bomb::BombGuard::new("subject.tar", 1, limits);
+    let error = resolve(&mut reader(subject()), &Selection::default(), tight).unwrap_err();
+    assert_eq!(error.kind().label(), "archive.bomb");
+    assert!(
+        error.next_action().contains("subject.tar"),
+        "the archive is not named: {}",
+        error.next_action()
+    );
 }
