@@ -129,52 +129,14 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
     )
 }
 
-/// Reports whether every object hashes to the name it is stored under.
-pub fn digests_are_their_bytes(layout: &fetchloom_cache::layout::Layout) -> bool {
-    let Ok(entries) = std::fs::read_dir(layout.objects()) else {
+/// Reports whether the cache holds nothing that fails its own verification,
+/// asked of the cache rather than of a second reader that would have to know
+/// the pack layout to answer.
+pub fn digests_are_their_bytes(root: &Path) -> bool {
+    let Ok(held) = open_cache_at(root) else {
         return false;
     };
-    for entry in entries.flatten() {
-        let Ok(bytes) = std::fs::read(entry.path()) else {
-            return false;
-        };
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            return false;
-        };
-        if fetchloom_cache::layout::name_of(hash_bytes(&bytes)) != name {
-            return false;
-        }
-    }
-    packed_digests_are_their_bytes(layout)
-}
-
-/// Reports whether every object a pack holds hashes to the name it is under.
-pub fn packed_digests_are_their_bytes(layout: &fetchloom_cache::layout::Layout) -> bool {
-    let Ok(packs) = std::fs::read_dir(layout.packs()) else {
-        return true;
-    };
-    for pack in packs.flatten() {
-        let Ok(bytes) = std::fs::read(pack.path()) else {
-            return false;
-        };
-        let mut at = 0usize;
-        while at + 72 <= bytes.len() {
-            let mut name = [0_u8; 32];
-            name.copy_from_slice(&bytes[at..at + 32]);
-            let mut length = [0_u8; 8];
-            length.copy_from_slice(&bytes[at + 64..at + 72]);
-            let length = usize::try_from(u64::from_le_bytes(length)).unwrap_or(usize::MAX);
-            let start = at + 72;
-            if start.saturating_add(length) > bytes.len() {
-                break;
-            }
-            if hash_bytes(&bytes[start..start + length]).bytes() != &name {
-                return false;
-            }
-            at = start + length;
-        }
-    }
-    true
+    fetchloom_cache::verify::run(&held).is_ok_and(|report| report.quarantined.is_empty())
 }
 
 /// Lists the entries in a directory, ignoring the owner records beside them.
@@ -389,4 +351,38 @@ pub fn damage(cache: &Cache<NativePlatform>, digest: ContentDigest, with: &[u8])
         .unwrap();
     file.seek(SeekFrom::Start(placed.offset())).unwrap();
     file.write_all(with).unwrap();
+}
+
+/// Every object this checker has already found to hash to the name it is stored
+/// under.
+///
+/// An object is content addressed and is never rewritten once it is published,
+/// so reading one a second time proves nothing the first read did not. A loop
+/// that publishes in rounds asks this after each round and pays for each object
+/// once rather than once per round.
+#[derive(Debug, Default)]
+pub struct Checked {
+    seen: std::collections::BTreeSet<String>,
+}
+
+impl Checked {
+    /// Reads every object the cache holds that has not been read before, and
+    /// reports whether each hashed to the name it is stored under.
+    pub fn newly_published_are_their_bytes(&mut self, root: &Path) -> bool {
+        let Ok(held) = open_cache_at(root) else {
+            return false;
+        };
+        let Ok(digests) = held.list() else {
+            return false;
+        };
+        for digest in digests {
+            if !self.seen.insert(digest.to_string()) {
+                continue;
+            }
+            if !matches!(held.object_is_its_digest(digest), Ok(true)) {
+                return false;
+            }
+        }
+        true
+    }
 }

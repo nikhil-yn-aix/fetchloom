@@ -90,7 +90,7 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
             outcome.kind().label()
         );
         assert!(
-            support::digests_are_their_bytes(held.layout()),
+            support::digests_are_their_bytes(held.layout().root()),
             "running out of room left an object that does not hash to its name"
         );
     }

@@ -262,24 +262,6 @@ fn a_stalled_connection_exits_twenty_rather_than_hanging() {
 }
 
 #[test]
-fn a_name_no_resolver_knows_exits_twenty_and_is_not_retried() {
-    let harness = Harness::with(impatient());
-    let locations = vec!["http://fetchloom-no-such-host.invalid/object".to_owned()];
-
-    let failure = harness
-        .transfer()
-        .run(Some(digest_of(b"anything")), &nothing_prior, &locations)
-        .unwrap_err();
-
-    assert_eq!(failure.layer(), Layer::Transfer);
-    assert_eq!(ExitCode::from(failure.layer()), ExitCode::Network);
-    assert!(
-        !failure.retryable(),
-        "a name no resolver has heard of will not be heard of on the next attempt"
-    );
-}
-
-#[test]
 fn a_rate_limit_storm_stops_at_the_attempt_limit_and_waits_within_the_ceiling() {
     let server = TestServer::start(Script::serving(object(4096)).replying(vec![
         Reply::Status {

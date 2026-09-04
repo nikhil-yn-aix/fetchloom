@@ -683,3 +683,30 @@ pub fn trust_store_loads() -> bool {
         .build();
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ErrorKind, classify};
+
+    #[test]
+    fn a_name_nothing_resolves_is_terminal() {
+        let (kind, retryable, action) = classify(&ureq::Error::HostNotFound);
+        assert_eq!(kind, ErrorKind::NetworkRefused);
+        assert!(
+            !retryable,
+            "a name no resolver has heard of will not be heard of on the next attempt"
+        );
+        assert!(action.contains("resolve"), "the action was {action}");
+    }
+
+    #[test]
+    fn a_socket_that_ran_out_of_time_is_worth_another_attempt() {
+        let ran_out = std::io::Error::from(std::io::ErrorKind::TimedOut);
+        let (kind, retryable, _) = classify(&ureq::Error::Io(ran_out));
+        assert_eq!(kind, ErrorKind::NetworkTimeout);
+        assert!(
+            retryable,
+            "a request that ran out of time may not next time"
+        );
+    }
+}

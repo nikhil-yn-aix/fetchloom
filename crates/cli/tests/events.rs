@@ -3,7 +3,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test setup, where a failure to run the binary is the assertion"
 )]
 

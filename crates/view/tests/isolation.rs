@@ -13,17 +13,72 @@ use fetchloom_engine as _;
 /// Every dependency this crate is permitted to have.
 const PERMITTED: [&str; 1] = ["fetchloom-engine"];
 
-/// Every way into the world that must not appear anywhere in this crate.
-const FORBIDDEN: [&str; 8] = [
-    "std::fs",
-    "std::net",
-    "std::process",
-    "std::env",
-    "File::open",
-    "File::create",
+/// Every name that reaches outside this crate, as a whole word rather than as
+/// a substring, so that a grouped import spells one of them too.
+const FORBIDDEN: [&str; 12] = [
+    "fs",
+    "net",
+    "process",
+    "env",
+    "File",
+    "OpenOptions",
     "TcpStream",
-    "include_str!",
+    "TcpListener",
+    "UdpSocket",
+    "Command",
+    "include_str",
+    "include_bytes",
 ];
+
+/// Returns the source with its comments and string literals removed, because a
+/// word inside prose or inside a message is not a way out of the crate.
+fn code_only(text: &str) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let mut held = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(character) = held.next() {
+        if in_string {
+            if character == '\\' {
+                held.next();
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '/' if held.peek() == Some(&'/') => {
+                for skipped in held.by_ref() {
+                    if skipped == '\n' {
+                        break;
+                    }
+                }
+                kept.push('\n');
+            }
+            '/' if held.peek() == Some(&'*') => {
+                held.next();
+                let mut last = ' ';
+                for skipped in held.by_ref() {
+                    if last == '*' && skipped == '/' {
+                        break;
+                    }
+                    last = skipped;
+                }
+                kept.push(' ');
+            }
+            _ => kept.push(character),
+        }
+    }
+    kept
+}
+
+/// Returns every identifier the code spells, as whole words.
+fn words(code: &str) -> Vec<String> {
+    code.split(|character: char| !character.is_alphanumeric() && character != '_')
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
 
 fn manifest() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap()
@@ -77,9 +132,10 @@ fn the_view_depends_on_the_event_types_and_on_nothing_else() {
 #[test]
 fn the_view_reaches_no_filesystem_no_network_and_no_process() {
     for (path, text) in sources() {
+        let spelled = words(&code_only(&text));
         for forbidden in FORBIDDEN {
             assert!(
-                !text.contains(forbidden),
+                !spelled.iter().any(|word| word == forbidden),
                 "{path} names {forbidden}, so the live view can reach something the event stream \
                  did not give it"
             );

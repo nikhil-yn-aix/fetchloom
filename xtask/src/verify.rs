@@ -28,6 +28,8 @@ struct Step {
     skipped: bool,
     /// How long the command took.
     took: Duration,
+    /// Why the step declined to run, when it declined.
+    declined: String,
 }
 
 /// One thing the matrix wanted and did not get.
@@ -86,6 +88,7 @@ impl Report {
             passed,
             skipped: false,
             took,
+            declined: String::new(),
         });
         passed
     }
@@ -103,6 +106,7 @@ impl Report {
             passed,
             skipped: false,
             took,
+            declined: String::new(),
         });
     }
 
@@ -114,6 +118,7 @@ impl Report {
             passed: false,
             skipped: true,
             took,
+            declined: reason.to_owned(),
         });
     }
 
@@ -402,6 +407,12 @@ fn summary(report: &Report) {
         report.steps.len() - skipped,
         report.degrades.len()
     );
+    for step in report.steps.iter().filter(|step| step.skipped) {
+        println!(
+            "NOT VERIFIED {}: {}. This run proves nothing about what that step covers, and it is \n             not counted above.",
+            step.name, step.declined
+        );
+    }
 }
 
 fn cargo(workspace: &Path, arguments: &[&str]) -> Command {

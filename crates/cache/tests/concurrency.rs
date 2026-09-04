@@ -104,7 +104,7 @@ fn many_processes_wanting_one_digest_perform_one_transfer() {
     let digest = hash_bytes(&bytes_of(RACED_LENGTH, 23));
     assert!(held.contains(digest).unwrap());
     assert!(
-        support::digests_are_their_bytes(held.layout()),
+        support::digests_are_their_bytes(held.layout().root()),
         "an object does not hash to the name it is stored under"
     );
 }
@@ -138,6 +138,7 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
     let layout = Layout::new(&cache);
     drop(cache_in(scratch.path()));
 
+    let mut checked = support::Checked::default();
     let mut reached_publication = false;
     let mut killed = 0;
     while killed < KILLS {
@@ -162,7 +163,7 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
         killed += u32::try_from(RACERS).unwrap_or(1);
 
         assert!(
-            support::digests_are_their_bytes(&layout),
+            checked.newly_published_are_their_bytes(layout.root()),
             "a killed writer left an object that does not hash to its name after {killed} kills"
         );
         let published = layout.objects().read_dir().unwrap().next().is_some()
@@ -184,7 +185,7 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
     let recovered = cache_in(scratch.path());
 
     assert!(
-        support::digests_are_their_bytes(recovered.layout()),
+        support::digests_are_their_bytes(recovered.layout().root()),
         "recovery left an object that does not hash to its name"
     );
     assert_eq!(
