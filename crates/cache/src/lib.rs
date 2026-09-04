@@ -308,12 +308,8 @@ fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
             ),
         )),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::write(layout.format(), ours).map_err(|why| {
-                Error::new(
-                    ErrorKind::CacheCorrupt,
-                    format!("{}: {why}", layout.format().display()),
-                )
-            })?;
+            std::fs::write(layout.format(), ours)
+                .map_err(|why| filesystem_failure(Surface::Cache, &layout.format(), &why))?;
             work.touched_file();
             Ok(())
         }
