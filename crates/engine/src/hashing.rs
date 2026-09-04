@@ -40,7 +40,15 @@ impl Default for Groups {
 }
 
 impl Groups {
-    fn update(&mut self, mut chunk: &[u8]) {
+    fn update(&mut self, chunk: &[u8]) {
+        self.fill(chunk, false);
+    }
+
+    fn update_parallel(&mut self, chunk: &[u8]) {
+        self.fill(chunk, true);
+    }
+
+    fn fill(&mut self, mut chunk: &[u8], across_threads: bool) {
         while !chunk.is_empty() {
             if self.filled == GROUP_LEN {
                 self.finished.push(self.current.finalize_non_root());
@@ -50,7 +58,11 @@ impl Groups {
             }
             let room = usize_of(GROUP_LEN - self.filled);
             let take = room.min(chunk.len());
-            self.current.update(&chunk[..take]);
+            if across_threads {
+                self.current.update_rayon(&chunk[..take]);
+            } else {
+                self.current.update(&chunk[..take]);
+            }
             self.filled += take as u64;
             self.length += take as u64;
             chunk = &chunk[take..];
@@ -94,7 +106,7 @@ impl Pair {
         processor.install(|| {
             rayon::join(
                 || {
-                    content.update(chunk);
+                    content.update_parallel(chunk);
                 },
                 || {
                     interop.update(chunk);

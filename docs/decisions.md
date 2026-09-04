@@ -8581,3 +8581,30 @@ Proof: eight runs of the file under deliberate load, all green, where the same
 eight before the change failed two to four times.
 
 Sources: standards.md Measure; `crates/cli/tests/transfer.rs`.
+
+## Audit. The concurrency regime asked two identical hosts to disagree
+
+`cargo xtask bench` failed every run on `many-hosts-concurrency`, saying
+"127.0.0.1 and ::1 are both recorded at 4, though only one of them was ever
+rate limited". Only one was rate limited in the other regime. `run_hosts` runs
+`hosts_regime` twice, once with `rate_limited` false and once true, and `decided`
+applied the same four checks to both. Its last check requires the two hosts to
+end at different concurrencies, which is the point of the backoff regime and is
+the opposite of what the concurrency regime should see: both hosts serve the
+same script at the same latency, so a controller that keys measurements by host
+correctly records them the same. The regime demanded divergence with nothing
+present to cause it.
+
+The check now takes the flag the regime already had. Both hosts reaching 4 from
+a cold 2 is what the concurrency regime proves, and the first three checks still
+prove it: two hosts recorded, named apart, and neither left where a host nothing
+is known about starts. The backoff regime still requires divergence and still
+gets it.
+
+Proof: `xtask/src/bench.rs`
+`two_hosts_treated_alike_decide_the_regime_where_neither_was_rate_limited`,
+which did not compile against the old one-argument `decided` and fails against
+it once it does; `two_hosts_treated_alike_decide_nothing_where_one_was_rate_limited`
+and `a_host_left_where_it_started_decides_nothing` hold the checks that stayed.
+
+Sources: standards.md Measure; `xtask/src/bench.rs` `decided`.

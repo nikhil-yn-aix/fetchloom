@@ -56,7 +56,9 @@ fn object_at(root: &Path) {
 
 struct Observed {
     reported: Work,
+    #[cfg(windows)]
     kernel_read: u64,
+    #[cfg(windows)]
     kernel_written: u64,
 }
 
@@ -124,8 +126,6 @@ fn run_observed(source: &Path, destination: &Path, cache: &Path) -> Observed {
     let reported: Reported = serde_json::from_slice(&output.stdout).expect("a json result");
     Observed {
         reported: reported.work,
-        kernel_read: 0,
-        kernel_written: 0,
     }
 }
 

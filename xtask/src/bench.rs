@@ -1083,7 +1083,7 @@ fn hosts_regime(
             .env("FETCHLOOM_CACHE_DIR", &cache);
         let run = measure(command)?;
         let hosts = recorded_hosts(&cache);
-        decided(&hosts)?;
+        decided(&hosts, rate_limited)?;
 
         let mut fetched = 0.0;
         for (index, url) in urls.iter().enumerate() {
@@ -1129,7 +1129,7 @@ fn free_to_decide() -> bool {
         .is_none_or(|ceiling| ceiling > 1)
 }
 
-fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
+fn decided(hosts: &[RecordedHost], rate_limited: bool) -> Result<(), BenchError> {
     if !free_to_decide() {
         return Ok(());
     }
@@ -1156,7 +1156,7 @@ fn decided(hosts: &[RecordedHost]) -> Result<(), BenchError> {
              starts, so nothing the controller does was measured"
         )));
     }
-    if hosts[0].measurement.concurrency == hosts[1].measurement.concurrency {
+    if rate_limited && hosts[0].measurement.concurrency == hosts[1].measurement.concurrency {
         return Err(BenchError::ControllerInert(format!(
             "{} and {} are both recorded at {}, though only one of them was ever rate limited, \n             so either a rate limit on one host moved the other or neither moved at all",
             hosts[0].host, hosts[1].host, hosts[0].measurement.concurrency
@@ -1187,7 +1187,7 @@ fn measure(mut command: Command) -> Result<Measured, BenchError> {
     }
     let status = child.wait().map_err(BenchError::Process)?;
     let elapsed = started.elapsed();
-    let peak_bytes = peak_of(&child, watching)?;
+    let peak_bytes = peak_of(&child, &watching)?;
     if !status.success() {
         return Err(BenchError::NonZeroExit(status.code().unwrap_or(-1)));
     }
@@ -1208,7 +1208,7 @@ fn peak_watcher(_child: &std::process::Child) -> Watcher {
 }
 
 #[cfg(windows)]
-fn peak_of(child: &std::process::Child, _watching: Watcher) -> Result<u64, BenchError> {
+fn peak_of(child: &std::process::Child, _watching: &Watcher) -> Result<u64, BenchError> {
     use std::os::windows::io::AsRawHandle as _;
 
     use windows_sys::Win32::Foundation::HANDLE;
@@ -1270,7 +1270,7 @@ fn high_water(status: &str) -> Option<u64> {
 }
 
 #[cfg(not(windows))]
-fn peak_of(_child: &std::process::Child, seen: Watcher) -> Result<u64, BenchError> {
+fn peak_of(_child: &std::process::Child, seen: &Watcher) -> Result<u64, BenchError> {
     match seen.load(std::sync::atomic::Ordering::Relaxed) {
         0 => Err(BenchError::NoPeak),
         bytes => Ok(bytes),
@@ -1623,5 +1623,44 @@ mod tests {
         let recorded = baseline_of(vec![timing(100.0)]);
         let current = baseline_of(vec![timing(4000.0)]);
         assert!(compare(&recorded, &current).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod hosts_tests {
+    use super::{RecordedHost, decided};
+
+    fn host(name: &str, concurrency: u32) -> RecordedHost {
+        RecordedHost {
+            host: name.to_owned(),
+            measurement: fetchloom_engine::tuning::HostMeasurement {
+                concurrency,
+                throughput: 1,
+                time_to_first_byte_ms: 1,
+                observed_at: fetchloom_engine::timestamp::Timestamp::now(),
+            },
+        }
+    }
+
+    #[test]
+    fn two_hosts_treated_alike_decide_the_regime_where_neither_was_rate_limited() {
+        let served = [host("::1", 4), host("127.0.0.1", 4)];
+        assert!(
+            decided(&served, false).is_ok(),
+            "two hosts answering the same way had to differ to count, though nothing made them differ"
+        );
+    }
+
+    #[test]
+    fn two_hosts_treated_alike_decide_nothing_where_one_was_rate_limited() {
+        let served = [host("::1", 4), host("127.0.0.1", 4)];
+        assert!(decided(&served, true).is_err());
+    }
+
+    #[test]
+    fn a_host_left_where_it_started_decides_nothing() {
+        let cold = fetchloom_engine::tuning::FIRST_PER_HOST;
+        let served = [host("::1", cold), host("127.0.0.1", cold)];
+        assert!(decided(&served, false).is_err());
     }
 }
