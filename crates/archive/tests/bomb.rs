@@ -67,7 +67,12 @@ fn a_symlink_declaring_more_bytes_than_the_limit_is_refused_before_its_body_is_r
         ..Limits::default()
     };
     let error = listing_error(symlink_declaring(1_000_000), "expanded.zip", limits);
-    assert_eq!(error.kind().label(), "archive.bomb", "{}", error.next_action());
+    assert_eq!(
+        error.kind().label(),
+        "archive.bomb",
+        "{}",
+        error.next_action()
+    );
     assert!(
         error.next_action().contains("expanded.zip"),
         "the refusal does not name the archive: {}",
@@ -83,7 +88,12 @@ fn a_symlink_declaring_a_ratio_past_the_limit_is_refused_before_its_body_is_read
         ..Limits::default()
     };
     let error = listing_error(symlink_declaring(100_000_000), "ratio.zip", limits);
-    assert_eq!(error.kind().label(), "archive.bomb", "{}", error.next_action());
+    assert_eq!(
+        error.kind().label(),
+        "archive.bomb",
+        "{}",
+        error.next_action()
+    );
     assert!(
         error.next_action().contains("ratio.zip"),
         "the refusal does not name the archive: {}",

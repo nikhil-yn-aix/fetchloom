@@ -193,7 +193,9 @@ pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::M
     }
     let limits = Limits::default();
     let read = crate::resolve::read_bounded_document(source, &limits);
-    Some(read.and_then(|bytes| fetchloom_engine::manifest::Manifest::parse(&bytes, syntax, &limits)))
+    Some(
+        read.and_then(|bytes| fetchloom_engine::manifest::Manifest::parse(&bytes, syntax, &limits)),
+    )
 }
 
 #[expect(
