@@ -71,6 +71,10 @@ impl std::error::Error for EntryPathError {}
 pub struct EntryPath(String);
 
 impl EntryPath {
+    /// # Errors
+    /// `EntryPathError`, saying which rule the path broke: empty, absolute, a
+    /// trailing separator, an empty or relative component, a backslash, or a
+    /// control character.
     pub fn new(path: &str) -> Result<Self, EntryPathError> {
         if path.is_empty() {
             return Err(EntryPathError::Empty);

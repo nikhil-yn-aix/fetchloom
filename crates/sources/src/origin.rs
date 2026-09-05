@@ -13,6 +13,9 @@ pub struct Origin {
 }
 
 impl Origin {
+    /// # Errors
+    /// `reference.unresolved` when the location has no scheme, or a scheme
+    /// this source does not serve.
     pub fn of(location: &str) -> Result<Self, Error> {
         let (scheme, rest) = location
             .split_once("://")
@@ -45,6 +48,10 @@ impl Origin {
         &self.host
     }
 
+    /// # Errors
+    /// `reference.unresolved` when the location redirected from has no origin,
+    /// and `network.status` when the target is relative to a path rather than
+    /// to the origin, which this build does not resolve.
     pub fn join(from: &str, target: &str) -> Result<String, Error> {
         if target.contains("://") {
             return Ok(target.to_owned());

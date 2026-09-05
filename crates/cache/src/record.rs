@@ -4,25 +4,28 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
-use fetchloom_engine::identity::{Fingerprint, VolumeId};
+use fetchloom_engine::identity::Fingerprint;
 use fetchloom_engine::seam::platform::OwnerToken;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ObjectRecord {
-    pub interop: fetchloom_engine::digest::InteropDigest,
-    pub volume: u64,
-    pub file: u128,
-    pub size: u64,
-    pub modified_nanos: i128,
-    pub changed_nanos: i128,
+pub(crate) struct ObjectRecord {
+    pub(crate) interop: fetchloom_engine::digest::InteropDigest,
+    pub(crate) volume: u64,
+    pub(crate) file: u128,
+    pub(crate) size: u64,
+    modified_nanos: i128,
+    changed_nanos: i128,
 }
 
 impl ObjectRecord {
     #[must_use]
-    pub fn new(fingerprint: Fingerprint, interop: fetchloom_engine::digest::InteropDigest) -> Self {
+    pub(crate) fn new(
+        fingerprint: Fingerprint,
+        interop: fetchloom_engine::digest::InteropDigest,
+    ) -> Self {
         Self {
             interop,
             volume: fingerprint.volume.value(),
@@ -34,23 +37,22 @@ impl ObjectRecord {
     }
 
     #[must_use]
-    pub fn matches(self, now: Fingerprint) -> bool {
+    pub(crate) fn matches(self, now: Fingerprint) -> bool {
         let observed = Self::new(now, self.interop);
         self == observed
-    }
-
-    #[must_use]
-    pub fn volume(self) -> VolumeId {
-        VolumeId::new(self.volume)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mark {
-    pub marked_nanos: i128,
+    pub(crate) marked_nanos: i128,
 }
 
+/// # Errors
+/// `cache.corrupt` when the record cannot be rendered, written beside its
+/// destination, or renamed onto it, and `resource.disk` when the volume is
+/// full.
 pub fn write<T: Serialize>(
     path: &Path,
     record: &T,
@@ -82,6 +84,9 @@ pub fn write<T: Serialize>(
     Ok(())
 }
 
+/// # Errors
+/// `cache.corrupt` when a record exists and cannot be read or does not parse.
+/// No record is `None` rather than an error.
 pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -101,7 +106,7 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
     })
 }
 
-pub fn read_owner(path: &Path) -> Result<Option<OwnerToken>, Error> {
+pub(crate) fn read_owner(path: &Path) -> Result<Option<OwnerToken>, Error> {
     read(path)
 }
 

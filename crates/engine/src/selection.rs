@@ -230,6 +230,9 @@ impl Selection {
         included && !self.exclude.iter().any(|glob| glob.matches(path))
     }
 
+    /// # Errors
+    /// `reference.unresolved` when no member matches the patterns, because a
+    /// selection that takes nothing is a mistake rather than an empty run.
     pub fn apply(&self, members: &[Candidate<'_>]) -> Result<Applied, Error> {
         let mut taken = Vec::new();
         for (index, member) in members.iter().enumerate() {

@@ -31,7 +31,7 @@ pub trait Prompter: Send + Sync {
 }
 
 #[derive(Debug, Default)]
-pub struct StdinPrompter;
+pub(crate) struct StdinPrompter;
 
 impl Prompter for StdinPrompter {
     fn confirm(&self, question: &str) -> bool {
@@ -218,13 +218,17 @@ fn missing_region(host: &Host, variable: &str) -> Error {
 }
 
 pub trait CredentialStore: Send + Sync {
+    /// # Errors
+    /// `policy.credential_invalid` when a credential is stored for the host
+    /// and cannot be read. No stored credential is `None` rather than an
+    /// error.
     fn token(&self, host: &Host) -> Result<Option<String>, Error>;
 
     fn describe(&self) -> String;
 }
 
 #[derive(Debug, Default)]
-pub struct NativeCredentialStore;
+pub(crate) struct NativeCredentialStore;
 
 impl CredentialStore for NativeCredentialStore {
     fn token(&self, host: &Host) -> Result<Option<String>, Error> {
@@ -288,6 +292,10 @@ impl Policy for CommandLinePolicy<'_> {
             IoChoice::Buffered => IoMode::Buffered,
             IoChoice::Uncached => IoMode::Uncached,
         }
+    }
+
+    fn compression(&self) -> fetchloom_engine::compression::CompressionChoice {
+        self.settings.compress.value
     }
 
     fn accepts(&self, class: TrustClass) -> bool {

@@ -489,6 +489,10 @@ fn open_lock_file(path: &Path) -> Result<File, Error> {
         .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
 }
 
+/// # Errors
+/// `policy.credential_invalid` when a credential is stored for the host and
+/// cannot be read, which on Linux includes a credentials file other users can
+/// read. No stored credential is `None` rather than an error.
 pub fn stored_token(host: &str, configuration: &Path) -> Result<Option<String>, Error> {
     #[cfg(windows)]
     {

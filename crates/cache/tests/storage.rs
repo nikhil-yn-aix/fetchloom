@@ -11,6 +11,7 @@ use serde as _;
 use serde_json as _;
 #[cfg(windows)]
 use windows_sys as _;
+use zstd as _;
 
 mod support;
 
@@ -150,7 +151,7 @@ fn an_object_above_the_threshold_keeps_a_file_of_its_own() {
     let digest = publish(&held, &bytes);
 
     assert!(
-        matches!(held.placement(digest), Some(Placement::Loose(_))),
+        matches!(held.placement(digest), Some(Placement::Loose { .. })),
         "a large object was packed"
     );
 }
@@ -167,7 +168,10 @@ fn a_packed_object_and_a_loose_one_read_back_identically() {
         held.placement(packed),
         Some(Placement::Packed { .. })
     ));
-    assert!(matches!(held.placement(loose), Some(Placement::Loose(_))));
+    assert!(matches!(
+        held.placement(loose),
+        Some(Placement::Loose { .. })
+    ));
 
     let mut read = Vec::new();
     held.read(packed).unwrap().read_to_end(&mut read).unwrap();

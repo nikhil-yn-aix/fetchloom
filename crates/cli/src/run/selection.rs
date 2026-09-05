@@ -138,7 +138,7 @@ pub(super) fn apply_selection(
     })
 }
 
-pub fn assert_terms(
+pub(crate) fn assert_terms(
     policy: &dyn Policy,
     license: Option<&fetchloom_engine::license::License>,
 ) -> Result<Option<fetchloom_engine::license::Acceptance>, Error> {
@@ -159,6 +159,9 @@ pub fn assert_terms(
     }
 }
 
+/// # Errors
+/// `policy.offline` when the run was told not to reach the network and the
+/// reference names something that is not already here.
 pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error> {
     if !policy.offline() {
         return Ok(());

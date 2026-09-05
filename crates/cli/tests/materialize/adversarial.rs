@@ -73,9 +73,12 @@ impl Harness {
             NativePlatform::new(std::sync::Arc::new(
                 fetchloom_engine::work::WorkCounter::new(),
             )),
-            DurabilityTier::Fast,
-            VerificationPolicy::Fingerprint,
-            IoMode::Buffered,
+            fetchloom_cache::CacheSettings {
+                tier: DurabilityTier::Fast,
+                policy: VerificationPolicy::Fingerprint,
+                io: IoMode::Buffered,
+                compression: fetchloom_engine::compression::CompressionChoice::Auto,
+            },
             std::sync::Arc::clone(&work),
             test_processor(),
         )

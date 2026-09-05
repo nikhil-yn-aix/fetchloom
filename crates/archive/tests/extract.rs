@@ -11,9 +11,9 @@ use blake3 as _;
 use bzip2 as _;
 use flate2 as _;
 use lzma_rust2 as _;
-use ruzstd as _;
 use tar as _;
 use zip as _;
+use zstd as _;
 
 use std::io::Cursor;
 use std::path::Path;

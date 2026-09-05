@@ -32,7 +32,15 @@ pub trait Archive {
 
     fn format(&self) -> ArchiveFormat;
 
+    /// # Errors
+    /// `archive.unsupported` when the container is not one this reader knows,
+    /// `archive.unsafe_path` or `archive.link_escape` for a member name that
+    /// leaves the destination, `archive.collision` for two names that are one
+    /// name on the destination, and `archive.bomb` when a limit is passed.
     fn members(&mut self) -> Result<Vec<ArchiveMember>, Error>;
 
+    /// # Errors
+    /// The kinds `members` gives, and `archive.bomb` when the member expands
+    /// past the limits the run holds itself to.
     fn open(&mut self, member: &ArchiveMember) -> Result<Self::Body, Error>;
 }

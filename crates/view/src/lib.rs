@@ -103,11 +103,6 @@ impl LiveView {
     }
 
     #[must_use]
-    pub fn height(&self) -> usize {
-        self.render().lines().count()
-    }
-
-    #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
         let dataset = self.dataset.as_deref().unwrap_or("?");

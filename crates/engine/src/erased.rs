@@ -10,7 +10,7 @@ use crate::seam::source::{
     ByteRange, Listing, Revalidated, Served, Serves, Source, SourceMetadata, Validator,
 };
 
-pub type AnyBody = Box<dyn Read + Send>;
+type AnyBody = Box<dyn Read + Send>;
 
 trait ErasedSource: Send + Sync {
     fn serves(&self, reference: &str) -> Option<Serves>;

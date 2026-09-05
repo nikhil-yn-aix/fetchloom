@@ -30,6 +30,10 @@ impl Refused {
     }
 }
 
+/// # Errors
+/// `Refused`, saying which of the four conditions a split needs was not met:
+/// the object is not large, its identity is not immutable, the source serves
+/// no ranges, or no measurement said a split would gain anything.
 pub fn parts_for(
     metadata: &SourceMetadata,
     limits: &Limits,

@@ -10,7 +10,7 @@ use crate::digest::{ContentDigest, InteropDigest};
 use crate::outboard::{self, GROUP_LEN, Outboard};
 use crate::pool::Processor;
 
-pub const POOL_THRESHOLD: usize = 1 << 20;
+const POOL_THRESHOLD: usize = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Digests {
@@ -148,6 +148,9 @@ impl Digester {
         }
     }
 
+    /// # Errors
+    /// Whatever the reader reports, unchanged, so the caller decides which
+    /// surface a read failure belongs to.
     pub fn hash(&mut self, processor: &Processor, reader: impl Read) -> io::Result<Digests> {
         let mut reader = reader;
         let mut pair = Pair::new();

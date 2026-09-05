@@ -1,213 +1,118 @@
 # Contributing
 
-Read `docs/standards.md` first. It is how code is written here and it is not
-optional. `docs/contracts.md` states the behavior; if it is silent on something
-you need, ask rather than choose. `docs/roadmap.md` says which phase is open.
+## How code is written here
 
-## Prerequisites
+These are not preferences. A change that breaks one of these does not land.
 
-The toolchain is pinned in `rust-toolchain.toml`, so `rustup` installs the right
-one for you the first time you build. Everything below is what the verification
-matrix needs on top of that.
+**Contracts come first.** If [docs/contracts.md](docs/contracts.md) states a behavior, implement exactly that. If it is silent on something you need, ask rather than choosing. Never invent a flag, field, event or error kind that is not written down.
 
-| Needed for | How to get it | What is unproven without it |
-|---|---|---|
-| The lint and cross-compile arms | `rustup target add x86_64-unknown-linux-musl aarch64-pc-windows-msvc` | Both non-host targets |
-| The dependency gate | `cargo install cargo-deny` | The allow list, the advisories, the licences, the registries |
-| The rust-version gate | `rustup toolchain install 1.89.0` | That the workspace builds at the version its manifest states |
-| The Linux lanes | Docker Desktop, running, with its Linux engine | Every Linux behavior in this repository |
-| ReFS, a small volume, a case-sensitive directory | An elevated PowerShell, and Hyper-V for the virtual disks, which `xtask/verify/volumes-windows.ps1` needs | Block cloning, the small-volume rows, the case-sensitive rows |
+**Tests before implementation, and they must fail for the right reason first.** A test that cannot fail is worse than no test. Assert a stated contract, not an implementation detail.
 
-A missing tool is a skipped step with a `NOT VERIFIED` line naming what the run
-did not prove. It is never a silent pass. Run `cargo xtask verify` and read those
-lines before believing a green result.
+**No comments.** If code needs explaining, the names are wrong. The one exception is `// SAFETY:` on an unsafe block, which a lint requires and another lint refuses where it does not belong.
 
-Docker Desktop must be started before `cargo xtask verify`. It is not started for
-you, and its Linux engine can take a minute to accept connections after the
-window appears. `docker info` answering is the test.
+**No version fields, no compatibility code, no second way of doing anything that already exists.**
 
-Budget memory for it. `docker info` on this machine reports `MemTotal`
-8,128,204,800 bytes to the daemon, and during the container lane the Linux
-virtual machine's working set was measured at 7322.1 MB, forty-four percent of a
-16 GB machine. Run the container lane with nothing else running. If a run is
-killed, note that `docker run` losing its client does not stop the container: the
-suite keeps going inside it and produces no verdict, so check `docker ps` before
-starting again.
+**Nothing degrades silently.** Every fallback emits a `degrade` event naming what was requested, what was used, and why.
+
+**Both platforms or it is not done.** Windows and Linux.
+
+**Verify, do not trust.** Confirm every library API against current documentation before using it. Do not rely on recall for a signature, a default, or a platform behavior. Do not trust the docs or a previous session's claim over what the code and tests actually do. If a doc contradicts reality, say so rather than coding around it.
+
+**Run everything you claim.** A suite you did not execute has not passed. Paste the real output.
+
+**State uncertainty plainly.** A guess labeled as a guess is useful. A guess presented as fact is a defect.
+
+## What the compiler enforces
+
+Workspace lints, all deny: `unsafe_code`, `unused_crate_dependencies`, clippy `all` and `pedantic`, `unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`, `dbg_macro`, `allow_attributes`, `allow_attributes_without_reason`, `missing_errors_doc`, `missing_panics_doc`.
+
+Only `platform` lifts `unsafe_code`, per item, with a stated reason.
+
+`allow_attributes` forces `#[expect]` over `#[allow]`, so a stale exception becomes a compile error once it is no longer needed instead of surviving forever. `allow_attributes_without_reason` makes the reason mandatory. Every exception is therefore a written invariant that expires on its own.
+
+`cargo deny` runs as a verify step with an allow list naming every crate permitted in the graph, direct and transitive, each with a reason. A new dependency fails the gate until a human edits that list.
 
 ## The gate
 
-`cargo xtask verify` is the whole matrix: format, dependencies, both lint arms,
-the host build, the aarch64 Windows compile, the Windows suite, the build at the
-stated rust-version, the recorded network subjects, the benchmark comparison, and
-the Linux lanes in a container. It takes about half an hour here. Add `--arm` for
-the emulated aarch64 Linux pair, which is slower again.
-
-`cargo xtask verify --fast` is the push gate: format, dependencies, both lint
-arms, the build, and the aarch64 Windows compile. Sixteen seconds when the tree
-is fully warm, and about eighty when the lint arms have work to do. It names
-every lane it declined in its own output, with a `NOT VERIFIED` line each.
-
-`cargo xtask verify --install-hook` writes `.git/hooks/pre-push` running
-`cargo xtask verify --fast`. Running it again when the hook is already there
-changes nothing. If a different `pre-push` hook exists it refuses and writes
-nothing, so read that file and decide yourself.
-
-The hook does not run the suite. `cargo xtask verify` does, and that is what a
-change is finished against. The hook exists to make the cheap and certain
-failures impossible to push, in a time short enough that nobody reaches for
-`--no-verify`.
-
-## Running the suites here
-
-Run one crate at a time, in the foreground:
-
 ```
-cargo test -p fetchloom-cache -- --test-threads=2
+cargo xtask verify
 ```
 
-Whole-workspace runs in the background have been killed for low memory on this
-machine. The cause is not any one test. `crates/cache/tests/concurrency.rs`
-spawns eight children over a thousand kills and its whole process tree peaks at
-65.7 MB, measured; the pressure is ambient, and a long test is simply the process
-that is alive when the machine runs short. Running in the foreground, one crate
-at a time, keeps the number of test binaries alive at once small enough that it
-does not happen.
+Thirteen steps: format, dependencies, lint, build, aarch64 cross compile, the test suite, a build at the stated MSRV, network, benchmarks, and the Linux container lanes. The host lints the Windows target only. Every Linux target is linted, with warnings denied, inside the container that also builds and tests it, because that is where a C toolchain for musl exists.
 
-## What the machine does to the numbers
+```
+cargo xtask verify --fast        format, deps, lint, build, cross compile
+cargo xtask verify --install-hook   writes .git/hooks/pre-push running --fast
+```
 
-Every timing number in this repository is a property of the machine that produced
-it. On the Windows development machine these two effects are large enough to
-swamp any change to the code.
+A fast run prints a NOT VERIFIED line for every lane it declines. It never reports a skipped step as a pass.
 
-Real-time antivirus scans every file the suites write. During one suite run
-`MsMpEng.exe` grew from 3.0 GB to 5.5 GB on a machine with 15.6 GB of memory. In
-that state the many-small-files regime reported small writes costing 47, 49, 57
-and 173 times one large write across four runs of identical code. Add exclusions
-for the workspace directory and for `%TEMP%` before any timing number measured
-here means anything. Without them the numbers measure the scanner.
+```
+cargo xtask bench              measure
+cargo xtask bench --compare    fail on a regression above five percent
+cargo xtask surface            report what crosses a crate boundary
+```
 
-Memory pressure decides how the suites are run, which is the section above.
+## Prerequisites
 
-## How sessions are run
+Rust 1.98.0, pinned in `rust-toolchain.toml`. The stated MSRV is 1.89.0 and verify builds at it, so `rustup toolchain install 1.89.0` if you want that step to run.
 
-Fetchloom is built by separate sessions that share no memory. The rules below
-exist to remove drift, assumptions, and unverified claims.
+`cargo-deny` for the dependencies step.
 
-### Unit of work
+Docker Desktop for the Linux lanes. Without it those steps fail rather than being skipped, which is deliberate: an unproven platform should look unproven.
 
-A phase is too large for one session. A phase is split into three to five slices.
-One session does one slice.
+## What this machine costs
 
-A slice is independently testable, independently mergeable, and small enough that
-its result can be judged in minutes. If a slice cannot be described in one
-paragraph, it is two slices.
+Worth knowing before you blame the code.
 
-### Session lifetime
+Windows Defender inspects every write. It has been measured at 3.5 GB resident during a run, and the many small files regime has reported cost ratios of 47x, 49x, 57x and 173x across four identical runs. If you are benchmarking, an exclusion on the working tree and the cache changes the numbers substantially. Fetchloom reports the ratio and never works around it.
 
-Sessions reset at phase boundaries, not between slices. Within a phase, a session
-that already holds the context keeps working. Across a phase boundary every
-session is closed, because a new phase reads different contracts and inherits
-nothing but the documents.
+The Docker VM peaked at 7.3 GB working set on a 16 GB machine during the container lane. That, not the test suite, is what causes memory pressure during a full verify. The kill test that usually dies is the process alive when the machine runs short, not the one that made it short: measured, its whole process tree peaked at 65.7 MB.
 
-Decision records are how context crosses a boundary. Anything a session learns
-that must survive is written to `docs/decisions.md` before it closes.
+Run one crate's suite at a time in the foreground if memory is tight.
 
-### Roles
+## Reporting a change
 
-Three roles, never combined in one session.
+Keep it short. Use `file:line` rather than pasting code.
 
-Researcher settles open questions and writes a decision record. Produces no code.
+```
+Done: <one line>
+Decisions: <any choice not already in the docs, with the reason>
+Tests: <what was added, and the real pass or fail output>
+Benchmarks: <numbers, or none needed>
+Uncertain: <anything you could not verify>
+Blocked: <anything needing a human decision>
+```
 
-Builder implements one slice against settled decisions. Never decides anything
-the docs are silent about; it stops and asks instead.
+Do not restate the plan, summarize the docs, or explain at length what you are about to do.
 
-Judge reviews a finished slice against the contracts. Never wrote the code it
-reviews, because a session cannot see its own assumptions.
+## Done means
 
-### Loop
+Tests written first, passing, asserting a stated contract.
 
-Research the open questions of the phase. Write decisions. Human approves.
+Adversarial cases covered where they apply: failure, corruption, interruption, concurrency, hostile input.
 
-For each slice: build, then judge, then fix or accept.
+Green on both platforms.
 
-At the end of the phase, judge against the roadmap exit criteria. A phase is not
-partially carried forward.
+Benchmark numbers for anything performance relevant, with no regime regressed.
 
-### Parallelism
+Contracts updated in the same change if behavior changed.
 
-Builders run in parallel only when they own disjoint crates. Two sessions inside
-one crate produce merge conflicts and, worse, two different answers to the same
-unwritten question.
+No `todo!`, no placeholder, no skipped test, no dead code.
 
-Parallel builders require a foundation session first. Every seam trait, domain
-type, and signature they compile against must already exist, or they will each
-invent their own. That foundation is one session and it is never parallelized.
+## Where things live
 
-A judge runs alone, after the work it judges.
+```
+crates/engine      identity, canonical forms, policy, the six seams
+crates/platform    filesystem, atomic publication, locking, capability detection
+crates/cache       the content addressed store
+crates/sources     network adapters
+crates/archive     enumeration, selection, bounded extraction
+crates/view        the live renderer, which reads events and nothing else
+crates/faults      fault injection and the hostile corpus
+crates/cli         the command surface
+xtask              verify, bench, profile, surface
+docs/decisions.md  an append only log of why, never authoritative over code
+```
 
-### Decision records
-
-Every choice not already written in the docs is recorded in `docs/decisions.md`
-before code depends on it. A record states what had to be decided, what was
-considered, what was chosen, the evidence measured or cited, and what the choice
-makes harder.
-
-If a decision changes a contract, contracts.md is updated in the same change. The
-decision record is the reason; the contract is the rule.
-
-### Token discipline
-
-The standing rules live in `CLAUDE.md` and are not repeated in prompts. A prompt
-carries only what is specific to its slice.
-
-Prompts name the sections to read, not whole documents.
-
-Reports use the format in `CLAUDE.md`: short, `file:line` references, no pasted
-code, no restating the plan.
-
-A session that has drifted is restarted with a fresh prompt rather than argued
-with.
-
-### Sizing
-
-A session takes the largest coherent batch it can finish well. Small batches
-waste sessions and force the same context to be rebuilt repeatedly. A batch is
-too large only when its work spans seams that do not depend on each other, or
-when its result cannot be judged against a single set of contracts.
-
-Research and build never share a session. That split is what removes assumptions,
-and merging it costs more than it saves.
-
-Research runs immediately before the build that depends on it, so decisions are
-made once, in context, and never made twice.
-
-### Prompts
-
-A researcher prompt names the sections to read and the questions to settle, each
-with what evidence would settle it, and asks for one decision record per
-question. It forbids editing contracts.md and requires stopping when a question
-cannot be settled with evidence.
-
-A builder prompt names the slice, the sections and decision records to read, what
-exists when it is done, the tests and adversarial cases required, the objective
-criteria for done, and the files it may not touch. It requires every library API
-to be verified against current documentation, and every test run to be pasted.
-
-A judge prompt names the slice and the sections, and asks nine questions, each
-answered with evidence from the code. Does the behavior match the contract
-exactly, including error kinds, event names, exit codes and limits. Was each test
-written to fail first, and does it assert a contract rather than an
-implementation detail. Can any test pass while the feature is broken. Are the
-adversarial cases real: failure, corruption, interruption, concurrency, hostile
-input. Did it run green on both platforms, shown rather than claimed. Is there
-any comment, version field, compatibility path, second way of doing an existing
-thing, dead code, or placeholder. Any silent fallback without a degrade event.
-Any new dependency without a stated reason. Any benchmark regime regressed or
-missing. It outputs defects with `file:line` and fixes nothing.
-
-## Before you push
-
-`cargo xtask verify` green, with every `NOT VERIFIED` line read. Contracts
-updated in the same change if behavior changed. A decision record for anything
-the documents did not already answer. Benchmark numbers for anything
-performance-relevant.
+Folder names drop the `fetchloom-` prefix their packages carry, the way ripgrep's `crates/cli` is package `grep-cli`. At eight crates the prefix in the path buys nothing.

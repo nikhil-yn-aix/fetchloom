@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use fetchloom_engine::digest::ContentDigest;
 
+pub const COMPRESSED_SUFFIX: &str = ".z";
+
 pub(crate) const DIRECTORIES: [&str; 10] = [
     "objects",
     "packs",
@@ -64,7 +66,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn diagnosis_of(&self, digest: ContentDigest) -> PathBuf {
+    pub(crate) fn diagnosis_of(&self, digest: ContentDigest) -> PathBuf {
         self.quarantine()
             .join(format!("{}.diagnosis", name_of(digest)))
     }
@@ -75,7 +77,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn receipt_of(&self, key: ContentDigest) -> PathBuf {
+    pub(crate) fn receipt_of(&self, key: ContentDigest) -> PathBuf {
         self.receipts().join(name_of(key))
     }
 
@@ -110,7 +112,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn marks(&self) -> PathBuf {
+    pub(crate) fn marks(&self) -> PathBuf {
         self.meta().join("prune")
     }
 
@@ -120,7 +122,13 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn outboard_of(&self, digest: ContentDigest) -> PathBuf {
+    pub fn compressed_object(&self, digest: ContentDigest) -> PathBuf {
+        self.objects()
+            .join(format!("{}{COMPRESSED_SUFFIX}", name_of(digest)))
+    }
+
+    #[must_use]
+    pub(crate) fn outboard_of(&self, digest: ContentDigest) -> PathBuf {
         self.outboard().join(name_of(digest))
     }
 
@@ -135,7 +143,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn lock_owner_of(&self, digest: ContentDigest) -> PathBuf {
+    pub(crate) fn lock_owner_of(&self, digest: ContentDigest) -> PathBuf {
         self.locks().join(format!("{}.owner", name_of(digest)))
     }
 
@@ -155,7 +163,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn witness_of(&self, key: &fetchloom_engine::trust::ArtifactKey) -> PathBuf {
+    pub(crate) fn witness_of(&self, key: &fetchloom_engine::trust::ArtifactKey) -> PathBuf {
         self.witnesses().join(hexadecimal(key.bytes()))
     }
 
@@ -165,17 +173,17 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn measurement_of(&self, key: &[u8; 32]) -> PathBuf {
+    pub(crate) fn measurement_of(&self, key: &[u8; 32]) -> PathBuf {
         self.measurements().join(hexadecimal(key))
     }
 
     #[must_use]
-    pub fn resolutions(&self) -> PathBuf {
+    pub(crate) fn resolutions(&self) -> PathBuf {
         self.meta().join("resolution")
     }
 
     #[must_use]
-    pub fn resolution_of(&self, key: &[u8; 32]) -> PathBuf {
+    pub(crate) fn resolution_of(&self, key: &[u8; 32]) -> PathBuf {
         self.resolutions().join(hexadecimal(key))
     }
 
@@ -200,6 +208,9 @@ fn hexadecimal(bytes: &[u8]) -> String {
     name
 }
 
+/// Strictly the hexadecimal of a digest and nothing else, so a name carrying
+/// anything more, such as the suffix a compressed object is filed under, is not
+/// one and is never read as one.
 #[must_use]
 pub fn digest_of(name: &str) -> Option<ContentDigest> {
     if name.len() != 64 {
@@ -211,4 +222,11 @@ pub fn digest_of(name: &str) -> Option<ContentDigest> {
         bytes[index] = u8::from_str_radix(text, 16).ok()?;
     }
     Some(ContentDigest::from_bytes(bytes))
+}
+
+/// The digest an entry of the objects directory is filed under, whether it is
+/// stored raw or compressed.
+#[must_use]
+pub fn stored_digest_of(name: &str) -> Option<ContentDigest> {
+    digest_of(name.strip_suffix(COMPRESSED_SUFFIX).unwrap_or(name))
 }

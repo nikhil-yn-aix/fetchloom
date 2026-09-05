@@ -30,16 +30,14 @@ const DEVMAJOR_OFFSET: usize = 329;
 const DEVMAJOR_LEN: usize = 8;
 const DEVMINOR_OFFSET: usize = 337;
 const DEVMINOR_LEN: usize = 8;
-const PREFIX_OFFSET: usize = 345;
-const PREFIX_LEN: usize = 155;
 
 pub const TYPEFLAG_REGULAR: u8 = b'0';
 pub const TYPEFLAG_HARDLINK: u8 = b'1';
 pub const TYPEFLAG_SYMLINK: u8 = b'2';
-pub const TYPEFLAG_CHARDEV: u8 = b'3';
+pub(crate) const TYPEFLAG_CHARDEV: u8 = b'3';
 pub const TYPEFLAG_BLOCKDEV: u8 = b'4';
 pub const TYPEFLAG_DIRECTORY: u8 = b'5';
-pub const TYPEFLAG_FIFO: u8 = b'6';
+pub(crate) const TYPEFLAG_FIFO: u8 = b'6';
 pub const TYPEFLAG_PAX: u8 = b'x';
 
 #[derive(Clone, Debug)]
@@ -86,7 +84,7 @@ impl TarHeader {
         self
     }
 
-    pub fn set_name(&mut self, name: &[u8]) -> &mut Self {
+    fn set_name(&mut self, name: &[u8]) -> &mut Self {
         self.set(NAME_OFFSET, NAME_LEN, name)
     }
 
@@ -95,16 +93,12 @@ impl TarHeader {
         self.set(MODE_OFFSET, MODE_LEN, &field)
     }
 
-    pub fn set_mode_bytes(&mut self, bytes: &[u8]) -> &mut Self {
-        self.set(MODE_OFFSET, MODE_LEN, bytes)
-    }
-
-    pub fn set_uid(&mut self, uid: u32) -> &mut Self {
+    fn set_uid(&mut self, uid: u32) -> &mut Self {
         let field = octal_field(u64::from(uid), UID_LEN);
         self.set(UID_OFFSET, UID_LEN, &field)
     }
 
-    pub fn set_gid(&mut self, gid: u32) -> &mut Self {
+    fn set_gid(&mut self, gid: u32) -> &mut Self {
         let field = octal_field(u64::from(gid), GID_LEN);
         self.set(GID_OFFSET, GID_LEN, &field)
     }
@@ -114,12 +108,12 @@ impl TarHeader {
         self.set(SIZE_OFFSET, SIZE_LEN, &field)
     }
 
-    pub fn set_mtime(&mut self, mtime: u64) -> &mut Self {
+    fn set_mtime(&mut self, mtime: u64) -> &mut Self {
         let field = octal_field(mtime, MTIME_LEN);
         self.set(MTIME_OFFSET, MTIME_LEN, &field)
     }
 
-    pub fn set_typeflag(&mut self, typeflag: u8) -> &mut Self {
+    fn set_typeflag(&mut self, typeflag: u8) -> &mut Self {
         self.raw[TYPEFLAG_OFFSET] = typeflag;
         self
     }
@@ -128,50 +122,38 @@ impl TarHeader {
         self.set(LINKNAME_OFFSET, LINKNAME_LEN, linkname)
     }
 
-    pub fn set_magic(&mut self, magic: &[u8]) -> &mut Self {
+    fn set_magic(&mut self, magic: &[u8]) -> &mut Self {
         self.set(MAGIC_OFFSET, MAGIC_LEN, magic)
     }
 
-    pub fn set_version(&mut self, version: &[u8]) -> &mut Self {
+    fn set_version(&mut self, version: &[u8]) -> &mut Self {
         self.set(VERSION_OFFSET, VERSION_LEN, version)
     }
 
-    pub fn set_uname(&mut self, uname: &[u8]) -> &mut Self {
+    fn set_uname(&mut self, uname: &[u8]) -> &mut Self {
         self.set(UNAME_OFFSET, UNAME_LEN, uname)
     }
 
-    pub fn set_gname(&mut self, gname: &[u8]) -> &mut Self {
+    fn set_gname(&mut self, gname: &[u8]) -> &mut Self {
         self.set(GNAME_OFFSET, GNAME_LEN, gname)
     }
 
-    pub fn set_devmajor(&mut self, devmajor: u32) -> &mut Self {
+    pub(crate) fn set_devmajor(&mut self, devmajor: u32) -> &mut Self {
         let field = octal_field(u64::from(devmajor), DEVMAJOR_LEN);
         self.set(DEVMAJOR_OFFSET, DEVMAJOR_LEN, &field)
     }
 
-    pub fn set_devminor(&mut self, devminor: u32) -> &mut Self {
+    pub(crate) fn set_devminor(&mut self, devminor: u32) -> &mut Self {
         let field = octal_field(u64::from(devminor), DEVMINOR_LEN);
         self.set(DEVMINOR_OFFSET, DEVMINOR_LEN, &field)
     }
 
-    pub fn set_prefix(&mut self, prefix: &[u8]) -> &mut Self {
-        self.set(PREFIX_OFFSET, PREFIX_LEN, prefix)
-    }
-
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; 512] {
+    pub(crate) fn to_bytes(&self) -> [u8; 512] {
         let mut block = [0u8; 512];
         block[..500].copy_from_slice(&self.raw);
         let sum = checksum_sum(&block);
         block[CHKSUM_OFFSET..CHKSUM_OFFSET + CHKSUM_LEN].copy_from_slice(&checksum_field(sum));
-        block
-    }
-
-    #[must_use]
-    pub fn to_bytes_with_checksum(&self, checksum: [u8; CHKSUM_LEN]) -> [u8; 512] {
-        let mut block = [0u8; 512];
-        block[..500].copy_from_slice(&self.raw);
-        block[CHKSUM_OFFSET..CHKSUM_OFFSET + CHKSUM_LEN].copy_from_slice(&checksum);
         block
     }
 }
@@ -245,11 +227,6 @@ impl TarWriter {
 
     pub fn push(&mut self, header: &TarHeader, data: &[u8]) -> &mut Self {
         self.bytes.extend_from_slice(&header.to_bytes());
-        self.push_data(data)
-    }
-
-    pub fn push_block(&mut self, block: &[u8; 512], data: &[u8]) -> &mut Self {
-        self.bytes.extend_from_slice(block);
         self.push_data(data)
     }
 

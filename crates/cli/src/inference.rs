@@ -10,7 +10,7 @@ use fetchloom_engine::manifest::{Artifact, DigestClaims, Manifest};
 use fetchloom_engine::pool::Processor;
 
 #[must_use]
-pub fn dataset_name(reference: &str) -> String {
+pub(crate) fn dataset_name(reference: &str) -> String {
     let trimmed = reference.trim_end_matches('/');
     let after_scheme = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest);
     let last = after_scheme
@@ -19,7 +19,7 @@ pub fn dataset_name(reference: &str) -> String {
     last.map_or_else(|| "dataset".to_owned(), str::to_owned)
 }
 
-pub fn from_directory(
+pub(crate) fn from_directory(
     root: &Path,
     processor: &Processor,
     limits: &Limits,
@@ -75,7 +75,7 @@ pub struct Observed {
     pub size: u64,
 }
 
-pub fn from_observed(
+pub(crate) fn from_observed(
     location: &str,
     observed: &[Observed],
     limits: &Limits,

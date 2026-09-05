@@ -11,14 +11,14 @@ use fetchloom_engine::seam::archive::{ArchiveMember, MemberKind};
 use fetchloom_engine::tree::Mode;
 use flate2::read::GzDecoder;
 use lzma_rust2::XzReader;
-use ruzstd::decoding::StreamingDecoder;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::bomb::BombGuard;
 use crate::path::{claim_member_path, validate_link_target, validate_member_path};
 use crate::shared::SharedSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TarCompression {
+pub(crate) enum TarCompression {
     None,
     Gzip,
     Zstd,
@@ -27,9 +27,9 @@ pub enum TarCompression {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TarOffset {
-    pub data_start: u64,
-    pub size: u64,
+pub(crate) struct TarOffset {
+    pub(crate) data_start: u64,
+    pub(crate) size: u64,
 }
 
 fn unsupported_archive(name: &str, detail: &str) -> Error {
@@ -61,7 +61,7 @@ fn build_decompressor<R: Read + 'static>(
         TarCompression::Gzip => Ok(Box::new(GzDecoder::new(source))),
         TarCompression::Xz => Ok(Box::new(XzReader::new(source, false))),
         TarCompression::Bzip2 => Ok(Box::new(BzDecoder::new(source))),
-        TarCompression::Zstd => StreamingDecoder::new(source)
+        TarCompression::Zstd => ZstdDecoder::new(source)
             .map(|decoder| Box::new(decoder) as Box<dyn Read>)
             .map_err(|error| {
                 unsupported_archive(archive_name, &format!("has an invalid zstd frame: {error}"))
@@ -124,7 +124,7 @@ fn reject_disallowed_pax_extensions(
     Ok(())
 }
 
-pub fn list_members<R: Read + Seek + 'static>(
+pub(crate) fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: TarCompression,
     archive_name: &str,
@@ -206,7 +206,7 @@ pub fn list_members<R: Read + Seek + 'static>(
     Ok((members, offsets))
 }
 
-pub struct TarStream {
+pub(crate) struct TarStream {
     decoder: Rc<RefCell<Box<dyn Read>>>,
     position: Rc<Cell<u64>>,
 }
@@ -220,7 +220,7 @@ impl Clone for TarStream {
     }
 }
 
-pub struct MemberBody {
+struct MemberBody {
     stream: TarStream,
     remaining: u64,
 }
@@ -241,7 +241,7 @@ impl Read for MemberBody {
     }
 }
 
-pub fn open_member<R: Read + Seek + 'static>(
+pub(crate) fn open_member<R: Read + Seek + 'static>(
     held: &mut Option<TarStream>,
     source: &SharedSource<R>,
     compression: TarCompression,

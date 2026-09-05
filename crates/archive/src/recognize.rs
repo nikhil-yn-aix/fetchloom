@@ -87,6 +87,10 @@ fn sniff(header: &[u8]) -> Option<Family> {
     None
 }
 
+/// # Errors
+/// `archive.unsupported` when the header says a different container from the
+/// one the name or the manifest declared. A location that declares nothing
+/// and looks like nothing is `None` rather than an error.
 pub fn recognize(
     declared: Option<ArchiveFormat>,
     location: &str,

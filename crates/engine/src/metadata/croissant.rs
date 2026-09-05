@@ -36,7 +36,12 @@ impl MetadataReader for Croissant {
     }
 
     fn read(&self, bytes: &[u8], context: &Context<'_>) -> Result<Manifest, Error> {
-        let document = document::parse(bytes, Syntax::Json, context.limits)?;
+        let document = document::parse(
+            bytes,
+            Syntax::Json,
+            context.limits,
+            document::Bound::Foreign,
+        )?;
         let Value::Object(root) = &document else {
             return Err(malformed(self.format(), "the top level is a JSON object"));
         };

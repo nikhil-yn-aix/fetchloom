@@ -7,7 +7,7 @@ use fetchloom_engine::tree::{Mode, TreeEntry};
 use std::path::{Path, PathBuf};
 
 #[must_use]
-pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
+pub(crate) fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
     let mut paths: Vec<String> = entries
         .iter()
         .filter_map(|entry| match entry {
@@ -23,7 +23,7 @@ pub fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
     paths
 }
 
-pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
+pub(crate) fn local_path(reference: &str) -> Result<PathBuf, Error> {
     if let Some(rest) = reference.strip_prefix("file://") {
         let trimmed = rest.strip_prefix('/').unwrap_or(rest);
         let looks_like_windows_path = trimmed.as_bytes().get(1).is_some_and(|byte| *byte == b':');
@@ -67,13 +67,16 @@ pub fn local_path(reference: &str) -> Result<PathBuf, Error> {
 }
 
 #[must_use]
-pub fn default_destination(source: &Path) -> PathBuf {
+pub(crate) fn default_destination(source: &Path) -> PathBuf {
     let name = source
         .file_name()
         .map_or_else(|| PathBuf::from("dataset"), PathBuf::from);
     PathBuf::from(".").join(name)
 }
 
+/// # Errors
+/// `destination.unrepresentable` when the path has no absolute form on this
+/// platform.
 pub fn resolve_path(path: &Path) -> Result<PathBuf, Error> {
     std::path::absolute(path).map_err(|reason| {
         Error::new(
@@ -146,7 +149,7 @@ pub(super) fn object_name(location: &str) -> String {
 }
 
 #[must_use]
-pub fn remote_name(location: &str) -> String {
+pub(crate) fn remote_name(location: &str) -> String {
     object_name(location)
 }
 

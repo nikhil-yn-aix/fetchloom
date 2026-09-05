@@ -64,5 +64,8 @@ pub trait MetadataReader {
 
     fn recognizes(&self, name: &str, bytes: &[u8]) -> bool;
 
+    /// # Errors
+    /// `manifest.invalid` when the document does not parse or names nothing
+    /// this reader can turn into artifacts.
     fn read(&self, bytes: &[u8], context: &Context<'_>) -> Result<Manifest, Error>;
 }

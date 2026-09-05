@@ -80,9 +80,12 @@ impl Harness {
             NativePlatform::new(std::sync::Arc::new(
                 fetchloom_engine::work::WorkCounter::new(),
             )),
-            DurabilityTier::Fast,
-            VerificationPolicy::Fingerprint,
-            IoMode::Buffered,
+            fetchloom_cache::CacheSettings {
+                tier: DurabilityTier::Fast,
+                policy: VerificationPolicy::Fingerprint,
+                io: IoMode::Buffered,
+                compression: fetchloom_engine::compression::CompressionChoice::Auto,
+            },
             std::sync::Arc::clone(&work),
             test_processor(),
         )
@@ -512,9 +515,12 @@ fn a_bare_url_with_no_known_digest_resumes_its_second_run_from_its_first() {
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         std::sync::Arc::clone(&work),
         test_processor(),
     )
@@ -613,9 +619,12 @@ fn a_container_reference_lists_and_materializes_every_entry() {
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         std::sync::Arc::clone(&work),
         test_processor(),
     )
@@ -922,9 +931,12 @@ fn a_second_container_run_against_an_unchanged_destination_writes_nothing() {
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         std::sync::Arc::clone(&work),
         test_processor(),
     )
@@ -1001,9 +1013,12 @@ fn a_selection_matching_no_listed_entry_is_an_error_rather_than_an_empty_destina
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         std::sync::Arc::clone(&work),
         test_processor(),
     )

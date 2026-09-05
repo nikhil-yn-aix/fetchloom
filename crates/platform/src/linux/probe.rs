@@ -85,10 +85,13 @@ fn measure(
         ),
         backing: backing(directory),
         scanner,
+        compresses: compression_probe(directory),
     })
 }
 
 const PATH_LENGTHS: [u32; 2] = [4096, 255];
+
+const COMPRESSION_PROBE_BYTES: usize = 1 << 20;
 
 fn fold_probe(
     directory: &Path,
@@ -205,6 +208,34 @@ fn sparse_probe(directory: &Path) -> bool {
     drop(file);
     let _ = std::fs::remove_file(&path);
     punched
+}
+
+/// Linux states no per-file compression flag a mounted btrfs or zfs sets
+/// reliably, so the answer is measured: a volume that compresses allocates far
+/// fewer blocks than were written. The pattern is repetitive rather than zero,
+/// because a zero-filled file may be made sparse instead of compressed and the
+/// two would measure the same.
+fn compression_probe(directory: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let tag = probe_tag();
+    let path = directory.join(format!("fetchloom-probe-{tag}-compressed"));
+    let pattern: Vec<u8> = b"fetchloom"
+        .iter()
+        .copied()
+        .cycle()
+        .take(COMPRESSION_PROBE_BYTES)
+        .collect();
+    let Ok(mut file) = std::fs::File::create(&path) else {
+        return false;
+    };
+    let written = std::io::Write::write_all(&mut file, &pattern)
+        .and_then(|()| file.sync_all())
+        .is_ok();
+    let allocated = std::fs::metadata(&path).map_or(u64::MAX, |found| found.blocks() * 512);
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+    written && allocated * 2 < COMPRESSION_PROBE_BYTES as u64
 }
 
 fn max_component_length(directory: &Path) -> u32 {

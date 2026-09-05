@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use fetchloom_cache::Cache;
-use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::lock::LockedDataset;
@@ -22,6 +21,10 @@ const DESTINATION: &str = "destination";
 
 const COST: &str = "cost";
 
+/// # Errors
+/// `reference.unresolved` when the lock pins nothing for the dataset, and
+/// `policy.trust_refused` when what the lock pins is not trusted enough to
+/// plan against.
 pub fn build(
     pinned: Option<&LockedDataset>,
     dataset: &str,
@@ -110,6 +113,9 @@ pub fn build(
     })
 }
 
+/// # Errors
+/// `manifest.invalid` when the file is longer than the limit allows or does
+/// not parse as a plan, and `reference.unresolved` when it cannot be read.
 pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
     let bytes = crate::resolve::read_bounded_document(path, limits)?;
     let syntax = fetchloom_engine::document::Syntax::of_path(path)
@@ -117,18 +123,13 @@ pub fn read(path: &Path, limits: &Limits) -> Result<Plan, Error> {
     Plan::parse(&bytes, syntax, limits)
 }
 
-pub fn only_artifact(plan: &Plan) -> Result<&PlanArtifact, Error> {
+pub(crate) fn only_artifact(plan: &Plan) -> Result<&PlanArtifact, Error> {
     plan.artifacts.first().ok_or_else(|| {
         Error::new(
             ErrorKind::ReferenceUnresolved,
             "plan a reference that resolves to something, because this plan names no artifact",
         )
     })
-}
-
-#[must_use]
-pub fn pinned_digest(plan: &Plan) -> Option<ContentDigest> {
-    plan.artifacts.first().map(|artifact| artifact.digest)
 }
 
 fn conflicts(destination: &Path) -> Vec<String> {

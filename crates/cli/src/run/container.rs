@@ -33,6 +33,11 @@ use std::path::Path;
     clippy::too_many_arguments,
     reason = "a container materialization is decided by what it runs under, where it reads, where it writes, what it selects, the two flags that govern an existing destination, and both observers"
 )]
+/// # Errors
+/// Whatever listing, transferring, extracting or publishing the container
+/// reports: the `network.*` kinds, `archive.*` for a member the destination
+/// cannot hold, `integrity.mismatch`, and the destination's own filesystem
+/// kinds.
 pub fn materialize_remote_container(
     with: &Materialization<'_>,
     location: &str,

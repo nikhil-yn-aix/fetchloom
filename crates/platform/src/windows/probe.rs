@@ -101,6 +101,7 @@ fn measure(
             Backing::Local
         },
         scanner,
+        compresses: compression_probe(directory),
     })
 }
 
@@ -213,6 +214,19 @@ fn scanner_probe(directory: &Path) -> Result<Scanner, Error> {
         }),
         None => Ok(Scanner::Absent),
     }
+}
+
+/// A volume that compresses what is written to it says so on the file itself,
+/// so the answer is a query rather than a measurement.
+fn compression_probe(directory: &Path) -> bool {
+    let tag = probe_tag();
+    let path = directory.join(format!("fetchloom-probe-{tag}-compressed"));
+    if std::fs::write(&path, [0u8; 1]).is_err() {
+        return false;
+    }
+    let compressed = ffi::is_compressed(&path);
+    let _ = std::fs::remove_file(&path);
+    compressed
 }
 
 fn is_scanner_altitude(altitude: u32) -> bool {

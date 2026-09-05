@@ -32,6 +32,9 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+skip = [
+  { crate = "getrandom@0.4", reason = "cc pulls it through jobserver to name a build-time pipe, and a build dependency never links into the binary; the TLS provider carries 0.3 and that is the only getrandom the artifact holds" },
+]
 allow-wildcard-paths = true
 allow = [
   { crate = "adler2", reason = "the Adler-32 checksum miniz_oxide verifies a zlib stream with" },
@@ -47,7 +50,7 @@ allow = [
   { crate = "block-buffer", reason = "the block accumulation sha2 hashes through" },
   { crate = "bytes", reason = "the reference-counted byte buffers ureq-proto passes bodies through" },
   { crate = "bzip2", reason = "the bzip2 decoder, chosen in the formats record for the Wikipedia dumps" },
-  { crate = "cc", reason = "the C build step libmimalloc-sys needs on the two musl targets" },
+  { crate = "cc", reason = "the C build step zstd-sys and libmimalloc-sys compile their bundled sources with" },
   { crate = "cfg_aliases", reason = "the target selection nix builds its syscall bindings with" },
   { crate = "cfg-if", reason = "target selection for blake3, sha2, and rustix" },
   { crate = "clap", reason = "the one argument parser, chosen in the toolchain record" },
@@ -91,6 +94,7 @@ allow = [
   { crate = "indexmap", reason = "the ordered member index zip reads a central directory into" },
   { crate = "is_terminal_polyfill", reason = "terminal detection for anstream" },
   { crate = "itoa", reason = "integer formatting for serde_json and http" },
+  { crate = "jobserver", reason = "the parallel build token cc takes from cargo so a C build does not oversubscribe the machine" },
   { crate = "libbz2-rs-sys", reason = "the pure-Rust bzip2 backend, which is bzip2 0.6 own default and replaces the C library" },
   { crate = "libc", reason = "the Unix syscall surface filetime, getrandom, nix and tar reach through on the Linux targets; no Fetchloom crate names it" },
   { crate = "libmimalloc-sys", reason = "the bindings mimalloc is built from" },
@@ -105,6 +109,7 @@ allow = [
   { crate = "once_cell_polyfill", reason = "the one-time initialization anstyle-query needs" },
   { crate = "openssl-probe", reason = "the system certificate bundle location rustls-platform-verifier reads on Linux" },
   { crate = "percent-encoding", reason = "the path escaping ureq applies to a location" },
+  { crate = "pkg-config", reason = "how zstd-sys looks for a system libzstd before falling back to the sources it bundles" },
   { crate = "proc-macro2", reason = "token handling for serde_derive" },
   { crate = "quote", reason = "token generation for serde_derive" },
   { crate = "rayon", reason = "the one explicit processor pool, chosen in the thread pool record" },
@@ -116,7 +121,6 @@ allow = [
   { crate = "rustls-pki-types", reason = "the certificate and key types rustls takes" },
   { crate = "rustls-platform-verifier", reason = "verification delegated to the platform, chosen in the trust record" },
   { crate = "rustls-webpki", reason = "the certificate path building rustls performs" },
-  { crate = "ruzstd", reason = "the zstd decoder, chosen in the formats record because it is pure Rust" },
   { crate = "schannel", reason = "the Windows certificate verification rustls-platform-verifier delegates to" },
   { crate = "serde", reason = "the one serialization framework, chosen in the toolchain record" },
   { crate = "serde_core", reason = "the traits serde is built on" },
@@ -134,7 +138,6 @@ allow = [
   { crate = "toml", reason = "the one configuration parser, required by contracts.md Configuration files" },
   { crate = "toml_datetime", reason = "the datetime type toml parses into" },
   { crate = "toml_parser", reason = "the parser toml is built on" },
-  { crate = "twox-hash", reason = "the XXH64 checksum ruzstd verifies a zstd frame with" },
   { crate = "typed-path", reason = "the platform-independent member paths zip parses names into" },
   { crate = "typenum", reason = "the compile-time sizes digest is generic over" },
   { crate = "unicode-ident", reason = "identifier classification for proc-macro2" },
@@ -151,4 +154,7 @@ allow = [
   { crate = "zeroize", reason = "the key material clearing rustls performs on drop" },
   { crate = "zip", reason = "the zip container reader, chosen in the formats record" },
   { crate = "zmij", reason = "float formatting for serde_json" },
+  { crate = "zstd", reason = "the zstd codec, chosen in the compression record: cached objects and bundles are written through it, and it is the one implementation the workspace reads and writes zstd with" },
+  { crate = "zstd-safe", reason = "the checked Rust wrapper zstd is built on" },
+  { crate = "zstd-sys", reason = "the bundled libzstd sources and their bindings, which zstd-safe compiles and links statically" },
 ]

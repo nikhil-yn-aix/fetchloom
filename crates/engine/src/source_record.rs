@@ -22,7 +22,7 @@ pub struct SourceRecord {
 
 impl SourceRecord {
     #[must_use]
-    pub fn identifies_the_same_bytes_as(&self, now: &SourceIdentity) -> bool {
+    pub(crate) fn identifies_the_same_bytes_as(&self, now: &SourceIdentity) -> bool {
         !matches!(self.identity, SourceIdentity::None) && &self.identity == now
     }
 }

@@ -127,12 +127,21 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// # Errors
+    /// `manifest.invalid` when the document does not parse, names no dataset,
+    /// or holds no artifact.
     pub fn parse(
         bytes: &[u8],
         syntax: crate::document::Syntax,
         limits: &crate::limits::Limits,
     ) -> Result<Self, Error> {
-        let manifest: Self = crate::document::read_model_in(bytes, syntax, "manifest", limits)?;
+        let manifest: Self = crate::document::read_model_in(
+            bytes,
+            syntax,
+            "manifest",
+            limits,
+            crate::document::Bound::Foreign,
+        )?;
         if manifest.name.is_empty() {
             return Err(Error::new(
                 ErrorKind::ManifestInvalid,
@@ -148,6 +157,9 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// # Errors
+    /// `manifest.invalid` when the manifest cannot be written in its canonical
+    /// form, which is what the digest is taken over.
     pub fn digest(&self) -> Result<crate::digest::ManifestDigest, Error> {
         Ok(crate::canonical::manifest_digest(
             &crate::document::canonical_json_of(self)?,

@@ -10,10 +10,10 @@ use bzip2 as _;
 use fetchloom_platform as _;
 use flate2 as _;
 use lzma_rust2 as _;
-use ruzstd as _;
 use tar as _;
 use tempfile as _;
 use zip as _;
+use zstd as _;
 
 use std::io::{Cursor, Read};
 
@@ -106,15 +106,17 @@ fn every_hostile_entry_the_reader_decides_fails_with_its_declared_kind() {
         };
         let Err(error) = read_through(entry) else {
             panic!(
-                "hostile entry {} was read without being refused, and must fail with {kind}",
-                entry.name()
+                "hostile entry {} attacks {} and was read without being refused, and must fail with {kind}",
+                entry.name(),
+                entry.attacks()
             )
         };
         assert_eq!(
             error.kind().label(),
             *kind,
-            "hostile entry {} was refused with the wrong kind: {}",
+            "hostile entry {} attacks {} and was refused with the wrong kind: {}",
             entry.name(),
+            entry.attacks(),
             error.next_action()
         );
         assert!(

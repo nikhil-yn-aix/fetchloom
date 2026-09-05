@@ -150,7 +150,7 @@ fn parse_manifest(bytes: &[u8], context: &Context<'_>) -> Result<Vec<Entry>, Err
 pub struct BagIt;
 
 impl BagIt {
-    pub fn read_with_fetch(
+    fn read_with_fetch(
         manifest_bytes: &[u8],
         fetch_bytes: Option<&[u8]>,
         context: &Context<'_>,

@@ -16,13 +16,6 @@ pub struct Resolution {
     pub last_modified: Option<String>,
 }
 
-impl Resolution {
-    #[must_use]
-    pub fn can_be_asked_about(&self) -> bool {
-        self.etag.is_some() || self.last_modified.is_some()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Located {
@@ -31,13 +24,16 @@ struct Located {
 }
 
 #[must_use]
-pub fn key_of(location: &str) -> [u8; 32] {
+pub(crate) fn key_of(location: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key(RESOLUTION_KEY_CONTEXT);
     hasher.update(location.as_bytes());
     *hasher.finalize().as_bytes()
 }
 
 impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `cache.corrupt` when a record exists and does not parse. No record is
+    /// `None` rather than an error.
     pub fn resolution(&self, location: &str) -> Result<Option<Resolution>, Error> {
         let held: Option<Located> = record::read(&self.layout().resolution_of(&key_of(location)))?;
         Ok(held.map(|found| found.resolution))
@@ -62,6 +58,9 @@ impl<P: Platform> Cache<P> {
         (None, None)
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the record cannot be written, and `resource.disk`
+    /// when the volume is full.
     pub fn record_resolution(&self, location: &str, found: &Resolution) -> Result<(), Error> {
         record::write(
             &self.layout().resolution_of(&key_of(location)),

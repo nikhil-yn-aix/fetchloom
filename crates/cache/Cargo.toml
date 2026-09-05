@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 fetchloom-engine = { workspace = true }
+zstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

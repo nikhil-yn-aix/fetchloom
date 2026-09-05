@@ -79,10 +79,10 @@ pub fn portable_core() -> Vec<TreeEntry> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclaredFailure {
-    pub description: &'static str,
+    pub(crate) description: &'static str,
     pub entries: Vec<TreeEntry>,
     pub kind: ErrorKind,
-    pub reason: &'static str,
+    pub(crate) reason: &'static str,
 }
 
 #[must_use]

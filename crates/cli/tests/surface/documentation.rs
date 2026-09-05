@@ -1,8 +1,8 @@
-//! The proof that every flag, command, event and error kind features.md names
-//! without marking it unbuilt is one this binary actually has.
+//! The proof that every flag, command, event and error kind reference.md names
+//! above its Not built section is one this binary actually has.
 //!
-//! Three audits found false sentences in that file by hand and each recorded
-//! that nothing enforced the convention. This is the enforcement.
+//! Three audits found false sentences in the documentation by hand and each
+//! recorded that nothing enforced the convention. This is the enforcement.
 
 #![expect(
     clippy::unwrap_used,
@@ -18,14 +18,19 @@ use fetchloom_engine::event::EVENT_NAMES;
 
 const EXTENSIONS: [&str; 8] = ["yaml", "yml", "toml", "json", "ndjson", "md", "lock", "txt"];
 
-const UNBUILT: &str = "Not built.";
+const UNBUILT: &str = "
+## Not built";
 
-fn features() -> String {
-    std::fs::read_to_string(concat!(
+fn reference() -> String {
+    let whole = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/features.md"
+        "/../../docs/reference.md"
     ))
-    .unwrap()
+    .unwrap();
+    match whole.split_once(UNBUILT) {
+        Some((built, _)) => built.to_owned(),
+        None => whole,
+    }
 }
 
 fn help(arguments: &[&str]) -> String {
@@ -98,9 +103,6 @@ fn long_flags(text: &str) -> Vec<String> {
 fn claimed(text: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     for paragraph in text.split("\n\n") {
-        if paragraph.contains(UNBUILT) {
-            continue;
-        }
         let mut parts = paragraph.split('`');
         parts.next();
         while let Some(token) = parts.next() {
@@ -110,15 +112,15 @@ fn claimed(text: &str) -> BTreeSet<String> {
             found.insert(token.to_owned());
         }
     }
-    assert!(!found.is_empty(), "features.md quotes nothing");
+    assert!(!found.is_empty(), "reference.md quotes nothing");
     found
 }
 
 #[test]
-fn every_flag_features_md_names_is_one_the_binary_offers() {
+fn every_flag_the_reference_names_is_one_the_binary_offers() {
     let offered = flags();
     let mut missing = Vec::new();
-    for token in claimed(&features()) {
+    for token in claimed(&reference()) {
         let Some(flag) = token.split_whitespace().next() else {
             continue;
         };
@@ -131,18 +133,18 @@ fn every_flag_features_md_names_is_one_the_binary_offers() {
     }
     assert!(
         missing.is_empty(),
-        "features.md names {missing:?} as flags this build has, and the binary's own help offers \
+        "reference.md names {missing:?} as flags this build has, and the binary's own help offers \
          none of them. Either the flag is unbuilt, in which case the sentence needs its Not built. \
          marker, or the name in the document is wrong."
     );
 }
 
 #[test]
-fn every_dotted_name_features_md_uses_is_an_event_or_an_error_kind() {
+fn every_dotted_name_the_reference_uses_is_an_event_or_an_error_kind() {
     let events: BTreeSet<&str> = EVENT_NAMES.into_iter().collect();
     let kinds: BTreeSet<&str> = ErrorKind::ALL.into_iter().map(ErrorKind::label).collect();
     let mut missing = Vec::new();
-    for token in claimed(&features()) {
+    for token in claimed(&reference()) {
         if !token.contains('.') || token.contains(' ') || token.contains('/') {
             continue;
         }
@@ -162,7 +164,7 @@ fn every_dotted_name_features_md_uses_is_an_event_or_an_error_kind() {
     }
     assert!(
         missing.is_empty(),
-        "features.md names {missing:?}, which is neither an event in EVENT_NAMES nor an error kind \
+        "reference.md names {missing:?}, which is neither an event in EVENT_NAMES nor an error kind \
          in ErrorKind::ALL. A dotted lowercase name in that document is one or the other."
     );
 }

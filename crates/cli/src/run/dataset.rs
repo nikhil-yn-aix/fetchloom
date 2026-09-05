@@ -33,7 +33,7 @@ use fetchloom_platform::NativePlatform;
 use std::path::Path;
 
 #[must_use]
-pub fn synthesized_manifest(
+pub(crate) fn synthesized_manifest(
     adapters: &Adapters,
     dataset: &str,
     reference: &str,
@@ -60,7 +60,7 @@ pub fn synthesized_manifest(
     }
 }
 
-pub fn write_receipt(
+pub(crate) fn write_receipt(
     cache: &Cache<NativePlatform>,
     manifest: &fetchloom_engine::manifest::Manifest,
     artifacts: &[ResolvedArtifact],
@@ -149,7 +149,7 @@ pub(super) fn fingerprints_of(
 }
 
 #[must_use]
-pub fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> String {
+pub(crate) fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> String {
     if is_served(adapters, reference) {
         return remote_name(reference);
     }
@@ -160,33 +160,35 @@ pub fn dataset_name(adapters: &Adapters, reference: &str, source: &Path) -> Stri
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Provenance {
-    pub prior: Option<ContentDigest>,
-    pub observed: Option<String>,
+pub(crate) struct Provenance {
+    pub(crate) prior: Option<ContentDigest>,
+    pub(crate) observed: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedArtifact {
-    pub id: String,
-    pub digest: ContentDigest,
-    pub interop: fetchloom_engine::digest::InteropDigest,
-    pub size: u64,
-    pub source: SafeUrl,
-    pub name: String,
-    pub selection: Selection,
-    pub declared: Option<ArchiveFormat>,
-    pub prior: Option<ContentDigest>,
-    pub observed: Option<String>,
-    pub reason: Option<String>,
+pub(crate) struct ResolvedArtifact {
+    pub(crate) id: String,
+    pub(crate) digest: ContentDigest,
+    pub(crate) interop: fetchloom_engine::digest::InteropDigest,
+    pub(crate) size: u64,
+    pub(crate) source: SafeUrl,
+    pub(crate) name: String,
+    pub(crate) selection: Selection,
+    pub(crate) declared: Option<ArchiveFormat>,
+    pub(crate) prior: Option<ContentDigest>,
+    pub(crate) observed: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 pub struct DatasetRun {
-    pub resolved: Vec<ResolvedArtifact>,
+    pub(crate) resolved: Vec<ResolvedArtifact>,
     pub outcome: Result<RunResult, Error>,
 }
 
 #[must_use]
-pub fn manifest_at(source: &Path) -> Option<Result<fetchloom_engine::manifest::Manifest, Error>> {
+pub(crate) fn manifest_at(
+    source: &Path,
+) -> Option<Result<fetchloom_engine::manifest::Manifest, Error>> {
     let syntax = fetchloom_engine::document::Syntax::of_path(source)?;
     if !source.is_file() {
         return None;
@@ -640,7 +642,7 @@ pub(super) fn fill_dataset_staging(
 }
 
 #[must_use]
-pub fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<ResolvedArtifact> {
+pub(crate) fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<ResolvedArtifact> {
     let Some(artifact) = &result.artifact else {
         return Vec::new();
     };

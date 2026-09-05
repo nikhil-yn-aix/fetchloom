@@ -10,6 +10,7 @@ use tempfile as _;
 use windows_sys as _;
 
 pub mod bundle;
+pub mod compress;
 pub mod diagnosis;
 pub mod format;
 pub mod ingest;
@@ -31,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fetchloom_engine::capability::Backing;
+use fetchloom_engine::compression::CompressionChoice;
 use fetchloom_engine::degrade::{Degradation, DegradeQueue};
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
@@ -52,6 +54,15 @@ const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
+/// What a cache was opened with, as opposed to what it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheSettings {
+    pub tier: DurabilityTier,
+    pub policy: VerificationPolicy,
+    pub io: IoMode,
+    pub compression: CompressionChoice,
+}
+
 #[derive(Debug)]
 pub struct Cache<P: Platform> {
     layout: Layout,
@@ -59,7 +70,9 @@ pub struct Cache<P: Platform> {
     tier: DurabilityTier,
     policy: VerificationPolicy,
     io_mode: IoMode,
-    io_degradations: DegradeQueue,
+    compression: CompressionChoice,
+    volume_compresses: bool,
+    degradations: DegradeQueue,
     token: OwnerToken,
     work: Arc<WorkCounter>,
     processor: Arc<Processor>,
@@ -68,15 +81,25 @@ pub struct Cache<P: Platform> {
 }
 
 impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `cache.format_mismatch` when the directory was written by a build with
+    /// another format, `cache.cross_volume` when the cache spans volumes,
+    /// `cache.locking_unsupported` when the volume is reached over a network
+    /// or cannot express an advisory lock, and `cache.corrupt` when the
+    /// directories cannot be created or read.
     pub fn open(
         root: impl AsRef<Path>,
         platform: P,
-        tier: DurabilityTier,
-        policy: VerificationPolicy,
-        requested_io: IoMode,
+        settings: CacheSettings,
         work: Arc<WorkCounter>,
         processor: Arc<Processor>,
     ) -> Result<Self, Error> {
+        let CacheSettings {
+            tier,
+            policy,
+            io: requested_io,
+            compression,
+        } = settings;
         let layout = Layout::new(root.as_ref());
         create_directories(&layout, &work)?;
         check_format(&layout, &work)?;
@@ -84,13 +107,24 @@ impl<P: Platform> Cache<P> {
         check_locking(&platform, &layout)?;
 
         let capabilities = platform.volume_capabilities(&layout.objects())?;
-        let io_degradations = DegradeQueue::new();
+        let degradations = DegradeQueue::new();
         let io_mode = resolve_io_mode(
             requested_io,
             &capabilities,
             CAN_RELEASE_PAGES,
-            &io_degradations,
+            &degradations,
         );
+        let volume_compresses = capabilities.compresses;
+        if volume_compresses && compression != CompressionChoice::None {
+            degradations.record(
+                format!("cached objects written {compression}"),
+                "cached objects written raw",
+                format!(
+                    "{} is on a volume that compresses what is written to it, so compressing again would spend processor time to store the same bytes twice over",
+                    layout.objects().display()
+                ),
+            );
+        }
 
         let token = platform.owner_token()?;
         let cache = Self {
@@ -99,7 +133,9 @@ impl<P: Platform> Cache<P> {
             tier,
             policy,
             io_mode,
-            io_degradations,
+            compression,
+            volume_compresses,
+            degradations,
             token,
             work,
             processor,
@@ -131,13 +167,19 @@ impl<P: Platform> Cache<P> {
     }
 
     #[must_use]
-    pub fn io_mode(&self) -> IoMode {
-        self.io_mode
+    pub fn take_degradations(&self) -> Vec<Degradation> {
+        self.degradations.take()
     }
 
+    /// What this run was asked to do, which is not always what it does: a
+    /// volume that compresses on its own is stored raw whatever was asked.
     #[must_use]
-    pub fn take_io_degradations(&self) -> Vec<Degradation> {
-        self.io_degradations.take()
+    pub fn compression(&self) -> CompressionChoice {
+        if self.volume_compresses {
+            CompressionChoice::None
+        } else {
+            self.compression
+        }
     }
 
     #[must_use]
@@ -169,6 +211,9 @@ impl<P: Platform> Cache<P> {
     }
 }
 
+/// # Errors
+/// `cache.corrupt` when the directory exists and cannot be removed. A cache
+/// that is not there is not an error.
 pub fn clear(root: &Path) -> Result<(), Error> {
     match std::fs::remove_dir_all(root) {
         Ok(()) => Ok(()),

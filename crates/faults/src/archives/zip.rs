@@ -70,7 +70,7 @@ impl ZipLocalHeader {
 
 #[derive(Clone, Debug)]
 pub struct ZipCentralHeader {
-    pub version_made_by: u16,
+    version_made_by: u16,
     pub version_needed: u16,
     pub flags: u16,
     pub method: u16,
@@ -79,10 +79,10 @@ pub struct ZipCentralHeader {
     pub crc32: u32,
     pub compressed_size: u32,
     pub uncompressed_size: u32,
-    pub disk_start: u16,
-    pub internal_attrs: u16,
+    disk_start: u16,
+    internal_attrs: u16,
     pub external_attrs: u32,
-    pub local_header_offset: u32,
+    local_header_offset: u32,
     pub name: Vec<u8>,
     pub extra: Vec<u8>,
     pub comment: Vec<u8>,
@@ -190,7 +190,7 @@ impl ZipWriter {
     }
 
     #[must_use]
-    pub fn finish_zip64(self) -> Vec<u8> {
+    pub(crate) fn finish_zip64(self) -> Vec<u8> {
         self.finish_inner(true)
     }
 

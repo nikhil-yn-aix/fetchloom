@@ -237,6 +237,7 @@ fn capabilities(backing: Backing, scanner: Scanner) -> VolumeCapabilities {
         max_path_length: 4096,
         backing,
         scanner,
+        compresses: false,
     }
 }
 

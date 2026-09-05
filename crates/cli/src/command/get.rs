@@ -2,7 +2,9 @@
 
 use crate::command::explain::tuning_for;
 use crate::command::plan::locked_selection;
-use crate::command::{Opened, Requested, get_policy, open_for, open_request};
+use crate::command::{
+    Opened, Requested, get_policy, open_for, open_request, report_cache_degradations,
+};
 use crate::settings::ProcessEnvironment;
 use crate::surface::CommandLine;
 use crate::{Reporter, locked, run, settings, surface};
@@ -215,6 +217,7 @@ pub(crate) fn record(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
+    report_cache_degradations(into.cache, observer, sequence);
     let tree = produced.outcome.as_ref().ok().map(|result| result.tree);
     let settled = locked::resolved(into.manifest, &produced.resolved, tree).and_then(|recorded| {
         locked::settle(

@@ -12,7 +12,7 @@ export FETCHLOOM_VERIFY_VOLUMES=1
 
 for target in "$@"; do
   echo "target $target"
-  cargo clippy --workspace --all-targets --target "$target"
+  cargo clippy --workspace --all-targets --target "$target" -- -D warnings
   cargo test --workspace --target "$target"
   cargo run -p xtask -- network "/target/$target/debug/fetchloom"
 done

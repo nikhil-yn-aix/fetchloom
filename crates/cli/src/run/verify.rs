@@ -16,7 +16,7 @@ use fetchloom_engine::work::WorkCounter;
 use std::io::Read;
 use std::path::Path;
 
-pub fn verify_tree(
+pub(crate) fn verify_tree(
     path: &Path,
     receipt: Option<&Receipt>,
     budget: ThreadBudget,

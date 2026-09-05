@@ -16,6 +16,8 @@ pub fn forbidden() -> bool {
     FORBIDDEN.load(Ordering::SeqCst)
 }
 
+/// # Errors
+/// `policy.offline` when the run was told not to reach the network.
 pub fn allowed(location: &str) -> Result<(), Error> {
     if !forbidden() {
         return Ok(());

@@ -61,13 +61,6 @@ pub struct Witness {
     pub observed_at: crate::timestamp::Timestamp,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrustRecord {
-    pub publisher_identity: Option<String>,
-    pub manifest_authenticity: Option<String>,
-    pub content_integrity: TrustClass,
-}
-
 #[must_use]
 pub fn classify(
     prior: Option<ContentDigest>,

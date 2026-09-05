@@ -35,10 +35,10 @@ impl Status {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Check {
-    pub key: String,
-    pub status: Status,
-    pub finding: String,
+pub(crate) struct Check {
+    pub(crate) key: String,
+    pub(crate) status: Status,
+    finding: String,
 }
 
 impl Check {
@@ -53,12 +53,12 @@ impl Check {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Report {
-    pub checks: Vec<Check>,
+    pub(crate) checks: Vec<Check>,
 }
 
 impl Report {
     #[must_use]
-    pub fn exit_code(&self) -> ExitCode {
+    pub(crate) fn exit_code(&self) -> ExitCode {
         if self
             .checks
             .iter()

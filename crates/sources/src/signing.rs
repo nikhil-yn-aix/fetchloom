@@ -46,27 +46,23 @@ fn hex(bytes: &[u8]) -> String {
     text
 }
 
-#[must_use]
-pub fn payload_digest(payload: &[u8]) -> String {
-    hex(&Sha256::digest(payload))
-}
-
-pub const EMPTY_PAYLOAD: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+pub(crate) const EMPTY_PAYLOAD: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SigningTime {
-    pub stamp: String,
-    pub day: String,
+    stamp: String,
+    day: String,
 }
 
 impl SigningTime {
     #[must_use]
-    pub fn now() -> Self {
+    pub(crate) fn now() -> Self {
         Self::at(fetchloom_engine::timestamp::Timestamp::now())
     }
 
     #[must_use]
-    pub fn at(timestamp: fetchloom_engine::timestamp::Timestamp) -> Self {
+    pub(crate) fn at(timestamp: fetchloom_engine::timestamp::Timestamp) -> Self {
         let rendered = timestamp.to_string();
         let compact: String = rendered
             .chars()
@@ -91,10 +87,10 @@ pub struct Request<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signed {
-    pub authorization: String,
-    pub date: String,
-    pub content_digest: String,
-    pub security_token: Option<String>,
+    pub(crate) authorization: String,
+    pub(crate) date: String,
+    pub(crate) content_digest: String,
+    pub(crate) security_token: Option<String>,
 }
 
 fn canonical_request(request: &Request<'_>, time: &SigningTime, token: Option<&str>) -> String {
@@ -180,9 +176,10 @@ pub fn sign(
 
 #[cfg(test)]
 mod tests {
-    use super::{EMPTY_PAYLOAD, Request, SigningTime, hex, keyed_hash, payload_digest, sign};
+    use super::{EMPTY_PAYLOAD, Request, SigningTime, hex, keyed_hash, sign};
     use fetchloom_engine::credential::SigningKeys;
     use fetchloom_engine::redact::Secret;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn the_keyed_hash_matches_the_published_test_vectors() {
@@ -216,7 +213,7 @@ mod tests {
 
     #[test]
     fn the_empty_payload_digest_is_the_one_that_is_named() {
-        assert_eq!(payload_digest(b""), EMPTY_PAYLOAD);
+        assert_eq!(hex(&Sha256::digest(b"")), EMPTY_PAYLOAD);
     }
 
     fn keys() -> SigningKeys {

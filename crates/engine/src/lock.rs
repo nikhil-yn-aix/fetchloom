@@ -39,6 +39,10 @@ pub struct Lock {
 }
 
 impl LockedDataset {
+    /// # Errors
+    /// `alias.unstable` when the resolved dataset holds an artifact the lock
+    /// pins nothing for, and whatever `LockedArtifact::check` gives for an
+    /// artifact that moved.
     pub fn check(&self, resolved: &Self) -> Result<(), Error> {
         for (id, found) in &resolved.artifacts {
             let Some(pinned) = self.artifacts.get(id) else {
@@ -79,6 +83,9 @@ impl LockedDataset {
 }
 
 impl LockedDataset {
+    /// # Errors
+    /// `alias.unstable` when the manifest digest, the release, or the
+    /// selection the run asks for is not the one the lock pins.
     pub fn check_request(
         &self,
         manifest: ManifestDigest,
@@ -115,6 +122,9 @@ impl LockedDataset {
 }
 
 impl LockedArtifact {
+    /// # Errors
+    /// `integrity.mismatch` when the bytes hash to something other than what
+    /// the lock pins, and `alias.unstable` when another pinned field moved.
     pub fn check(&self, id: &str, resolved: &Self) -> Result<(), Error> {
         if self.digest != resolved.digest {
             return Err(Error::new(
@@ -170,6 +180,9 @@ fn moved(field: &str, pinned: &impl std::fmt::Display, found: &impl std::fmt::Di
 }
 
 impl Lock {
+    /// # Errors
+    /// `manifest.invalid` when the file exists and cannot be read or does not
+    /// parse. A lock that is not there is an empty lock rather than an error.
     pub fn read(path: &Path, limits: &crate::limits::Limits) -> Result<Self, Error> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
@@ -183,9 +196,12 @@ impl Lock {
                 ));
             }
         };
-        crate::document::read_model(&bytes, "lock", limits)
+        crate::document::read_model(&bytes, "lock", limits, crate::document::Bound::Foreign)
     }
 
+    /// # Errors
+    /// `manifest.invalid` when the lock cannot be rendered, written beside
+    /// the destination, or renamed onto it.
     pub fn write(&self, path: &Path) -> Result<(), Error> {
         let rendered = crate::document::render_model(self)?;
         let mut beside = path.as_os_str().to_owned();

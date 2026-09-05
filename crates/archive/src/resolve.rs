@@ -13,6 +13,10 @@ use fetchloom_engine::tree::TreeEntry;
 use crate::bomb::BombGuard;
 use crate::extract::{BUFFER_LEN, build_plan, io_failure, select_members};
 
+/// # Errors
+/// The kinds `Archive::members` gives, `reference.unresolved` when the
+/// selection matches no member, and `archive.bomb` when the members selected
+/// pass a limit.
 pub fn resolve<A: Archive>(
     archive: &mut A,
     selection: &Selection,

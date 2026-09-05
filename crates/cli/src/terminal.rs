@@ -23,18 +23,18 @@ impl Streams {
     }
 
     #[must_use]
-    pub fn can_prompt(self) -> bool {
+    pub(crate) fn can_prompt(self) -> bool {
         self.stdin && self.stderr
     }
 }
 
 #[must_use]
-pub fn continuous_integration(environment: &dyn Environment) -> bool {
+fn continuous_integration(environment: &dyn Environment) -> bool {
     environment.get("CI").is_some()
 }
 
 #[must_use]
-pub fn dumb_terminal(environment: &dyn Environment) -> bool {
+fn dumb_terminal(environment: &dyn Environment) -> bool {
     environment.get("TERM").as_deref() == Some("dumb")
 }
 

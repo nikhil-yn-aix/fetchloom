@@ -31,7 +31,7 @@ use std::path::Path;
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
 )]
-pub fn materialize_local(
+pub(crate) fn materialize_local(
     with: &Materialization<'_>,
     source: &Path,
     destination: &Path,

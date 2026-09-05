@@ -10,13 +10,13 @@ use fetchloom_engine::seam::archive::{ArchiveMember, MemberKind};
 use fetchloom_engine::tree::Mode;
 use flate2::read::GzDecoder;
 use lzma_rust2::XzReader;
-use ruzstd::decoding::StreamingDecoder;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::bomb::BombGuard;
 use crate::shared::SharedSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BareCompression {
+pub(crate) enum BareCompression {
     Gzip,
     Zstd,
     Xz,
@@ -43,7 +43,7 @@ fn build_decompressor<R: Read + 'static>(
         BareCompression::Gzip => Ok(Box::new(GzDecoder::new(source))),
         BareCompression::Xz => Ok(Box::new(XzReader::new(source, false))),
         BareCompression::Bzip2 => Ok(Box::new(BzDecoder::new(source))),
-        BareCompression::Zstd => StreamingDecoder::new(source)
+        BareCompression::Zstd => ZstdDecoder::new(source)
             .map(|decoder| Box::new(decoder) as Box<dyn Read>)
             .map_err(|error| {
                 unsupported_archive(archive_name, &format!("has an invalid zstd frame: {error}"))
@@ -60,7 +60,7 @@ pub fn member_name(location: &str, extension: &str) -> String {
         .to_owned()
 }
 
-pub fn list_member<R: Read + Seek + 'static>(
+pub(crate) fn list_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: BareCompression,
     name: &str,
@@ -95,7 +95,7 @@ pub fn list_member<R: Read + Seek + 'static>(
     })
 }
 
-pub fn open_member<R: Read + Seek + 'static>(
+pub(crate) fn open_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     compression: BareCompression,
     name: &str,

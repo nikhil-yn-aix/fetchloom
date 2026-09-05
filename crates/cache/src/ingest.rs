@@ -24,6 +24,10 @@ pub struct Ingested {
 }
 
 impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `reference.unresolved` when the file cannot be read, `resource.disk`
+    /// when the volume is full, and `cache.corrupt` when the object cannot be
+    /// published into the store.
     pub fn ingest(&self, source: &Path) -> Result<Ingested, Error> {
         let (digests, length) = self.digest_of(source)?;
         if self.contains(digests.content)? {
@@ -61,6 +65,9 @@ impl<P: Platform> Cache<P> {
         Ok((pair.finish(), length))
     }
 
+    /// # Errors
+    /// The kinds `ingest` gives, and `cache.cross_volume` when the file being
+    /// adopted is not on the volume the cache publishes onto.
     pub fn adopt(&self, digests: &Digests, length: u64, source: &Path) -> Result<Ingested, Error> {
         let digest = digests.content;
         let present = Ingested {
@@ -117,6 +124,9 @@ impl<P: Platform> Cache<P> {
         self.finish_publication(digests)
     }
 
+    /// # Errors
+    /// `cache.corrupt` when a record exists and does not parse. No record is
+    /// `None` rather than an error.
     pub fn recorded_interop(&self, digest: ContentDigest) -> Result<Option<InteropDigest>, Error> {
         if let Some(crate::storage::Placement::Packed { entry, .. }) = self.placement(digest) {
             return Ok(Some(entry.interop));
@@ -125,7 +135,7 @@ impl<P: Platform> Cache<P> {
         Ok(record.map(|record| record.interop))
     }
 
-    pub fn ingest_from(
+    fn ingest_from(
         &self,
         reading: impl Read,
         length: u64,

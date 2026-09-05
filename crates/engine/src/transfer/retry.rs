@@ -35,6 +35,9 @@ pub struct Retry<'a, P> {
 }
 
 impl<P: Pause> Retry<'_, P> {
+    /// # Errors
+    /// Whatever the work reported on its last attempt, once the attempts are
+    /// spent or the failure is one that is never retried.
     pub fn until_spent<T>(
         &self,
         mut work: impl FnMut(u32) -> Result<T, Error>,

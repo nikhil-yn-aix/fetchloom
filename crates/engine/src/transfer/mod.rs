@@ -92,6 +92,11 @@ fn unprobed(index: usize, location: &str, headroom: u32) -> Probed {
 }
 
 impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
+    /// # Errors
+    /// Whatever the last candidate source reported once every source has been
+    /// tried: the `network.*` kinds, `integrity.mismatch` when the bytes do
+    /// not hash to what was expected, and the store's own kinds for a write
+    /// that could not be completed.
     pub fn run(
         &self,
         expected: Option<ContentDigest>,

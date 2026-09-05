@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 pub const REDACTED: &str = "[redacted]";
 
-pub const SENSITIVE_HEADERS: [&str; 2] = ["authorization", "cookie"];
+const SENSITIVE_HEADERS: [&str; 2] = ["authorization", "cookie"];
 
 #[must_use]
 pub fn is_sensitive_header(name: &str) -> bool {

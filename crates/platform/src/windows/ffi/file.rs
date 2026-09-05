@@ -11,8 +11,9 @@ use std::path::Path;
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALLOCATION_INFO, FILE_END_OF_FILE_INFO, FileAllocationInfo, FileEndOfFileInfo,
-    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileInformationByHandle,
+    FILE_ALLOCATION_INFO, FILE_ATTRIBUTE_COMPRESSED, FILE_END_OF_FILE_INFO, FileAllocationInfo,
+    FileEndOfFileInfo, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileInformationByHandle,
 };
 
 use super::encode::wide;
@@ -74,4 +75,12 @@ pub(crate) fn create_symlink(target: &str, link: &Path, directory: bool) -> io::
     } else {
         std::os::windows::fs::symlink_file(target, link)
     }
+}
+
+pub(crate) fn is_compressed(path: &Path) -> bool {
+    let name = wide(path);
+    // SAFETY: the pointer names a null-terminated wide string that outlives the
+    // call, which is the whole contract of GetFileAttributesW.
+    let attributes = unsafe { GetFileAttributesW(name.as_ptr()) };
+    attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_COMPRESSED != 0
 }

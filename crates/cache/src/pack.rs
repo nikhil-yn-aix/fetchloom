@@ -3,18 +3,21 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+use fetchloom_engine::compression::{Stored, Transform};
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::seam::platform::Platform;
 
 use crate::Cache;
 
-const HEADER: usize = 32 + 32 + 8;
+const HEADER: usize = 32 + 32 + 8 + 8 + 1 + 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub offset: u64,
     pub length: u64,
+    pub plain_length: u64,
+    pub stored: Stored,
     pub interop: InteropDigest,
 }
 
@@ -31,12 +34,14 @@ impl<P: Platform> Cache<P> {
         digest: ContentDigest,
         interop: InteropDigest,
         bytes: &[u8],
+        stored: Stored,
     ) -> Result<Entry, Error> {
+        let path = self.own_pack();
+        let body = body_of(bytes, stored, &path)?;
         let _appending = self
             .appending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let path = self.own_pack();
         let mut file = std::fs::File::options()
             .append(true)
             .create(true)
@@ -45,23 +50,24 @@ impl<P: Platform> Cache<P> {
         let at = file
             .seek(SeekFrom::End(0))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
-        let mut header = [0_u8; HEADER];
-        header[..32].copy_from_slice(digest.bytes());
-        header[32..64].copy_from_slice(interop.bytes());
-        header[64..].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
-        file.write_all(&header)
-            .and_then(|()| file.write_all(bytes))
+        let entry = Entry {
+            offset: at + HEADER as u64,
+            length: body.len() as u64,
+            plain_length: bytes.len() as u64,
+            stored,
+            interop,
+        };
+        file.write_all(&header_of(digest, &entry))
+            .and_then(|()| file.write_all(&body))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         self.platform().flush(&file, self.tier())?;
         self.work().touched_file();
-        self.work().wrote_bytes((HEADER + bytes.len()) as u64);
-        Ok(Entry {
-            offset: at + HEADER as u64,
-            length: bytes.len() as u64,
-            interop,
-        })
+        self.work().wrote_bytes((HEADER + body.len()) as u64);
+        Ok(entry)
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the pack index cannot be read or does not parse.
     pub fn entries_in(&self, pack: &std::path::Path) -> Result<Vec<(ContentDigest, Entry)>, Error> {
         let mut file = match std::fs::File::open(pack) {
             Ok(file) => file,
@@ -84,10 +90,16 @@ impl<P: Platform> Cache<P> {
             let mut interop = [0_u8; 32];
             interop.copy_from_slice(&header[32..64]);
             let length = u64::from_le_bytes(
-                header[64..]
+                header[64..72]
                     .try_into()
                     .map_err(|_| malformed(pack, "a length that is not eight bytes"))?,
             );
+            let plain_length = u64::from_le_bytes(
+                header[72..80]
+                    .try_into()
+                    .map_err(|_| malformed(pack, "a length that is not eight bytes"))?,
+            );
+            let stored = stored_of(header[80], header[81], pack)?;
             let digest = ContentDigest::from_bytes(name);
             let start = at + HEADER as u64;
             if start.saturating_add(length) > on_disk {
@@ -101,6 +113,8 @@ impl<P: Platform> Cache<P> {
                 Entry {
                     offset: start,
                     length,
+                    plain_length,
+                    stored,
                     interop: InteropDigest::from_bytes(interop),
                 },
             ));
@@ -108,6 +122,9 @@ impl<P: Platform> Cache<P> {
         }
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the pack directory cannot be walked. A directory
+    /// that does not exist yet is an empty list rather than an error.
     pub fn packs(&self) -> Result<Vec<PathBuf>, Error> {
         let directory = self.layout().packs();
         let entries = match std::fs::read_dir(&directory) {
@@ -122,6 +139,64 @@ impl<P: Platform> Cache<P> {
             .collect();
         found.sort();
         Ok(found)
+    }
+}
+
+fn header_of(digest: ContentDigest, entry: &Entry) -> [u8; HEADER] {
+    let mut header = [0_u8; HEADER];
+    header[..32].copy_from_slice(digest.bytes());
+    header[32..64].copy_from_slice(entry.interop.bytes());
+    header[64..72].copy_from_slice(&entry.length.to_le_bytes());
+    header[72..80].copy_from_slice(&entry.plain_length.to_le_bytes());
+    let (level, transform) = match entry.stored {
+        Stored::Raw => (0, 0),
+        Stored::Zstd { level, transform } => (
+            u8::try_from(level).unwrap_or(0),
+            match transform {
+                Transform::None => 0,
+                Transform::Shuffle => 1,
+            },
+        ),
+    };
+    header[80] = level;
+    header[81] = transform;
+    header
+}
+
+fn stored_of(level: u8, transform: u8, pack: &std::path::Path) -> Result<Stored, Error> {
+    if level == 0 {
+        return Ok(Stored::Raw);
+    }
+    let transform = match transform {
+        0 => Transform::None,
+        1 => Transform::Shuffle,
+        other => {
+            return Err(malformed(
+                pack,
+                &format!("a byte transform numbered {other}"),
+            ));
+        }
+    };
+    Ok(Stored::Zstd {
+        level: i32::from(level),
+        transform,
+    })
+}
+
+fn body_of(bytes: &[u8], stored: Stored, pack: &std::path::Path) -> Result<Vec<u8>, Error> {
+    match stored {
+        Stored::Raw => Ok(bytes.to_vec()),
+        Stored::Zstd { level, transform } => {
+            let mut framed = Vec::with_capacity(bytes.len());
+            crate::compress::write_frames(
+                &mut std::io::Cursor::new(bytes),
+                &mut framed,
+                pack,
+                level,
+                transform,
+            )?;
+            Ok(framed)
+        }
     }
 }
 
@@ -217,22 +292,15 @@ impl<P: Platform> Cache<P> {
                 .seek(SeekFrom::Start(entry.offset))
                 .and_then(|_| source.read_exact(&mut bytes))
                 .map_err(|reason| filesystem_failure(Surface::Cache, pack, &reason))?;
-            let mut header = [0_u8; HEADER];
-            header[..32].copy_from_slice(digest.bytes());
-            header[32..64].copy_from_slice(entry.interop.bytes());
-            header[64..].copy_from_slice(&entry.length.to_le_bytes());
+            let moved_to = Entry {
+                offset: at + HEADER as u64,
+                ..entry
+            };
             writing
-                .write_all(&header)
+                .write_all(&header_of(digest, &moved_to))
                 .and_then(|()| writing.write_all(&bytes))
                 .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
-            moved.push((
-                digest,
-                Entry {
-                    offset: at + HEADER as u64,
-                    length: entry.length,
-                    interop: entry.interop,
-                },
-            ));
+            moved.push((digest, moved_to));
             at += HEADER as u64 + entry.length;
         }
         self.platform().flush(&writing, self.tier())?;

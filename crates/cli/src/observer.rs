@@ -10,13 +10,16 @@ use fetchloom_engine::seam::observer::Observer;
 
 use crate::surface::DisplayMode;
 
-pub const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct EventStream {
     sink: Mutex<Box<dyn Write + Send>>,
 }
 
 impl EventStream {
+    /// # Errors
+    /// Whatever creating the file reports. The target `-` is standard output
+    /// and never fails here.
     pub fn open(target: &str) -> std::io::Result<Self> {
         let sink: Box<dyn Write + Send> = if target == "-" {
             Box::new(std::io::stdout())
@@ -231,6 +234,9 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// # Errors
+/// Whatever opening the file or reading a line from it reports. The target
+/// `-` is standard input.
 pub fn watch(target: &str) -> std::io::Result<()> {
     let reader: Box<dyn std::io::BufRead> = if target == "-" {
         Box::new(std::io::BufReader::new(std::io::stdin()))

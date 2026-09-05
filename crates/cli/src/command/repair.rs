@@ -13,6 +13,31 @@ use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::work::WorkCounter;
 use std::sync::Arc;
 
+pub(crate) fn inert_on_repair(transfer: &surface::TransferFlags) -> Option<&'static str> {
+    if transfer.output.is_some() {
+        return Some("--output");
+    }
+    if !transfer.select.is_empty() {
+        return Some("--select");
+    }
+    if !transfer.exclude.is_empty() {
+        return Some("--exclude");
+    }
+    if transfer.layout.is_some() {
+        return Some("--layout");
+    }
+    if transfer.no_extract {
+        return Some("--no-extract");
+    }
+    if transfer.force {
+        return Some("--force");
+    }
+    if transfer.adopt {
+        return Some("--adopt");
+    }
+    None
+}
+
 #[must_use]
 pub fn run_repair(
     reference: &str,
@@ -22,6 +47,13 @@ pub fn run_repair(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
+    if let Some(flag) = inert_on_repair(transfer) {
+        eprintln!(
+            "{flag} chooses what a run materializes, and repair restores bytes in the cache \
+             and materializes nothing"
+        );
+        return ExitCode::Usage;
+    }
     let reporter = Reporter::new(parsed.global.json, observer, sequence);
     let environment = ProcessEnvironment;
     let policy = policy::CommandLinePolicy::new(

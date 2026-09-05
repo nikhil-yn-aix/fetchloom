@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::Path;
 
 use fetchloom_cache::Cache;
+use fetchloom_engine::compression::CompressionChoice;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::Error;
@@ -38,14 +39,26 @@ pub fn open_cache_with_io(
     policy: VerificationPolicy,
     io: IoMode,
 ) -> Result<Cache<NativePlatform>, Error> {
+    open_cache_compressed(under, policy, io, CompressionChoice::Auto)
+}
+
+pub fn open_cache_compressed(
+    under: &Path,
+    policy: VerificationPolicy,
+    io: IoMode,
+    compression: CompressionChoice,
+) -> Result<Cache<NativePlatform>, Error> {
     Cache::open(
         under.join("cache"),
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        policy,
-        io,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy,
+            io,
+            compression,
+        },
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
         processor(),
     )
@@ -95,9 +108,12 @@ pub fn open_cache_at(root: &Path) -> Result<Cache<NativePlatform>, Error> {
         NativePlatform::new(std::sync::Arc::new(
             fetchloom_engine::work::WorkCounter::new(),
         )),
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: CompressionChoice::Auto,
+        },
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
         processor(),
     )
@@ -329,4 +345,8 @@ impl Checked {
         }
         true
     }
+}
+
+pub fn scratch() -> tempfile::TempDir {
+    tempfile::TempDir::new().unwrap()
 }

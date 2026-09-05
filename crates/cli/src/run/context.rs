@@ -16,30 +16,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedArtifact {
-    pub id: String,
-    pub digest: ContentDigest,
-    pub interop: Option<fetchloom_engine::digest::InteropDigest>,
-    pub size: u64,
-    pub source: SafeUrl,
-    pub prior: Option<ContentDigest>,
-    pub observed: Option<String>,
+pub(crate) struct RecordedArtifact {
+    pub(crate) id: String,
+    pub(crate) digest: ContentDigest,
+    pub(crate) interop: Option<fetchloom_engine::digest::InteropDigest>,
+    pub(crate) size: u64,
+    pub(crate) source: SafeUrl,
+    pub(crate) prior: Option<ContentDigest>,
+    pub(crate) observed: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RunResult {
     pub status: RunStatus,
-    pub dataset: String,
+    pub(crate) dataset: String,
     pub tree: TreeDigest,
-    pub destination: PathBuf,
+    pub(crate) destination: PathBuf,
     pub entries: u64,
     pub bytes: u64,
-    pub work: Work,
-    pub trust: TrustClass,
+    pub(crate) work: Work,
+    pub(crate) trust: TrustClass,
     #[serde(skip)]
-    pub executable: Vec<String>,
+    pub(crate) executable: Vec<String>,
     #[serde(skip)]
-    pub artifact: Option<RecordedArtifact>,
+    pub(crate) artifact: Option<RecordedArtifact>,
 }
 
 #[derive(Clone, Copy)]

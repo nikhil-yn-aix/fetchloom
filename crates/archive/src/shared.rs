@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::io::{Read, Result, Seek, SeekFrom};
 use std::rc::Rc;
 
-pub struct SharedSource<R> {
+pub(crate) struct SharedSource<R> {
     inner: Rc<RefCell<R>>,
 }
 
 impl<R> SharedSource<R> {
-    pub fn new(source: R) -> Self {
+    pub(crate) fn new(source: R) -> Self {
         Self {
             inner: Rc::new(RefCell::new(source)),
         }

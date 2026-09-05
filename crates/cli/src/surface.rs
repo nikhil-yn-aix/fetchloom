@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use fetchloom_engine::compression::CompressionChoice;
 use fetchloom_engine::limits::Bandwidth;
 use fetchloom_engine::selection::Layout;
 
@@ -106,12 +107,20 @@ pub struct GlobalFlags {
     /// Answer every confirmation with yes.
     #[arg(hide_short_help = true, long, global = true)]
     pub yes: bool,
+    /// How cached objects are stored.
+    #[arg(
+        hide_short_help = true,
+        long,
+        global = true,
+        value_name = "auto|none|zstd:1..19"
+    )]
+    pub compress: Option<CompressArg>,
 }
 
 /// How far a write is pushed before publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
-pub enum DurabilityChoice {
+pub(crate) enum DurabilityChoice {
     /// Flush the file and its containing directory to the device.
     Strict,
     /// Flush the file.
@@ -123,7 +132,7 @@ pub enum DurabilityChoice {
 /// What a cache hit is checked against before it is reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
-pub enum VerifyChoice {
+pub(crate) enum VerifyChoice {
     /// Reread and rehash the whole object.
     Always,
     /// Trust the object when its recorded filesystem fingerprint matches.
@@ -135,7 +144,7 @@ pub enum VerifyChoice {
 /// Which write path a run takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
-pub enum IoChoice {
+pub(crate) enum IoChoice {
     /// Let the volume's own capabilities decide.
     Auto,
     /// Write through the operating system's page cache.
@@ -144,9 +153,21 @@ pub enum IoChoice {
     Uncached,
 }
 
+/// The value `--compress` was given, parsed into how objects are stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompressArg(pub CompressionChoice);
+
+impl std::str::FromStr for CompressArg {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.parse().map(Self)
+    }
+}
+
 /// The value `--bandwidth` was given, parsed into a ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RateArg(pub Bandwidth);
+pub(crate) struct RateArg(pub Bandwidth);
 
 impl std::str::FromStr for RateArg {
     type Err = String;
@@ -158,7 +179,7 @@ impl std::str::FromStr for RateArg {
 
 /// The value `--timeout` was given, parsed into a span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DurationArg(pub std::time::Duration);
+pub(crate) struct DurationArg(pub std::time::Duration);
 
 impl std::str::FromStr for DurationArg {
     type Err = String;
@@ -186,7 +207,7 @@ impl std::str::FromStr for DurationArg {
 
 /// The value `--layout` was given, parsed into what selection acts on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LayoutArg(pub Layout);
+pub(crate) struct LayoutArg(pub Layout);
 
 impl std::str::FromStr for LayoutArg {
     type Err = String;
@@ -222,14 +243,14 @@ pub struct TransferFlags {
     pub exclude: Vec<String>,
     /// Path rewriting.
     #[arg(help_heading = "Where it lands", long, value_name = "keep|flatten:n")]
-    pub layout: Option<LayoutArg>,
+    pub(crate) layout: Option<LayoutArg>,
     /// How far a write is pushed before publication.
     #[arg(
         help_heading = "Proving what you got",
         long,
         value_name = "strict|normal|fast"
     )]
-    pub durability: Option<DurabilityChoice>,
+    pub(crate) durability: Option<DurabilityChoice>,
     /// Lock file location.
     #[arg(help_heading = "Proving what you got", long, value_name = "path")]
     pub lock: Option<PathBuf>,
@@ -238,17 +259,17 @@ pub struct TransferFlags {
     pub locked: bool,
     /// Bypass the cache for this operation.
     #[arg(help_heading = "Proving what you got", long)]
-    pub no_cache: bool,
+    pub(crate) no_cache: bool,
     /// Keep a recognized archive as a file rather than extracting it.
     #[arg(help_heading = "Where it lands", long)]
-    pub no_extract: bool,
+    pub(crate) no_extract: bool,
     /// What a cache hit is checked against before it is reused.
     #[arg(
         help_heading = "Proving what you got",
         long,
         value_name = "always|fingerprint|never"
     )]
-    pub verify: Option<VerifyChoice>,
+    pub(crate) verify: Option<VerifyChoice>,
     /// Overwrite modified destination entries and remove foreign ones.
     #[arg(help_heading = "Where it lands", long)]
     pub force: bool,
@@ -268,7 +289,7 @@ pub struct TransferFlags {
         long,
         value_name = "rate"
     )]
-    pub bandwidth: Option<RateArg>,
+    pub(crate) bandwidth: Option<RateArg>,
     /// Attempts per transient failure.
     #[arg(help_heading = "Speed and politeness", hide_short_help = true, long, value_name = "n", value_parser = clap::value_parser!(u32).range(1..))]
     pub retries: Option<u32>,
@@ -279,7 +300,7 @@ pub struct TransferFlags {
         long,
         value_name = "duration"
     )]
-    pub timeout: Option<DurationArg>,
+    pub(crate) timeout: Option<DurationArg>,
     /// Which write path a run takes.
     #[arg(
         help_heading = "Speed and politeness",
@@ -287,13 +308,13 @@ pub struct TransferFlags {
         long,
         value_name = "auto|buffered|uncached"
     )]
-    pub io: Option<IoChoice>,
+    pub(crate) io: Option<IoChoice>,
     /// Raise politeness ceilings.
     #[arg(help_heading = "Speed and politeness", hide_short_help = true, long)]
     pub aggressive: bool,
     /// Disable adaptation, so two runs do identical work.
     #[arg(help_heading = "Speed and politeness", hide_short_help = true, long)]
-    pub deterministic_io: bool,
+    pub(crate) deterministic_io: bool,
 }
 
 /// What to do with the cache.

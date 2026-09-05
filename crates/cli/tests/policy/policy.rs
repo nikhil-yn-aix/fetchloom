@@ -475,6 +475,10 @@ impl Policy for SeamOnly {
     fn adapts(&self) -> bool {
         true
     }
+    fn compression(&self) -> fetchloom_engine::compression::CompressionChoice {
+        fetchloom_engine::compression::CompressionChoice::Auto
+    }
+
     fn io(&self) -> IoMode {
         IoMode::Auto
     }

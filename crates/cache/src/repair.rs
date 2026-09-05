@@ -25,7 +25,7 @@ pub enum Held {
 
 impl Held {
     #[must_use]
-    pub fn path(&self) -> &std::path::Path {
+    pub(crate) fn path(&self) -> &std::path::Path {
         match self {
             Self::Published(path) | Self::Quarantined(path) => path,
         }
@@ -52,6 +52,10 @@ impl<P: Platform> Cache<P> {
         None
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the cache holds no such object or the object's
+    /// own bytes cannot be read. An object whose damage cannot be narrowed is
+    /// a `Localized` saying why, not an error.
     pub fn localize(&self, digest: ContentDigest) -> Result<Localized, Error> {
         let Some(held) = self.locate(digest) else {
             return Err(Error::new(
@@ -99,6 +103,10 @@ impl<P: Platform> Cache<P> {
         }
     }
 
+    /// # Errors
+    /// `cache.locked` or `cache.locking_unsupported` when the object cannot be
+    /// locked for the move, and `cache.corrupt` when it cannot be moved or its
+    /// diagnosis cannot be written.
     pub fn quarantine(
         &self,
         digest: ContentDigest,
@@ -132,6 +140,9 @@ impl<P: Platform> Cache<P> {
         Ok(diagnosis)
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the quarantined object cannot be opened for
+    /// writing.
     pub fn begin_repair(&self, digest: ContentDigest) -> Result<RepairWriter, Error> {
         let Some(held) = self.locate(digest) else {
             return Err(Error::new(
@@ -160,6 +171,10 @@ impl<P: Platform> Cache<P> {
         })
     }
 
+    /// # Errors
+    /// `integrity.truncated` when the body ends before the span it was asked
+    /// for, and `cache.corrupt` when the object cannot be written at that
+    /// offset.
     pub fn patch(
         &self,
         writer: &mut RepairWriter,
@@ -203,6 +218,10 @@ impl<P: Platform> Cache<P> {
         Ok(moved)
     }
 
+    /// # Errors
+    /// `integrity.mismatch` when the repaired object still does not hash to
+    /// its name, and `cache.corrupt` when it cannot be truncated to length or
+    /// published back out of quarantine.
     pub fn finish_repair(
         &self,
         writer: RepairWriter,
@@ -290,13 +309,6 @@ pub struct RepairWriter {
     written: u64,
 }
 
-impl RepairWriter {
-    #[must_use]
-    pub fn written(&self) -> u64 {
-        self.written
-    }
-}
-
 fn read_group(
     object: &mut std::fs::File,
     path: &Path,
@@ -339,6 +351,9 @@ fn recorded_length(tree: &mut std::fs::File) -> Option<u64> {
     Some(u64::from_le_bytes(header))
 }
 
+/// # Errors
+/// `cache.corrupt` when the partial or its outboard cannot be read. A prefix
+/// that does not check out is a shorter answer, not an error.
 pub fn verified_prefix<P: Platform>(
     cache: &Cache<P>,
     key: fetchloom_engine::partial_key::PartialKey,

@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 
 pub const DIGEST_LEN: usize = 32;
 
-pub const TREE_DIGEST_CONTEXT: &str = "fetchloom tree digest";
+pub(crate) const TREE_DIGEST_CONTEXT: &str = "fetchloom tree digest";
 
-pub const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
+pub(crate) const MANIFEST_DIGEST_CONTEXT: &str = "fetchloom manifest digest";
 
-pub const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
+pub(crate) const RECEIPT_KEY_CONTEXT: &str = "fetchloom receipt key";
 
-pub const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
+pub(crate) const PARTIAL_KEY_CONTEXT: &str = "fetchloom partial key";
 
-pub const WITNESS_KEY_CONTEXT: &str = "fetchloom witness key";
+pub(crate) const WITNESS_KEY_CONTEXT: &str = "fetchloom witness key";
 
 pub const RESOLUTION_KEY_CONTEXT: &str = "fetchloom resolution key";
 
@@ -152,8 +152,8 @@ fn hex_value(byte: u8) -> Result<u8, ParseDigestError> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WrongAlgorithm {
-    pub expected: Algorithm,
-    pub found: Algorithm,
+    pub(crate) expected: Algorithm,
+    pub(crate) found: Algorithm,
 }
 
 impl fmt::Display for WrongAlgorithm {

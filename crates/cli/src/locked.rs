@@ -13,7 +13,7 @@ use fetchloom_engine::seam::observer::Observer;
 
 use crate::run::ResolvedArtifact;
 
-pub fn pinned(
+pub(crate) fn pinned(
     path: &Path,
     dataset: &str,
     requires: Option<Requirement>,
@@ -38,7 +38,7 @@ pub fn pinned(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Requirement {
+pub(crate) enum Requirement {
     LockedRun,
     Plan,
 }
@@ -59,7 +59,7 @@ impl Requirement {
     }
 }
 
-pub fn resolved(
+pub(crate) fn resolved(
     manifest: &Manifest,
     artifacts: &[ResolvedArtifact],
     tree: Option<TreeDigest>,
@@ -89,7 +89,7 @@ pub fn resolved(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unpinned {
+pub(crate) enum Unpinned {
     Tree,
     InteropUnknown,
     RunFailed,
@@ -111,7 +111,7 @@ impl Unpinned {
     }
 }
 
-pub fn settle(
+pub(crate) fn settle(
     path: &Path,
     dataset: &str,
     pinned: Option<&LockedDataset>,

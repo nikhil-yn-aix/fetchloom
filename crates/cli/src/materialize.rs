@@ -10,28 +10,28 @@ use fetchloom_engine::pool::Processor;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::work::WorkCounter;
 
-pub const WALKED_MODE: Mode = Mode::ReadWrite;
+pub(crate) const WALKED_MODE: Mode = Mode::ReadWrite;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceFile {
-    pub relative: PathBuf,
-    pub entry: EntryPath,
-    pub mode: Mode,
+pub(crate) struct SourceFile {
+    pub(crate) relative: PathBuf,
+    pub(crate) entry: EntryPath,
+    pub(crate) mode: Mode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceLink {
-    pub entry: EntryPath,
-    pub target: Vec<u8>,
+pub(crate) struct SourceLink {
+    pub(crate) entry: EntryPath,
+    pub(crate) target: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Walked {
-    pub entries: Vec<TreeEntry>,
-    pub files: Vec<SourceFile>,
-    pub links: Vec<SourceLink>,
-    pub bytes: u64,
-    pub root: PathBuf,
+pub(crate) struct Walked {
+    pub(crate) entries: Vec<TreeEntry>,
+    pub(crate) files: Vec<SourceFile>,
+    pub(crate) links: Vec<SourceLink>,
+    pub(crate) bytes: u64,
+    pub(crate) root: PathBuf,
 }
 
 fn unrepresentable(path: &Path, reason: &str) -> Error {
@@ -59,7 +59,7 @@ fn entry_path_of(relative: &Path) -> Result<EntryPath, Error> {
     EntryPath::new(&joined).map_err(|reason| unrepresentable(relative, &reason.to_string()))
 }
 
-pub fn walk(root: &Path) -> Result<Walked, Error> {
+pub(crate) fn walk(root: &Path) -> Result<Walked, Error> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|reason| filesystem_failure(Surface::Source, root, &reason))?;
     let mut walked = Walked::default();
@@ -133,7 +133,7 @@ fn walk_one(
     Ok(())
 }
 
-pub fn copy_file(
+pub(crate) fn copy_file(
     digester: &mut hashing::Digester,
     processor: &Processor,
     work: &WorkCounter,

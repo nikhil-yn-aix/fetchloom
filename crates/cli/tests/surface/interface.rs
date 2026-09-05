@@ -250,3 +250,34 @@ fn a_retry_ceiling_bounds_the_attempts_a_transient_failure_makes() {
         "--retries 1 issued {issued} requests where the default five would issue more"
     );
 }
+
+#[test]
+fn repair_refuses_every_flag_it_could_never_act_on() {
+    let temporary = TempDir::new().unwrap();
+    let cache = temporary.path().join("cache");
+    for (flag, value) in [
+        ("--output", Some("elsewhere")),
+        ("--select", Some("**/*.txt")),
+        ("--exclude", Some("**/*.bin")),
+        ("--layout", Some("flatten:1")),
+        ("--no-extract", None),
+        ("--force", None),
+        ("--adopt", None),
+    ] {
+        let mut command = support::fetchloom();
+        command
+            .current_dir(temporary.path())
+            .env("FETCHLOOM_CACHE_DIR", &cache)
+            .args(["repair", "https://example.invalid/x.tar", flag]);
+        if let Some(value) = value {
+            command.arg(value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "repair accepted {flag}, which materializes nothing and cannot act on it: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

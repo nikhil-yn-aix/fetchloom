@@ -69,15 +69,26 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// # Errors
+    /// `manifest.invalid` when the plan cannot be written as a document.
     pub fn render(&self) -> Result<String, crate::error::Error> {
         crate::document::render_model(self)
     }
 
+    /// # Errors
+    /// `manifest.invalid` when the document does not parse as a plan, holds an
+    /// unknown key, or is longer than the limit allows.
     pub fn parse(
         bytes: &[u8],
         syntax: crate::document::Syntax,
         limits: &crate::limits::Limits,
     ) -> Result<Self, crate::error::Error> {
-        crate::document::read_model_in(bytes, syntax, "plan", limits)
+        crate::document::read_model_in(
+            bytes,
+            syntax,
+            "plan",
+            limits,
+            crate::document::Bound::Foreign,
+        )
     }
 }

@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROJECT_FILE: &str = "fetchloom.toml";
+const PROJECT_FILE: &str = "fetchloom.toml";
 
-pub const USER_FILE: &str = "config.toml";
+const USER_FILE: &str = "config.toml";
 
-pub const CONFIGURATION_DIRECTORY: &str = "fetchloom";
+const CONFIGURATION_DIRECTORY: &str = "fetchloom";
 
-pub const WINDOWS_CONFIGURATION_DIRECTORY: &str = "Fetchloom";
+const WINDOWS_CONFIGURATION_DIRECTORY: &str = "Fetchloom";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,34 +51,35 @@ pub struct Sourced<T> {
 
 impl<T> Sourced<T> {
     #[must_use]
-    pub fn new(value: T, origin: Origin) -> Self {
+    pub(crate) fn new(value: T, origin: Origin) -> Self {
         Self { value, origin }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct ConfigFile {
-    pub offline: Option<bool>,
-    pub threads: Option<NonZeroU32>,
-    pub display: Option<String>,
-    pub cache: Option<CacheSection>,
-    pub concurrency: Option<NonZeroU32>,
-    pub per_host: Option<NonZeroU32>,
-    pub bandwidth: Option<String>,
-    pub io: Option<String>,
-    pub log: Option<String>,
-    pub retries: Option<NonZeroU32>,
-    pub timeout: Option<String>,
-    pub sources: Option<Vec<String>>,
-    pub color: Option<String>,
-    pub hints: Option<bool>,
+pub(crate) struct ConfigFile {
+    pub(crate) offline: Option<bool>,
+    pub(crate) threads: Option<NonZeroU32>,
+    pub(crate) display: Option<String>,
+    pub(crate) cache: Option<CacheSection>,
+    pub(crate) concurrency: Option<NonZeroU32>,
+    pub(crate) per_host: Option<NonZeroU32>,
+    pub(crate) bandwidth: Option<String>,
+    pub(crate) io: Option<String>,
+    pub(crate) log: Option<String>,
+    pub(crate) retries: Option<NonZeroU32>,
+    pub(crate) timeout: Option<String>,
+    pub(crate) sources: Option<Vec<String>>,
+    pub(crate) color: Option<String>,
+    pub(crate) hints: Option<bool>,
+    pub(crate) compress: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct CacheSection {
-    pub dir: Option<PathBuf>,
+pub(crate) struct CacheSection {
+    pub(crate) dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -110,10 +111,14 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedConfig {
-    pub path: PathBuf,
-    pub values: ConfigFile,
+    pub(crate) path: PathBuf,
+    pub(crate) values: ConfigFile,
 }
 
+/// # Errors
+/// `ConfigError::Unreadable` when the file cannot be read, and
+/// `ConfigError::Malformed` when it is not TOML or holds a key this build
+/// does not know.
 pub fn read(path: &Path) -> Result<LoadedConfig, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|reason| ConfigError::Unreadable {
         path: path.to_path_buf(),
@@ -166,6 +171,9 @@ pub struct Discovered {
     pub user: Option<LoadedConfig>,
 }
 
+/// # Errors
+/// The kinds `read` gives, for the file named on the command line or for the
+/// project and user files found beside the working directory.
 pub fn discover(
     working_directory: &Path,
     named: Option<&Path>,

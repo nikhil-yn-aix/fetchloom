@@ -11,13 +11,13 @@ pub struct Hint {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Observed {
-    pub declined_provider: Option<String>,
-    pub projected_gain: Option<Duration>,
+    pub(crate) declined_provider: Option<String>,
+    pub(crate) projected_gain: Option<Duration>,
     pub placement: Option<String>,
-    pub restarted_from_zero: bool,
-    pub cache_unusable: bool,
-    pub lock_written: Option<String>,
-    pub entries_taken_whole: Option<u64>,
+    restarted_from_zero: bool,
+    pub(crate) cache_unusable: bool,
+    pub(crate) lock_written: Option<String>,
+    pub(crate) entries_taken_whole: Option<u64>,
 }
 
 const WORTH_SAYING: Duration = Duration::from_secs(120);

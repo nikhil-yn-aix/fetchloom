@@ -37,7 +37,7 @@ pub enum Scanner {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "four independent capabilities the contract requires reported separately"
+    reason = "five independent capabilities the contract requires reported separately"
 )]
 pub struct VolumeCapabilities {
     pub case_folding: CaseFolding,
@@ -50,6 +50,7 @@ pub struct VolumeCapabilities {
     pub max_path_length: u32,
     pub backing: Backing,
     pub scanner: Scanner,
+    pub compresses: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

@@ -12,18 +12,12 @@ use crate::settings;
 
 const METADATA_SCHEME: &str = "croissant:";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Resolved {
-    Direct(String),
-    MetadataDocument(String),
-}
-
 #[must_use]
-pub fn is_metadata_document(reference: &str) -> bool {
+pub(crate) fn is_metadata_document(reference: &str) -> bool {
     reference.starts_with(METADATA_SCHEME)
 }
 
-pub fn metadata_location(reference: &str) -> Result<String, Error> {
+fn metadata_location(reference: &str) -> Result<String, Error> {
     let rest = reference.strip_prefix(METADATA_SCHEME).unwrap_or_default();
     if rest.is_empty() {
         return Err(Error::new(
@@ -35,7 +29,7 @@ pub fn metadata_location(reference: &str) -> Result<String, Error> {
 }
 
 #[must_use]
-pub fn has_explicit_scheme(reference: &str) -> bool {
+fn has_explicit_scheme(reference: &str) -> bool {
     if reference.contains("://") || is_metadata_document(reference) {
         return true;
     }
@@ -51,7 +45,7 @@ pub fn has_explicit_scheme(reference: &str) -> bool {
 }
 
 #[must_use]
-pub fn is_name(reference: &str) -> bool {
+fn is_name(reference: &str) -> bool {
     if has_explicit_scheme(reference) || reference.contains('\\') {
         return false;
     }
@@ -83,7 +77,7 @@ pub fn candidates(reference: &str, sources: &[String]) -> Vec<String> {
 }
 
 #[must_use]
-pub fn unmatched(reference: &str, tried: usize) -> Error {
+fn unmatched(reference: &str, tried: usize) -> Error {
     if tried == 0 {
         return Error::new(
             ErrorKind::ReferenceUnresolved,
@@ -102,7 +96,7 @@ pub fn unmatched(reference: &str, tried: usize) -> Error {
     )
 }
 
-pub fn resolve_reference(
+pub(crate) fn resolve_reference(
     reference: &str,
     adapters: &Adapters,
     resolved: &settings::Settings,
@@ -141,7 +135,7 @@ pub fn resolve_reference(
     Err(unmatched(reference, candidates.len()))
 }
 
-pub fn manifest_from_metadata(
+pub(crate) fn manifest_from_metadata(
     reference: &str,
     adapters: &Adapters,
     policy: &dyn Policy,
@@ -162,7 +156,7 @@ pub fn manifest_from_metadata(
     )
 }
 
-pub fn read_bounded_document(
+pub(crate) fn read_bounded_document(
     path: &std::path::Path,
     limits: &fetchloom_engine::limits::Limits,
 ) -> Result<Vec<u8>, fetchloom_engine::error::Error> {
@@ -193,7 +187,7 @@ pub fn read_bounded_document(
     Ok(bytes)
 }
 
-pub fn read_document(
+fn read_document(
     location: &str,
     adapters: &Adapters,
     policy: &dyn Policy,
@@ -237,7 +231,7 @@ pub fn read_document(
     Ok(bytes)
 }
 
-pub fn resolve_manifest(
+pub(crate) fn resolve_manifest(
     adapters: &Adapters,
     reference: &str,
     source: &std::path::Path,

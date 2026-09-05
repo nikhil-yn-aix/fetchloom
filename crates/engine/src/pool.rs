@@ -10,6 +10,9 @@ pub struct Processor {
 }
 
 impl Processor {
+    /// # Errors
+    /// Whatever rayon reports when a pool of that many threads cannot be
+    /// built.
     pub fn new(budget: ThreadBudget) -> Result<Self, ThreadPoolBuildError> {
         let pool = ThreadPoolBuilder::new()
             .num_threads(budget.threads().get())

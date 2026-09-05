@@ -16,41 +16,41 @@ const REQUIRED_FOR_CORROBORATED: usize = 2;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Resolution {
     pub form: String,
-    pub resolved_to: String,
+    resolved_to: String,
     pub destination: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct SourceChoice {
-    pub recorded: bool,
+pub(crate) struct SourceChoice {
+    pub(crate) recorded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub(crate) source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TrustReasoning {
-    pub recorded: bool,
+pub(crate) struct TrustReasoning {
+    pub(crate) recorded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub class: Option<String>,
-    pub reason: String,
+    pub(crate) class: Option<String>,
+    pub(crate) reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub witnesses_found: Option<usize>,
+    witnesses_found: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub witnesses_required: Option<usize>,
+    witnesses_required: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Explanation {
-    pub resolution: Resolution,
-    pub source: SourceChoice,
-    pub trust: TrustReasoning,
+pub(crate) struct Explanation {
+    pub(crate) resolution: Resolution,
+    pub(crate) source: SourceChoice,
+    pub(crate) trust: TrustReasoning,
 }
 
 impl Explanation {
     #[must_use]
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let mut lines = vec![
             format!(
                 "resolution   {}: {}",
@@ -79,7 +79,8 @@ impl Explanation {
                 (self.trust.witnesses_found, self.trust.witnesses_required)
             {
                 lines.push(format!(
-                    "witnesses    {found} found, corroborated requires {required} independent"
+                    "witnesses    {found} found; corroborated needs {required} independent, \\
+                     which takes a second machine and no run in this build records one"
                 ));
             }
         } else {
@@ -128,7 +129,7 @@ fn trust_reason(class: TrustClass) -> String {
     }
 }
 
-pub fn explain(
+pub(crate) fn explain(
     reference: &str,
     adapters: &Adapters,
     cache: Option<&Cache<NativePlatform>>,

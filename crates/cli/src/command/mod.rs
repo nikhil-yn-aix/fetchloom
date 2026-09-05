@@ -96,11 +96,12 @@ pub(crate) fn open_cache(
         policy.durability(),
         policy.verification(),
         policy.io(),
+        policy.compression(),
         Arc::clone(work),
         Arc::clone(processor),
     ) {
         crate::cache::Opened::Ready(held) => {
-            for entry in held.take_io_degradations() {
+            for entry in held.take_degradations() {
                 observer.emit(&Event::new(
                     sequence,
                     EventPayload::Degrade {
@@ -277,4 +278,27 @@ pub(crate) fn open_request(
         is_dataset,
         remote,
     })
+}
+
+/// Every degradation the cache recorded while the run was publishing, drained
+/// once at the end rather than at each of the places that publish, so no path
+/// through a run can record one and never say it.
+pub(crate) fn report_cache_degradations(
+    held: Option<&fetchloom_cache::Cache<NativePlatform>>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) {
+    let Some(held) = held else {
+        return;
+    };
+    for entry in held.take_degradations() {
+        observer.emit(&Event::new(
+            sequence,
+            EventPayload::Degrade {
+                requested: entry.requested,
+                used: entry.used,
+                reason: entry.reason,
+            },
+        ));
+    }
 }

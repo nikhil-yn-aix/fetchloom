@@ -25,10 +25,10 @@ const CENTRAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
 const MAXIMUM_END_RECORD_SEARCH: u64 = 22 + 0xFFFF;
 
 #[derive(Clone, Copy, Debug)]
-pub struct ZipOffset {
-    pub data_start: u64,
-    pub compressed_size: u64,
-    pub stored: bool,
+pub(crate) struct ZipOffset {
+    pub(crate) data_start: u64,
+    compressed_size: u64,
+    pub(crate) stored: bool,
 }
 
 fn unsupported_archive(name: &str, detail: &str) -> Error {
@@ -299,7 +299,7 @@ fn open_body(
     }
 }
 
-pub fn list_members<R: Read + Seek + 'static>(
+pub(crate) fn list_members<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     archive_name: &str,
     on_disk_bytes: u64,
@@ -404,7 +404,7 @@ pub fn list_members<R: Read + Seek + 'static>(
     Ok((members, offsets))
 }
 
-pub fn open_member<R: Read + Seek + 'static>(
+pub(crate) fn open_member<R: Read + Seek + 'static>(
     source: &SharedSource<R>,
     offset: ZipOffset,
 ) -> Result<Box<dyn Read>, Error> {

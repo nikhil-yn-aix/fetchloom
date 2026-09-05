@@ -1,5 +1,16 @@
 # Decisions
 
+An append only log of why things are the way they are. It is history, not documentation.
+
+Nothing here is authoritative over the code. Where this log and the code disagree, the code is what runs and this log is what someone believed at the time. Entries are not edited to stay true; a decision that was later reversed gets a new entry rather than a correction to the old one.
+
+For what is promised, read [contracts.md](contracts.md). For how it works, read [internals.md](internals.md).
+
+Entries citing `audit.md` or `audit2.md` refer to scratch analysis deleted in the documentation rewrite. The reasoning they carried is in the entry itself.
+
+---
+
+
 ## Toolchain and crate selection
 
 Question: Which crate, at most one per job, for argument parsing and shell completion, terminal styling, progress rendering, BLAKE3, SHA-256 with hardware acceleration, raw platform syscalls, typed errors, structured events, unit and integration testing, and benchmarking, for a single static binary on six targets.
@@ -220,7 +231,7 @@ Question: What mechanically enforces the rules in docs/standards.md, specificall
 
 Options: review discipline alone; clippy lint table; clippy plus a custom checker; clippy plus `cargo-deny` plus a custom checker.
 
-Chosen: a `[workspace.lints]` table inherited by every crate, plus `cargo deny check` with an exhaustive allow-list, plus one `xtask` checker for the rules no lint expresses. All four run in CI as gate jobs and all four fail the build.
+Chosen: a `[workspace.lints]` table inherited by every crate, plus `cargo deny check` with an exhaustive allow-list. Both run in CI as gate jobs and both fail the build. The `xtask` checker this record once named was deleted at `5bebc92`, so the rules no lint expresses are held in review.
 
 Lints, in the workspace `Cargo.toml` and inherited with `lints.workspace = true`. The `[lints]` table has been stable since Cargo 1.74.
 
@@ -228,7 +239,6 @@ Lints, in the workspace `Cargo.toml` and inherited with `lints.workspace = true`
 [workspace.lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
-missing_docs = "deny"
 unused_crate_dependencies = "deny"
 
 [workspace.lints.clippy]
@@ -248,9 +258,9 @@ missing_errors_doc = "deny"
 missing_panics_doc = "deny"
 ```
 
-No unsafe without a stated invariant. `unsafe_code` is denied everywhere. Only the `platform` crate lifts it, and only with `#[expect(unsafe_code, reason = "...")]` on the specific item. Inside it, `clippy::undocumented_unsafe_blocks` requires a `// SAFETY:` comment on every `unsafe` block, which is the exactly one comment form standards.md permits, and `clippy::unnecessary_safety_comment` rejects a `SAFETY:` line attached to safe code so the marker cannot be used decoratively. Both lints are in clippy's `restriction` group and are allow-by-default, so they must be named explicitly.
+No unsafe without a stated invariant. `unsafe_code` is denied everywhere. Only the `platform` crate lifts it, and only with a module-level `#![expect(unsafe_code, reason = "...")]` at the top of each Windows FFI module, which is the file a Win32 call may be written in. Inside it, `clippy::undocumented_unsafe_blocks` requires a `// SAFETY:` comment on every `unsafe` block, which is the exactly one comment form standards.md permits, and `clippy::unnecessary_safety_comment` rejects a `SAFETY:` line attached to safe code so the marker cannot be used decoratively. Both lints are in clippy's `restriction` group and are allow-by-default, so they must be named explicitly.
 
-No unwrap outside enforced invariants. `unwrap_used` and `expect_used` are denied. An exception is written as `#[expect(clippy::unwrap_used, reason = "<the invariant, and what enforces it>")]` on the enclosing item. `allow_attributes` forces `#[expect]` over `#[allow]`, so a stale exception becomes a compile error once the exception is no longer needed instead of surviving forever. `allow_attributes_without_reason` makes the stated invariant mandatory. Test modules carry a single `#![expect(clippy::unwrap_used, reason = "test setup, failure is the assertion")]`.
+No unwrap outside enforced invariants. `unwrap_used` and `expect_used` are denied. An exception is written as `#[expect(clippy::unwrap_used, reason = "<the invariant, and what enforces it>")]` on the enclosing item. `allow_attributes` forces `#[expect]` over `#[allow]`, so a stale exception becomes a compile error once the exception is no longer needed instead of surviving forever. `allow_attributes_without_reason` makes the stated invariant mandatory. Test modules carry a single `#![expect(clippy::unwrap_used, reason = "test setup, where a failure to build the input is the assertion")]`.
 
 No new dependency without review. `deny.toml` uses `[bans] allow = [...]` listing every crate permitted in the graph, direct and transitive, each with a reason. The cargo-deny documentation states that "if the `allow` list has one or more entries, then any crate not in that list will be denied". A new dependency, or a version bump that changes the transitive graph, fails `cargo deny check` until the list is edited, which makes the review a diff a human must approve. `multiple-versions = "deny"` and `wildcards = "deny"` are also set, and the `advisories`, `licenses` and `sources` checks run in the same invocation. `unused_crate_dependencies` catches the opposite direction, a dependency declared and no longer used.
 
@@ -8394,9 +8404,10 @@ item could exist without one. The owner asked for them all gone.
 
 Chosen: gone, and the three lints with them. `missing_errors_doc` and
 `missing_panics_doc` come from `clippy::pedantic`, which is denied at the
-workspace level, so each is now an explicit `allow` in the workspace lint table
+workspace level, so each became an explicit `allow` in the workspace lint table
 rather than a silent omission: the table states the position instead of leaving a
-reader to infer it.
+reader to infer it. Phase 5 set both back to `deny` over a public surface small
+enough to document; `missing_docs` stays off.
 
 What carries the weight instead. standards.md already said that a function needing
 a comment to be understood is renamed or split, and that rationale belongs here
@@ -8411,9 +8422,10 @@ Costs, stated plainly rather than argued away. `cargo doc` now produces a bare
 API listing with no prose, so the crates are not readable from rustdoc. A caller
 who wants to know which errors a `Result` can carry reads the body or the tests
 rather than an `# Errors` section, and nothing mechanical will remind an author to
-say so. The decisions.md record at the phase 0 gate, which lists `missing_docs`
-denied among the standards the lint policy enforces, describes a policy this
-change reverses; it is left as written because it was true when it was written.
+say so. The decisions.md record at the phase 0 gate listed `missing_docs` denied among
+the standards the lint policy enforces, which this change reverses; its lint
+table has since been corrected to what `Cargo.toml` sets, and Phase 5 put
+`missing_errors_doc` and `missing_panics_doc` back at `deny`.
 
 What would make this the wrong call: a second person joining who has to learn the
 tree from the outside. The answer then is contracts.md and the tests, and if that
@@ -9244,3 +9256,458 @@ Sources: `BurntSushi/ripgrep` workspace `Cargo.toml` members list, and the
 `name` fields of `crates/cli/Cargo.toml` (`grep-cli`), `crates/pcre2/Cargo.toml`
 (`grep-pcre2`) and `crates/searcher/Cargo.toml` (`grep-searcher`), read at
 `master`.
+
+## Phase 5. Measuring which public items cross a crate boundary, and demoting the rest
+
+Question: the workspace sets `publish = false` and ships one binary from eight
+library crates, so `pub` had become the default rather than a statement. rustc
+cannot measure the difference: `unreachable_pub` found 47 items, 27 of them in
+`xtask`, because every module was `pub mod` and so everything was reachable from
+its own crate root. It cannot see that no other crate names the item.
+
+Options: a one-off analysis pasted into this record; a standing `xtask` command
+that gates; a standing `xtask` command that reports.
+
+Chosen: `cargo xtask surface`, a standing command that reports and never gates.
+It parses each library crate's `src/` for items declared `pub`, builds the text of
+every file outside that crate's `src/` -- the other crates, every `tests/` and
+`benches/` target, `xtask/src`, and the crate's own `src/main.rs`, which is a
+separate crate and therefore outside -- and asks whether the item is named there.
+A free item is named if its own name appears. A module is named only through a
+path that spells it, `name::`, because a module called `record` or `error` shares
+its spelling with every local variable in the workspace. A member is named only
+where both its owner type and its own name appear, which is the aggressive
+reading: it over-reports, and the compiler is what settles each case.
+
+It reports rather than gates because the measurement is approximate in exactly one
+direction. An item can be reachable without ever being named: as an associated
+type in a public trait impl, as the return type of a public function whose caller
+uses inference, or as a field of a struct another crate builds by literal.
+`PlatformLock`, `FileBody`, `HttpBody`, `SigningTime`, `Signed`, `ObjectReader`,
+`WriteLease`, `Received`, `VerifyReport`, `RebuildReport`, `Diagnosis`,
+`ArchiveSpec`, `MetadataFormat`, `DeclaredFailure`, `Produced`, `WrongAlgorithm`,
+`ParseTimestampError` and the three `Limits` fields are each in that class, and
+each is still `pub` for a reason the compiler states and the tool cannot see. A
+gate would need an allow-list of them, and an allow-list would rot exactly the way
+the lint record in this file rotted.
+
+The demotion itself was compiler-driven: demote everything the tool reports, build
+`--workspace --all-targets`, and put back only what `E0603`, `E0616`, `E0624`,
+`E0446`, `E0451`, `E0364` or `private_interfaces` names. A demotion that broke
+nothing was correct. Counts, `pub` then `pub(crate)`, before and after:
+
+| Crate | pub before | pub after | pub(crate) before | pub(crate) after |
+|---|---|---|---|---|
+| engine | 717 | 690 | 18 | 31 |
+| cli | 406 | 214 | 100 | 282 |
+| cache | 186 | 138 | 13 | 46 |
+| faults | 150 | 122 | 6 | 12 |
+| sources | 45 | 34 | 13 | 20 |
+| archive | 36 | 13 | 9 | 30 |
+| platform | 8 | 8 | 88 | 88 |
+| view | 6 | 5 | 0 | 0 |
+
+The counts are the tool's, which counts fields and inherent methods as items, so
+they are larger than a count of `pub` lines at column zero.
+
+A test reaching into a crate's internals kept the item public: 208 items are held
+open by the crate's own `tests/` targets and by `cli/src/main.rs`, and no test was
+moved, because every one of them drives the crate from outside the way another
+crate would.
+
+What the demotion found. Several items were dead once nothing outside could reach
+them and nothing inside did either: `TrustRecord`, `Reference` and
+`ReferenceForm` in the engine, `payload_digest` in sources, `LiveView::height` in
+view, and `Resolved` in the cli, along with `Cache::read_diagnosis`,
+`Diagnosis::damaged_bytes`, `Cache::io_mode`, `ObjectRecord::volume`,
+`RepairWriter::written`, `Resolution::can_be_asked_about`, three accessors on the
+store's lease types, `planning::pinned_digest`, `style::warning` and four tar
+writer primitives in `faults`. All are deleted. Two fields survive as dead-looking
+code with `#[expect(dead_code, reason = ...)]`, because they are lock guards held
+for a value's lifetime and never read: removing them would release the lock early,
+which is a behavior change and not a visibility one.
+
+Costs: `cargo xtask surface` will keep reporting the items above as unnamed,
+because it cannot see the reachability the compiler enforces. A reader who runs it
+and expects zero will be misled, which is why it prints a count rather than a
+verdict.
+
+Uncertain: whether the tar writer primitives deleted from `faults` mark a gap in
+the hostile corpus rather than dead weight. `set_prefix`, `set_mode_bytes`,
+`to_bytes_with_checksum` and `push_block` exist to build a ustar prefix-split
+name, a malformed mode field, a bad header checksum and a raw block, and the
+corpus exercises none of the four. The primitives are gone; the gap is real and is
+a corpus entry to write, not a builder to keep.
+
+Sources: `xtask/src/surface.rs`; the rustc error indexes for `E0446`, `E0451`,
+`E0603`, `E0616` and `E0624`.
+
+## Phase 5. The error and panic doc lints go back to deny, and `missing_docs` does not
+
+Question: the lint record in this file printed `missing_errors_doc = "deny"` and
+`missing_panics_doc = "deny"` while `Cargo.toml` set both to `allow`. The record
+had been false since it was written. What should the manifest actually say.
+
+Options: correct the record to match the manifest; correct the manifest to match
+the record; do both for some lints and not others.
+
+Chosen: both lints are denied and 137 `# Errors` sections and one `# Panics`
+section are written. `missing_docs` stays off.
+
+The number is what decided it. Before the surface demotion the two lints produced
+177 warnings; after it, 138, which is a body of writing that can be done in one
+change and read as a taxonomy rather than as narration. Each section names the
+error kinds the item can return, in the spelling `docs/reference/errors.md` uses,
+and says what causes each. The one `# Panics` section is on `outboard::tree_of`,
+whose two assertions guard a caller invariant -- an object of one group or none is
+hashed directly rather than merged -- so the panic is a bug detector and returning
+`Result` would move a bug into the error path.
+
+`missing_docs` stands at 1,428 items after the demotion, down from 1,897. It stays
+off. standards.md refuses a doc comment that restates the item name, and on a
+surface that is now what crosses a crate boundary most of those 1,428 would be
+exactly that. The number goes in standards.md so the next reader does not have to
+measure it again.
+
+Costs: a section per fallible public item is a duplication standards.md's Debloat
+rule would otherwise refuse, and it is repetitive across the two seam traits in
+particular, where 43 methods fail in a small number of ways. What buys it is that
+a caller reading a `Result` learns which of the 33 kinds it can carry without
+reading the body, which is the one fact a name cannot carry. standards.md is
+amended in the same change, because it previously said no lint asks for a
+docstring, and now two do.
+
+The rest of the lint record was checked against the files it describes while these
+two lines were corrected. Three more claims were wrong. `missing_docs = "deny"`
+appeared in its lint table and is not set. The record said `unsafe_code` is lifted
+with an `#[expect]` on the specific item, where the code carries a module-level
+`#![expect(unsafe_code, reason = "...")]` at the top of each Windows FFI file. And
+its Chosen line promised one `xtask` checker for the rules no lint expresses, and
+that all four gates run in CI, where the checker was deleted at `5bebc92` -- which
+the same record says two paragraphs later. The quoted `unwrap_used` reason did not
+match any reason in the tree either. `deny.toml` was checked and matches:
+`[bans] allow` lists 117 crates, each with a reason, and `multiple-versions`,
+`wildcards`, `advisories`, `licenses` and `sources` are as described.
+
+Sources: `Cargo.toml` `[workspace.lints]`; `clippy::missing_errors_doc` and
+`clippy::missing_panics_doc` documentation; `deny.toml`; `docs/standards.md` under
+Docstrings.
+
+## Phase 5. `TrustClass::Corroborated` is contracted and no run reaches it
+
+Question: contracts.md:315 said a cache directory shared between machines is the
+only channel by which a second machine's witness arrives; contracts.md:1141 said a
+network filesystem uses a conservative lock path; and `crates/cache/src/lib.rs`
+refuses a network-backed cache outright with `cache.locking_unsupported`. A shared
+cache directory is reached over a network, so the only channel by which
+`corroborated` could ever be reached does not exist, and the contract described a
+lock path the code does not have.
+
+Options: A, build network cache support so the channel exists. B, keep the refusal
+and correct the contracts.
+
+Chosen: B. Advisory locking over SMB and NFS is not reliable, which is what
+`cache.locking_unsupported` exists to say, and a cache whose locks may not hold
+across the machines that share it is a cache that can be corrupted by the
+sharing. Refusing is the honest answer, and this repository already has the idiom
+for a contracted and unbuilt behavior at `docs/reference/errors.md` under
+`source.identity_changed` and under Cancelled.
+
+What changed. contracts.md:315 now says `corroborated` is in the taxonomy and
+nothing in this build produces it, naming the refusal as the reason.
+contracts.md:1141 is split, because it covered two surfaces and only one of them
+is refused: a cache on a network volume is refused, a destination on one is not,
+and cloning is decided by whether the volume reports block refcounting rather than
+by what backs it. `docs/reference/trust.md` and the `why` command both explained
+`corroborated` to a user as something they might reach by collecting witnesses,
+and both now say what it would take and that no run records it.
+
+Proof, written first. `crates/cache/tests/witness.rs` holds two tests. One records
+witnesses the way a run does, through `record_witness` under the cache's own owner
+token, from three origins and three runs, and asserts every witness carries this
+machine and that `classify` returns `tofu`. Making a run able to write a foreign
+machine fails it at the first assertion, which is the failure that was checked
+before the contract was edited: "a witness in this cache was observed by a machine
+no run here could have been". The second pushes a stranger's witness into the set
+by hand and asserts it does corroborate, so the rule the class rests on is pinned
+separately from the channel that cannot deliver it. If a later build opens the
+channel, the first test fails and the contract has to be rewritten with it.
+
+Costs: a user on two machines who wants corroboration cannot have it, and the four
+trust classes are three in practice. Nothing in the receipt format or the
+classifier changes, so the day the channel exists the class works.
+
+Sources: `docs/contracts.md` Witnesses and Write path; `crates/cache/src/lib.rs`
+`check_locking`; `crates/engine/src/trust.rs` `classify`.
+
+## Phase 5. The lock probe is not dead weight, because `Backing::Unknown` reaches it
+
+Question: `check_locking` refuses a cache whose volume reports `Backing::Network`,
+and then probes the locks directory with `try_lock`. If the refusal already covers
+the volumes that cannot lock, the probe is a lock and unlock on every cache open
+for nothing.
+
+Options: remove the probe; keep it and state what it catches.
+
+Chosen: keep it. `Backing` has three variants, not two. `probe::backing` returns
+`Unknown` for a FUSE filesystem and for any volume `statfs` refuses to answer
+about, and the refusal tests only for `Network`, so an sshfs, a gocryptfs or any
+other FUSE mount passes the refusal and reaches the probe. Advisory locking on
+those is whatever the FUSE server implements, which is frequently nothing. A local
+volume mounted `nolock`, and a Windows volume behind a filter driver that refuses
+`LockFileEx`, are in the same position. In every one of those cases `try_lock`
+fails, `lock_failure` maps `ENOLCK` and `EOPNOTSUPP` to
+`cache.locking_unsupported`, and the run is refused at open rather than corrupted
+later.
+
+The refusal and the probe answer different questions: the refusal is what the
+volume says it is, and the probe is what the volume does. Deleting the probe would
+narrow the guarantee from "this cache can lock" to "this cache is not on a
+filesystem type we recognize as remote".
+
+Costs: one exclusive lock, one unlock and one file removal per cache open, on a
+path that already creates directories and reads the format fingerprint.
+
+Uncertain: whether any volume this project can test reports `Unknown` and refuses
+locking at the same time. None is available here, which is the same gap this file
+already records for the network filesystem refusal itself: it is reasoned from
+`statfs` and the rustix documentation, not measured.
+
+Sources: `crates/platform/src/linux/probe.rs` `backing`;
+`crates/platform/src/windows/mod.rs` `volume_backing`;
+`crates/engine/src/error.rs` `lock_failure`; `crates/cache/src/lib.rs`
+`check_locking`.
+
+---
+
+
+## The zstd codec: libzstd over ruzstd, and what that costs
+
+Question: Which zstd implementation carries `--compress <auto|none|zstd:1..19>`, and
+is linking C acceptable to get it.
+
+Options: `ruzstd`, already in the graph as the pure-Rust decoder, whose 0.9 release
+added an encoder; `zstd`, which compiles and statically links the reference C
+library.
+
+Chosen: `zstd`. Two reasons, measured before deciding.
+
+`ruzstd` implements one compression level of nineteen. `CompressionLevel::Fastest`
+is roughly zstd-1; `Default`, `Better` and `Best` are marked UNIMPLEMENTED in the
+crate source, and there is no way to ask for an arbitrary level at all. A flag
+written `zstd:1..19` on top of that is a flag that accepts eighteen values it
+cannot act on, which `contracts.md` refuses under The surface is not a placeholder.
+
+It is also slow. Measured here on corpus entries, 1 MiB frames, one process, the
+same harness for both. Ratios are deterministic; throughputs are single runs
+except the first two rows, which are three:
+
+| entry | libzstd-1 MiB/s | ruzstd MiB/s | slower | libzstd ratio | ruzstd ratio |
+|---|---|---|---|---|---|
+| enwik8 | 197 / 195 / 188 | 47 / 47 / 51 | 4.1x | 2.451 | 2.089 |
+| ncep float32 | 180 / 201 / 199 | 27 / 27 / 27 | 7.1x | 1.706 | 1.796 |
+| GRCh38.114.gtf | 1170 | 69 | 17x | 31.380 | 9.001 |
+| linux-6.6.1.tar.gz | 642 | 24 | 27x | 1.005 | 1.016 |
+| yellow_2024-01.parquet | 471 | 22 | 21x | 1.002 | 1.000 |
+
+The libzstd column reproduces the spike, which measured 2.451 on enwik8, 1.002 on
+Parquet and 1.692 on the float array, so the harness is comparable and experiment
+1 stands. The decisive number is that every ruzstd figure is below 119 MiB/s, a
+gigabit link, before hashing and before writing. D1.1 chose level 1 on exactly one
+criterion, that the whole pipeline stays ahead of a gigabit link on every regime.
+On ruzstd nothing does, so taking it would have discarded D1.1, D1.2, D1.5 and D1.8
+and required re-measuring the whole experiment before any implementation was
+justified.
+
+This is not a preference against pure Rust. It is that one of nineteen levels
+exists and it runs four to twenty-seven times slower than the thing every number
+in the design was measured on.
+
+Costs: the workspace compiles and statically links C for the first time. Four
+crates enter the graph, each now in the `deny.toml` allow list: `zstd`, the codec
+itself; `zstd-safe`, its checked wrapper; `zstd-sys`, the bundled libzstd sources
+and their bindings; and `cc`, which compiles them, previously allowed for
+`libmimalloc-sys` alone. Two more arrive as build dependencies of `cc`,
+`jobserver` and `pkg-config`. `getrandom` is now in the graph twice, 0.3 under the
+TLS provider and 0.4 under `jobserver`, and that duplicate is skipped by name in
+`deny.toml` with the reason that a build dependency never links into the binary.
+
+The static binary, no root and no runtime claims are about not needing an
+interpreter or a service, and statically linked C breaks none of them.
+
+Two build lanes needed toolchains that were not here. `aarch64-pc-windows-msvc`
+needed the MSVC ARM64 cross toolset, a component of the Visual Studio Installer,
+which was installed; it landed under 14.29.30133, the same toolset version the x64
+lane already used, so `cc` selects one MSVC version on this host and not two.
+`x86_64-unknown-linux-musl` is covered by the next entry.
+
+Uncertain: `aarch64-unknown-linux-musl` and `aarch64-unknown-linux-gnu` are built
+only by the emulated `--arm` lane, which is off by default. What that lane does
+with `zstd-sys` is recorded where that lane is run, not asserted here.
+
+Sources: `Cargo.toml` workspace dependencies; `deny.toml` allow list;
+`crates/cache/src/compress.rs`; `crates/archive/src/bare.rs` and `tar_reader.rs`,
+where the decoder call sites moved.
+
+
+---
+
+
+## The musl lint moved into the container that already built musl
+
+Question: The host lane `cargo clippy --target x86_64-unknown-linux-musl` cannot
+run once `zstd-sys` is in the graph, because compiling its C needs
+`x86_64-linux-musl-gcc` and this is a Windows host. Install a musl cross compiler
+here, or move the lint.
+
+Options: install the cross toolchain on the host; move the lint into the Linux
+container; drop musl linting.
+
+Chosen: move it, because the coverage was already there. `xtask/verify/linux.sh`
+ran clippy over both `LINUX_TARGETS`, which includes `x86_64-unknown-linux-musl`,
+inside an image whose Dockerfile already installs `musl-tools`. The host lane was
+duplicating it on a machine that cannot compile C for that target.
+
+One real gap came with it: the container clippy did not pass `-- -D warnings`, so
+it failed only on errors where the host lane failed on warnings. Both changed in
+the same edit. `LINT_TARGETS` is now the Windows target alone and the container
+denies warnings, so what was checked is still checked and nothing was lowered to
+make a step pass.
+
+`cargo xtask verify` is thirteen steps rather than fourteen. `CONTRIBUTING.md`
+says so.
+
+Costs: a musl lint failure now surfaces in the container lane, which needs Docker,
+rather than in the fast host gate. `cargo xtask verify --fast` therefore no longer
+lints musl at all, and prints its usual NOT VERIFIED line for the lane that does.
+
+Sources: `xtask/src/verify.rs` `LINT_TARGETS`; `xtask/verify/linux.sh`;
+`xtask/verify/Dockerfile`.
+
+
+---
+
+
+## Compression happens at publication, and the probe reads bytes rather than names
+
+Question: Where in the pipeline does an object get compressed, and how is it
+decided whether to compress it and whether to byte shuffle it first.
+
+Options for when: compress as bytes arrive, inside the transfer own pass; or
+compress when the verified object is published into `objects/`.
+
+Chosen: at publication. A partial must stay raw. A resume appends at a recorded
+byte offset and `verified_prefix` checks what is already there by range against
+the outboard tree, and neither is possible against a stream whose byte offsets
+mean something else. Compressing at publication costs one extra read and write of
+the object, and keeps resume, ranged verification and localized repair working on
+the same bytes they always did.
+
+Options for what: decide from the media type or the file extension; decide from a
+measurement of the bytes themselves.
+
+Chosen: measure. The probe compresses the first 1 MiB at the effective level twice,
+once as it stands and once byte shuffled at stride 4, and takes whichever measured
+smaller, storing the object raw when neither reaches 1.10 and the run asked for
+`auto`. An extension and a media type are both claims a publisher makes, and this
+project already refuses to let a name decide what bytes are anywhere else.
+
+That is also the answer to the float array question experiment 1 left open. There
+is no reliable way to recognise a float array from its bytes, and a heuristic
+nobody can explain is worse than a missing feature. But the shuffle does not need
+recognising: it needs to be worth it, and whether it is worth it is exactly what
+compressing the head both ways measures. A wrong shuffle is still correct output,
+so the only thing at risk is one extra megabyte of compression per object.
+
+D1.5 calibrated the 1.10 threshold on plain ratios, and taking the better of the
+two measurements can only move an object from raw to compressed, never the
+reverse. The 23 of 23 classification therefore still holds as a lower bound on
+what is stored raw. Whether any of the nine entries the spike stored raw would now
+be compressed because shuffling lifted it over 1.10 is not measured here.
+
+Costs: one extra pass over each published object, and 1 to 2 MiB of compression
+per object for the probe itself, including on objects that end up stored raw.
+
+Sources: `crates/cache/src/compress.rs` `decide`; `crates/cache/src/storage.rs`
+`publish_object` and `decide_storage`; `spike/RESULTS.md` experiment 1.
+
+
+---
+
+
+## Which form an object is stored in is stated, never sniffed
+
+Question: Given `objects/<hex>`, how does a reader know whether it holds raw bytes
+or compressed frames.
+
+Options: read the file first or last bytes and look for the frame table magic;
+record the answer beside the object; state it in the name.
+
+Chosen: state it in the name. `objects/<hex>` is raw and `objects/<hex>.z` is
+compressed, and inside a pack each entry header carries its own level and
+transform. A cache holds arbitrary bytes under content addressing, so some object
+somewhere eventually ends in whatever four bytes a sniffing reader looks for, and
+that object would then be served as garbage or refused. A name cannot collide that
+way because the digest fixes it.
+
+The one place sniffing is used is reading a bundle, and only because the first
+bytes of a tar are a member name, which in a bundle is the hexadecimal of a
+digest, and therefore cannot be a compression frame magic. That is a proof about
+the format rather than a guess about content.
+
+`digest_of` stays strict: a name carrying the suffix is not a digest and returns
+`None`. Only `stored_digest_of`, used when walking the objects directory, strips
+it. Bundle member names go through `digest_of`, so a member cannot claim to be an
+object by carrying the suffix.
+
+Costs: the objects directory holds two name shapes, and every place that turned a
+directory entry back into a digest had to be told which of the two functions it
+wanted.
+
+Sources: `crates/cache/src/layout.rs` `digest_of`, `stored_digest_of`,
+`COMPRESSED_SUFFIX`; `crates/cache/src/storage.rs` `placement`;
+`crates/cache/src/bundle.rs` `BundleReader::open`.
+
+
+---
+
+
+## Detecting a volume that already compresses, differently on each platform
+
+Question: NTFS compression and btrfs zstd exist. Compressing again on such a volume
+spends processor time to store the same bytes twice over. How is that detected
+through the Platform seam.
+
+Options: query where the platform reports it, probe where it does not, per
+`contracts.md`.
+
+Chosen: both, because the platforms differ in which they permit.
+
+Windows reports it. `FILE_ATTRIBUTE_COMPRESSED` on a file the probe creates in the
+staging directory is one `GetFileAttributesW` and answers directly.
+
+Linux reports nothing usable. A btrfs mounted `compress=zstd` does not reliably set
+the per-inode `FS_COMPR_FL`, so reading the flag would answer for some volumes and
+lie about others. It is measured instead: write 1 MiB of a repeating pattern,
+`sync_all`, and compare the blocks the file actually allocated against the bytes
+written. A volume that compresses allocates far fewer. The pattern is repetitive
+rather than zero because a zero-filled file may be made sparse rather than
+compressed, and the two would measure the same.
+
+Both answers land on `VolumeCapabilities::compresses`, which the contract already
+decides once per run, and a run on such a volume stores objects raw and emits
+`degrade` naming what was asked and why it did not happen.
+
+Costs: one 1 MiB write and one stat per volume on Linux, once per run, alongside
+the probes already there. On Windows, one one-byte file.
+
+Uncertain: measured on NTFS on this machine, where the answer is that `D:` does not
+compress, which matches what the spike found. The positive case, a volume that does
+compress, is measured on neither platform: no compressed NTFS volume and no btrfs
+with compression are available here. The Linux threshold of half the bytes written
+is reasoned, not calibrated against a real compressed mount.
+
+Sources: `crates/engine/src/capability.rs` `VolumeCapabilities::compresses`;
+`crates/platform/src/windows/probe.rs` `compression_probe`;
+`crates/platform/src/linux/probe.rs` `compression_probe`; `crates/cache/src/lib.rs`
+`Cache::open`.

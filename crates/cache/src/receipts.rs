@@ -10,6 +10,10 @@ use fetchloom_engine::seam::platform::Platform;
 use crate::Cache;
 
 impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `manifest.invalid` when the receipt cannot be rendered, `cache.corrupt`
+    /// when it cannot be written or renamed into place, and `resource.disk`
+    /// when the volume is full.
     pub fn write_receipt(&self, receipt: &Receipt) -> Result<(), Error> {
         let path = self.layout().receipt_of(Receipt::key(&receipt.destination));
         let rendered = receipt.render()?;
@@ -27,6 +31,10 @@ impl<P: Platform> Cache<P> {
         Ok(())
     }
 
+    /// # Errors
+    /// `cache.corrupt` when a receipt exists and cannot be read, and
+    /// `manifest.invalid` when it does not parse. No receipt, or one written
+    /// for another destination, is `None` rather than an error.
     pub fn read_receipt(&self, destination: &Path) -> Result<Option<Receipt>, Error> {
         let path = self.layout().receipt_of(Receipt::key(destination));
         let bytes = match std::fs::read(&path) {

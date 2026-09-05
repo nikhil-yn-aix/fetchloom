@@ -43,15 +43,27 @@ pub trait Policy: Send + Sync {
 
     fn io(&self) -> IoMode;
 
+    fn compression(&self) -> crate::compression::CompressionChoice;
+
     fn accepts(&self, class: TrustClass) -> bool;
 
+    /// # Errors
+    /// `policy.credential_missing` when the host needs one and none is held,
+    /// and `policy.credential_invalid` when the stored credential cannot be
+    /// read. A host that needs none is `None` rather than an error.
     fn credential(&self, host: &Host, necessity: Necessity) -> Result<Option<Credential>, Error>;
 
+    /// # Errors
+    /// `policy.credential_invalid` when the credential offered cannot be
+    /// read. A refused offer is `None` rather than an error.
     fn offer_credential(
         &self,
         help: &ProviderHelp,
         projected_gain: std::time::Duration,
     ) -> Result<Option<Credential>, Error>;
 
+    /// # Errors
+    /// `policy.terms_required` when the license must be accepted and this run
+    /// cannot ask.
     fn terms(&self, license: &License) -> Result<Acceptance, Error>;
 }

@@ -122,15 +122,15 @@ const HANDSHAKE_FAILURE: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
 #[derive(Clone, Debug)]
 pub struct Script {
     pub object: Vec<u8>,
-    pub etags: Vec<String>,
+    etags: Vec<String>,
     pub replies: Vec<Reply>,
     pub then: Reply,
     pub accepts_ranges: bool,
     pub last_modified: Option<String>,
-    pub honors_conditionals: bool,
-    pub refuses_tls: bool,
+    honors_conditionals: bool,
+    refuses_tls: bool,
     pub latency: Latency,
-    pub extra_headers: Vec<(String, String)>,
+    extra_headers: Vec<(String, String)>,
     pub flight: Option<Arc<Flight>>,
 }
 
@@ -161,12 +161,6 @@ impl Script {
     #[must_use]
     pub fn refusing_tls(mut self) -> Self {
         self.refuses_tls = true;
-        self
-    }
-
-    #[must_use]
-    pub fn modified_at(mut self, value: impl Into<String>) -> Self {
-        self.last_modified = Some(value.into());
         self
     }
 
@@ -232,10 +226,15 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    /// # Errors
+    /// Whatever binding a loopback port reports.
     pub fn start(script: Script) -> std::io::Result<Self> {
         Self::start_on("127.0.0.1", script)
     }
 
+    /// # Errors
+    /// Whatever binding that address reports, and whatever asking the bound
+    /// socket for its port reports.
     pub fn start_on(loopback: &str, script: Script) -> std::io::Result<Self> {
         let listener = TcpListener::bind((loopback, 0))?;
         let address = listener.local_addr()?;

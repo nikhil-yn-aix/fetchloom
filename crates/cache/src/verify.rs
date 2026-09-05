@@ -15,6 +15,10 @@ pub struct VerifyReport {
     pub held: u64,
 }
 
+/// # Errors
+/// `cache.corrupt` when the store cannot be walked or a mismatched object
+/// cannot be quarantined. An object that does not hash to its name is
+/// quarantined and counted, not an error.
 pub fn run<P: Platform>(cache: &Cache<P>) -> Result<VerifyReport, Error> {
     let mut report = VerifyReport::default();
     for digest in cache.list()? {

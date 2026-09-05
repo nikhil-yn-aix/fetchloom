@@ -19,6 +19,8 @@ pub struct Limits {
     pub redirects: u32,
     pub manifest_size: u64,
     pub manifest_nodes: u64,
+    pub record_size: u64,
+    pub record_nodes: u64,
     pub retry_attempts: u32,
     pub retry_ceiling: Duration,
     pub listing_entries: u64,
@@ -46,6 +48,8 @@ impl Default for Limits {
             redirects: 10,
             manifest_size: 16_777_216,
             manifest_nodes: 100_000,
+            record_size: 268_435_456,
+            record_nodes: 8_000_000,
             retry_attempts: 5,
             retry_ceiling: Duration::from_secs(60),
             listing_entries: 500_000,
@@ -111,3 +115,12 @@ impl std::str::FromStr for Bandwidth {
 pub const PACK_THRESHOLD: u64 = OUTBOARD_CHUNK_GROUP;
 
 pub const STREAM_BUFFER_BYTES: usize = 1 << 20;
+
+pub const COMPRESSION_FRAME_BYTES: u64 = OUTBOARD_CHUNK_GROUP;
+
+const _: () = assert!(
+    COMPRESSION_FRAME_BYTES == OUTBOARD_CHUNK_GROUP
+        && COMPRESSION_FRAME_BYTES == PACK_THRESHOLD
+        && COMPRESSION_FRAME_BYTES == STREAM_BUFFER_BYTES as u64,
+    "a compression frame covers exactly one outboard chunk group, one packed object and one stream buffer, so a ranged verify or a localized repair decompresses the frames covering the range it asked for and no others"
+);

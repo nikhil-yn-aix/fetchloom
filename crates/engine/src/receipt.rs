@@ -92,11 +92,16 @@ impl Receipt {
         }
     }
 
+    /// # Errors
+    /// `manifest.invalid` when the receipt cannot be written as a document.
     pub fn render(&self) -> Result<String, Error> {
         crate::document::render_model(self)
     }
 
+    /// # Errors
+    /// `manifest.invalid` when the document does not parse as a receipt, holds
+    /// an unknown key, or is longer than the limit allows.
     pub fn parse(bytes: &[u8], limits: &crate::limits::Limits) -> Result<Self, Error> {
-        crate::document::read_model(bytes, "receipt", limits)
+        crate::document::read_model(bytes, "receipt", limits, crate::document::Bound::Own)
     }
 }

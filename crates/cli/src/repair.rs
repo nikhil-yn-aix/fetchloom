@@ -16,12 +16,12 @@ use fetchloom_platform::NativePlatform;
 use fetchloom_sources::{FileSource, HttpSource};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct RepairResult {
-    pub status: &'static str,
-    pub digest: String,
-    pub ranges: u64,
-    pub bytes: u64,
-    pub work: Work,
+pub(crate) struct RepairResult {
+    pub(crate) status: &'static str,
+    pub(crate) digest: String,
+    pub(crate) ranges: u64,
+    pub(crate) bytes: u64,
+    pub(crate) work: Work,
 }
 
 pub struct Repair<'a> {
@@ -33,7 +33,7 @@ pub struct Repair<'a> {
 }
 
 impl Repair<'_> {
-    pub fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
+    pub(crate) fn run(&self, digest: ContentDigest) -> Result<RepairResult, Error> {
         if FileSource::names_a_file(self.location) {
             let source = FileSource::new(Arc::clone(self.work));
             return self.against(digest, &source);
@@ -177,7 +177,7 @@ fn whole_of(
     metadata.size.unwrap_or(localized.object_len)
 }
 
-pub fn digest_for(
+pub(crate) fn digest_for(
     cache: &Cache<NativePlatform>,
     reference: &str,
     pinned: Option<ContentDigest>,
@@ -213,7 +213,10 @@ fn parse_digest(reference: &str) -> Option<ContentDigest> {
 }
 
 #[must_use]
-pub fn report(outcome: &Result<RepairResult, Error>, reporter: &crate::Reporter<'_>) -> ExitCode {
+pub(crate) fn report(
+    outcome: &Result<RepairResult, Error>,
+    reporter: &crate::Reporter<'_>,
+) -> ExitCode {
     match outcome {
         Ok(result) => {
             if reporter.json() {

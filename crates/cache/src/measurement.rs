@@ -18,7 +18,7 @@ struct Measured {
 }
 
 #[must_use]
-pub fn key_of(host: &str) -> [u8; 32] {
+pub(crate) fn key_of(host: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key(MEASUREMENT_KEY_CONTEXT);
     hasher.update(host.as_bytes());
     *hasher.finalize().as_bytes()
@@ -32,6 +32,9 @@ impl<P: Platform> Cache<P> {
         held.map(|found| found.measurement)
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the measurement cannot be written, and
+    /// `resource.disk` when the volume is full.
     pub fn record_measurement(
         &self,
         host: &str,

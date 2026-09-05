@@ -21,7 +21,7 @@ use crate::http::{HttpBody, HttpSource, Method, check_fetch_status, header};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identifier {
     pub path: String,
-    pub revision: Option<String>,
+    revision: Option<String>,
 }
 
 fn identifier_of(rest: &str) -> Identifier {

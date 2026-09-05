@@ -4,6 +4,7 @@
 mod bench;
 mod network;
 mod profile;
+mod surface;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         "completions" => generate_completions(&workspace, &rest),
         "network" => run_network(&workspace, &rest),
         "profile" => profile::run(&rest),
+        "surface" => surface::run(&workspace, &rest),
         "verify" => {
             if verify::run(&workspace, &rest) {
                 ExitCode::SUCCESS
@@ -43,6 +45,7 @@ usage:
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
   cargo xtask profile [--rounds <n>]
+  cargo xtask surface [--list] [--crate <name>]
   cargo xtask verify [--fast] [--arm] [--install-hook]";
 
 fn workspace_root() -> PathBuf {
@@ -186,7 +189,7 @@ fn regimes_into_baseline(
     };
     println!("many-small-files {lane}");
     if publish {
-        let page = workspace.join("docs").join("benchmarks.md");
+        let page = workspace.join("xtask").join("benchmarks").join("report.md");
         if let Err(error) = std::fs::write(&page, bench::publish(&current, &lane)) {
             eprintln!("could not write {}: {error}", page.display());
             return ExitCode::from(1);

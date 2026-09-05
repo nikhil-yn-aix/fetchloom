@@ -7,6 +7,9 @@ fn unsafe_path(member: &str, next_action: String) -> Error {
     Error::new(ErrorKind::ArchiveUnsafePath, next_action).with_member(member)
 }
 
+/// # Errors
+/// `archive.unsafe_path` for a name holding a NUL, not valid UTF-8, absolute,
+/// climbing out with a relative component, or nested past the limit.
 pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Error> {
     if raw.contains(&0) {
         let lossy = String::from_utf8_lossy(raw);
@@ -62,7 +65,7 @@ pub fn validate_member_path(raw: &[u8], nesting_limit: u32) -> Result<String, Er
     Ok(path)
 }
 
-pub fn claim_member_path(
+pub(crate) fn claim_member_path(
     claimed: &mut std::collections::BTreeSet<String>,
     path: &str,
 ) -> Result<(), Error> {
@@ -75,7 +78,7 @@ pub fn claim_member_path(
     ))
 }
 
-pub fn validate_link_target(member: &str, raw: &[u8]) -> Result<(), Error> {
+pub(crate) fn validate_link_target(member: &str, raw: &[u8]) -> Result<(), Error> {
     let target = String::from_utf8_lossy(raw);
     let escape = |reason: &str| {
         Err(Error::new(

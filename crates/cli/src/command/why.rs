@@ -37,6 +37,7 @@ pub fn run_why(
         DurabilityTier::Normal,
         fetchloom_engine::verification::VerificationPolicy::Fingerprint,
         IoMode::Auto,
+        fetchloom_engine::compression::CompressionChoice::Auto,
         Arc::clone(&work),
         Arc::new(processor),
     ) {

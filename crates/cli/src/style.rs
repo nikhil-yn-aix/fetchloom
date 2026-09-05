@@ -8,8 +8,6 @@ const ACCENT: &str = "\u{1b}[36m";
 
 const FAILURE: &str = "\u{1b}[31m";
 
-const WARNING: &str = "\u{1b}[33m";
-
 const DIMMED: &str = "\u{1b}[2m";
 
 const PLAIN: &str = "\u{1b}[0m";
@@ -19,7 +17,7 @@ pub fn colored(yes: bool) {
 }
 
 #[must_use]
-pub fn is_colored() -> bool {
+fn is_colored() -> bool {
     COLORED.load(Ordering::SeqCst)
 }
 
@@ -32,7 +30,7 @@ fn drawn(code: &str, text: &str) -> String {
 }
 
 #[must_use]
-pub fn accent(text: &str) -> String {
+pub(crate) fn accent(text: &str) -> String {
     drawn(ACCENT, text)
 }
 
@@ -42,11 +40,6 @@ pub fn failure(text: &str) -> String {
 }
 
 #[must_use]
-pub fn warning(text: &str) -> String {
-    drawn(WARNING, text)
-}
-
-#[must_use]
-pub fn dimmed(text: &str) -> String {
+pub(crate) fn dimmed(text: &str) -> String {
     drawn(DIMMED, text)
 }

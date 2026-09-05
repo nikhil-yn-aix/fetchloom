@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use fetchloom_engine::compression::CompressionChoice;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
@@ -14,6 +15,8 @@ use crate::layout::{digest_of, name_of};
 
 const BLOCK: usize = 512;
 
+const MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
+
 use fetchloom_engine::limits::STREAM_BUFFER_BYTES as BUFFER;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,12 +27,16 @@ pub struct BundleReport {
 }
 
 impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `cache.corrupt` when an object cannot be read or the bundle cannot be
+    /// written, and `resource.disk` when the volume is full.
     pub fn export(&self, to: &Path) -> Result<BundleReport, Error> {
         let mut digests = self.list()?;
         digests.sort_by(|left, right| left.bytes().cmp(right.bytes()));
 
-        let mut writing = std::fs::File::create(to)
+        let file = std::fs::File::create(to)
             .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))?;
+        let mut writing = BundleWriter::new(file, self.compression(), to)?;
         let mut buffer = vec![0u8; BUFFER];
         let mut report = BundleReport {
             objects: 0,
@@ -65,12 +72,15 @@ impl<P: Platform> Cache<P> {
             report.bytes += length;
         }
         write_all(&mut writing, &[0u8; BLOCK * 2], to)?;
-        writing
-            .flush()
-            .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))?;
+        writing.finish(to)?;
         Ok(report)
     }
 
+    /// # Errors
+    /// `archive.unsafe_path` for a member name that leaves the cache,
+    /// `integrity.mismatch` or `integrity.truncated` when a member does not
+    /// hash to the name it is filed under, and `cache.corrupt` when the bundle
+    /// cannot be read.
     pub fn import(&self, from: &Path, format: BundleReader) -> Result<BundleReport, Error> {
         let mut staged: Vec<Staged> = Vec::new();
         let outcome = self.stage_bundle(from, format, &mut staged);
@@ -204,17 +214,37 @@ fn claimed_digest(name: &str) -> Result<ContentDigest, Error> {
 }
 
 pub struct BundleReader {
-    file: std::fs::File,
+    source: Box<dyn Read>,
     path: std::path::PathBuf,
     at: u64,
 }
 
 impl BundleReader {
+    /// A bundle is read compressed or uncompressed as its own first bytes say.
+    /// A tar header opens with a member name, which here is the hexadecimal of
+    /// a digest, so it can never open with the frame magic and the two are told
+    /// apart by the bytes rather than by a name or a flag.
+    ///
+    /// # Errors
+    /// `cache.corrupt` when the file cannot be opened or is not a container
+    /// this build reads.
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let file = std::fs::File::open(path)
+        let mut file = std::fs::File::open(path)
             .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
+        let mut opening = [0u8; MAGIC.len()];
+        let filled = fill(&mut file, &mut opening)
+            .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
+        let read = std::io::Cursor::new(opening[..filled].to_vec()).chain(file);
+        let source: Box<dyn Read> = if opening[..filled] == MAGIC {
+            Box::new(
+                zstd::stream::read::Decoder::new(read)
+                    .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?,
+            )
+        } else {
+            Box::new(read)
+        };
         Ok(Self {
-            file,
+            source,
             path: path.to_path_buf(),
             at: 0,
         })
@@ -222,7 +252,7 @@ impl BundleReader {
 
     fn next_member(&mut self, from: &Path) -> Result<Option<BundleMember>, Error> {
         let mut block = [0u8; BLOCK];
-        let filled = fill(&mut self.file, &mut block)
+        let filled = fill(&mut self.source, &mut block)
             .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
         if filled == 0 {
             return Err(truncated(from));
@@ -262,7 +292,7 @@ impl BundleReader {
 
     fn read_body(&mut self, into: &mut [u8]) -> Result<usize, Error> {
         let filled = self
-            .file
+            .source
             .read(into)
             .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
         self.at += filled as u64;
@@ -276,7 +306,7 @@ impl BundleReader {
         }
         let mut block = [0u8; BLOCK];
         let want = BLOCK - over;
-        let filled = fill(&mut self.file, &mut block[..want])
+        let filled = fill(&mut self.source, &mut block[..want])
             .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
         if filled < want {
             return Err(Error::new(
@@ -379,8 +409,57 @@ fn padding(size: u64) -> Vec<u8> {
     }
 }
 
-fn write_all(writing: &mut std::fs::File, bytes: &[u8], to: &Path) -> Result<(), Error> {
+fn write_all(writing: &mut BundleWriter, bytes: &[u8], to: &Path) -> Result<(), Error> {
     writing
         .write_all(bytes)
         .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))
+}
+
+/// A bundle is written as a tar, compressed whole when the run asks for it. The
+/// member names and the bytes under them are the same either way, so what a
+/// bundle states about itself does not change with how it is stored.
+enum BundleWriter {
+    Plain(std::fs::File),
+    Compressed(Box<zstd::stream::write::Encoder<'static, std::fs::File>>),
+}
+
+impl BundleWriter {
+    fn new(file: std::fs::File, choice: CompressionChoice, to: &Path) -> Result<Self, Error> {
+        let level = match choice {
+            CompressionChoice::None => return Ok(Self::Plain(file)),
+            CompressionChoice::Auto => fetchloom_engine::compression::MIN_LEVEL,
+            CompressionChoice::Zstd(level) => level,
+        };
+        let encoder = zstd::stream::write::Encoder::new(file, level)
+            .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason))?;
+        Ok(Self::Compressed(Box::new(encoder)))
+    }
+
+    fn finish(self, to: &Path) -> Result<(), Error> {
+        match self {
+            Self::Plain(mut file) => file
+                .flush()
+                .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason)),
+            Self::Compressed(encoder) => encoder
+                .finish()
+                .and_then(|mut file| file.flush())
+                .map_err(|reason| filesystem_failure(Surface::Cache, to, &reason)),
+        }
+    }
+}
+
+impl Write for BundleWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(file) => file.write(bytes),
+            Self::Compressed(encoder) => encoder.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(file) => file.flush(),
+            Self::Compressed(encoder) => encoder.flush(),
+        }
+    }
 }

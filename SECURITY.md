@@ -1,77 +1,49 @@
 # Security
 
-## Reporting a vulnerability
+## Reporting
 
-Report privately at
-https://github.com/nikhil-yn-aix/fetchloom/security/advisories/new. Do not open
-a public issue for a suspected vulnerability.
+Open a private security advisory on the repository, or email the address on the commit history. Include what you did, what happened, and what you expected. A proof of concept helps and is not required.
 
-Include the reference or input that triggers it, the command that was run, the
-version the binary prints, and the platform. A corrupted archive, a manifest, or
-a captured response is more useful than a description of one.
-
-Fetchloom has one maintainer and no published release. There is no response time
-commitment before 1.0. You will get an acknowledgement and, if the report is
-accepted, the commit that closes it.
+Expect an acknowledgement within a week. There is no bounty.
 
 ## What is in scope
 
-Fetchloom's threat model is that everything on the far side of the network is
-hostile and everything the user typed is not. A remote source can serve any
-bytes it likes, and no amount of them may cost more than the limits in
-contracts.md allow.
+Fetchloom fetches data from servers you do not control and unpacks it on your machine. That is the whole threat model.
 
-In scope:
+**Archive handling.** A member escaping the destination, whether by an absolute path, traversal, a symlink, a hard link, or a name the volume treats differently than the bytes suggest. An archive that exhausts memory or disk through entry count, expanded size, or expansion ratio.
 
-Anything a remote source controls: manifest files and manifest URLs, directory
-listings, HTTP responses and headers, archive containers and their members, and
-digests or sizes a source declares.
+**Resolution.** A manifest, listing, or metadata document that causes unbounded memory use, unbounded time, or a request to somewhere the reference did not name.
 
-Escaping the destination: a member path, a symlink target, or a hard link that
-places a file outside the tree the user named.
+**Credentials.** A token reaching any output stream, any file, or any host other than the one it was resolved for, including across a redirect.
 
-Resource exhaustion driven by remote input: memory, disk, file descriptors, or
-processor time that grows without a bound the limits in contracts.md state.
+**Integrity.** Any path that reports a trust class higher than the evidence supports, or that publishes bytes into the cache or a destination without them being verified whole.
 
-Cache corruption or cross-process interference: one run reading bytes another
-run wrote, a killed process leaving an object that does not hash to its name, or
-a cache shared between users leaking content.
+**Offline.** Any network activity under `--offline`.
 
-Credential and secret handling: a token, a signed query string, or a presigned
-parameter appearing in a log record, an event, a receipt, a plan, or an error
-message.
+## What is not
 
-Trust decisions: certificate verification, the digests a lock pins, and anything
-that lets a run accept bytes that do not match what it verified.
+Compromise of a source you pointed at. If a publisher serves different bytes, Fetchloom reports the mismatch. It cannot decide which bytes were correct.
 
-## What is out of scope
+Anything requiring write access to the cache directory or the configuration files. A local attacker who can write there is already inside the boundary.
 
-A dependency's vulnerability, which belongs upstream. Report it there, and open
-an advisory here only if Fetchloom's use of it makes it worse.
+Speed. Being slower than another tool is not a vulnerability.
 
-Anything requiring an attacker who already controls the machine, the cache
-directory, or the user's configuration file.
+## Fixed
 
-Cost the user asked for. A reference that names a large dataset transfers a large
-dataset.
+**Zip symlink bypass.** A symlink member's bytes were read before the expansion guard observed them, so a 100 MB zip could force an allocation of roughly 100 GB. Deflate reaches 1032 to 1. The guard now observes the size before the read.
 
-Missing hardening that is not a defect: a feature marked **Not built.** in
-docs/features.md is not a vulnerability.
+**Exponential glob.** Selection patterns backtracked, so eight `*` components took 143 ms and each additional one multiplied that by about 5.8. Patterns arrive in remote manifests, so this was remotely reachable. Matching is now non backtracking.
 
-## Classes already closed
+**Unbounded document reads.** A manifest or plan was read whole before its size was checked.
 
-Two remote-input denial of service classes were found and fixed before any
-release.
+## Design notes relevant to review
 
-A zip symlink member was read in full before the bomb guard was consulted, so a
-100 MB archive could force about 100 GB of decompression before the expanded-byte
-limit or the ratio was checked. The guard is now asked with the declared size
-before the member kind is acted on.
+Manifests are declarative. No key can express a command, a script, or a path to execute. There are no hooks and no generators.
 
-Glob matching recursed over every suffix at each recursive wildcard, so a pattern
-in a manifest fetched from a remote URL could be made to cost exponentially in
-the number of `**` components. Matching is now linear in the pattern and the
-path.
+Every rejection stops the entire run. No member is ever skipped, and excluding a rejected member with `--select` does not let the archive through.
 
-Both are recorded in docs/decisions.md with their measurements and the tests that
-hold them closed.
+Query parameter values are redacted as a class rather than by a list of sensitive names, because a list can be incomplete. Redaction happens where the value is constructed, not where it is printed.
+
+Fetchloom lists what you point at and never follows a link outside that prefix, never opens a file to discover more work, and never executes anything.
+
+TLS verification is on and there is no flag or configuration key that turns it off.

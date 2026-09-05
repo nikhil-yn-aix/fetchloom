@@ -15,7 +15,7 @@ use std::path::Path;
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
 )]
-pub fn materialize_cached(
+pub(crate) fn materialize_cached(
     with: &Materialization<'_>,
     digest: ContentDigest,
     size: u64,

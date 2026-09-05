@@ -16,7 +16,7 @@ pub enum LogLevel {
 
 impl LogLevel {
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Error => "error",
             Self::Info => "info",
@@ -25,7 +25,7 @@ impl LogLevel {
     }
 
     #[must_use]
-    pub fn above(self) -> Option<Self> {
+    pub(crate) fn above(self) -> Option<Self> {
         match self {
             Self::Error => Some(Self::Info),
             Self::Info => Some(Self::Debug),
@@ -34,7 +34,7 @@ impl LogLevel {
     }
 
     #[must_use]
-    pub fn raised(self, steps: u32) -> (Self, bool) {
+    pub(crate) fn raised(self, steps: u32) -> (Self, bool) {
         let mut level = self;
         for _ in 0..steps {
             match level.above() {
@@ -46,7 +46,7 @@ impl LogLevel {
     }
 
     #[must_use]
-    pub fn renders(self, payload: &EventPayload) -> bool {
+    pub(crate) fn renders(self, payload: &EventPayload) -> bool {
         match self {
             Self::Debug => true,
             Self::Info => matches!(

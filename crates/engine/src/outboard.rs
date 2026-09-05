@@ -32,6 +32,10 @@ impl Outboard {
 }
 
 #[must_use]
+/// # Panics
+/// When the object is one group or none, or when the leaves handed in are not
+/// one per group. Both are the caller's invariant: an object that small is
+/// hashed directly rather than merged, so either case is a bug here.
 pub fn tree_of(object_len: u64, leaves: &[ChainingValue]) -> (ContentDigest, Option<Outboard>) {
     let whole = Subtree::whole(object_len);
     assert!(
@@ -199,6 +203,9 @@ fn tree_corrupt(range: &Range<u64>) -> Error {
     ))
 }
 
+/// # Errors
+/// `integrity.range_mismatch` naming the first group whose bytes do not match
+/// the tree, and `cache.corrupt` when the outboard itself cannot be read.
 pub fn verify_range(
     outboard: &mut (impl Read + Seek),
     object_len: u64,
@@ -227,6 +234,9 @@ pub fn verify_range(
     }
 }
 
+/// # Errors
+/// `cache.corrupt` when the outboard cannot be read or does not check out
+/// against the content digest, which says nothing about which bytes are wrong.
 pub fn find_damage(
     outboard: &mut (impl Read + Seek),
     object_len: u64,

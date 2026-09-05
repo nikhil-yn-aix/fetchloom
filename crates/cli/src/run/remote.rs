@@ -30,6 +30,11 @@ use std::path::Path;
     clippy::too_many_arguments,
     reason = "the selection, force, and adopt flags each name a contract behavior of their own"
 )]
+/// # Errors
+/// Whatever probing, transferring, verifying or publishing the object
+/// reports: the `network.*` kinds, `integrity.mismatch` against a pinned
+/// digest, `destination.modified` for a destination this run may not replace,
+/// and the destination's own filesystem kinds.
 pub fn materialize_remote(
     with: &Materialization<'_>,
     location: &str,
@@ -141,7 +146,7 @@ pub fn materialize_remote(
     )
 }
 
-pub fn infer_remote(
+pub(crate) fn infer_remote(
     with: &Materialization<'_>,
     location: &str,
     observer: &dyn Observer,

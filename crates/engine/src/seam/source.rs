@@ -115,12 +115,21 @@ pub trait Source {
 
     fn take_degradations(&self) -> Vec<Degradation>;
 
+    /// # Errors
+    /// `network.refused`, `network.timeout`, `network.tls` or `network.status`
+    /// as the source answers, `reference.unresolved` when the location names
+    /// nothing, and `policy.credential_missing` or `policy.credential_invalid`
+    /// when the source asks for one it did not get.
     fn probe(
         &self,
         location: &str,
         credential: Option<&Credential>,
     ) -> Result<SourceMetadata, Error>;
 
+    /// # Errors
+    /// The kinds `probe` gives, `source.unsupported_range` when a range was
+    /// asked for and the whole object was served, and `resource.limit` when
+    /// the object is larger than the run allows.
     fn fetch(
         &self,
         location: &str,
@@ -128,6 +137,9 @@ pub trait Source {
         credential: Option<&Credential>,
     ) -> Result<Served<Self::Body>, Error>;
 
+    /// # Errors
+    /// The kinds `fetch` gives. A validator the source no longer honors is a
+    /// `Revalidated::Changed` answer rather than an error.
     fn revalidate(
         &self,
         location: &str,
@@ -135,5 +147,8 @@ pub trait Source {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error>;
 
+    /// # Errors
+    /// The kinds `probe` gives, and `reference.unresolved` when the location
+    /// is not a container this source can list.
     fn list(&self, location: &str, credential: Option<&Credential>) -> Result<Listing, Error>;
 }

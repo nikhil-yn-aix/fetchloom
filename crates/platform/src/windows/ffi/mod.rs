@@ -13,7 +13,7 @@ mod volume;
 
 pub(crate) use clone::{CLONE_CEILING, clone_spans, duplicate_extents};
 pub(crate) use credential::read_credential;
-pub(crate) use file::{create_symlink, preallocate, rename};
+pub(crate) use file::{create_symlink, is_compressed, preallocate, rename};
 pub(crate) use handle::{basic_info, id_info, open_for_query};
 pub(crate) use minifilter::loaded_minifilters;
 pub(crate) use process::{ProcessQuery, process_start, usable_processors};

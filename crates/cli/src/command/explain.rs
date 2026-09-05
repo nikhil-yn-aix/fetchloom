@@ -45,6 +45,7 @@ pub(crate) fn measured_for(resolved: &settings::Settings) -> explain::Measured {
                 DurabilityTier::Normal,
                 fetchloom_engine::verification::VerificationPolicy::Fingerprint,
                 IoMode::Buffered,
+                resolved.compress.value,
                 work,
                 Arc::new(pool),
             ) {

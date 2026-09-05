@@ -23,6 +23,12 @@ struct Created {
     member: String,
 }
 
+/// # Errors
+/// `archive.unsafe_path`, `archive.link_escape` or `archive.collision` for a
+/// member the destination cannot hold, `archive.bomb` when a limit is passed,
+/// `resource.disk` when the volume is full, and
+/// `destination.unrepresentable` when the platform refuses a name. Anything
+/// already written is removed before the error is returned.
 pub fn extract<A, P>(
     archive: &mut A,
     selection: &Selection,

@@ -24,6 +24,10 @@ pub struct RebuildReport {
     pub held: u64,
 }
 
+/// # Errors
+/// `cache.corrupt` when the store cannot be walked or a record cannot be
+/// rewritten. An object another process holds is counted as held, not an
+/// error.
 pub fn run<P: Platform>(cache: &Cache<P>) -> Result<RebuildReport, Error> {
     let mut report = RebuildReport::default();
     for digest in cache.list()? {

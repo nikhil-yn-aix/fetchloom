@@ -4,9 +4,9 @@ use crate::config::Discovered;
 use crate::settings::Settings;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Measurement {
-    pub found: String,
-    pub taken: String,
+pub(crate) struct Measurement {
+    pub(crate) found: String,
+    pub(crate) taken: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -15,7 +15,7 @@ pub struct Explained {
     pub value: String,
     pub origin: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub measurement: Option<Measurement>,
+    pub(crate) measurement: Option<Measurement>,
 }
 
 trait Describe {
@@ -69,6 +69,12 @@ impl Describe for crate::surface::DisplayMode {
             Self::Live => "live".to_owned(),
             Self::None => "none".to_owned(),
         }
+    }
+}
+
+impl Describe for fetchloom_engine::compression::CompressionChoice {
+    fn describe(&self) -> String {
+        self.label()
     }
 }
 
@@ -180,6 +186,7 @@ pub fn rows(settings: &Settings, measured: &Measured) -> Vec<Explained> {
         row!("sources", sources),
         row!("color", color),
         row!("hints", hints),
+        row!("compress", compress),
     ]
 }
 
@@ -242,7 +249,7 @@ fn threads_row(settings: &Settings, measured: &Measured) -> Explained {
 }
 
 #[must_use]
-pub fn file_lines(discovered: &Discovered) -> Vec<String> {
+pub(crate) fn file_lines(discovered: &Discovered) -> Vec<String> {
     let project = discovered.project.as_ref().map_or_else(
         || "project config: none found".to_owned(),
         |loaded| format!("project config: {}", loaded.path.display()),
@@ -255,19 +262,19 @@ pub fn file_lines(discovered: &Discovered) -> Vec<String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct ConfigFile {
-    pub level: String,
-    pub path: Option<String>,
+pub(crate) struct ConfigFile {
+    pub(crate) level: String,
+    pub(crate) path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Report {
-    pub files: Vec<ConfigFile>,
-    pub settings: Vec<Explained>,
+    pub(crate) files: Vec<ConfigFile>,
+    pub(crate) settings: Vec<Explained>,
 }
 
 #[must_use]
-pub fn files(discovered: &Discovered) -> Vec<ConfigFile> {
+pub(crate) fn files(discovered: &Discovered) -> Vec<ConfigFile> {
     vec![
         ConfigFile {
             level: "project".to_owned(),

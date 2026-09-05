@@ -4,71 +4,35 @@ A single binary that turns a dataset reference into exact, verified local files,
 
 ## Read before working
 
-`docs/standards.md` first, every session. It is how code is written here and it is not optional.
+`CONTRIBUTING.md` first, every session. It is how code is written here and it is not optional.
 
 `docs/contracts.md` for the exact behavior you are implementing. Read the sections you touch, not the whole file.
 
-`docs/roadmap.md` for the current phase and its exit criteria.
+`docs/internals.md` when the reason behind a contract is unclear.
 
-`docs/vision.md` and `docs/features.md` only when the reason behind a contract is unclear.
+`docs/reference.md` for the surface as it stands, including what is not built.
 
-## Non-negotiables
+Everything the old `standards.md`, `vision.md`, `features.md` and `roadmap.md` carried is in those four files. Do not look for them.
 
-Contracts come first. If contracts.md states a behavior, implement exactly that. If it is silent on something you need, stop and ask. Never choose for it and never invent a flag, field, event, or error kind that is not written down.
+## Report format
 
-Tests are written before implementation and must fail for the right reason first.
+```
+Done: <one line>
+Decisions: <any choice not already in the docs, with the reason>
+Tests: <what was added, and the real pass or fail output>
+Benchmarks: <numbers, or none needed>
+Uncertain: <anything you could not verify>
+Blocked: <anything needing a human decision>
+```
 
-No comments. No version fields. No compatibility code. No second way of doing anything that already exists.
-
-Nothing degrades silently. Every fallback emits a `degrade` event naming what was requested, what was used, and why.
-
-Every change works on Windows and Linux, or it is not done.
-
-## Verify, do not trust
-
-Confirm every library API against current documentation before using it. Use Context7 for library docs and web search for anything else. Do not rely on recall for a signature, a default, or a platform behavior.
-
-Do not trust this file, the docs, or a previous session's claim over what the code and the tests actually do. If a doc contradicts reality, say so instead of coding around it.
-
-Run everything you claim. A test suite you did not execute has not passed. Paste the real output.
-
-State uncertainty plainly. A guess labeled as a guess is useful; a guess presented as fact is a defect.
-
-## Done means
-
-Tests written first, passing, and asserting a stated contract rather than an implementation detail.
-
-Adversarial cases covered: failure, corruption, interruption, concurrency, and hostile input where relevant.
-
-Green on both platforms.
-
-Benchmark numbers included for anything performance-relevant, with no regime regressed.
-
-Contracts updated in the same change if behavior changed.
-
-No `todo!`, no placeholder, no skipped test, no dead code.
+Do not restate the plan, summarize the docs, or explain at length what you are about to do.
 
 ## Forbidden
 
-Placeholder or trivially-true tests. A test that cannot fail is worse than no test.
+Placeholder or trivially true tests. A test that cannot fail is worse than no test.
 
 Claiming success without running the command.
 
 Committing or pushing unless explicitly asked.
 
 Adding a dependency without stating why in the report.
-
-Restating the plan, summarizing the docs, or explaining what you are about to do at length.
-
-## Report format
-
-Keep it short. Use `file:line` references instead of pasting code.
-
-```
-Done: <one line>
-Decisions: <any choice not already written in the docs, with the reason>
-Tests: <what was added, and the real pass or fail output>
-Benchmarks: <numbers, or none needed>
-Uncertain: <anything you could not verify>
-Blocked: <anything requiring a human decision>
-```

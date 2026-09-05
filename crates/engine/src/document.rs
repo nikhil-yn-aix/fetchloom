@@ -10,6 +10,22 @@ use crate::error::{Error, ErrorKind};
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Bound {
+    Foreign,
+    Own,
+}
+
+impl Bound {
+    #[must_use]
+    fn of(self, limits: &Limits) -> (u64, u64) {
+        match self {
+            Self::Foreign => (limits.manifest_size, limits.manifest_nodes),
+            Self::Own => (limits.record_size, limits.record_nodes),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Syntax {
     Yaml,
     Toml,
@@ -38,13 +54,19 @@ impl Syntax {
     }
 }
 
-pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Error> {
-    if bytes.len() as u64 > limits.manifest_size {
-        return Err(invalid(format!(
-            "shorten the document, because it is {} bytes and the limit is {}",
-            bytes.len(),
-            limits.manifest_size
-        )));
+/// # Errors
+/// `manifest.invalid` when the document is longer than the limit allows, is
+/// not UTF-8, does not parse as the syntax named, or nests past the limit.
+pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits, bound: Bound) -> Result<Value, Error> {
+    let (size, nodes) = bound.of(limits);
+    if bytes.len() as u64 > size {
+        return Err(Error::new(
+            ErrorKind::ResourceLimit,
+            format!(
+                "shorten the document, because it is {} bytes and the limit is {size}",
+                bytes.len(),
+            ),
+        ));
     }
     let text = std::str::from_utf8(bytes)
         .map_err(|reason| invalid(format!("write the document in UTF-8, because {reason}")))?;
@@ -56,7 +78,7 @@ pub fn parse(bytes: &[u8], syntax: Syntax, limits: &Limits) -> Result<Value, Err
         Syntax::Json => serde_json::from_str::<Value>(text)
             .map_err(|reason| invalid(format!("correct the JSON, because {reason}")))?,
     };
-    check_bounds(&value, limits)?;
+    check_bounds(&value, limits, nodes)?;
     Ok(value)
 }
 
@@ -78,18 +100,24 @@ fn invalid(action: impl Into<String>) -> Error {
     Error::new(ErrorKind::ManifestInvalid, action)
 }
 
-fn check_bounds(value: &Value, limits: &Limits) -> Result<(), Error> {
+fn check_bounds(value: &Value, limits: &Limits, ceiling: u64) -> Result<(), Error> {
     let mut nodes = 0u64;
-    walk(value, 0, &mut nodes, limits)
+    walk(value, 0, &mut nodes, limits, ceiling)
 }
 
-fn walk(value: &Value, depth: u32, nodes: &mut u64, limits: &Limits) -> Result<(), Error> {
+fn walk(
+    value: &Value,
+    depth: u32,
+    nodes: &mut u64,
+    limits: &Limits,
+    ceiling: u64,
+) -> Result<(), Error> {
     *nodes += 1;
-    if *nodes > limits.manifest_nodes {
-        return Err(invalid(format!(
-            "shorten the document, because it holds more than {} nodes",
-            limits.manifest_nodes
-        )));
+    if *nodes > ceiling {
+        return Err(Error::new(
+            ErrorKind::ResourceLimit,
+            format!("shorten the document, because it holds more than {ceiling} nodes"),
+        ));
     }
     if depth > limits.nesting_depth {
         return Err(invalid(format!(
@@ -100,13 +128,13 @@ fn walk(value: &Value, depth: u32, nodes: &mut u64, limits: &Limits) -> Result<(
     match value {
         Value::Array(items) => {
             for item in items {
-                walk(item, depth + 1, nodes, limits)?;
+                walk(item, depth + 1, nodes, limits, ceiling)?;
             }
             Ok(())
         }
         Value::Object(fields) => {
             for field in fields.values() {
-                walk(field, depth + 1, nodes, limits)?;
+                walk(field, depth + 1, nodes, limits, ceiling)?;
             }
             Ok(())
         }
@@ -153,7 +181,7 @@ fn ordered(fields: &Map<String, Value>) -> Vec<(&String, &Value)> {
 }
 
 #[must_use]
-pub fn quote(text: &str) -> String {
+pub(crate) fn quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for character in text.chars() {
@@ -242,24 +270,26 @@ fn render_key(key: &str) -> String {
     if plain { key.to_owned() } else { quote(key) }
 }
 
-pub fn read_model<T: serde::de::DeserializeOwned>(
+pub(crate) fn read_model<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     called: &str,
     limits: &Limits,
+    bound: Bound,
 ) -> Result<T, Error> {
-    read_model_in(bytes, Syntax::Yaml, called, limits)
+    read_model_in(bytes, Syntax::Yaml, called, limits, bound)
 }
 
-pub fn read_model_in<T: serde::de::DeserializeOwned>(
+pub(crate) fn read_model_in<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     syntax: Syntax,
     called: &str,
     limits: &Limits,
+    bound: Bound,
 ) -> Result<T, Error> {
-    from_document(parse(bytes, syntax, limits)?, called)
+    from_document(parse(bytes, syntax, limits, bound)?, called)
 }
 
-pub fn from_document<T: serde::de::DeserializeOwned>(
+fn from_document<T: serde::de::DeserializeOwned>(
     document: Value,
     called: &str,
 ) -> Result<T, Error> {
@@ -292,10 +322,14 @@ fn refuse_reserved_keys(document: &Value, called: &str) -> Result<(), Error> {
     }
 }
 
+/// # Errors
+/// `manifest.invalid` when the model cannot be written as a value.
 pub fn canonical_json_of<T: serde::Serialize>(model: &T) -> Result<Vec<u8>, Error> {
     Ok(canonical_json(&to_value(model)?))
 }
 
+/// # Errors
+/// `manifest.invalid` when the model cannot be written as a value.
 pub fn render_model<T: serde::Serialize>(model: &T) -> Result<String, Error> {
     Ok(render(&to_value(model)?))
 }

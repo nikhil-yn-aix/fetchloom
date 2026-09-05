@@ -18,9 +18,7 @@ pub use http::{HttpBody, HttpSource, trust_store_loads};
 pub use object_store::ObjectStoreSource;
 pub use origin::Origin;
 pub use provider::{HuggingFaceSource, ZenodoSource};
-pub use signing::{
-    EMPTY_PAYLOAD, Request as SigningRequest, Signed, SigningTime, payload_digest, sign,
-};
+pub use signing::{Request as SigningRequest, Signed, SigningTime, sign};
 
 #[must_use]
 pub fn joined(container: &str, path: &str) -> String {

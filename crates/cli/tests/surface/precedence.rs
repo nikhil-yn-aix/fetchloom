@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use fetchloom_cli::config::{self, Discovered, Origin};
 use fetchloom_cli::settings::{self, Environment};
 use fetchloom_cli::surface::{DisplayMode, GlobalFlags};
+use fetchloom_engine::compression::CompressionChoice;
 use tempfile::TempDir;
 
 use crate::support;
@@ -314,4 +315,122 @@ fn measured(threads: u32) -> fetchloom_cli::explain::Measured {
         per_host: 1,
         recorded: Vec::new(),
     }
+}
+
+fn compress_origin(
+    flags: &GlobalFlags,
+    project: Option<&str>,
+    user: Option<&str>,
+    environment: &dyn Environment,
+) -> (CompressionChoice, Origin) {
+    let (_temporary, discovered) = discovered_from(project, user);
+    let resolved = settings::resolve_all(
+        flags,
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &discovered,
+        environment,
+    )
+    .expect("no level supplied a value this build cannot read");
+    (resolved.compress.value, resolved.compress.origin)
+}
+
+#[test]
+fn compress_defaults_to_auto_when_no_level_supplies_it() {
+    let (value, origin) = compress_origin(
+        &GlobalFlags::default(),
+        None,
+        None,
+        &FakeEnvironment::default(),
+    );
+    assert_eq!(value, CompressionChoice::Auto);
+    assert_eq!(origin, Origin::Default);
+}
+
+#[test]
+fn compress_is_taken_from_each_of_the_five_levels_in_order() {
+    let user = Some("compress = \"zstd:9\"\n");
+    let project = Some("compress = \"zstd:6\"\n");
+
+    let (value, origin) = compress_origin(
+        &GlobalFlags::default(),
+        None,
+        user,
+        &FakeEnvironment::default(),
+    );
+    assert_eq!(value, CompressionChoice::Zstd(9));
+    assert_eq!(origin, Origin::UserConfig);
+
+    let (value, origin) = compress_origin(
+        &GlobalFlags::default(),
+        project,
+        user,
+        &FakeEnvironment::default(),
+    );
+    assert_eq!(value, CompressionChoice::Zstd(6));
+    assert_eq!(origin, Origin::ProjectConfig);
+
+    let (value, origin) = compress_origin(
+        &GlobalFlags::default(),
+        project,
+        user,
+        &FakeEnvironment::with(&[("FETCHLOOM_COMPRESS", "none")]),
+    );
+    assert_eq!(value, CompressionChoice::None);
+    assert_eq!(origin, Origin::Environment);
+
+    let flags = GlobalFlags {
+        compress: Some(fetchloom_cli::surface::CompressArg(
+            CompressionChoice::Zstd(1),
+        )),
+        ..GlobalFlags::default()
+    };
+    let (value, origin) = compress_origin(
+        &flags,
+        project,
+        user,
+        &FakeEnvironment::with(&[("FETCHLOOM_COMPRESS", "none")]),
+    );
+    assert_eq!(value, CompressionChoice::Zstd(1));
+    assert_eq!(origin, Origin::CommandLine);
+}
+
+#[test]
+fn a_compress_value_no_level_may_supply_is_refused_by_name() {
+    let (_temporary, discovered) = discovered_from(Some("compress = \"zstd:99\"\n"), None);
+    let refused = settings::resolve_all(
+        &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &discovered,
+        &FakeEnvironment::default(),
+    )
+    .expect_err("a level out of range was accepted");
+    assert_eq!(refused.key, "compress");
+    assert_eq!(refused.origin, Origin::ProjectConfig);
+}
+
+#[test]
+fn explain_reports_compress_and_the_level_that_supplied_it() {
+    let (_temporary, discovered) = discovered_from(None, Some("compress = \"zstd:3\"\n"));
+    let resolved = settings::resolve_all(
+        &GlobalFlags::default(),
+        &fetchloom_cli::surface::TransferFlags::default(),
+        &discovered,
+        &FakeEnvironment::default(),
+    )
+    .expect("no level supplied a value this build cannot read");
+    let rows = fetchloom_cli::explain::rows(
+        &resolved,
+        &fetchloom_cli::explain::Measured {
+            threads: 1,
+            concurrency: 1,
+            per_host: 1,
+            recorded: Vec::new(),
+        },
+    );
+    let row = rows
+        .iter()
+        .find(|row| row.key == "compress")
+        .expect("explain does not report compress at all");
+    assert_eq!(row.value, "zstd:3");
+    assert_eq!(row.origin, Origin::UserConfig.to_string());
 }

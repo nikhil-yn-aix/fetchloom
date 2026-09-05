@@ -17,6 +17,7 @@ use blake3 as _;
 use fetchloom_faults as _;
 use serde as _;
 use serde_json as _;
+use zstd as _;
 
 mod support;
 

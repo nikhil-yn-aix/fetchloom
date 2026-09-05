@@ -15,6 +15,9 @@ pub struct Prior {
     pub validator: Validator,
 }
 
+/// # Errors
+/// `source.identity_changed` when what the source now serves is a different
+/// object from the one the partial belongs to.
 pub fn rung_for(
     recorded: Option<&SourceRecord>,
     now: &SourceMetadata,

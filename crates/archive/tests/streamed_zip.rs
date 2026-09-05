@@ -14,10 +14,10 @@ use bzip2 as _;
 use fetchloom_platform as _;
 use flate2 as _;
 use lzma_rust2 as _;
-use ruzstd as _;
 use tar as _;
 use tempfile as _;
 use zip as _;
+use zstd as _;
 
 use fetchloom_archive::ArchiveReader;
 use fetchloom_engine::error::ErrorKind;

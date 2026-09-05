@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-const LINT_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"];
+const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
 
 const COMPILE_ONLY_TARGETS: [&str; 1] = ["aarch64-pc-windows-msvc"];
 

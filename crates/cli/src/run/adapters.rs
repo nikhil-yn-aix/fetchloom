@@ -57,7 +57,7 @@ pub struct Tuning {
 
 impl Tuning {
     #[must_use]
-    pub fn controller(
+    pub(crate) fn controller(
         &self,
         host: &str,
         cache: Option<&Cache<NativePlatform>>,
@@ -129,17 +129,17 @@ pub(super) fn offers_for(policy: &dyn Policy) -> impl Fn(&str, std::time::Durati
 }
 
 #[must_use]
-pub fn host_of(location: &str) -> String {
+pub(crate) fn host_of(location: &str) -> String {
     Host::of_location(location).as_str().to_owned()
 }
 
 #[must_use]
-pub fn is_served(adapters: &Adapters, reference: &str) -> bool {
+pub(crate) fn is_served(adapters: &Adapters, reference: &str) -> bool {
     adapters.serving(reference).is_some()
 }
 
 #[must_use]
-pub fn is_container(adapters: &Adapters, reference: &str) -> bool {
+pub(crate) fn is_container(adapters: &Adapters, reference: &str) -> bool {
     matches!(adapters.serving(reference), Some((_, Serves::Container)))
 }
 

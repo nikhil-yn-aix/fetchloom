@@ -22,8 +22,8 @@ pub enum NotLocalized {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DamagedRange {
-    pub start: u64,
-    pub end: u64,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,19 +36,11 @@ pub struct Diagnosis {
     pub localized: Option<NotLocalized>,
     pub source: Option<String>,
     pub validator: Option<String>,
-    pub quarantined_at: Timestamp,
+    pub(crate) quarantined_at: Timestamp,
     pub next_action: String,
 }
 
 impl Diagnosis {
-    #[must_use]
-    pub fn damaged_bytes(&self) -> u64 {
-        self.damaged
-            .iter()
-            .map(|span| span.end.saturating_sub(span.start))
-            .sum()
-    }
-
     #[must_use]
     pub fn ranges(&self) -> Vec<Range<u64>> {
         self.damaged
@@ -59,21 +51,17 @@ impl Diagnosis {
 }
 
 impl<P: Platform> Cache<P> {
-    pub fn write_diagnosis(&self, found: &Diagnosis) -> Result<(), Error> {
+    pub(crate) fn write_diagnosis(&self, found: &Diagnosis) -> Result<(), Error> {
         record::write(
             &self.layout().diagnosis_of(found.digest),
             found,
             self.work(),
         )
     }
-
-    pub fn read_diagnosis(&self, digest: ContentDigest) -> Result<Option<Diagnosis>, Error> {
-        record::read(&self.layout().diagnosis_of(digest))
-    }
 }
 
 #[must_use]
-pub fn spans_of(damaged: &[Range<u64>]) -> Vec<DamagedRange> {
+pub(crate) fn spans_of(damaged: &[Range<u64>]) -> Vec<DamagedRange> {
     damaged
         .iter()
         .map(|span| DamagedRange {

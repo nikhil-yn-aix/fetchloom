@@ -429,3 +429,84 @@ fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }
+
+/// A file whose bytes do not compress, large enough not to be packed.
+fn dense_source(under: &Path) -> std::path::PathBuf {
+    let source = under.join("dense");
+    std::fs::create_dir_all(&source).unwrap();
+    let mut state = 0x5eed_u64;
+    let bytes: Vec<u8> = (0..(2 << 20))
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            u8::try_from(state >> 24 & 0xff).unwrap_or(0)
+        })
+        .collect();
+    std::fs::write(source.join("noise.bin"), &bytes).unwrap();
+    source
+}
+
+#[test]
+fn an_object_the_probe_will_not_compress_says_so_in_the_event_stream() {
+    let scratch = TempDir::new().unwrap();
+    let cache = scratch.path().join("cache");
+    let source = dense_source(scratch.path());
+
+    let done = run(
+        &cache,
+        &[
+            "get",
+            source.to_str().unwrap(),
+            "--output",
+            scratch.path().join("out").to_str().unwrap(),
+            "-vv",
+        ],
+    );
+
+    assert!(
+        done.status.success(),
+        "a run over incompressible bytes failed: {}",
+        events(&done)
+    );
+    let stream = events(&done);
+    assert!(
+        stream.contains("degrade"),
+        "compression was asked for, did not happen, and nothing said so: {stream}"
+    );
+    assert!(
+        stream.contains("written raw"),
+        "the degrade does not name what was used instead: {stream}"
+    );
+    assert!(
+        stream.contains("compressed at"),
+        "the degrade does not name what was measured: {stream}"
+    );
+}
+
+#[test]
+fn compress_none_asks_for_nothing_so_nothing_degrades_about_compression() {
+    let scratch = TempDir::new().unwrap();
+    let cache = scratch.path().join("cache");
+    let source = dense_source(scratch.path());
+
+    let done = run(
+        &cache,
+        &[
+            "get",
+            source.to_str().unwrap(),
+            "--output",
+            scratch.path().join("out").to_str().unwrap(),
+            "--compress",
+            "none",
+            "-vv",
+        ],
+    );
+
+    assert!(done.status.success(), "{}", events(&done));
+    assert!(
+        !events(&done).contains("written raw"),
+        "compress none reported a degradation about something it never asked for: {}",
+        events(&done)
+    );
+}

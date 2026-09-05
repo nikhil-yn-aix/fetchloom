@@ -14,7 +14,7 @@ use serde_json as _;
 use sha2 as _;
 use toml as _;
 
-use fetchloom_engine::document::{Syntax, canonical_json, parse, render};
+use fetchloom_engine::document::{Bound, Syntax, canonical_json, parse, render};
 use fetchloom_engine::limits::Limits;
 use fetchloom_engine::manifest::Manifest;
 
@@ -128,6 +128,7 @@ fn the_canonical_form_orders_every_mapping_by_the_bytes_of_its_keys() {
         br#"{"b": 1, "a": 2, "A": 3, "\u00e1": 4}"#,
         Syntax::Json,
         &Limits::default(),
+        Bound::Foreign,
     )
     .unwrap();
     assert_eq!(
@@ -142,6 +143,7 @@ fn the_canonical_form_writes_a_control_character_as_one_escape() {
         b"{\"k\": \"a\\u0007b\\tc\\\"d\"}",
         Syntax::Json,
         &Limits::default(),
+        Bound::Foreign,
     )
     .unwrap();
     assert_eq!(
@@ -152,7 +154,13 @@ fn the_canonical_form_writes_a_control_character_as_one_escape() {
 
 #[test]
 fn the_rendered_form_ends_every_line_with_one_line_feed() {
-    let document = parse(YAML.as_bytes(), Syntax::Yaml, &Limits::default()).unwrap();
+    let document = parse(
+        YAML.as_bytes(),
+        Syntax::Yaml,
+        &Limits::default(),
+        Bound::Foreign,
+    )
+    .unwrap();
     let rendered = render(&document);
     assert!(
         !rendered.contains('\r'),
@@ -163,15 +171,32 @@ fn the_rendered_form_ends_every_line_with_one_line_feed() {
 
 #[test]
 fn what_is_rendered_reads_back_as_what_was_rendered() {
-    let document = parse(YAML.as_bytes(), Syntax::Yaml, &Limits::default()).unwrap();
+    let document = parse(
+        YAML.as_bytes(),
+        Syntax::Yaml,
+        &Limits::default(),
+        Bound::Foreign,
+    )
+    .unwrap();
     let rendered = render(&document);
-    let again = parse(rendered.as_bytes(), Syntax::Yaml, &Limits::default()).unwrap();
+    let again = parse(
+        rendered.as_bytes(),
+        Syntax::Yaml,
+        &Limits::default(),
+        Bound::Foreign,
+    )
+    .unwrap();
     assert_eq!(document, again, "rendered as:\n{rendered}");
 }
 
 fn refused(text: &str) -> String {
-    let error = parse(text.as_bytes(), Syntax::Yaml, &Limits::default())
-        .expect_err("this document must be refused");
+    let error = parse(
+        text.as_bytes(),
+        Syntax::Yaml,
+        &Limits::default(),
+        Bound::Foreign,
+    )
+    .expect_err("this document must be refused");
     assert_eq!(error.kind().label(), "manifest.invalid");
     error.next_action().to_owned()
 }
@@ -195,6 +220,7 @@ fn a_word_that_looks_like_a_yes_is_a_word() {
         b"a: yes\nb: true\nc: \"true\"\nd: on\ne: 0755\nf: 12\n",
         Syntax::Yaml,
         &Limits::default(),
+        Bound::Foreign,
     )
     .unwrap();
     assert_eq!(
@@ -244,19 +270,19 @@ fn a_document_past_a_bound_is_refused_rather_than_read() {
         manifest_size: 8,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &small).is_err());
+    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &small, Bound::Foreign).is_err());
 
     let few = Limits {
         manifest_nodes: 3,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &few).is_err());
+    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &few, Bound::Foreign).is_err());
 
     let shallow = Limits {
         nesting_depth: 1,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &shallow).is_err());
+    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &shallow, Bound::Foreign).is_err());
 }
 
 #[test]
@@ -296,4 +322,51 @@ fn a_receipt_renders_with_the_widest_fingerprint_any_platform_can_produce() {
     )
     .expect("a receipt has to read back");
     assert_eq!(read, receipt);
+}
+
+#[test]
+fn a_receipt_for_a_large_tree_reads_back_after_it_is_written() {
+    use fetchloom_engine::digest::{ContentDigest, ManifestDigest, TreeDigest};
+    use fetchloom_engine::receipt::{Receipt, RecordedFingerprint};
+    use std::collections::BTreeMap;
+
+    const ENTRIES: usize = 20_000;
+
+    let mut fingerprints = BTreeMap::new();
+    for index in 0..ENTRIES {
+        fingerprints.insert(
+            format!("deep/tree/of/many/files/entry-{index:07}.bin"),
+            RecordedFingerprint {
+                volume: "1234567890abcdef".to_owned(),
+                file: format!("{index:016x}"),
+                size: 4096,
+                modified_nanos: "1788612484000000000".to_owned(),
+                changed_nanos: "1788612484000000000".to_owned(),
+            },
+        );
+    }
+
+    let written = Receipt {
+        dataset: "large".to_owned(),
+        manifest: ManifestDigest::from_bytes([1u8; 32]),
+        artifacts: BTreeMap::new(),
+        tree: Some(TreeDigest::from_bytes([2u8; 32])),
+        executable: Vec::new(),
+        fingerprints,
+        destination: std::path::PathBuf::from("large-destination"),
+        accepted_terms: None,
+        fetchloom: "0.1.0".to_owned(),
+        completed_at: fetchloom_engine::timestamp::Timestamp::from_epoch_seconds(1_788_612_484),
+    };
+
+    let rendered = written.render().unwrap();
+    let read = Receipt::parse(rendered.as_bytes(), &Limits::default());
+    assert!(
+        read.is_ok(),
+        "a receipt this run wrote for {ENTRIES} entries did not read back: {}, document is {} bytes",
+        read.as_ref().err().map_or("", |error| error.kind().label()),
+        rendered.len()
+    );
+    assert_eq!(read.unwrap(), written);
+    let _ = ContentDigest::from_bytes([3u8; 32]);
 }

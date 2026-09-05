@@ -9,6 +9,7 @@ use fetchloom_engine::limits::{Bandwidth, Limits};
 use crate::config::{ConfigFile, Discovered, Origin, Sourced};
 use crate::logging::LogLevel;
 use crate::surface::{ColorChoice, DisplayMode, DurationArg, GlobalFlags, IoChoice, TransferFlags};
+use fetchloom_engine::compression::CompressionChoice;
 
 pub trait Environment: Send + Sync {
     fn get(&self, name: &str) -> Option<String>;
@@ -51,9 +52,9 @@ pub struct Settings {
     pub concurrency: Sourced<Option<NonZeroU32>>,
     pub per_host: Sourced<Option<NonZeroU32>>,
     pub bandwidth: Sourced<Option<Bandwidth>>,
-    pub io: Sourced<IoChoice>,
+    pub(crate) io: Sourced<IoChoice>,
     pub aggressive: Sourced<bool>,
-    pub deterministic_io: Sourced<bool>,
+    pub(crate) deterministic_io: Sourced<bool>,
     pub log: Sourced<LogLevel>,
     pub log_clamped: bool,
     pub retries: Sourced<NonZeroU32>,
@@ -61,10 +62,11 @@ pub struct Settings {
     pub sources: Sourced<Vec<String>>,
     pub color: Sourced<ColorChoice>,
     pub hints: Sourced<bool>,
+    pub compress: Sourced<CompressionChoice>,
 }
 
 #[must_use]
-pub fn limits_for(settings: &Settings) -> Limits {
+pub(crate) fn limits_for(settings: &Settings) -> Limits {
     Limits {
         retry_attempts: settings.retries.value.get(),
         idle_timeout: settings.timeout.value,
@@ -210,6 +212,9 @@ where
     }
 }
 
+/// # Errors
+/// `Refused`, naming the setting that was given a value this build does not
+/// accept and the level it came from.
 pub fn resolve_all(
     flags: &GlobalFlags,
     transfer: &TransferFlags,
@@ -295,6 +300,7 @@ pub fn resolve_all(
         color,
         hints,
     } = resolve_presentation(flags, &levels)?;
+    let compress = resolve_compression(flags, &levels, environment)?;
 
     Ok(Settings {
         offline,
@@ -314,6 +320,7 @@ pub fn resolve_all(
         sources,
         color,
         hints,
+        compress,
     })
 }
 
@@ -416,6 +423,30 @@ fn resolve_tuning(
         aggressive,
         deterministic_io,
     })
+}
+
+fn resolve_compression(
+    flags: &GlobalFlags,
+    levels: &Levels<'_>,
+    environment: &dyn Environment,
+) -> Result<Sourced<CompressionChoice>, Refused> {
+    if let Some(chosen) = flags.compress {
+        return Ok(Sourced::new(chosen.0, Origin::CommandLine));
+    }
+    if let Some(chosen) =
+        from_environment::<CompressionChoice>(environment, "FETCHLOOM_COMPRESS", "compress")?
+    {
+        return Ok(Sourced::new(chosen, Origin::Environment));
+    }
+    if let Some((chosen, origin)) = from_files(
+        levels,
+        |file| file.compress.clone(),
+        |text| text.parse::<CompressionChoice>().ok(),
+        "compress",
+    )? {
+        return Ok(Sourced::new(chosen, origin));
+    }
+    Ok(Sourced::new(CompressionChoice::Auto, Origin::Default))
 }
 
 fn resolve_log(

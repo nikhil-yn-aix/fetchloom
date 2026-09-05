@@ -10,6 +10,7 @@ use serde as _;
 use serde_json as _;
 #[cfg(windows)]
 use windows_sys as _;
+use zstd as _;
 
 mod support;
 
@@ -164,9 +165,12 @@ fn a_volume_whose_locks_are_refused_is_refused_as_a_cache() {
     let refused = Cache::open(
         scratch.path().join("cache"),
         platform,
-        DurabilityTier::Fast,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Fast,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         std::sync::Arc::clone(&work),
         std::sync::Arc::new(
             fetchloom_engine::pool::Processor::new(

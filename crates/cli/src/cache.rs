@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fetchloom_cache::Cache;
+use fetchloom_engine::compression::CompressionChoice;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind};
@@ -19,23 +20,35 @@ use fetchloom_platform::NativePlatform;
 
 use crate::surface::CacheCommand;
 
-pub enum Opened {
+pub(crate) enum Opened {
     Ready(Box<Cache<NativePlatform>>),
     Degraded { reason: String },
     Refused(Box<Error>),
 }
 
 #[must_use]
-pub fn open(
+pub(crate) fn open(
     root: &Path,
     tier: DurabilityTier,
     policy: VerificationPolicy,
     io: IoMode,
+    compression: CompressionChoice,
     work: Arc<WorkCounter>,
     processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Opened {
     let platform = NativePlatform::new(Arc::clone(&work));
-    match Cache::open(root, platform, tier, policy, io, work, processor) {
+    match Cache::open(
+        root,
+        platform,
+        fetchloom_cache::CacheSettings {
+            tier,
+            policy,
+            io,
+            compression,
+        },
+        work,
+        processor,
+    ) {
         Ok(held) => Opened::Ready(Box::new(held)),
         Err(refused)
             if refused.kind() == ErrorKind::CacheFormatMismatch
@@ -52,6 +65,9 @@ pub fn open(
     }
 }
 
+/// # Errors
+/// The kinds `Cache::open` gives, which is how a run that needs a cache fails
+/// rather than continuing without one.
 pub fn require(
     root: &Path,
     work: Arc<WorkCounter>,
@@ -61,15 +77,23 @@ pub fn require(
     Cache::open(
         root,
         platform,
-        DurabilityTier::Normal,
-        VerificationPolicy::Fingerprint,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Normal,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: CompressionChoice::Auto,
+        },
         work,
         processor,
     )
 }
 
-pub fn report_degrade(observer: &dyn Observer, sequence: &Sequence, root: &Path, reason: &str) {
+pub(crate) fn report_degrade(
+    observer: &dyn Observer,
+    sequence: &Sequence,
+    root: &Path,
+    reason: &str,
+) {
     observer.emit(&Event::new(
         sequence,
         EventPayload::Degrade {

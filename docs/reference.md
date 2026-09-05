@@ -1,0 +1,302 @@
+# Reference
+
+Everything the binary accepts. For what each one promises, see [contracts.md](contracts.md).
+
+Anything marked **not built** is written down and not in the binary. There is no state where a flag exists and cannot act.
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `get <ref>` | Resolve, transfer, verify, unpack, record |
+| `init <url\|dir>` | Write a manifest for data that has none |
+| `plan <ref>` | Report what a run would do, move no bytes |
+| `apply <plan>` | Execute a plan, possibly made elsewhere |
+| `repair <ref>` | Refetch only the damaged ranges of a cached object |
+| `verify <path>` | Recheck a directory against the record of what was written |
+| `watch <events>` | Render a run's event stream, live or after the fact |
+| `cache <subcommand>` | Inspect and change what is kept between runs |
+| `doctor` | Check this machine, change nothing |
+| `why <ref>` | Explain a reference, its source, and its trust |
+| `explain [key]` | Every setting and where its value came from |
+| `completions <shell>` | Print a completion script |
+
+### cache subcommands
+
+| Subcommand | Does |
+|---|---|
+| `status` | Objects, bytes, partials, pins, quarantined |
+| `ls` | List objects by digest |
+| `verify` | Reread and rehash everything, quarantine each mismatch |
+| `repair` | Rebuild derived data from what the cache already holds |
+| `prune` | Remove what nothing refers to |
+| `clear` | Remove every object, after confirming |
+| `pin <digest>` | Keep an object from ever being pruned |
+| `unpin <digest>` | Remove that mark |
+| `export <bundle>` | Write every object into a bundle |
+| `import <bundle>` | Read a bundle in |
+
+## Reference forms
+
+| Form | Example |
+|---|---|
+| Bare name | `silesia` |
+| Namespaced with release | `acme/imagenet@2012` |
+| Local manifest | `./data.yaml` |
+| Remote manifest | `https://lab.edu/eeg.yaml` |
+| Direct file | `https://host/x.tar.zst` |
+| Local file or directory | `file:///data/raw` |
+| Object store prefix | `https://s3.amazonaws.com/bucket/prefix/` |
+| Provider | `hf:datasets/org/name@rev`, `zenodo:10.5281/zenodo.1234567` |
+| Metadata document | `croissant:https://host/metadata.json` |
+| Content address | `blake3:<hex>` |
+
+Resolution order: explicit scheme, then a local path if it exists, then each entry in `sources` in order. A bare name matching nothing fails. It is never guessed at.
+
+## Global flags
+
+Available on every command.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--config <path>` | discovered | Use this configuration file only |
+| `--no-config` | off | Ignore every configuration file |
+| `--cache-dir <path>` | platform default | Where the cache lives |
+| `--offline` | off | Forbid all network activity |
+| `--json` | off | Machine readable result on stdout |
+| `--events <path\|->` | off | Write the event stream here |
+| `--quiet` | off | No progress |
+| `--verbose` | off | Raise log level one step, repeatable |
+| `--color <auto\|always\|never>` | auto | When output is colored |
+| `--display <plain\|live\|none>` | plain | How progress is presented |
+| `--no-animation` | off | Do not redraw |
+| `--no-hints` | off | Never print a hint |
+| `--yes` | off | Answer every confirmation with yes |
+| `--threads <n>` | detected | Ceiling on threads for processor work |
+
+## Flags for get, plan and apply
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--output <path>` | `./<name>` | Destination directory |
+| `--select <glob>` | all | Include members, repeatable |
+| `--exclude <glob>` | none | Exclude members, applied after includes |
+| `--layout <keep\|flatten:n>` | keep | Drop the first n path components |
+| `--lock <path>` | `./fetchloom.lock` | Lock file location |
+| `--locked` | off | Fail if resolution differs from the lock |
+| `--no-cache` | off | Keep nothing from this run |
+| `--verify <always\|fingerprint\|never>` | fingerprint | What a cache hit is checked against |
+| `--force` | off | Overwrite modified entries, remove foreign ones |
+| `--adopt` | off | Accept the destination as it stands |
+| `--no-extract` | off | Keep a recognized archive as a file |
+| `--concurrency <n>` | measured | Transfers in flight across all hosts |
+| `--per-host <n>` | measured | Transfers in flight for one host |
+| `--bandwidth <rate>` | unlimited | Ceiling on transfer rate |
+| `--retries <n>` | 5 | Attempts per transient failure |
+| `--timeout <duration>` | 30s | Idle timeout inside a connection |
+| `--durability <strict\|normal\|fast>` | normal | How far a write is pushed before publication |
+| `--io <auto\|buffered\|uncached>` | auto | Write path |
+| `--aggressive` | off | Raise politeness ceilings, prints a warning |
+| `--deterministic-io` | off | Disable adaptation, for benchmarking |
+
+`repair` takes the transfer half of this list and refuses the rest, because it restores bytes in the cache and materializes nothing. `plan` refuses `--force` and `--adopt`, because it writes to no destination.
+
+### Flags for init
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--output <path>` | stdout | Write the manifest to a file |
+| `--force` | off | Overwrite the file `--output` names |
+
+## Environment
+
+| Variable | Effect |
+|---|---|
+| `FETCHLOOM_CACHE_DIR` | Cache location |
+| `FETCHLOOM_CONFIG` | Configuration file path |
+| `FETCHLOOM_OFFLINE` | Offline when set to `1` |
+| `FETCHLOOM_CONCURRENCY` | Global concurrency |
+| `FETCHLOOM_PER_HOST` | Per host concurrency |
+| `FETCHLOOM_THREADS` | Processor thread ceiling |
+| `FETCHLOOM_BANDWIDTH` | Bandwidth ceiling |
+| `FETCHLOOM_LOG` | `error`, `info`, or `debug` |
+| `FETCHLOOM_TOKEN_<HOST>` | Bearer credential for that host |
+| `FETCHLOOM_ACCESS_KEY_<HOST>` | Access key of a signing credential |
+| `FETCHLOOM_SECRET_KEY_<HOST>` | Secret key of the same credential |
+| `FETCHLOOM_SESSION_TOKEN_<HOST>` | Session token, when it has one |
+| `FETCHLOOM_REGION_<HOST>` | Region the credential signs for |
+| `AWS_ACCESS_KEY_ID` and friends | Read only by the provider native tier |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy policy |
+| `XDG_CACHE_HOME` | Cache root on Linux |
+| `NO_COLOR` | Disable color |
+
+## Configuration keys
+
+TOML. Manifests take three syntaxes because strangers write them. Configuration takes one because you write it, and one format means one parser and one set of error messages.
+
+| Key | Meaning |
+|---|---|
+| `sources` | Ordered base locations a bare name resolves against |
+| `cache` | Cache location, as `cache = { dir = "..." }` |
+| `offline` | Forbid network activity |
+| `concurrency`, `per_host` | In flight ceilings |
+| `bandwidth` | Rate ceiling |
+| `threads` | Processor thread ceiling |
+| `retries`, `timeout` | Retry policy |
+| `verify` | Cache hit verification policy |
+| `durability`, `io` | Write path |
+| `log` | Log level |
+| `color`, `display`, `hints` | Presentation |
+
+Unknown keys are an error. The `x-` prefix is reserved and refused.
+
+## Log levels
+
+A level decides which of the events the run already emits reach stderr, each as one JSON object. It never decides which events exist, and the stream `--events` writes is identical at every level.
+
+| Level | Rendered |
+|---|---|
+| `error` | `error` and `degrade` |
+| `info` | those, plus `run.start`, `run.end`, and the result. Default |
+| `debug` | every event, one line each |
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 2 | You asked for something that is not a command |
+| 10 | The reference could not be resolved |
+| 20 | The network failed after every retry |
+| 30 | The bytes are not what they were supposed to be |
+| 40 | Policy blocked the run |
+| 50 | Not enough disk, or a resource limit exceeded |
+| 60 | The destination is in the way |
+| 70 | The archive contains something unsafe |
+| 80 | The cache could not be used |
+| 130 | Cancelled |
+
+## Error kinds
+
+| Kind | Exit | What to do |
+|---|---|---|
+| `reference.unresolved` | 10 | Check the path or URL. The message says which |
+| `manifest.invalid` | 10 | The message names the key and the line |
+| `alias.unstable` | 10 | Run once without `--locked` to record what it resolves to now |
+| `network.timeout` | 20 | The source went quiet longer than the idle timeout |
+| `network.refused` | 20 | The connection did not complete |
+| `network.status` | 20 | The source answered with a status the run cannot use |
+| `network.tls` | 20 | The certificate could not be verified |
+| `source.unsupported_range` | 20 | A range was asked for and the whole object was served |
+| `source.identity_changed` | 20 | A source contradicted an immutable identity it stated |
+| `integrity.mismatch` | 30 | For a cached object, `repair <ref>`. For a directory, fetch again |
+| `integrity.truncated` | 30 | Run again, a resume picks up from what arrived |
+| `integrity.range_mismatch` | 30 | Run again, the partial is discarded first |
+| `policy.offline` | 40 | Drop `--offline`, or plan elsewhere and carry a bundle |
+| `policy.terms_required` | 40 | Run again with `--yes` |
+| `policy.trust_refused` | 40 | Run once without `--locked` |
+| `policy.credential_missing` | 40 | Follow the numbered steps the run printed |
+| `policy.credential_invalid` | 40 | Renew it or widen its scope |
+| `resource.disk` | 50 | A volume has no room for what the run needs |
+| `resource.limit` | 50 | A document or a pool exceeded a bound |
+| `destination.modified` | 60 | `--force` to overwrite, `--adopt` to accept |
+| `destination.foreign` | 60 | `--force` to remove, `--adopt` to accept |
+| `destination.unrepresentable` | 60 | The message names the member and what the volume said |
+| `destination.cross_volume` | 60 | Put the destination on the volume the staging is on |
+| `archive.unsafe_path` | 70 | A member path is unsafe, and the message says how |
+| `archive.link_escape` | 70 | A link resolves outside the destination |
+| `archive.collision` | 70 | Two members land on one path |
+| `archive.bomb` | 70 | More entries, bytes, or ratio than the limits allow |
+| `archive.unsupported` | 70 | A format or entry type this build does not carry |
+| `cache.locked` | 80 | Another process holds it. Run again |
+| `cache.corrupt` | 80 | `cache verify`, then `repair <ref>` |
+| `cache.format_mismatch` | 80 | `cache clear` |
+| `cache.cross_volume` | 80 | Put the cache on one volume |
+| `cache.locking_unsupported` | 80 | Put the cache somewhere local |
+
+## Events
+
+Newline delimited JSON. Every event carries a sequence number, a timestamp, the dataset, and where it applies the artifact.
+
+```
+run.start run.end
+resolve.start resolve.alias resolve.end
+plan.ready
+cache.hit cache.miss cache.wait
+credential.required credential.offer credential.declined
+listing.start listing.skipped listing.end
+source.probe source.selected source.failover
+transfer.start transfer.progress transfer.retry transfer.resume transfer.end
+verify.start verify.range verify.mismatch verify.end
+extract.start extract.reject extract.end
+publish.commit
+reconcile.outcome
+degrade
+error
+```
+
+`degrade` fires whenever any capability, optimization or trust level came out lower than what was asked for, and names what was requested, what was used, and why.
+
+## Archive formats
+
+| Name | What it is |
+|---|---|
+| `tar` | A POSIX ustar stream |
+| `tar+gzip`, `tar+zstd`, `tar+xz`, `tar+bzip2` | A tar inside that compression |
+| `zip` | A zip container, store and deflate only |
+| `gzip`, `zstd`, `xz`, `bzip2` | One compressed object, materialized as one file |
+
+The name and the bytes must agree. A file whose name ends in `tar` and whose header says otherwise fails with `archive.unsupported` naming both.
+
+## Metadata formats init can absorb
+
+Checksum sidecars, Croissant, Frictionless data packages, pooch registries, BagIt.
+
+Torrent and DVC are refused by name. A torrent states SHA-1 over pieces that span file boundaries and names a swarm rather than a location. A DVC file states MD5 or an ETag, and an ETag is supporting evidence, never content identity.
+
+## Limits
+
+All configurable. None may be raised past a ceiling that would allow unbounded memory or disk use.
+
+| Limit | Default |
+|---|---|
+| Archive entries | 1,000,000 |
+| Expanded bytes | 1 TiB |
+| Expansion ratio | 200 |
+| Nesting depth | 64 |
+| Redirects followed | 10 |
+| Manifest size | 16 MiB |
+| Manifest node count | 100,000 |
+| Record size | 256 MiB |
+| Record node count | 8,000,000 |
+| Retry attempts | 5 |
+| Retry ceiling | 60 s |
+| Outboard threshold | 64 MiB |
+| Outboard chunk group | 1 MiB |
+| Pack threshold | 1 MiB |
+| Split threshold | 64 MiB |
+| Repair spans | 64 |
+| Repair whole refetch share | 50 percent |
+| Listing entries | 500,000 |
+| Listing size | 16 MiB |
+| Connections to one host | 4 |
+| Connect timeout | 10 s |
+| Response header timeout | 30 s |
+| Idle timeout inside a body | 30 s |
+| Probed candidates | 4 |
+
+## Not built
+
+Written down, not in the binary. Each is refused as an unknown flag or command today rather than accepted and ignored.
+
+| Thing | What it would do |
+|---|---|
+| `--compress <auto\|none\|zstd:n>` | Compress cached objects. Measured at 3.4x for zstd-1 |
+| `--track` | Keep your edits and the link to upstream, instead of choosing one |
+| `status`, `diff`, `revert`, `promote` | Work with those tracked edits |
+| `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |
+| `probe <ref>`, `list <ref>` | Size and listing without fetching, for other tools to call |
+| `get` with no argument | Read a project manifest, the way `cargo build` reads a manifest |
+| Suggestions on a missed name | `did you mean ham10000?` with the command to run |
+| FTP, SFTP | Two more source protocols |
+| Installer, signed releases | Distribution |

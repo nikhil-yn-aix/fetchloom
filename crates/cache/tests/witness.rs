@@ -14,6 +14,7 @@ use serde_json as _;
 use tempfile as _;
 #[cfg(windows)]
 use windows_sys as _;
+use zstd as _;
 
 mod support;
 
@@ -136,5 +137,68 @@ fn a_witness_carrying_another_digest_never_corroborates_this_one() {
     assert_eq!(
         classify(None, digest(1), &held.witnesses(&key).unwrap()),
         TrustClass::Tofu
+    );
+}
+
+#[test]
+fn every_witness_a_run_can_write_carries_its_own_machine_so_none_of_them_corroborate() {
+    let (_scratch, held) = cache();
+    let key = key();
+    let mine = held.token().machine.clone();
+    for (origin, run) in [
+        ("https://a/x", "r1"),
+        ("https://b/x", "r2"),
+        ("https://c/x", "r3"),
+    ] {
+        held.record_witness(
+            &key,
+            Witness {
+                digest: digest(1),
+                machine: mine.clone(),
+                origin: origin.to_owned(),
+                run: RunId::new(run),
+                observed_at: Timestamp::now(),
+            },
+        )
+        .unwrap();
+    }
+    let witnesses = held.witnesses(&key).unwrap();
+    assert!(
+        witnesses.iter().all(|seen| seen.machine == mine),
+        "a witness in this cache was observed by a machine no run here could have been"
+    );
+    assert_eq!(
+        classify(None, digest(1), &witnesses),
+        TrustClass::Tofu,
+        "witnesses this machine wrote by itself corroborated, so corroborated is reachable and contracts.md must say so"
+    );
+}
+
+#[test]
+fn corroborating_needs_a_witness_from_a_machine_that_no_channel_in_this_build_delivers() {
+    let (_scratch, held) = cache();
+    let key = key();
+    let mine = held.token().machine.clone();
+    held.record_witness(
+        &key,
+        Witness {
+            digest: digest(1),
+            machine: mine.clone(),
+            origin: "https://a/x".to_owned(),
+            run: RunId::new("r1"),
+            observed_at: Timestamp::now(),
+        },
+    )
+    .unwrap();
+    let mut with_a_stranger = held.witnesses(&key).unwrap();
+    with_a_stranger.push(witness("another-machine", "https://b/x", "r2"));
+    assert_ne!(
+        with_a_stranger[1].machine, mine,
+        "the stranger was this machine, so the case being described is not the one being tested"
+    );
+    assert_eq!(
+        classify(None, digest(1), &with_a_stranger),
+        TrustClass::Corroborated,
+        "a second machine's witness did not corroborate, so the rule corroborated rests on has changed"
     );
 }

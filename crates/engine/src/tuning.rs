@@ -233,7 +233,7 @@ pub fn debt(rate: u64, moved: u64, elapsed: Duration) -> Duration {
     (whole + part).saturating_sub(elapsed)
 }
 
-pub const COLLAPSE_FRACTION: u64 = 4;
+const COLLAPSE_FRACTION: u64 = 4;
 
 pub const SUSTAINED_WINDOWS: usize = 8;
 

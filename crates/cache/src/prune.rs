@@ -21,6 +21,9 @@ struct Removable<L> {
     held: L,
 }
 
+/// # Errors
+/// `cache.corrupt` when the store cannot be walked or an object cannot be
+/// removed. An object another user owns is counted as skipped, not an error.
 pub fn run<P: Platform>(cache: &Cache<P>, grace: Duration) -> Result<PruneReport, Error> {
     let mut report = PruneReport::default();
     let now = nanos_now();

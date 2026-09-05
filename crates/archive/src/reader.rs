@@ -45,6 +45,9 @@ pub struct ArchiveReader<R> {
 }
 
 impl<R: Read + Seek + 'static> ArchiveReader<R> {
+    /// # Errors
+    /// `archive.unsupported` when the source cannot be measured or is not a
+    /// container this build reads.
     pub fn new(
         source: R,
         format: ArchiveFormat,

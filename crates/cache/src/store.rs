@@ -19,7 +19,7 @@ use fetchloom_engine::source_record::SourceRecord;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
 
-use crate::layout::{digest_of, name_of};
+use crate::layout::name_of;
 use crate::record::{self, ObjectRecord};
 use crate::{Cache, owner_record_of, source_record_of};
 
@@ -28,13 +28,11 @@ use fetchloom_engine::limits::STREAM_BUFFER_BYTES as RESUME_BUFFER_BYTES;
 #[derive(Debug)]
 pub struct ObjectReader<L> {
     bytes: crate::storage::Bytes,
+    #[expect(
+        dead_code,
+        reason = "the shared lease is held for the reader's lifetime, never read"
+    )]
     lease: L,
-}
-
-impl<L> ObjectReader<L> {
-    pub fn lease(&self) -> &L {
-        &self.lease
-    }
 }
 
 impl<L> Read for ObjectReader<L> {
@@ -83,27 +81,22 @@ impl Write for PartialWriter {
 pub struct WriteLease<L> {
     key: PartialKey,
     waited_for: Option<OwnerToken>,
+    #[expect(
+        dead_code,
+        reason = "the lock is held for the lease's lifetime, never read"
+    )]
     lock: L,
 }
 
 impl<L> WriteLease<L> {
     #[must_use]
-    pub fn key(&self) -> PartialKey {
-        self.key
-    }
-
-    #[must_use]
-    pub fn waited_for(&self) -> Option<&OwnerToken> {
+    fn waited_for(&self) -> Option<&OwnerToken> {
         self.waited_for.as_ref()
-    }
-
-    pub fn lock(&self) -> &L {
-        &self.lock
     }
 }
 
 impl<P: Platform> Cache<P> {
-    pub fn read_lease(&self, digest: ContentDigest) -> Result<P::Lock, Error> {
+    fn read_lease(&self, digest: ContentDigest) -> Result<P::Lock, Error> {
         self.platform.lock_shared(&self.layout.lock_of(digest))
     }
 
@@ -111,6 +104,10 @@ impl<P: Platform> Cache<P> {
         self.holds(digest)
     }
 
+    /// # Errors
+    /// `integrity.mismatch` when the verification policy rereads the object
+    /// and it does not hash to its name, and `cache.corrupt` when it cannot be
+    /// read at all.
     pub fn check_hit(&self, digest: ContentDigest) -> Result<(), Error> {
         self.check(digest)
     }
@@ -179,14 +176,18 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the object cannot be read to be hashed.
     pub fn object_is_its_digest(&self, digest: ContentDigest) -> Result<bool, Error> {
         Ok(self.hash_object(digest)? == digest)
     }
 
-    pub fn object_record(&self, digest: ContentDigest) -> PathBuf {
+    pub(crate) fn object_record(&self, digest: ContentDigest) -> PathBuf {
         self.layout.records().join(name_of(digest))
     }
 
+    /// # Errors
+    /// `cache.corrupt` when the quarantine directory cannot be walked.
     pub fn quarantined(&self) -> Result<Vec<ContentDigest>, Error> {
         Self::digests_in(&self.layout.quarantine())
     }
@@ -196,7 +197,7 @@ impl<P: Platform> Cache<P> {
         let mut found = Vec::new();
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str()
-                && let Some(digest) = digest_of(name)
+                && let Some(digest) = crate::layout::stored_digest_of(name)
             {
                 found.push(digest);
             }

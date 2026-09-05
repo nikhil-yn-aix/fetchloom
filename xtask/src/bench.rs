@@ -1441,9 +1441,12 @@ fn ingest_round(root: &Path, charged: Duration) -> Result<f64, BenchError> {
     let cache = fetchloom_cache::Cache::open(
         root.join("cache"),
         platform,
-        DurabilityTier::Strict,
-        VerificationPolicy::Always,
-        IoMode::Buffered,
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Strict,
+            policy: VerificationPolicy::Always,
+            io: IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::Auto,
+        },
         work,
         processor,
     )

@@ -28,7 +28,7 @@ impl BombGuard {
         }
     }
 
-    pub fn observe_entry(&mut self) -> Result<(), Error> {
+    pub(crate) fn observe_entry(&mut self) -> Result<(), Error> {
         self.entries += 1;
         if self.entries > self.limits.archive_entries {
             return Err(bomb(format!(
@@ -39,7 +39,7 @@ impl BombGuard {
         Ok(())
     }
 
-    pub fn observe_bytes(&mut self, count: u64) -> Result<(), Error> {
+    pub(crate) fn observe_bytes(&mut self, count: u64) -> Result<(), Error> {
         self.expanded_bytes = self.expanded_bytes.saturating_add(count);
         if self.expanded_bytes > self.limits.expanded_bytes {
             return Err(bomb(format!(
