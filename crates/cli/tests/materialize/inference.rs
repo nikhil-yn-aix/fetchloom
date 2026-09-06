@@ -389,18 +389,6 @@ fn a_namespaced_release_resolves_the_same_way() {
 }
 
 #[test]
-fn a_name_with_no_sources_configured_says_to_configure_one() {
-    let workspace = Workspace::new();
-    let output = workspace.run(&["get", "silesia", "--json"]);
-    assert_eq!(output.status.code(), Some(10));
-    let said = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(
-        said.contains("sources") && said.contains("fetchloom.toml"),
-        "the failure did not say how to configure a source: {said}"
-    );
-}
-
-#[test]
 fn a_name_that_matches_no_configured_source_is_never_guessed_at() {
     let workspace = Workspace::new();
     workspace.write(

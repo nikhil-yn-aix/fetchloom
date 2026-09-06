@@ -16,6 +16,7 @@ use windows_sys as _;
 pub mod cache;
 pub mod command;
 pub mod config;
+pub mod discover;
 pub mod doctor;
 pub mod explain;
 pub mod hint;

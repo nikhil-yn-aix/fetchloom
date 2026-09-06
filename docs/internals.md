@@ -48,6 +48,12 @@ HTTP/3 was measured too. The Rust implementation is still described as experimen
 
 Revisit when the workload changes, not before.
 
+## Why FTP was written rather than depended on
+
+FTP has not changed since RFC 3659 in 2007, so a dependency on it buys future maintenance of a protocol with no future. The crate that would have been taken brings `chrono` and `regex` transitively, and both exist in it only to read a date and a size out of a `LIST` line, which is an `ls` line meant for a person. `MLSD` states the same as fields, and `FEAT` was checked against every host this is meant to reach before the choice was made: NCBI and UCSC offer it, EBI and Ensembl do not, so the `LIST` fallback is real rather than theoretical and is a `degrade` rather than a silent equivalence.
+
+What is here is one control connection, one reply parser, `PASV`, and two listing readers, in one file. The TLS is the rustls already in the graph, so FTPS added no crate.
+
 ## Why no chunk deduplication
 
 Content defined chunking looked obviously worth it and measurement said no.

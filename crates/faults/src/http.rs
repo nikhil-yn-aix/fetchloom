@@ -206,6 +206,7 @@ pub struct Received {
     pub method: String,
     pub target: String,
     pub headers: Vec<(String, String)>,
+    pub body: String,
 }
 
 impl Received {
@@ -386,10 +387,20 @@ fn read_request(reader: &mut BufReader<&TcpStream>) -> Option<Received> {
         let (name, value) = header.split_once(':')?;
         headers.push((name.trim().to_lowercase(), value.trim().to_owned()));
     }
+    let length: usize = headers
+        .iter()
+        .find(|(named, _)| named == "content-length")
+        .and_then(|(_, value)| value.parse().ok())
+        .unwrap_or(0);
+    let mut body = vec![0_u8; length];
+    if length > 0 {
+        reader.read_exact(&mut body).ok()?;
+    }
     Some(Received {
         method,
         target,
         headers,
+        body: String::from_utf8_lossy(&body).into_owned(),
     })
 }
 

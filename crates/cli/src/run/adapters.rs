@@ -41,6 +41,7 @@ pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
                 }),
         )
         .chain([
+            AnySource::new(fetchloom_sources::FtpSource::new(*limits, Arc::clone(work))),
             AnySource::new(ObjectStoreSource::new(*limits, Arc::clone(work))),
             AnySource::new(HttpSource::new(*limits, Arc::clone(work))),
         ])

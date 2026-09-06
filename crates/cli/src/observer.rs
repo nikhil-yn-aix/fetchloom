@@ -215,7 +215,7 @@ impl Observer for Fanout {
     }
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     #[expect(
         clippy::cast_precision_loss,

@@ -10454,3 +10454,125 @@ Sources: `crates/engine/src/erased.rs`; `crates/cli/src/run/dataset.rs`;
 `crates/cli/tests/transfer/adapters.rs`
 `a_mirror_list_spanning_two_adapters_falls_through_from_one_to_the_other`;
 `crates/cli/tests/transfer/probe.rs`.
+
+---
+
+## FTP is written here rather than taken as a dependency
+
+FTP stopped changing in 2007. RFC 3659 added `MLSD`, `SIZE` and `MDTM`, and
+nothing has been added since. A dependency on a protocol library buys future
+maintenance, and there is no future here to maintain.
+
+`suppaftp` is the crate that would have been taken. Its sync rustls path needs
+`chrono`, `lazy-regex` and therefore `regex`, `thiserror` and `log`, none of
+which are in the graph today, and `deny.toml` sets `multiple-versions = "deny"`,
+so each one is a version constraint on everything else forever. Twelve to fifteen
+crates into a hand-curated allow list, for one frozen protocol, in a repository
+that already wrote its own tar reader, zip reader and glob matcher.
+
+What those crates are for is the tell. `chrono` and `regex` exist in that
+dependency to parse `LIST` output, which is an `ls` line meant for a person: a
+date in one of several formats, a size in one of several columns, and no way to
+know which. `MLSD` states the same facts as fields, and `FEAT` was checked live
+against every server this is meant to reach.
+
+    ftp.ncbi.nlm.nih.gov   MLST modify*;perm*;size*;type*;unique*;UNIX...
+    hgdownload.soe.ucsc.edu MLST modify*;perm*;size*;type*;unique*;UNIX...
+    ftp.ebi.ac.uk          no MLSD; EPRT EPSV MDTM PASV REST STREAM SIZE TVFS
+    ftp.ensembl.org        no MLSD; the same, being the same vsftpd
+
+So NCBI and UCSC answer `MLSD` and EBI and Ensembl do not, which is the opposite
+of what was assumed before the check. The fallback to `LIST` is therefore not
+theoretical, and it is a `degrade` rather than a silent equivalence: a name and a
+size read out of an `ls` line are a guess where `MLSD` states them.
+
+The whole of it is `crates/sources/src/ftp.rs`, which is one control connection,
+one reply parser, `PASV`, and two listing readers. `rustls-platform-verifier` was
+added as a direct dependency of `sources` because the FTPS handshake is made
+here rather than inside `ureq`; it was already in the graph through `ureq`, so no
+crate was added to `deny.toml`.
+
+Sources: `crates/sources/src/ftp.rs`; `crates/sources/src/tls.rs`;
+`crates/sources/tests/ftp.rs`; `crates/faults/src/ftp.rs`.
+
+---
+
+## A PASV reply names a host, and the host it names is not used
+
+`PASV` answers with four bytes of address and two of port. Following the address
+is the bounce attack: a server that answers with someone else's address makes the
+client open a connection to a third party, and on a client that then sends data
+it makes the client the attacker.
+
+The port is honored and the address is discarded. The data connection is opened
+to the peer the control connection is already connected to, which is the only
+host this run has any business talking to. A reply naming another address is not
+quietly corrected: it fails with `network.refused` naming both the address the
+server gave and the address the control connection holds, because a server doing
+this is either broken behind a NAT it was not told about or hostile, and both are
+worth saying out loud.
+
+The rejected alternative was to accept the address when it is in the same subnet,
+or when it is not a private range, or some other rule that is right most of the
+time. There is no case where following it is necessary: a server behind NAT that
+answers with its internal address is served correctly by ignoring the address,
+which is what `EPSV` was standardized for and what every client does in practice.
+
+Active mode was not implemented at all, so no run ever listens for an inbound
+connection.
+
+Sources: `crates/sources/src/ftp.rs` `Control::passive`;
+`crates/sources/tests/ftp.rs`
+`a_data_connection_the_server_points_at_another_host_is_refused_by_name`.
+
+---
+
+## A name resolves to exactly one record or to none, and never to a choice
+
+`reference.md` has always said a bare name matching nothing fails and is never
+guessed at. What changed is what counts as matching: with no `sources`
+configured, the name is searched for across the eight registries that offer
+search, in parallel.
+
+Every search endpoint was checked against a live response first, because the
+previous session found four providers whose own documentation was wrong about
+their API. Two more were wrong here. Figshare's `/v2/articles/search` answers a
+`GET` with `404 predicate mismatch for view ArticlesPublicView (request_method =
+POST)`, and `/v2/articles?search_for=` answers `200` with the newest articles
+rather than a search, so a `GET` that looked like it worked would have returned
+plausible nonsense. OpenML answers `412 {"error":{"code":"372","message":"No
+results"}}` where every other registry answers an empty list, so a status check
+alone would have reported a broken registry for every name it does not hold.
+`data.gov.uk` answers HTML to `/api/3/action/package_search` and
+`catalog.data.gov` answers `404 {"message":"Not Found"}` to the same path, so
+neither is the CKAN default; `data.humdata.org` is, being a live install that
+answers the documented shape with a populated index. A CKAN reference names its
+own host, so the default only decides where a bare name is searched.
+
+The three outcomes are the whole contract. One record carrying the name proceeds.
+Several refuse and print each with its size, its provenance and what it states
+about its bytes, plus the exact command for each, because two registries holding
+a name is not two copies of one dataset: it may be different preprocessing, a
+different version, or an unrelated record that happens to share a word. None
+fails, naming the nearest names within three edits.
+
+Choosing for the user was rejected in every form. There is no "most downloaded",
+no "prefer the one with a checksum", no first-match-wins over a registry
+ordering. A tie broken by a heuristic is a wrong dataset fetched silently, and
+the failure mode of refusing is that the user pastes one line.
+
+A registry that fails to answer is a registry that found nothing, not a run that
+failed, so one rate-limited host does not take the search down. A registry that
+answers something that is not the shape it documents is a failure, because that
+is a broken registry and reporting it as no results hides it.
+
+The name is never written to a lock; what it resolved to is. Writing the name
+would mean a locked run re-searching and possibly resolving elsewhere, which
+trades away the one thing a lock is for.
+
+Discovery runs only when no `sources` list is configured. A configured list is
+the user saying where to look, and searching elsewhere after it misses would
+contradict that.
+
+Sources: `crates/sources/src/search.rs`; `crates/cli/src/discover.rs`;
+`crates/cli/src/resolve.rs` `resolve_reference`; `crates/sources/tests/search.rs`.

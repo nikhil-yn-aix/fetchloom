@@ -195,6 +195,10 @@ const PERMITTED: &[(&str, &str)] = &[
         "EntryPath::new",
     ),
     (
+        "a socket, which fails as a connection and never as a path on a volume",
+        "fn socket_failure",
+    ),
+    (
         "the compressor refusing the bytes it was handed, which is the codec answering and never a path on a volume",
         "fn codec_failure",
     ),

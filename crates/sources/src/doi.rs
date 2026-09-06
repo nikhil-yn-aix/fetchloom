@@ -173,7 +173,7 @@ fn figshare_article(name: &str) -> Option<&str> {
         .filter(|held| !held.is_empty())
 }
 
-fn routed(name: &str, landing: &str) -> Option<String> {
+pub(crate) fn routed(name: &str, landing: &str) -> Option<String> {
     let host = host_of(landing)?;
     if let Some(persistent) = persistent_id(landing) {
         return Some(format!("dataverse:{host}/{persistent}"));

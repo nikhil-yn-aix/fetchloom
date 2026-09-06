@@ -24,7 +24,8 @@ file:///D:/raw                           a folder on this machine
 https://s3.amazonaws.com/bucket/prefix/  everything under a prefix
 hf:datasets/org/name@rev                 a provider
 blake3:9f2c...                           bytes by their digest
-silesia                                  a name, if you configured a source for it
+ftp://ftp.ebi.ac.uk/pub/                 a directory on an FTP server
+ham10000                                 a name, searched for across the registries
 ```
 
 Eight providers are reached by their own identifier rather than by a location.
@@ -52,7 +53,69 @@ fetchloom get doi:10.7910/DVN/OMV93V
 
 It reads the registration, works out which provider holds the record, and tells you what it decided. A DOI belonging to a provider it has no adapter for stops and says which provider that is, rather than guessing at an API.
 
-A folder, an object store prefix, a WebDAV directory, or a generated HTML index all expand to the files inside them. It lists what you point at. It does not follow links out of that prefix and it never opens a file to find more work.
+A folder, an object store prefix, a WebDAV directory, an FTP directory, or a generated HTML index all expand to the files inside them. It lists what you point at. It does not follow links out of that prefix and it never opens a file to find more work.
+
+## FTP, when that is what the data is on
+
+Much of public biology is still on FTP, so `get` speaks it.
+
+```
+fetchloom get ftp://ftp.ncbi.nlm.nih.gov/genomes/README.txt
+fetchloom get ftp://ftp.ebi.ac.uk/pub/databases/ --output ebi
+```
+
+You log in as anonymous unless you say otherwise. An interrupted transfer resumes from where it stopped.
+
+`ftp://` tries to encrypt the connection and tells you when the server would not let it. Write `ftps://` and it will not go on unencrypted at all.
+
+```
+fetchloom get ftps://host/pub/reads.fastq.gz
+```
+
+There is no flag that turns that off, and if you have set a password for a host it is never sent over a connection that could not be encrypted. If you need one, set it as `user:password`.
+
+```
+setx FETCHLOOM_TOKEN_HOST_EXAMPLE "someone:their-password"
+```
+
+SFTP is a different protocol and this does not speak it.
+
+## Finding something by name
+
+If you know what the dataset is called but not where it is, just say the name.
+
+```
+fetchloom get ham10000
+```
+
+With no `sources` in your configuration it searches Hugging Face, Kaggle, OpenML, Zenodo, Figshare, CKAN, Dataverse and DataCite at once, and one of three things happens.
+
+One place has it, so it tells you what it took and gets on with it.
+
+```
+resolved ham10000 to kaggle:kmader/skin-cancer-mnist-ham10000
+```
+
+Several places have it, so it stops and shows you, because they may not be the same data.
+
+```
+name one of them, because ham10000 matched 2 records and a name is never guessed at:
+  kaggle:kmader/skin-cancer-mnist-ham10000 — Skin Cancer MNIST: HAM10000, 5.2 GiB, no checksum, so a first fetch is trusted on first use
+    fetchloom get kaggle:kmader/skin-cancer-mnist-ham10000
+  dataverse:dataverse.harvard.edu/doi:10.7910/DVN/LZJTKO — Segmented HAM10000, an unstated size, a checksum the install states, verified when it is SHA-256
+    fetchloom get dataverse:dataverse.harvard.edu/doi:10.7910/DVN/LZJTKO
+```
+
+Copy whichever line you want. Nowhere has it, and it tells you what came closest.
+
+```
+did you mean one of these, because ham10k matched nothing exactly:
+  ham10000
+    fetchloom get kaggle:kmader/skin-cancer-mnist-ham10000
+```
+
+The name is never what goes in the lock. What it resolved to goes in, so the first run searches and every run after it goes straight there.
+
 
 ## Where things land
 

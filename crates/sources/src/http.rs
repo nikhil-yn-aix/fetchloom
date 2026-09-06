@@ -94,6 +94,34 @@ impl HttpSource {
         credential: Option<&Credential>,
         asking: &Validator,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
+        self.sent(method, location, range, credential, asking, None)
+    }
+
+    pub(crate) fn send_json(
+        &self,
+        location: &str,
+        body: &str,
+        credential: Option<&Credential>,
+    ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
+        self.sent(
+            Method::Post,
+            location,
+            None,
+            credential,
+            &Validator::default(),
+            Some(body),
+        )
+    }
+
+    fn sent(
+        &self,
+        method: Method,
+        location: &str,
+        range: Option<ByteRange>,
+        credential: Option<&Credential>,
+        asking: &Validator,
+        body: Option<&str>,
+    ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
         fetchloom_engine::network::allowed(location)?;
         let start = Origin::of(location)?;
         let mut current = location.to_owned();
@@ -113,32 +141,23 @@ impl HttpSource {
             }
 
             let agent = self.agent(here.host());
-            let mut request = match method {
-                Method::Head => agent.head(&current),
-                Method::Get => agent.get(&current),
+            let asked = Asked {
+                credential: carried,
+                location: &current,
+                host: here.host(),
+                method,
+                range,
+                asking,
             };
-            if let Some(credential) = carried {
-                for (name, value) in authorizing_headers(credential, &current, here.host(), method)
-                {
-                    request = request.header(name, &value);
-                }
-            }
-            if let Some(range) = range {
-                request = request.header(
-                    "Range",
-                    &format!("bytes={}-{}", range.start, range.end.saturating_sub(1)),
-                );
-            }
-            if let Some(tag) = asking.etag.as_deref() {
-                request = request.header("If-None-Match", tag);
-            }
-            if let Some(since) = asking.last_modified.as_deref() {
-                request = request.header("If-Modified-Since", since);
-            }
             self.work.issued_request();
-            let answer = request
-                .call()
-                .map_err(|reason| transport_failure(&current, &reason))?;
+            let answer = match method {
+                Method::Head => decorated(agent.head(&current), &asked).call(),
+                Method::Get => decorated(agent.get(&current), &asked).call(),
+                Method::Post => decorated(agent.post(&current), &asked)
+                    .header("Content-Type", "application/json")
+                    .send(body.unwrap_or_default()),
+            }
+            .map_err(|reason| transport_failure(&current, &reason))?;
 
             let status = answer.status().as_u16();
             let Some(next) = redirect_target(&answer, status) else {
@@ -158,10 +177,46 @@ impl HttpSource {
     }
 }
 
+struct Asked<'a> {
+    credential: Option<&'a Credential>,
+    location: &'a str,
+    host: &'a str,
+    method: Method,
+    range: Option<ByteRange>,
+    asking: &'a Validator,
+}
+
+fn decorated<Any>(
+    mut request: ureq::RequestBuilder<Any>,
+    asked: &Asked<'_>,
+) -> ureq::RequestBuilder<Any> {
+    if let Some(credential) = asked.credential {
+        for (name, value) in
+            authorizing_headers(credential, asked.location, asked.host, asked.method)
+        {
+            request = request.header(name, &value);
+        }
+    }
+    if let Some(range) = asked.range {
+        request = request.header(
+            "Range",
+            &format!("bytes={}-{}", range.start, range.end.saturating_sub(1)),
+        );
+    }
+    if let Some(tag) = asked.asking.etag.as_deref() {
+        request = request.header("If-None-Match", tag);
+    }
+    if let Some(since) = asked.asking.last_modified.as_deref() {
+        request = request.header("If-Modified-Since", since);
+    }
+    request
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Method {
     Head,
     Get,
+    Post,
 }
 
 fn path_and_query(location: &str) -> (String, String) {
@@ -196,6 +251,7 @@ fn authorizing_headers(
             method: match method {
                 Method::Head => "HEAD",
                 Method::Get => "GET",
+                Method::Post => "POST",
             },
             path: &path,
             query: &query,

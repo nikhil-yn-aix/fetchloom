@@ -17,7 +17,13 @@ struct Subject {
     fetched_tree: &'static str,
 }
 
-const SUBJECTS: [Subject; 3] = [
+const SUBJECTS: [Subject; 4] = [
+    Subject {
+        location: "ftp://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz",
+        name: "hello-over-ftp",
+        entries: 462,
+        fetched_tree: "blake3:516b098d76cd000fe6001281327f1752d89d3cf9d5bbe39bc74ece250f22bbec",
+    },
     Subject {
         location: "https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz",
         name: "hello",
@@ -117,7 +123,39 @@ pub fn run(workspace: &Path, binary: Option<&Path>) -> Outcome {
             ));
         }
     }
+    if let Some(complaint) = discovery_names_what_it_found(&binary, &root) {
+        return complaint;
+    }
     Outcome::Passed
+}
+
+fn discovery_names_what_it_found(binary: &Path, root: &Path) -> Option<Outcome> {
+    let output = Command::new(binary)
+        .arg("--no-config")
+        .arg("get")
+        .arg("iris")
+        .arg("--output")
+        .arg(root.join("iris"))
+        .arg("--cache-dir")
+        .arg(root.join("cache"))
+        .arg("--json")
+        .output()
+        .ok()?;
+    let said = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if said.contains("network.") {
+        return Some(Outcome::Skipped(
+            "the registries could not be reached for the discovery subject".to_owned(),
+        ));
+    }
+    if output.status.success() {
+        return None;
+    }
+    if said.contains("fetchloom get openml:") || said.contains("did you mean") {
+        return None;
+    }
+    Some(Outcome::Failed(format!(
+        "a name every registry holds several of neither resolved nor named the records it found: {said}"
+    )))
 }
 
 fn disagrees(subject: &Subject, body: &str) -> Option<String> {

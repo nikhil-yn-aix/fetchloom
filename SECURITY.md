@@ -47,3 +47,5 @@ Query parameter values are redacted as a class rather than by a list of sensitiv
 Fetchloom lists what you point at and never follows a link outside that prefix, never opens a file to discover more work, and never executes anything.
 
 TLS verification is on and there is no flag or configuration key that turns it off.
+
+An FTP data connection is opened to the address the control connection is already talking to. The address a `PASV` reply names is read for its port and discarded, so a server cannot point a transfer at a third party. A reference written `ftps://` fails rather than continuing in the clear, no flag turns that off, and a credential resolved for a host is never sent over a control connection that could not be secured. SFTP is not spoken.

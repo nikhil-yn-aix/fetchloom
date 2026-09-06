@@ -44,7 +44,13 @@ The canonical text form written to a file uses the same ordering, writes every s
 
 ## References
 
-Resolution order is deterministic: explicit scheme, then a local path if it exists, then each configured source in order. A bare name matching nothing fails. It is never guessed at.
+Resolution order is deterministic: explicit scheme, then a local path if it exists, then each configured source in order. A name matching none of the configured sources fails. It is never guessed at.
+
+A name with no source configured is searched for across every registry that offers search, run in parallel, and a registry that fails is a registry that found nothing rather than a run that failed. Exactly one record carrying the name resolves to it; several refuse, naming each with its size, where it came from, what it states about its bytes, and the command that would take it; none fails, naming the nearest names it did find. There is no fourth outcome and nothing is chosen for the user.
+
+A name is never written to a lock. What it resolved to is, so the first run searches and every run after is exact. Writing the name would trade pinning away to save typing, and a lock exists to say what was fetched rather than what was asked for.
+
+A name matches a record when both fold to the same letters and digits, so case and punctuation do not separate them. A record within three edits of the term is suggested and never resolved to, because a near name is a question and not an answer.
 
 A local path is read as a manifest when its extension is one a manifest is written in, and as data otherwise. Nothing else decides it, and a directory is never searched for one.
 
@@ -135,6 +141,8 @@ A partial carries a record beside it holding the redacted location, host, stated
 A partial is preallocated to its full length, so its size on disk says nothing about how much arrived. The recorded byte count is the only offset a resume may append at, and anything past it is discarded first. A count behind what arrived costs a refetch; one ahead would be corruption, so it is only written after the bytes are.
 
 `If-Range` is sent only on rung three and carries only a strong entity tag. A range answered `200` rather than `206` means the server ignored it, so the partial is discarded and the rung it fell to is reported. A `416` is answered once by rereading the length and remaking the request; a second is terminal.
+
+Over FTP the rung is four. `MDTM` is a weak validator, `REST` states the offset the transfer restarts at, and a server whose `FEAT` does not offer `REST` reports that it accepts no ranges, so a partial is never appended to at an offset the server would ignore.
 
 ## Verification
 
@@ -377,7 +385,9 @@ Terms are never accepted automatically. If a manifest records `requires_acceptan
 
 A reference naming a container is expanded by listing it. Fetchloom lists. It does not crawl.
 
-Supported: object store listing APIs, provider repository and record APIs, WebDAV `PROPFIND`, and standard generated HTML indexes. FTP is not spoken, so an FTP directory is not a container this build lists.
+Supported: object store listing APIs, provider repository and record APIs, WebDAV `PROPFIND`, standard generated HTML indexes, and FTP directories.
+
+An FTP directory is listed with `MLSD`, which states each member's type and size as fields rather than as a line meant for a person. A server that refuses `MLSD` is listed with `LIST` and a `degrade` names the fallback, because reading a name and a size out of an `ls` line is guesswork where a machine-readable listing is not. A listing is walked into the directories it names, and a member name that is absolute, holds a separator, or is `.` or `..` is refused with `reference.unresolved`, because a listing is a stranger's document.
 
 Only entries at or below the given prefix are considered. Links pointing outside the prefix are ignored and counted in the result. Nothing is discovered from the contents of files. No script is executed. Entry count is bounded. An index that is not recognized fails with `reference.unresolved` and is never guessed at.
 
@@ -392,6 +402,22 @@ A DOI names a registration, and a registration names a landing page rather than 
 Routing reads the landing page rather than the registrant identity, because a registrant enumerates who paid for the prefix, one per installation, where the landing page names the installation that holds the record, which is the thing a multiplier's reference has to carry.
 
 A file inside a record is named by the record's reference and the path the listing gave it. The listing remembers where each of its own members is fetched from, so naming one costs no further request. A reference that names a file without the listing having been read is resolved by reading the record it names.
+
+## FTP
+
+FTP is spoken here rather than taken as a dependency. `USER` and `PASS` with anonymous as the default, `TYPE I`, `PASV`, `SIZE`, `MDTM`, `REST` then `RETR`, `MLSD` with a `LIST` fallback, and `QUIT`. Nothing else is sent.
+
+The data connection is passive and is never active, so no run listens for an inbound connection. A `PASV` reply names a host and a port. The port is used and the host is not: the data connection is opened to the address the control connection is already talking to, and a reply naming any other host is refused with `network.refused` naming both addresses. A server that could redirect a client's data connection to a third party is the bounce attack, and it is refused by name rather than by luck.
+
+`ftps://` secures the control connection with explicit `AUTH TLS`, then `PBSZ 0` and `PROT P` so the data connection is secured too. There is no flag that turns that off, and no implicit FTPS on port 990, which is deprecated. A server that refuses `AUTH TLS` fails an `ftps://` reference with `network.tls`, and no user name or password is sent to it.
+
+`ftp://` attempts `AUTH TLS` first and falls back to the clear when it is refused, emitting a `degrade` that says every command and every byte travels unencrypted. A credential resolved for the host is never sent over a control connection that could not be secured: the run fails with `policy.credential_invalid` naming `ftps://` as the way to send it, because a password in the clear is worse than a run that did not happen.
+
+A bearer credential for an FTP host is read as `user:password`, and a value with no separator is the user name with an empty password. `SIZE` and `MDTM` are the probe. `MDTM` is a weak validator, so an FTP resume stands on rung four: `REST` states the offset and the whole object is verified at completion.
+
+An FTP source states no checksum, so a first fetch is `tofu` and a locked run compares the digest the lock pins.
+
+SFTP is not spoken, and is refused as a scheme this build does not serve rather than being attempted over FTP.
 
 ## Output
 

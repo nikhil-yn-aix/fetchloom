@@ -150,7 +150,18 @@ pub(crate) fn resolve_reference(
             return Ok(candidate.clone());
         }
     }
-    Err(unmatched(reference, candidates.len()))
+    if !sources.is_empty() || fetchloom_engine::network::forbidden() {
+        return Err(unmatched(reference, candidates.len()));
+    }
+    let found = crate::discover::searched(reference, policy, *policy.limits(), work)?;
+    observer.emit(&Event::new(
+        sequence,
+        EventPayload::ResolveAlias {
+            from: reference.to_owned(),
+            to: fetchloom_engine::redact::SafeUrl::new(&found).to_string(),
+        },
+    ));
+    Ok(found)
 }
 
 pub(crate) fn manifest_from_metadata(

@@ -56,10 +56,24 @@ Anything marked **not built** is written down and not in the binary. There is no
 | CKAN dataset | `ckan:demo.ckan.org/a-dataset` |
 | Dataverse dataset | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/OMV93V` |
 | DOI | `doi:10.7910/DVN/OMV93V` |
+| FTP file or directory | `ftp://ftp.ncbi.nlm.nih.gov/pub/README`, `ftp://ftp.ebi.ac.uk/pub/` |
+| FTPS file or directory | `ftps://host/pub/reads.fastq.gz` |
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
 
-Resolution order: explicit scheme, then a local path if it exists, then each entry in `sources` in order. A bare name matching nothing fails. It is never guessed at.
+Resolution order: explicit scheme, then a local path if it exists, then each entry in `sources` in order. A name matching none of the configured sources fails. It is never guessed at.
+
+A name with no `sources` configured is searched for instead, across every registry that offers search, in parallel: Hugging Face, Kaggle, OpenML, Zenodo, Figshare, CKAN at data.humdata.org, Dataverse at dataverse.harvard.edu and DataCite. Three outcomes and no fourth.
+
+| Outcome | What happens |
+|---|---|
+| One record carries the name | The run proceeds, prints what the name resolved to, and records the resolved reference in the lock |
+| Several records carry it | Every one is printed with its size, where it came from and what it states about its bytes, the run refuses, and the exact command for each is given |
+| None carries it | The run fails, naming the nearest names it did find and the command for each |
+
+A name never enters a lock. What it resolved to does, so the first run searches and every run after is exact.
+
+Matching folds case and drops anything that is not a letter or a digit, so `HAM-10000` and `ham10000` are the same name. A record whose name is within three edits of the term is near enough to suggest and never near enough to resolve to.
 
 ## Global flags
 
@@ -156,6 +170,7 @@ What each provider needs, and what it states about the bytes it serves.
 | Figshare | None | | MD5 only, which is not carried |
 | CKAN | Not built. A CKAN install that refuses an anonymous request fails naming the status | | `hash`, carried only when it is written `sha256:<hex>` |
 | Dataverse | Not built. Dataverse authenticates with an `X-Dataverse-key` header rather than `Authorization`, and the credential seam has no per-adapter header name | | The `checksum` the install records, carried only when its `type` is SHA-256 |
+| FTP, FTPS | Anonymous by default. A bearer credential written `user:password` logs in as that user, and is refused unless the control connection is secured | `FETCHLOOM_TOKEN_<HOST>` | None. FTP states no checksum, so a first fetch is `tofu` |
 
 A variable named for the host is read before the provider's own, and holds the whole `Authorization` header rather than a bare token, which is how a header other than `Bearer` is sent. The provider's own variable holds the bare token the provider prints, and is sent as `Bearer` followed by it.
 
@@ -336,7 +351,5 @@ Written down, not in the binary. Each is refused as an unknown flag or command t
 | `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |
 | `probe <ref>`, `list <ref>` | Size and listing without fetching, for other tools to call |
 | `get` with no argument | Read a project manifest, the way `cargo build` reads a manifest |
-| Suggestions on a missed name | `did you mean ham10000?` with the command to run |
-| FTP, FTPS | One more source protocol, with resume by REST and TLS that no flag turns off |
 | SFTP | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own SECURITY.md section |
 | Installer, signed releases | Distribution |

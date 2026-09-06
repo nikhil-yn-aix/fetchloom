@@ -10,6 +10,7 @@ use sha2 as _;
 
 use rustls as _;
 use rustls_graviola as _;
+use rustls_platform_verifier as _;
 use ureq as _;
 
 use std::io::Read;

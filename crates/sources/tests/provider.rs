@@ -8,6 +8,7 @@
 
 use rustls as _;
 use rustls_graviola as _;
+use rustls_platform_verifier as _;
 use serde_json as _;
 use sha2 as _;
 use ureq as _;
