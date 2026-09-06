@@ -193,6 +193,7 @@ fn a_third_adapter_that_states_it_serves_a_reference_is_the_one_a_run_uses() {
         name: "invented".to_owned(),
         release: None,
         license: None,
+        derived_from: None,
         artifacts: vec![fetchloom_engine::manifest::Artifact {
             id: "object".to_owned(),
             sources: vec![format!("{SCHEME}host/object")],
@@ -308,6 +309,7 @@ fn a_mirror_list_spanning_two_adapters_falls_through_from_one_to_the_other() {
         name: "mirrored".to_owned(),
         release: None,
         license: None,
+        derived_from: None,
         artifacts: vec![fetchloom_engine::manifest::Artifact {
             id: "object".to_owned(),
             sources: vec![

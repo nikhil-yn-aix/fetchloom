@@ -23,6 +23,7 @@ pub(crate) fn from_directory(
     root: &Path,
     processor: &Processor,
     limits: &Limits,
+    into: Option<&fetchloom_cache::Cache<fetchloom_platform::NativePlatform>>,
 ) -> Result<Manifest, Error> {
     let walked = crate::materialize::walk(root)?;
     if !walked.links.is_empty() {
@@ -38,26 +39,34 @@ pub(crate) fn from_directory(
     let mut artifacts = Vec::new();
     for file in &walked.files {
         let path = walked.root.join(&file.relative);
-        let opened = std::fs::File::open(&path).map_err(|reason| {
-            Error::new(
-                ErrorKind::ReferenceUnresolved,
-                format!("make {} readable: {reason}", path.display()),
-            )
-        })?;
-        let digests = digester.hash(processor, opened).map_err(|reason| {
-            Error::new(
-                ErrorKind::ReferenceUnresolved,
-                format!("make {} readable: {reason}", path.display()),
-            )
-        })?;
+        let (content, interop, length) = if let Some(cache) = into {
+            let ingested = cache.ingest(&path)?;
+            (ingested.digest, ingested.interop, ingested.size)
+        } else {
+            {
+                let opened = std::fs::File::open(&path).map_err(|reason| {
+                    Error::new(
+                        ErrorKind::ReferenceUnresolved,
+                        format!("make {} readable: {reason}", path.display()),
+                    )
+                })?;
+                let digests = digester.hash(processor, opened).map_err(|reason| {
+                    Error::new(
+                        ErrorKind::ReferenceUnresolved,
+                        format!("make {} readable: {reason}", path.display()),
+                    )
+                })?;
+                (digests.content, digests.interop, digests.length)
+            }
+        };
         let id = file.entry.as_str().to_owned();
         artifacts.push(Artifact {
             sources: vec![id.clone()],
             id,
-            size: Some(digests.length),
+            size: Some(length),
             digest: Some(DigestClaims {
-                blake3: Some(digests.content),
-                sha256: Some(digests.interop),
+                blake3: Some(content),
+                sha256: Some(interop),
             }),
             media_type: None,
             archive: None,
@@ -122,6 +131,7 @@ fn finish(name: String, mut artifacts: Vec<Artifact>, limits: &Limits) -> Result
         release: None,
         artifacts,
         license: None,
+        derived_from: None,
     };
     Ok(manifest)
 }

@@ -60,9 +60,9 @@ pub fn run_init(
         )
     } else {
         match run::local_path(reference) {
-            Ok(path) if path.is_dir() => {
-                Ok(crate::inference::from_directory(&path, &processor, &limits))
-            }
+            Ok(path) if path.is_dir() => Ok(crate::inference::from_directory(
+                &path, &processor, &limits, None,
+            )),
             Ok(path) => Ok(Err(fetchloom_engine::error::Error::new(
                 fetchloom_engine::error::ErrorKind::ReferenceUnresolved,
                 format!(
@@ -90,32 +90,41 @@ pub fn run_init(
         Ok(rendered) => rendered,
         Err(error) => return reporter.report(&error),
     };
-    match output {
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            let _ = write!(stdout, "{rendered}");
-            let _ = stdout.flush();
-            ExitCode::Success
-        }
-        Some(path) => {
-            if path.exists() && !force {
-                return reporter.report(&fetchloom_engine::error::Error::new(
-                    fetchloom_engine::error::ErrorKind::DestinationModified,
-                    format!(
-                        "give --force to replace {}, because a manifest is edited after it is generated",
-                        path.display()
-                    ),
-                ));
-            }
-            match std::fs::write(path, rendered.as_bytes()) {
-                Ok(()) => ExitCode::Success,
-                Err(reason) => reporter.report(&fetchloom_engine::error::Error::new(
-                    fetchloom_engine::error::ErrorKind::DestinationUnrepresentable,
-                    format!("make {} writable: {reason}", path.display()),
-                )),
-            }
-        }
+    match write_manifest(output, &rendered, force) {
+        Ok(()) => ExitCode::Success,
+        Err(error) => reporter.report(&error),
     }
+}
+
+/// # Errors
+/// `destination.modified` when the file exists and `--force` was not given,
+/// and `destination.unrepresentable` when it cannot be written.
+pub(crate) fn write_manifest(
+    output: Option<&Path>,
+    rendered: &str,
+    force: bool,
+) -> Result<(), fetchloom_engine::error::Error> {
+    let Some(path) = output else {
+        let mut stdout = std::io::stdout().lock();
+        let _ = write!(stdout, "{rendered}");
+        let _ = stdout.flush();
+        return Ok(());
+    };
+    if path.exists() && !force {
+        return Err(fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::DestinationModified,
+            format!(
+                "give --force to replace {}, because a manifest is edited after it is generated",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::write(path, rendered.as_bytes()).map_err(|reason| {
+        fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::DestinationUnrepresentable,
+            format!("make {} writable: {reason}", path.display()),
+        )
+    })
 }
 
 #[expect(

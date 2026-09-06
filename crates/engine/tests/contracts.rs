@@ -74,6 +74,7 @@ fn every_error_kind_the_contract_lists_exists_with_its_layer() {
         ("archive.collision", Layer::Extract),
         ("archive.bomb", Layer::Extract),
         ("archive.unsupported", Layer::Extract),
+        ("destination.conflict", Layer::Materialize),
         ("destination.modified", Layer::Materialize),
         ("destination.foreign", Layer::Materialize),
         ("destination.unrepresentable", Layer::Materialize),
@@ -218,6 +219,10 @@ fn every_event_name_the_contract_lists_is_produced_by_a_payload() {
         EventPayload::ReconcileOutcomeReached {
             path: "a".to_owned(),
             outcome: fetchloom_engine::reconcile::ReconcileOutcome::Unchanged,
+        },
+        EventPayload::MergeResolutionReached {
+            path: "a".to_owned(),
+            resolution: fetchloom_engine::merge::Resolution::Conflict,
         },
         EventPayload::Degrade {
             requested: "clone".to_owned(),

@@ -386,6 +386,17 @@ pub(crate) fn finish_get(
             Err(error) => return reporter.report(&error),
         }
     }
+    if !result.conflicts.is_empty() {
+        return reporter.report(&fetchloom_engine::error::Error::new(
+            fetchloom_engine::error::ErrorKind::DestinationConflict,
+            format!(
+                "decide each of these yourself, because upstream and you changed the same entry \
+                 and upstream's version is beside yours as <name>{}: {}",
+                crate::run::ASIDE,
+                result.conflicts.join(", ")
+            ),
+        ));
+    }
     if !policy.accepts(result.trust) {
         return reporter.report(&fetchloom_engine::error::Error::new(
             fetchloom_engine::error::ErrorKind::PolicyTrustRefused,

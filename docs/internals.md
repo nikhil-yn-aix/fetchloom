@@ -95,9 +95,20 @@ Measured on one machine, `x86_64-pc-windows-msvc`. Wall time is a property of th
 | one 256 MiB file | 759 ms | Copy-Item 347 ms | 2.2x |
 | many hosts | 9672 ms | curl 2114 ms | 4.6x |
 
-Peak memory is 8.4 MB on every regime including the 256 MiB single file one. Nothing is ever loaded whole. Binary is 7.9 MB, startup 8 ms.
+Peak memory is 8.4 MB on every regime including the 256 MiB single file one. Nothing is ever loaded whole. Binary is 9,053,696 bytes, startup 8 ms. Four commands and the help text they carry moved it 664 KB from where it stood before them, which the benchmark gate reported and this baseline now records.
 
 The many hosts ratio is mostly not transfer cost. That regime injects 100 ms of latency into 40 requests and rate limits one host. Most of the time measured is backoff this run waits out one request at a time, because a host asking to be left alone drives its concurrency back to one. The alternative waits out none of it.
+
+### Asking what changed
+
+`status` answers from the record where it can and reads bytes where it cannot. Medians of three, release, on the same machine.
+
+| Tree | Fingerprint | Reading every byte | Ratio |
+|---|---|---|---|
+| 100,000 files of 256 bytes | 6188 ms | 8904 ms | 1.44x |
+| 2,000 files of 512 KiB | 393 ms | 1525 ms | 3.88x |
+
+Two shapes because the pre-filter removes the hashing term and nothing else. Walking the tree, stating each file and parsing the record cost the same either way, and over a hundred thousand files those dominate a corpus that is only 25 MB. The term it removes grows with bytes; the term it leaves grows with file count. `verify <path>` over the same hundred thousand files is 8341 ms, which is what status would cost with no record to consult.
 
 ### Hashing
 

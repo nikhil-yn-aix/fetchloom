@@ -132,7 +132,7 @@ pub(crate) enum DurabilityChoice {
 /// What a cache hit is checked against before it is reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
-pub(crate) enum VerifyChoice {
+pub enum VerifyChoice {
     /// Reread and rehash the whole object.
     Always,
     /// Trust the object when its recorded filesystem fingerprint matches.
@@ -523,6 +523,104 @@ pub enum Command {
         /// The path to verify.
         #[arg(value_name = "path")]
         target: String,
+    },
+    /// Say which entries of a directory differ from the record of what was written there.
+    #[command(
+        long_about = "Say which entries of a directory differ from the record of what was \
+            written there.\n\n\
+            Every entry is one of four things: unchanged, modified, deleted, or added. \
+            Status prints a line for each one that is not unchanged and nothing at all when \
+            the directory is exactly what the run left.\n\n\
+            It changes nothing, and it does not go near the network. Where the record still \
+            describes the file on disk, size and timestamp answer the question and the bytes \
+            are not read again.",
+        after_help = "Example:\n  \
+            fetchloom status ./corpus\n\n\
+            To see what the difference actually is: `fetchloom diff ./corpus`"
+    )]
+    Status {
+        /// The directory to compare against its record.
+        #[arg(value_name = "path")]
+        target: String,
+        /// What an entry is checked against.
+        #[arg(long, value_name = "always|fingerprint|never")]
+        verify: Option<VerifyChoice>,
+    },
+    /// Show what each changed entry was and what it is now.
+    #[command(
+        long_about = "Show what each changed entry was and what it is now.\n\n\
+            The same four states status reports, with the digest and the length the record \
+            holds and the digest and the length the directory holds now.\n\n\
+            It never compares the inside of a file. A parquet file and a JPEG have no lines, \
+            so an entry is the smallest thing that can differ.",
+        after_help = "Example:\n  \
+            fetchloom diff ./corpus"
+    )]
+    Diff {
+        /// The directory to compare against its record.
+        #[arg(value_name = "path")]
+        target: String,
+        /// What an entry is checked against.
+        #[arg(long, value_name = "always|fingerprint|never")]
+        verify: Option<VerifyChoice>,
+    },
+    /// Put back what the record says was there.
+    #[command(
+        long_about = "Put back what the record says was there.\n\n\
+            Name entries to restore those, or name none and every changed entry goes back. \
+            An entry you edited is rewritten, one you deleted comes back, and one you added \
+            is removed.\n\n\
+            The bytes come out of the cache, so this needs no network at all. If the cache \
+            no longer holds the object an entry came from, revert fails naming what is \
+            missing and the command that would bring it back, rather than fetching it for \
+            you.",
+        after_help = "Examples:\n  \
+            fetchloom revert ./corpus\n      \
+            put the whole directory back\n\n  \
+            fetchloom revert ./corpus train/labels.csv\n      \
+            put one entry back and leave the rest of your edits alone"
+    )]
+    Revert {
+        /// The directory to restore.
+        #[arg(value_name = "path")]
+        target: String,
+        /// The entries to restore, or none for all of them.
+        #[arg(value_name = "entry")]
+        entries: Vec<String>,
+        /// What an entry is checked against.
+        #[arg(long, value_name = "always|fingerprint|never")]
+        verify: Option<VerifyChoice>,
+    },
+    /// Make the directory as it stands a dataset of its own.
+    #[command(
+        long_about = "Make the directory as it stands a dataset of its own.\n\n\
+            Promote reads every file, keeps the bytes in the cache, and writes a manifest \
+            and a lock describing exactly what is there. Your edited copy becomes something \
+            another person can fetch and get byte for byte.\n\n\
+            The manifest records what it was derived from: the dataset, the manifest and the \
+            tree the record names. A promoted dataset that forgets where it came from is \
+            worth less than one that remembers.\n\n\
+            Promote pins the bytes; it does not publish them. `cache export` is how the \
+            objects travel to someone else.",
+        after_help = "Examples:\n  \
+            fetchloom promote ./corpus\n      \
+            print the manifest\n\n  \
+            fetchloom promote ./corpus -o corpus.yaml\n      \
+            write it to a file"
+    )]
+    Promote {
+        /// The directory to promote.
+        #[arg(value_name = "path")]
+        target: String,
+        /// Where the manifest is written, rather than to standard output.
+        #[arg(long, short, value_name = "path")]
+        output: Option<PathBuf>,
+        /// Overwrite the file the manifest is written to.
+        #[arg(long)]
+        force: bool,
+        /// Where the lock is written.
+        #[arg(long, value_name = "path", default_value = "fetchloom.lock")]
+        lock: PathBuf,
     },
     /// Watch a run as it happens, or replay one that already did.
     #[command(

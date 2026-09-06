@@ -8,6 +8,14 @@ Nothing has been released. The version in `Cargo.toml` promises nothing before 1
 
 ### Added
 
+- `status <path>` and `diff <path>` say how a directory differs from the record the run that wrote it left. Four states and no others: unchanged, modified, deleted, added. An unchanged entry is not printed, so a directory that is exactly what the run left prints nothing at all. `diff` adds the digest and the length on each side and never looks inside a file. Both are read only and neither touches the network.
+- `revert <path>` puts back what the record states, and `revert <path> <entry>...` puts back only what it names, leaving every other edit alone. The bytes come out of the cache, so a revert works offline. An entry the cache no longer holds fails naming the object and the command that would fetch it, rather than quietly going to the network.
+- `get` against a directory you edited, where upstream has since moved, is a three way compare against the record rather than a refusal. Per entry and never per line: what only upstream changed is taken, what only you changed is kept, what you added stays, what upstream added arrives, and what you deleted stays deleted. Where both sides changed one entry, upstream's version is written beside yours as `<name>.upstream`, yours is left exactly as it is, every conflict is named, and the run exits 60 with `destination.conflict`. The merged tree is built whole in staging and published by rename, so a run killed halfway leaves the old directory or the new one.
+- `promote <path>` makes the directory as it stands a dataset of its own: every file read, the bytes kept in the cache, a manifest naming one artifact per file with both digests, and a lock pinning them. The manifest states `derived_from`, which is the dataset, the manifest digest and the tree digest it came from. Ingestion happens at promote and at no other time.
+- A record now states two entry streams: what was materialized, which is what `verify <path>` folds and what a fingerprint answers about, and what the reference resolved to, which is the merge base. They differ only where a run kept your version of an entry over upstream's.
+- An artifact whose stated digest the cache already holds resolves out of the cache without its source path existing, which is what makes a promoted manifest fetchable on a machine that took the objects in a bundle.
+- `merge.resolution` is a new event, one per entry a three way run decided. `destination.conflict` is a new error kind, exit 60.
+
 - FTP and FTPS are spoken, written here rather than taken as a dependency. `ftp://host/path` and `ftps://host/path` fetch a file or expand a directory, anonymous by default, passive, binary, resumed with `REST` at rung four. A directory is listed with `MLSD` and falls back to `LIST` with a `degrade` when the server refuses it, which two of the four reference hosts checked live do not support. The address a `PASV` reply names is discarded and only its port used, so a data connection is never opened to a host the control connection is not already talking to.
 - `ftps://` secures the control connection with `AUTH TLS`, then `PBSZ 0` and `PROT P` for the data connection, using the rustls already in the graph. No flag turns that off. `ftp://` attempts it and says so when it falls back to the clear, and a credential resolved for the host is refused rather than sent over a connection that could not be secured.
 - A name with no `sources` configured is searched for across the eight registries that offer search, in parallel: Hugging Face, Kaggle, OpenML, Zenodo, Figshare, CKAN, Dataverse and DataCite. One record carrying the name proceeds and prints what it resolved to; several are printed with size, provenance and what each states about its bytes, the run refuses, and the command for each is given; none fails naming the nearest names it did find. Nothing is chosen for the user. The name is never written to a lock and what it resolved to is.
@@ -32,6 +40,8 @@ Nothing has been released. The version in `Cargo.toml` promises nothing before 1
 
 ### Changed
 
+- A fingerprint is recorded only for a file whose modification and change times are already behind the instant the run began recording them, so a file written while the record was being taken is always read rather than trusted. The window that leaves is stated in `docs/contracts.md` rather than claimed closed.
+- Deciding whether a destination entry is unchanged no longer walks the resolved tree once per file, which was quadratic in the number of entries.
 - The zstd codec is libzstd through the `zstd` crate, replacing the pure-Rust `ruzstd`. `ruzstd` implements one of nineteen compression levels and ran 4x to 27x slower on the same corpus entries, so it could not carry `--compress zstd:1..19` without the flag becoming a placeholder. The workspace now compiles and statically links C.
 - The musl lint moved from the host into the Linux container, where a C toolchain for it exists. The container lane now denies warnings, which it did not before, so the coverage moved rather than shrank. `cargo xtask verify` is thirteen steps.
 - The cache format fingerprint changed, so an existing cache is discarded with `cache clear` rather than migrated. No lock, receipt, plan or bundle manifest changed, and no digest moved.
@@ -58,5 +68,6 @@ Nothing has been released. The version in `Cargo.toml` promises nothing before 1
 
 ### Removed
 
+- `--track` is gone from the Not built list rather than built. Detection costs nothing, because every completed run already writes the record `status`, `diff`, `revert` and `promote` read, so the flag would have been a second way of doing what the tool does.
 - `cargo xtask check-comments`. A checker for a taste rule is code shipped to police taste.
 - `audit.md`, `audit2.md`, `plan.md`, and eleven documentation files replaced by the four that remain.

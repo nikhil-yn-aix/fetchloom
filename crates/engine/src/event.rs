@@ -11,7 +11,7 @@ use crate::redact::SafeUrl;
 use crate::resume::ResumeRung;
 use crate::timestamp::Timestamp;
 
-pub const EVENT_NAMES: [&str; 34] = [
+pub const EVENT_NAMES: [&str; 35] = [
     "run.start",
     "run.end",
     "resolve.start",
@@ -44,6 +44,7 @@ pub const EVENT_NAMES: [&str; 34] = [
     "extract.end",
     "publish.commit",
     "reconcile.outcome",
+    "merge.resolution",
     "degrade",
     "error",
 ];
@@ -138,6 +139,11 @@ pub enum EventPayload {
         path: String,
         outcome: ReconcileOutcome,
     },
+    #[serde(rename = "merge.resolution")]
+    MergeResolutionReached {
+        path: String,
+        resolution: crate::merge::Resolution,
+    },
     #[serde(rename = "degrade")]
     Degrade {
         requested: String,
@@ -184,6 +190,7 @@ impl EventPayload {
             Self::ExtractEnd { .. } => "extract.end",
             Self::PublishCommit => "publish.commit",
             Self::ReconcileOutcomeReached { .. } => "reconcile.outcome",
+            Self::MergeResolutionReached { .. } => "merge.resolution",
             Self::Degrade { .. } => "degrade",
             Self::Failure { .. } => "error",
         }

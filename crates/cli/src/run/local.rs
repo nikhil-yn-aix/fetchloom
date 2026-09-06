@@ -3,7 +3,7 @@
 use super::context::{Materialization, RecordedArtifact, RunResult};
 use super::dataset::{Provenance, provisional_trust};
 use super::object::materialize_object;
-use super::paths::{containing_directory, executable_paths, staging_beside, temp_beside};
+use super::paths::{containing_directory, recorded_entries, staging_beside, temp_beside};
 use super::selection::apply_selection;
 use super::verify::{destination_entries, hash_files, report_unread_modes};
 use crate::materialize;
@@ -158,7 +158,9 @@ pub(super) fn materialize_fresh(
         bytes: entries.iter().map(entry_size).sum(),
         work: with.work.taken(),
         trust: provisional_trust(with, None),
-        executable: executable_paths(&entries),
+        recorded: recorded_entries(&entries),
+        conflicts: Vec::new(),
+        upstream: Vec::new(),
         artifact: None,
     })
 }
@@ -170,7 +172,7 @@ pub(super) fn entry_size(entry: &TreeEntry) -> u64 {
     }
 }
 
-pub(super) fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
+pub(crate) fn with_resolved_modes(resolved: &[TreeEntry], found: Vec<TreeEntry>) -> Vec<TreeEntry> {
     let modes: HashMap<&str, Mode> = resolved
         .iter()
         .filter_map(|entry| match entry {
@@ -206,6 +208,48 @@ pub(super) struct Settlement<'a> {
     pub(super) adopt: bool,
     pub(super) dataset: &'a str,
     pub(super) artifact: Option<RecordedArtifact>,
+    pub(super) fill: super::staged::Fill<'a>,
+}
+
+pub(super) fn recorded_for(
+    with: &Materialization<'_>,
+    destination: &Path,
+) -> Option<fetchloom_engine::receipt::Receipt> {
+    with.cache
+        .and_then(|cache| cache.read_receipt(destination).ok().flatten())
+}
+
+fn refuse_what_you_changed(outcomes: &[Reconciled]) -> Result<(), Error> {
+    let modified: Vec<&str> = outcomes
+        .iter()
+        .filter(|found| found.outcome == ReconcileOutcome::Modified)
+        .map(|found| found.path.as_str())
+        .collect();
+    let foreign: Vec<&str> = outcomes
+        .iter()
+        .filter(|found| found.outcome == ReconcileOutcome::Foreign)
+        .map(|found| found.path.as_str())
+        .collect();
+    if modified.is_empty() && foreign.is_empty() {
+        return Ok(());
+    }
+    let kind = if modified.is_empty() {
+        ErrorKind::DestinationForeign
+    } else {
+        ErrorKind::DestinationModified
+    };
+    let mut named: Vec<String> = modified
+        .iter()
+        .map(|path| format!("{path} (modified)"))
+        .collect();
+    named.extend(foreign.iter().map(|path| format!("{path} (foreign)")));
+    Err(Error::new(
+        kind,
+        format!(
+            "run again with --force to overwrite the modified entries and remove the foreign ones, or --adopt to accept the destination as it stands: {}",
+            named.join(", ")
+        ),
+    ))
 }
 
 pub(super) fn settle(
@@ -225,8 +269,34 @@ pub(super) fn settle(
     } = *settlement;
     let artifact = settlement.artifact.clone();
 
-    let found = destination_entries(with, destination, resolved)?;
+    let record = recorded_for(with, destination);
+    let empty = std::collections::BTreeMap::new();
+    let base = super::verify::Base {
+        entries: record.as_ref().map_or(resolved, |receipt| &receipt.entries),
+        fingerprints: record
+            .as_ref()
+            .map_or(&empty, |receipt| &receipt.fingerprints),
+    };
+    let found = destination_entries(with, destination, base)?;
     let destination_tree = with_resolved_modes(resolved, found);
+
+    if !force
+        && !adopt
+        && let Some(receipt) = record.as_ref()
+        && !receipt.entries.is_empty()
+        && canonical::tree_digest(receipt.resolved_entries()) != canonical::tree_digest(resolved)
+    {
+        let base = receipt.resolved_entries().to_vec();
+        return merged(
+            with,
+            destination,
+            settlement,
+            &destination_tree,
+            &base,
+            emit,
+        );
+    }
+
     let outcomes = reconcile(resolved, &destination_tree);
     for found in &outcomes {
         emit(EventPayload::ReconcileOutcomeReached {
@@ -248,7 +318,9 @@ pub(super) fn settle(
             bytes: resolved.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, artifact.as_ref()),
-            executable: executable_paths(resolved),
+            recorded: recorded_entries(resolved),
+            conflicts: Vec::new(),
+            upstream: Vec::new(),
             artifact,
         });
     }
@@ -263,40 +335,15 @@ pub(super) fn settle(
             bytes: destination_tree.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, artifact.as_ref()),
-            executable: executable_paths(&destination_tree),
+            recorded: recorded_entries(&destination_tree),
+            conflicts: Vec::new(),
+            upstream: recorded_entries(resolved),
             artifact,
         });
     }
 
-    let modified: Vec<&str> = outcomes
-        .iter()
-        .filter(|found| found.outcome == ReconcileOutcome::Modified)
-        .map(|found| found.path.as_str())
-        .collect();
-    let foreign: Vec<&str> = outcomes
-        .iter()
-        .filter(|found| found.outcome == ReconcileOutcome::Foreign)
-        .map(|found| found.path.as_str())
-        .collect();
-
-    if !force && (!modified.is_empty() || !foreign.is_empty()) {
-        let kind = if modified.is_empty() {
-            ErrorKind::DestinationForeign
-        } else {
-            ErrorKind::DestinationModified
-        };
-        let mut named: Vec<String> = modified
-            .iter()
-            .map(|path| format!("{path} (modified)"))
-            .collect();
-        named.extend(foreign.iter().map(|path| format!("{path} (foreign)")));
-        return Err(Error::new(
-            kind,
-            format!(
-                "run again with --force to overwrite the modified entries and remove the foreign ones, or --adopt to accept the destination as it stands: {}",
-                named.join(", ")
-            ),
-        ));
+    if !force {
+        refuse_what_you_changed(&outcomes)?;
     }
 
     if force {
@@ -313,9 +360,81 @@ pub(super) fn settle(
         bytes: resolved.iter().map(entry_size).sum(),
         work: with.work.taken(),
         trust: provisional_trust(with, artifact.as_ref()),
-        executable: executable_paths(resolved),
+        recorded: recorded_entries(resolved),
+        conflicts: Vec::new(),
+        upstream: Vec::new(),
         artifact,
     })
+}
+
+fn merged(
+    with: &Materialization<'_>,
+    destination: &Path,
+    settlement: &Settlement<'_>,
+    destination_tree: &[TreeEntry],
+    base: &[TreeEntry],
+    emit: &dyn Fn(EventPayload),
+) -> Result<RunResult, Error> {
+    let resolved = settlement.resolved;
+    let artifact = settlement.artifact.clone();
+    let decisions = fetchloom_engine::merge::merge(base, destination_tree, resolved);
+    for decision in &decisions {
+        emit(EventPayload::MergeResolutionReached {
+            path: decision.path.as_str().to_owned(),
+            resolution: decision.resolution,
+        });
+    }
+    let settled = |entries: &[TreeEntry], status: RunStatus, conflicts: Vec<String>| RunResult {
+        status,
+        dataset: settlement.dataset.to_owned(),
+        tree: canonical::tree_digest(entries),
+        destination: destination.to_path_buf(),
+        entries: entries.len() as u64,
+        bytes: entries.iter().map(entry_size).sum(),
+        work: with.work.taken(),
+        trust: provisional_trust(with, artifact.as_ref()),
+        recorded: super::paths::recorded_entries(entries),
+        artifact: artifact.clone(),
+        conflicts,
+        upstream: super::paths::recorded_entries(resolved),
+    };
+    if decisions.iter().all(|decision| {
+        matches!(
+            decision.resolution,
+            fetchloom_engine::merge::Resolution::Unchanged
+                | fetchloom_engine::merge::Resolution::StaysDeleted
+        )
+    }) {
+        return Ok(settled(destination_tree, RunStatus::Unchanged, Vec::new()));
+    }
+
+    let staging = super::staged::open_staging(destination, with)?;
+    let applied = (settlement.fill)(&staging).and_then(|_| {
+        super::threeway::apply(
+            with,
+            destination,
+            &staging,
+            super::threeway::Sides {
+                yours: destination_tree,
+                upstream: resolved,
+            },
+            &decisions,
+        )
+    });
+    let applied = match applied {
+        Ok(applied) => applied,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+    super::staged::publish(with, &staging, destination)?;
+    emit(EventPayload::PublishCommit);
+    Ok(settled(
+        &applied.entries,
+        RunStatus::Materialized,
+        applied.conflicts,
+    ))
 }
 
 pub(super) fn reconcile_existing(
@@ -345,6 +464,11 @@ pub(super) fn reconcile_existing(
             adopt,
             dataset,
             artifact: None,
+            fill: &|staging| {
+                let mut entries = fill_staging(with, staging, walked, emit)?;
+                entries.extend(walked.entries.iter().cloned());
+                Ok(entries)
+            },
         },
         emit,
         &|| materialize_fresh(with, walked, destination, dataset, emit),

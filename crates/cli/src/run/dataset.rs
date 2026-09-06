@@ -6,8 +6,7 @@ use super::context::{Materialization, RecordedArtifact, RunResult};
 use super::local::{Settlement, entry_size, settle};
 use super::object::place_object;
 use super::paths::{
-    containing_directory, entry_path_str, executable_paths, object_name, remote_name,
-    resolve_source_path, staging_beside,
+    entry_path_str, object_name, recorded_entries, remote_name, resolve_source_path,
 };
 use super::remote::transfer_object;
 use crate::materialize;
@@ -16,7 +15,7 @@ use fetchloom_cache::ingest::Ingested;
 use fetchloom_engine::canonical;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::erased::Adapters;
-use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
+use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
 use fetchloom_engine::limits::Limits;
@@ -58,6 +57,7 @@ pub(crate) fn synthesized_manifest(
             layout: fetchloom_engine::selection::Layout::Keep,
         }],
         license: None,
+        derived_from: None,
     }
 }
 
@@ -107,6 +107,12 @@ pub(crate) fn write_receipt(
                 source_used: artifact.source.clone(),
                 source_reason: artifact.reason.clone(),
                 trust: class,
+                name: artifact.name.clone(),
+                size: artifact.size,
+                select: artifact.selection.include.clone(),
+                exclude: artifact.selection.exclude.clone(),
+                layout: artifact.selection.layout,
+                archive: artifact.declared,
             },
         );
     }
@@ -115,7 +121,8 @@ pub(crate) fn write_receipt(
         manifest: manifest_digest,
         artifacts: recorded,
         tree: Some(result.tree),
-        executable: result.executable.clone(),
+        entries: result.recorded.clone(),
+        resolved: result.upstream.clone(),
         fingerprints: fingerprints_of(cache, &result.destination),
         destination: result.destination.clone(),
         accepted_terms,
@@ -140,12 +147,15 @@ pub(super) fn fingerprints_of(
     destination: &Path,
 ) -> std::collections::BTreeMap<String, RecordedFingerprint> {
     let mut found = std::collections::BTreeMap::new();
+    let taken = fetchloom_engine::identity::now_nanos();
     let Ok(walked) = materialize::walk(destination) else {
         return found;
     };
     for file in &walked.files {
         let full = walked.root.join(&file.relative);
-        if let Ok(fingerprint) = cache.platform().fingerprint(&full) {
+        if let Ok(fingerprint) = cache.platform().fingerprint(&full)
+            && fingerprint.settled_before(taken)
+        {
             found.insert(
                 file.entry.as_str().to_owned(),
                 RecordedFingerprint::new(fingerprint),
@@ -186,6 +196,44 @@ pub(crate) struct ResolvedArtifact {
     pub(crate) interop_prior: Option<fetchloom_engine::digest::InteropDigest>,
     pub(crate) observed: Option<String>,
     pub(crate) reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Placed {
+    pub(crate) id: String,
+    pub(crate) digest: ContentDigest,
+    pub(crate) size: u64,
+    pub(crate) name: String,
+    pub(crate) declared: Option<ArchiveFormat>,
+    pub(crate) selection: Selection,
+}
+
+impl ResolvedArtifact {
+    pub(crate) fn placed(&self) -> Placed {
+        Placed {
+            id: self.id.clone(),
+            digest: self.digest,
+            size: self.size,
+            name: self.name.clone(),
+            declared: self.declared,
+            selection: self.selection.clone(),
+        }
+    }
+}
+
+pub(crate) fn placed_by_record(receipt: &Receipt) -> Vec<Placed> {
+    receipt
+        .artifacts
+        .iter()
+        .map(|(id, artifact)| Placed {
+            id: id.clone(),
+            digest: artifact.digest,
+            size: artifact.size,
+            name: artifact.name.clone(),
+            declared: artifact.archive,
+            selection: artifact.selection(),
+        })
+        .collect()
 }
 
 pub struct DatasetRun {
@@ -257,9 +305,10 @@ pub fn materialize_manifest(
     });
     emit(EventPayload::PlanReady);
 
+    let placed: Vec<Placed> = resolved.iter().map(ResolvedArtifact::placed).collect();
     let outcome = publish_dataset(
         with,
-        &resolved,
+        &placed,
         &manifest.name,
         destination,
         force,
@@ -409,6 +458,18 @@ pub(super) fn ingest_artifact(
         )
         .with_artifact(artifact.id.clone()));
     };
+    if let Some(expected) = expected
+        && cache.locate(expected).is_some()
+        && let Some(interop) = cache.recorded_interop(expected)?
+    {
+        emit(EventPayload::CacheHit { digest: expected });
+        return Ok(Ingested {
+            digest: expected,
+            interop,
+            size: cache.size_of(expected).unwrap_or_default(),
+            was_present: true,
+        });
+    }
     if !path.exists() {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
@@ -481,7 +542,7 @@ pub(super) fn remember(
 
 pub(super) fn publish_dataset(
     with: &Materialization<'_>,
-    resolved: &[ResolvedArtifact],
+    resolved: &[Placed],
     dataset: &str,
     destination: &Path,
     force: bool,
@@ -500,7 +561,9 @@ pub(super) fn publish_dataset(
             bytes: entries.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, None),
-            executable: executable_paths(&entries),
+            recorded: recorded_entries(&entries),
+            conflicts: Vec::new(),
+            upstream: Vec::new(),
             artifact: None,
         })
     };
@@ -522,6 +585,7 @@ pub(super) fn publish_dataset(
             adopt,
             dataset,
             artifact: None,
+            fill: &|staging| fill_dataset_staging(with, resolved, staging, emit),
         },
         emit,
         &build,
@@ -529,7 +593,7 @@ pub(super) fn publish_dataset(
     )
 }
 
-pub(super) fn placement_of(artifact: &ResolvedArtifact, limits: &Limits) -> Result<String, Error> {
+pub(super) fn placement_of(artifact: &Placed, limits: &Limits) -> Result<String, Error> {
     fetchloom_archive::validate_member_path(artifact.id.as_bytes(), limits.nesting_depth)
 }
 
@@ -566,7 +630,7 @@ pub(super) fn with_ancestor_directories(entries: Vec<TreeEntry>) -> Result<Vec<T
 
 pub(super) fn dataset_entries(
     with: &Materialization<'_>,
-    artifact: &ResolvedArtifact,
+    artifact: &Placed,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
     let Some(format) = recognized_format(with, artifact.digest, &artifact.name, artifact.declared)?
@@ -595,42 +659,18 @@ pub(super) fn dataset_entries(
 
 pub(super) fn build_dataset_staging(
     with: &Materialization<'_>,
-    resolved: &[ResolvedArtifact],
+    resolved: &[Placed],
     destination: &Path,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
-    let staging = staging_beside(destination);
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
-    }
-    with.platform.create_directories(&staging)?;
-
-    let built = fill_dataset_staging(with, resolved, &staging, emit);
-    let entries = match built {
-        Ok(entries) => entries,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(error);
-        }
-    };
-    {
-        let parent = containing_directory(destination);
-        with.platform.create_directories(&parent)?;
-    }
-    if let Err(error) = with
-        .platform
-        .publish_directory(&staging, destination, with.durability)
-    {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
-    }
-    Ok(entries)
+    super::staged::stage_and_publish(with, destination, &|staging| {
+        fill_dataset_staging(with, resolved, staging, emit)
+    })
 }
 
 pub(super) fn fill_dataset_staging(
     with: &Materialization<'_>,
-    resolved: &[ResolvedArtifact],
+    resolved: &[Placed],
     staging: &Path,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {

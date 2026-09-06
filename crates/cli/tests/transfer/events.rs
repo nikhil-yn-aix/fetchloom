@@ -290,6 +290,33 @@ fn a_second_wanter_waits_for_the_first(seen: &mut BTreeSet<String>) {
     seen.extend(run.names);
 }
 
+fn an_edited_directory_meets_a_moved_upstream(seen: &mut BTreeSet<String>) {
+    let scratch = TempDir::new().unwrap();
+    let source = scratch.path().join("source");
+    write(&source, "a.txt", b"hello");
+    write(&source, "nested/b.txt", b"world");
+
+    let first = run_in(
+        scratch.path(),
+        &["get", source.to_str().unwrap(), "--output", "out"],
+    );
+    assert_eq!(first.code, 0, "the first run failed: {}", first.said);
+    seen.extend(first.names);
+
+    write(&scratch.path().join("out"), "a.txt", b"mine");
+    write(&source, "nested/b.txt", b"moved");
+
+    let merged = run_in(
+        scratch.path(),
+        &["get", source.to_str().unwrap(), "--output", "out"],
+    );
+    assert_eq!(merged.code, 0, "the merging run failed: {}", merged.said);
+    assert!(
+        merged.names.contains("merge.resolution"),
+        "a three way run emitted no resolution"
+    );
+    seen.extend(merged.names);
+}
 #[test]
 fn every_event_name_the_contract_lists_is_emitted_by_a_run() {
     let mut seen = BTreeSet::new();
@@ -309,6 +336,7 @@ fn every_event_name_the_contract_lists_is_emitted_by_a_run() {
     a_bare_name_resolves_to_a_location(&mut seen);
     one_run_waits_for_another(&mut seen);
     a_damaged_object_is_repaired_by_range(&mut seen);
+    an_edited_directory_meets_a_moved_upstream(&mut seen);
 
     let unnamed: Vec<&str> = seen
         .iter()

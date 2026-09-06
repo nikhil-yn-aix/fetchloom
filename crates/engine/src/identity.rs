@@ -90,3 +90,18 @@ impl CacheFormatFingerprint {
         self.0
     }
 }
+
+impl Fingerprint {
+    #[must_use]
+    pub fn settled_before(self, instant: i128) -> bool {
+        self.modified_nanos < instant && self.changed_nanos < instant
+    }
+}
+
+#[must_use]
+pub fn now_nanos() -> i128 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(elapsed) => i128::try_from(elapsed.as_nanos()).unwrap_or(i128::MAX),
+        Err(before) => i128::try_from(before.duration().as_nanos()).map_or(i128::MIN, |n| -n),
+    }
+}

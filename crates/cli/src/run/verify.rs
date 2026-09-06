@@ -145,17 +145,27 @@ impl<R: Read> Read for CountedRead<'_, R> {
     }
 }
 
-pub(super) fn destination_entries(
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Base<'a> {
+    pub(crate) entries: &'a [TreeEntry],
+    pub(crate) fingerprints: &'a std::collections::BTreeMap<String, RecordedFingerprint>,
+}
+
+pub(crate) fn destination_entries(
     with: &Materialization<'_>,
     destination: &Path,
-    resolved: &[TreeEntry],
+    base: Base<'_>,
 ) -> Result<Vec<TreeEntry>, Error> {
     let walked = materialize::walk(destination)?;
     let mut entries = walked.entries.clone();
-    let recorded = recorded_fingerprints(with, destination, resolved);
+    let named: std::collections::HashMap<&str, &TreeEntry> = base
+        .entries
+        .iter()
+        .map(|entry| (entry.path().as_str(), entry))
+        .collect();
     let mut to_hash = Vec::with_capacity(walked.files.len());
     for file in &walked.files {
-        match unchanged_by_fingerprint(with, &walked.root, file, &recorded, resolved) {
+        match unchanged_by_fingerprint(with, &walked.root, file, base, &named) {
             Some(entry) => entries.push(entry),
             None => to_hash.push(file.clone()),
         }
@@ -170,40 +180,24 @@ pub(super) fn destination_entries(
     Ok(entries)
 }
 
-pub(super) fn recorded_fingerprints(
-    with: &Materialization<'_>,
-    destination: &Path,
-    resolved: &[TreeEntry],
-) -> std::collections::BTreeMap<String, RecordedFingerprint> {
-    let wanted = canonical::tree_digest(resolved);
-    with.cache
-        .and_then(|cache| cache.read_receipt(destination).ok().flatten())
-        .filter(|receipt| receipt.tree == Some(wanted))
-        .map(|receipt| receipt.fingerprints)
-        .unwrap_or_default()
-}
-
 pub(super) fn unchanged_by_fingerprint(
     with: &Materialization<'_>,
     root: &Path,
     file: &materialize::SourceFile,
-    recorded: &std::collections::BTreeMap<String, RecordedFingerprint>,
-    resolved: &[TreeEntry],
+    base: Base<'_>,
+    named: &std::collections::HashMap<&str, &TreeEntry>,
 ) -> Option<TreeEntry> {
     use fetchloom_engine::verification::VerificationPolicy;
 
     if with.verify == VerificationPolicy::Always {
         return None;
     }
-    let held = recorded.get(file.entry.as_str())?;
+    let held = base.fingerprints.get(file.entry.as_str())?;
     let now = with.platform.fingerprint(&root.join(&file.relative)).ok()?;
     if !held.matches(now) {
         return None;
     }
-    let entry = resolved
-        .iter()
-        .find(|entry| entry.path() == &file.entry)?
-        .clone();
+    let entry = (*named.get(file.entry.as_str())?).clone();
     match entry {
         TreeEntry::File {
             path,

@@ -121,6 +121,7 @@ impl MetadataReader for PoochRegistry {
             release: None,
             artifacts,
             license: None,
+            derived_from: None,
         })
     }
 }

@@ -10576,3 +10576,211 @@ contradict that.
 
 Sources: `crates/sources/src/search.rs`; `crates/cli/src/discover.rs`;
 `crates/cli/src/resolve.rs` `resolve_reference`; `crates/sources/tests/search.rs`.
+
+---
+
+## `--track` is not a flag, because there is nothing for it to turn on
+
+`reference.md` listed `--track` as the flag that would keep your edits and the
+link to upstream instead of choosing one, with `status`, `diff`, `revert` and
+`promote` as the commands that would work against what it tracked.
+
+Detection costs nothing. A run already writes a record beside the cache keyed by
+its destination, and `get` already reads that record before choosing between
+refusing, `--force` and `--adopt`. Every fact `--track` would have switched on is
+already recorded by every run that has ever completed. A flag enabling something
+already free is a second way of doing what the tool does, which is the one thing
+CONTRIBUTING forbids without qualification, and it would have split every
+destination into two kinds for no gain: one where `status` answers and one where
+it says the run should have been asked differently.
+
+So the row is gone rather than moved. `status`, `diff`, `revert` and `promote`
+are commands, they work against any destination a run wrote, and the answer to
+"how do I turn this on" is that it was never off.
+
+The one thing the flag would have bought is the ability to say "do not record
+this". `--no-cache` already says that, because the record lives in the cache.
+
+Sources: `docs/reference.md`; `crates/cli/src/command/tracked.rs`;
+`crates/cli/src/run/local.rs` `settle`.
+
+---
+
+## The record states two trees, because after a merge they are not the same
+
+A receipt recorded one entry stream: what the run materialized. That is what
+`verify <path>` folds and what a fingerprint answers about, and while a run
+either publishes upstream's tree or refuses, it is also what the reference
+resolved to.
+
+A three way run breaks that. It publishes a tree that is upstream's where you
+changed nothing and yours where you did, so one stream can no longer be both what
+is on disk and what upstream last gave. Recording only the merged tree is what a
+first attempt did, and it is wrong in a way that shows up on the third run rather
+than the second: your own edit becomes the base, upstream's untouched file then
+reads as an upstream change, and the next run quietly overwrites your work with
+bytes upstream never changed.
+
+So the receipt carries `entries`, which is what the destination holds, and
+`resolved`, which is what the reference resolved to, absent when they are equal.
+`entries` is what `tree` digests and what a fingerprint stands for. `resolved` is
+the merge base, and what `status`, `diff` and `revert` compare against, which is
+why an entry you kept through a merge still reads as `modified` afterwards. It
+is your version, and the record has never claimed otherwise.
+
+Sources: `crates/engine/src/receipt.rs` `Receipt::resolved_entries`;
+`crates/cli/src/run/local.rs` `merged`; `crates/cli/tests/materialize/tracked.rs`
+`a_merged_run_records_upstream_so_your_edit_is_not_taken_for_upstreams_next_time`.
+
+---
+
+## Status trusts a fingerprint, and states the one window that leaves open
+
+Hashing a hundred thousand files to answer whether anything changed is not a
+usable answer, so `status` uses what the record already holds: the volume, file
+identifier, length, modification time and change time of each file as they stood
+after publication. A file whose five facts still match stands for the digest the
+record holds for it, and only a file that fails them is read.
+
+Measured on this machine, `x86_64-pc-windows-msvc`, release, medians of three.
+
+    100,000 files of 256 bytes    6188 ms against 8904 ms    1.44x
+    2,000 files of 512 KiB        393 ms against 1525 ms     3.88x
+
+Two shapes because the saving is the hashing term and nothing else. The walk,
+the stat of each file and the parse of the record cost the same either way, and
+at a hundred thousand files those dominate a corpus that is only 25 MB, so the
+pre-filter is worth 1.44x there and 3.88x over the same file count's worth of
+real bytes. The term it removes grows with bytes while the term it does not
+grows with file count, so the ratio rises with the size of what is being asked
+about, which is the direction that matters.
+
+`verify <path>` over the same hundred thousand files is 8341 ms, which is what
+status would cost with no record to consult at all.
+
+The window this leaves is the one git calls racily clean, and it cannot be closed
+by anything short of hashing. A file rewritten to the same length inside the same
+filesystem timestamp tick as the write it is being compared against keeps its
+recorded fingerprint and is reported unchanged. On Windows that tick is the
+system timer, not the 100 ns NTFS resolution, so it is milliseconds wide rather
+than nanoseconds.
+
+Half of it is closed for free. Fingerprints are taken after the last byte is
+written, and a fingerprint whose modification or change time is not already
+behind the instant that pass began is not recorded at all. A file written or
+touched while the record was being taken therefore carries no fingerprint and is
+always read, which costs one hash for the handful of files a run finished with
+and nothing for the rest. What remains is a rewrite that lands before the record
+is taken and inside the same tick as the run's own write.
+
+`--verify always` reads every byte and is the answer for a caller who cannot
+accept that window. Which is to say the optimization is disableable without
+disabling a correctness check, exactly as internals.md requires.
+
+Sources: `crates/engine/src/identity.rs` `Fingerprint::settled_before`;
+`crates/cli/src/run/dataset.rs` `fingerprints_of`;
+`crates/cli/src/run/verify.rs` `unchanged_by_fingerprint`.
+
+---
+
+## Three way, per entry, and never per line
+
+`get` against a destination whose record states a different resolved tree than
+the reference resolves to now is a three way compare. The record is the base, the
+destination is yours, upstream is what the reference resolves to. Thirteen rows,
+which is the closure of three sides over present, absent and changed, and not the
+seven that get written down when the table is sketched.
+
+Nothing merges the contents of a file. A parquet file, a JPEG and a zstd frame
+have no lines, and a tool that tried would produce a file that is not a valid
+anything while reporting success. The smallest thing that can differ is an entry.
+
+A conflict writes upstream's version beside yours as `<name>.upstream`, leaves
+yours untouched, names every conflict and exits 60. No merge tool, no prompt, no
+choice made for the user. Getting this wrong destroys work that has no other
+copy, and the cost of getting it right is that someone reads two files.
+
+`<name>.upstream` is one name and there is no second. A run whose aside would
+land on a name either side already holds fails before anything is written rather
+than numbering it, because a numbered name is a guess about which of two files a
+person meant and contracts.md has said since the first commit that numbered
+directories are never created.
+
+The rejected alternative was to refuse the whole run on the first conflict, which
+is what `--force` and `--adopt` already do between them and which would have
+thrown away the work of merging every entry that did not conflict.
+
+Sources: `crates/engine/src/merge.rs`; `crates/engine/tests/merge.rs`;
+`crates/cli/src/run/threeway.rs`; `crates/cli/tests/materialize/tracked.rs`.
+
+---
+
+## A missing entry is a deletion you made, and the other reading has two ways out
+
+A file you deleted and a file that vanished are one observation. The record
+states the entry, the destination does not hold it, and nothing on disk says
+which happened.
+
+A three way run assumes the deletion is yours. internals.md has said from the
+start that deletion is a change and needs the same evidence as an addition, and
+a run that quietly puts back a file someone removed on purpose is a run that
+cannot be used on a directory anyone works in. So an entry you deleted that
+upstream did not touch stays deleted, and one you deleted that upstream changed
+is a conflict: upstream's version lands as `<name>.upstream` and the absence
+stands.
+
+The other reading is reachable two ways, both of which already existed. `--force`
+rebuilds the destination as upstream states it, which puts back everything
+missing. `revert <path> <entry>` puts one entry back and leaves every other edit
+alone.
+
+A two way run, where upstream has not moved, keeps the `restored` outcome it has
+always had. That is not the same question asked twice: a run with nothing new to
+give has nothing to do except put back what it wrote, and refusing to would leave
+a destination that quietly stops matching its own tree digest with no run able to
+fix it. A run that does have something new to give is bringing upstream's
+changes, and re-adding a file you removed is not one of them.
+
+Sources: `docs/contracts.md` Three way; `crates/engine/src/merge.rs`;
+`crates/cli/tests/materialize/tracked.rs`
+`an_entry_you_deleted_that_upstream_left_alone_stays_deleted`,
+`an_entry_you_deleted_that_upstream_changed_conflicts`.
+
+---
+
+## Promote ingests once, and records what it was derived from
+
+`promote` turns the destination as it stands into a dataset of its own: every
+file read, the bytes kept in the cache, a manifest naming one artifact per file
+with both digests, and a lock pinning them.
+
+Ingestion happens at promote and nowhere else. Copying an edit into the cache as
+it is made would double every write in a directory someone is working in, for a
+copy nobody has asked for; the bytes are already on disk, and the cost belongs at
+the moment someone asks for them to be pinnable. It is the same reasoning that
+keeps a partial out of `objects/` until it verifies.
+
+The manifest states `derived_from`: the dataset, the manifest digest and the tree
+digest the record names. A record that forgets what it was derived from is worth
+less than one that remembers, and the three facts are exactly what someone needs
+to fetch the thing you started from and see what you changed. It states nothing
+about the destination path, because a path on this machine is not a fact about a
+dataset.
+
+Promote pins bytes and does not publish them. Each artifact names a path relative
+to the tree, and an artifact whose stated digest the cache already holds resolves
+out of the cache without that path existing, which is what makes a promoted
+manifest fetchable somewhere else once `cache export` has carried the objects
+there. That cache first resolution is a change to how a local artifact resolves,
+and it is the same promise a locked run already made: a cache holding the pinned
+bytes issues no request.
+
+Promote refuses a destination with no record. A directory nothing wrote is what
+`init` describes, and two commands writing one manifest for one directory would
+be the second way of doing something.
+
+Sources: `crates/cli/src/command/tracked.rs` `run_promote`;
+`crates/engine/src/manifest.rs` `DerivedFrom`;
+`crates/cli/src/run/dataset.rs` `ingest_artifact`;
+`crates/cli/tests/materialize/tracked.rs`
+`promote_keeps_the_edited_bytes_so_a_locked_run_can_fetch_them_again`.

@@ -118,6 +118,7 @@ impl MetadataReader for ChecksumSidecar {
             release: None,
             artifacts,
             license: None,
+            derived_from: None,
         })
     }
 }

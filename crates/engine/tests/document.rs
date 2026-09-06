@@ -305,7 +305,8 @@ fn a_receipt_renders_with_the_widest_fingerprint_any_platform_can_produce() {
         ),
         artifacts: std::collections::BTreeMap::new(),
         tree: None,
-        executable: Vec::new(),
+        entries: Vec::new(),
+        resolved: Vec::new(),
         fingerprints,
         destination: std::path::PathBuf::from("/data/silesia"),
         accepted_terms: None,
@@ -333,9 +334,11 @@ fn a_receipt_for_a_large_tree_reads_back_after_it_is_written() {
     const ENTRIES: usize = 20_000;
 
     let mut fingerprints = BTreeMap::new();
+    let mut entries = Vec::with_capacity(ENTRIES);
     for index in 0..ENTRIES {
+        let path = format!("deep/tree/of/many/files/entry-{index:07}.bin");
         fingerprints.insert(
-            format!("deep/tree/of/many/files/entry-{index:07}.bin"),
+            path.clone(),
             RecordedFingerprint {
                 volume: "1234567890abcdef".to_owned(),
                 file: format!("{index:016x}"),
@@ -344,6 +347,12 @@ fn a_receipt_for_a_large_tree_reads_back_after_it_is_written() {
                 changed_nanos: "1788612484000000000".to_owned(),
             },
         );
+        entries.push(fetchloom_engine::tree::TreeEntry::File {
+            path: fetchloom_engine::tree::EntryPath::new(&path).expect("a path this test builds"),
+            mode: fetchloom_engine::tree::Mode::ReadWrite,
+            size: 4096,
+            content: ContentDigest::from_bytes([3u8; 32]),
+        });
     }
 
     let written = Receipt {
@@ -351,7 +360,8 @@ fn a_receipt_for_a_large_tree_reads_back_after_it_is_written() {
         manifest: ManifestDigest::from_bytes([1u8; 32]),
         artifacts: BTreeMap::new(),
         tree: Some(TreeDigest::from_bytes([2u8; 32])),
-        executable: Vec::new(),
+        entries,
+        resolved: Vec::new(),
         fingerprints,
         destination: std::path::PathBuf::from("large-destination"),
         accepted_terms: None,

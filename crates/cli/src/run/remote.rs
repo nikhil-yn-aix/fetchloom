@@ -9,17 +9,16 @@ use super::container::transfer_container_entries;
 use super::context::{Materialization, Moved, RunResult};
 use super::dataset::{Provenance, prior_from, remember};
 use super::object::{materialize_object, place_object};
-use super::paths::{containing_directory, object_name, staging_beside};
+use super::paths::object_name;
 use super::selection::selected_entries;
 use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::ContentDigest;
 
-use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
+use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
-use fetchloom_engine::seam::platform::Platform;
 use fetchloom_engine::seam::source::Source;
 use fetchloom_engine::selection::Selection;
 use fetchloom_engine::transfer::{SleepingPause, Transfer};
@@ -192,15 +191,22 @@ pub(super) fn publish_one_object(
     selection: &Selection,
     emit: &dyn Fn(EventPayload),
 ) -> Result<Vec<TreeEntry>, Error> {
-    let staging = staging_beside(destination);
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
-    }
-    with.platform.create_directories(&staging)?;
+    super::staged::stage_and_publish(with, destination, &|staging| {
+        fill_object_staging(with, digest, size, name, staging, selection, emit)
+    })
+}
 
-    let built = match packed_format(with, digest, name)? {
-        Some(format) => extract_into(with, digest, format, name, &staging, selection, emit),
+pub(super) fn fill_object_staging(
+    with: &Materialization<'_>,
+    digest: ContentDigest,
+    size: u64,
+    name: &str,
+    staging: &Path,
+    selection: &Selection,
+    emit: &dyn Fn(EventPayload),
+) -> Result<Vec<TreeEntry>, Error> {
+    match packed_format(with, digest, name)? {
+        Some(format) => extract_into(with, digest, format, name, staging, selection, emit),
         None => place_object(with, digest, &staging.join(name)).and_then(|()| {
             Ok(vec![TreeEntry::File {
                 path: EntryPath::new(name).map_err(|reason| {
@@ -211,27 +217,7 @@ pub(super) fn publish_one_object(
                 content: digest,
             }])
         }),
-    };
-    let entries = match built {
-        Ok(entries) => entries,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(error);
-        }
-    };
-
-    {
-        let parent = containing_directory(destination);
-        with.platform.create_directories(&parent)?;
     }
-    if let Err(error) = with
-        .platform
-        .publish_directory(&staging, destination, with.durability)
-    {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
-    }
-    Ok(entries)
 }
 
 pub(super) fn transfer_object(

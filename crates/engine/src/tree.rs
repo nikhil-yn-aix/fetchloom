@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::digest::ContentDigest;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(into = "u32")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "u32", try_from = "u32")]
 pub enum Mode {
     ReadWrite,
     Executable,
@@ -38,6 +38,35 @@ impl From<Mode> for u32 {
     }
 }
 
+impl TryFrom<u32> for Mode {
+    type Error = ModeError;
+
+    fn try_from(bits: u32) -> Result<Self, Self::Error> {
+        match bits {
+            0o644 => Ok(Self::ReadWrite),
+            0o755 => Ok(Self::Executable),
+            other => Err(ModeError(other)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModeError(pub u32);
+
+impl fmt::Display for ModeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "write the mode as {:04o} or {:04o} rather than {:04o}",
+            Mode::ReadWrite.bits(),
+            Mode::Executable.bits(),
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ModeError {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryPathError {
     Empty,
@@ -66,9 +95,23 @@ impl fmt::Display for EntryPathError {
 
 impl std::error::Error for EntryPathError {}
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct EntryPath(String);
+
+impl From<EntryPath> for String {
+    fn from(path: EntryPath) -> Self {
+        path.0
+    }
+}
+
+impl TryFrom<String> for EntryPath {
+    type Error = EntryPathError;
+
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        Self::new(&path)
+    }
+}
 
 impl EntryPath {
     /// # Errors
@@ -119,8 +162,8 @@ impl fmt::Display for EntryPath {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TreeEntry {
     File {
         path: EntryPath,

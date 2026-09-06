@@ -84,6 +84,7 @@ impl MetadataReader for FrictionlessPackage {
             release,
             artifacts,
             license,
+            derived_from: None,
         })
     }
 }

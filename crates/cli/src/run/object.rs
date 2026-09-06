@@ -4,7 +4,7 @@ use super::archive::{extract_into, open_archive, packed_format};
 use super::context::{Materialization, RecordedArtifact, RunResult};
 use super::dataset::{Provenance, provisional_trust};
 use super::local::{Settlement, entry_size, settle};
-use super::paths::{containing_directory, entry_path_str, executable_paths, staging_beside};
+use super::paths::{containing_directory, entry_path_str, recorded_entries, staging_beside};
 use super::remote::publish_one_object;
 use fetchloom_engine::canonical;
 use fetchloom_engine::digest::ContentDigest;
@@ -66,7 +66,9 @@ pub(super) fn materialize_object(
             bytes: entries.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, Some(&recorded)),
-            executable: executable_paths(&entries),
+            recorded: recorded_entries(&entries),
+            conflicts: Vec::new(),
+            upstream: Vec::new(),
             artifact: Some(recorded.clone()),
         })
     };
@@ -84,6 +86,11 @@ pub(super) fn materialize_object(
             adopt,
             dataset,
             artifact: Some(recorded.clone()),
+            fill: &|staging| {
+                super::remote::fill_object_staging(
+                    with, digest, size, dataset, staging, selection, emit,
+                )
+            },
         },
         emit,
         &|| published(emit),

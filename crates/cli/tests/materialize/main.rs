@@ -37,4 +37,5 @@ mod manifest;
 mod reconcile;
 mod relative;
 mod symlink;
+mod tracked;
 mod work;

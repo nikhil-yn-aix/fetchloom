@@ -150,9 +150,92 @@ destination.modified: run again with --force to overwrite the modified entries
 and remove the foreign ones, or --adopt to accept the destination as it stands: a.txt (modified)
 ```
 
-Two ways out today. `--force` throws your edits away and rewrites from upstream. `--adopt` keeps your edits and records the directory as it stands, which means the link back to upstream is gone.
+That is what happens while upstream still serves what it served last time: there is nothing new to give you, so the run refuses rather than choosing between your work and its own. `--force` throws your edits away and rewrites from upstream. `--adopt` keeps your edits and records the directory as it stands. `fetchloom status` says which entries it is talking about, and `fetchloom revert` puts one back.
+
+When upstream has moved, the run has something new to give you and stops refusing. That is the next section but one.
 
 Nothing is ever half reconciled. It stops before staging anything, so you are never left with a directory that is neither the old tree nor the new one.
+
+## Editing what you fetched
+
+Fetchloom records what it wrote into a directory, so it can always tell you how that directory differs from it.
+
+```
+fetchloom get ./corpus-source -o corpus
+```
+
+Edit a file, delete one, drop one of your own in, then ask:
+
+```
+fetchloom status corpus
+```
+
+```
+modified  train/labels.csv
+deleted   notes/old.txt
+added     scratch.parquet
+```
+
+Four states and no others: unchanged, modified, deleted, added. An unchanged entry is not printed, so a directory that is exactly what the run left prints nothing at all. It reads no bytes it does not have to: where the size and timestamps still match what the run recorded, the file is not hashed again.
+
+`fetchloom diff corpus` prints the same states with the digest and the length on each side. It never looks inside a file, because a parquet file and a JPEG have no lines.
+
+To undo an edit:
+
+```
+fetchloom revert corpus train/labels.csv
+```
+
+The bytes come out of the cache, so this works with the network unplugged. Name no entry and everything changed goes back. If the cache no longer holds what an entry came from, revert says so and names the command that would fetch it, rather than quietly going to the network.
+
+## When upstream moves under your edits
+
+This is the case the tool is really for. You fetched something, you changed part of it, and the publisher released a new version.
+
+```
+fetchloom get ./corpus-source -o corpus
+```
+
+The record of the first run is the common ancestor, your directory is one side, and what the reference resolves to now is the other. Fetchloom decides per entry.
+
+- You did not touch it, upstream did: you get upstream's.
+- You changed it, upstream did not: yours stays.
+- You added a file: it stays.
+- Upstream added a file: you get it.
+- You deleted a file upstream did not touch: it stays deleted.
+- You both changed it: a conflict.
+
+Nothing merges the inside of a file, ever. A conflict writes upstream's version beside yours:
+
+```
+destination.conflict: decide each of these yourself, because upstream and you
+changed the same entry and upstream's version is beside yours as <name>.upstream:
+train/labels.csv
+```
+
+Your file is untouched. `train/labels.csv.upstream` is what upstream now serves. The run exits 60 so a script notices. Look at both, keep the one you want, delete the other, and run again.
+
+The whole thing is one publication: killed halfway, you have the old directory or the new one, never something half merged.
+
+`--force` still throws your edits away and takes upstream whole. `--adopt` still accepts the directory as it stands.
+
+## Publishing what you edited
+
+Your edited copy can become a dataset of its own.
+
+```
+fetchloom promote corpus -o corpus-2024-06.yaml
+```
+
+That reads every file, keeps the bytes in the cache, writes a manifest naming each file with both digests, and writes a lock pinning them. The manifest states what it was derived from, so the thing you made remembers the thing you started with.
+
+Promote pins the bytes; it does not upload them. To move them to someone else:
+
+```
+fetchloom cache export corpus.bundle
+```
+
+They import the bundle and run against your manifest, and get byte for byte what you had.
 
 ## Making a run repeatable
 

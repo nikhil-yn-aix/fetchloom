@@ -185,6 +185,10 @@ fn transfer_flags(command: &Command) -> surface::TransferFlags {
         | Command::Apply { transfer, .. }
         | Command::Repair { transfer, .. } => (**transfer).clone(),
         Command::Verify { .. }
+        | Command::Status { .. }
+        | Command::Diff { .. }
+        | Command::Revert { .. }
+        | Command::Promote { .. }
         | Command::Init { .. }
         | Command::Watch { .. }
         | Command::Doctor
@@ -221,6 +225,34 @@ fn dispatch(
         Command::Verify { target } => {
             command::verify::run_verify(target, resolved, parsed.global.json, observer, sequence)
         }
+        Command::Status { target, verify } => command::tracked::run_status(
+            target, false, *verify, parsed, resolved, observer, sequence,
+        ),
+        Command::Diff { target, verify } => command::tracked::run_status(
+            target, true, *verify, parsed, resolved, observer, sequence,
+        ),
+        Command::Revert {
+            target,
+            entries,
+            verify,
+        } => command::tracked::run_revert(
+            target, entries, *verify, parsed, resolved, observer, sequence,
+        ),
+        Command::Promote {
+            target,
+            output,
+            force,
+            lock,
+        } => command::tracked::run_promote(
+            target,
+            output.as_deref(),
+            lock,
+            *force,
+            parsed,
+            resolved,
+            observer,
+            sequence,
+        ),
         Command::Get {
             reference,
             transfer,

@@ -22,6 +22,7 @@ pub mod license;
 pub mod limits;
 pub mod lock;
 pub mod manifest;
+pub mod merge;
 pub mod metadata;
 pub mod network;
 pub mod outboard;

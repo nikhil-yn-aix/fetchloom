@@ -9,6 +9,7 @@ use fetchloom_engine::outcome::RunStatus;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::policy::Policy;
+use fetchloom_engine::tree::TreeEntry;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::work::{Work, WorkCounter};
 use fetchloom_platform::NativePlatform;
@@ -37,7 +38,11 @@ pub struct RunResult {
     pub(crate) work: Work,
     pub(crate) trust: TrustClass,
     #[serde(skip)]
-    pub(crate) executable: Vec<String>,
+    pub(crate) recorded: Vec<TreeEntry>,
+    #[serde(skip)]
+    pub(crate) conflicts: Vec<String>,
+    #[serde(skip)]
+    pub(crate) upstream: Vec<TreeEntry>,
     #[serde(skip)]
     pub(crate) artifact: Option<RecordedArtifact>,
 }

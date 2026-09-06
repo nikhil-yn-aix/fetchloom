@@ -14,6 +14,10 @@ Anything marked **not built** is written down and not in the binary. There is no
 | `apply <plan>` | Execute a plan, possibly made elsewhere |
 | `repair <ref>` | Refetch only the damaged ranges of a cached object |
 | `verify <path>` | Recheck a directory against the record of what was written |
+| `status <path>` | Say which entries differ from the record, one line each |
+| `diff <path>` | The same states, with the digest and the length on each side |
+| `revert <path> [entry...]` | Put back what the record states, from the cache |
+| `promote <path>` | Make the directory as it stands a dataset of its own |
 | `watch <events>` | Render a run's event stream, live or after the fact |
 | `cache <subcommand>` | Inspect and change what is kept between runs |
 | `doctor` | Check this machine, change nothing |
@@ -36,6 +40,19 @@ Anything marked **not built** is written down and not in the binary. There is no
 | `unpin <digest>` | Remove that mark |
 | `export <bundle>` | Write every object into a bundle |
 | `import <bundle>` | Read a bundle in |
+
+## What status and diff report
+
+One state per entry, decided against the record. An unchanged entry is not printed, so a directory that is exactly what the run left prints nothing at all.
+
+| State | Meaning |
+|---|---|
+| `unchanged` | The destination holds what the record states |
+| `modified` | It holds something else |
+| `deleted` | The record states it and the destination does not hold it |
+| `added` | The destination holds it and the record does not state it |
+
+There is no fifth state. `diff` prints the same states and adds the digest and the length the record states and the destination holds. Neither ever compares the inside of a file.
 
 ## Reference forms
 
@@ -123,6 +140,16 @@ Available on every command.
 | `--deterministic-io` | off | Disable adaptation, for benchmarking |
 
 `repair` takes the transfer half of this list and refuses the rest, because it restores bytes in the cache and materializes nothing. `plan` refuses `--force` and `--adopt`, because it writes to no destination.
+
+### Flags for promote
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--output <path>` | stdout | Write the manifest to a file |
+| `--force` | off | Overwrite the file `--output` names |
+| `--lock <path>` | `./fetchloom.lock` | Where the lock is written |
+
+`status`, `diff` and `revert` take the global flags and `--verify <always|fingerprint|never>`, which decides whether an entry is answered by its recorded fingerprint or by reading its bytes. Nothing else.
 
 ### Flags for init
 
@@ -246,6 +273,7 @@ A level decides which of the events the run already emits reach stderr, each as 
 | `policy.credential_invalid` | 40 | Renew it or widen its scope |
 | `resource.disk` | 50 | A volume has no room for what the run needs |
 | `resource.limit` | 50 | A document or a pool exceeded a bound |
+| `destination.conflict` | 60 | You and upstream changed one entry. Upstream's is beside yours as `<name>.upstream` |
 | `destination.modified` | 60 | `--force` to overwrite, `--adopt` to accept |
 | `destination.foreign` | 60 | `--force` to remove, `--adopt` to accept |
 | `destination.unrepresentable` | 60 | The message names the member and what the volume said |
@@ -278,6 +306,7 @@ verify.start verify.range verify.mismatch verify.end
 extract.start extract.reject extract.end
 publish.commit
 reconcile.outcome
+merge.resolution
 degrade
 error
 ```
@@ -346,8 +375,6 @@ Written down, not in the binary. Each is refused as an unknown flag or command t
 
 | Thing | What it would do |
 |---|---|
-| `--track` | Keep your edits and the link to upstream, instead of choosing one |
-| `status`, `diff`, `revert`, `promote` | Work with those tracked edits |
 | `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |
 | `probe <ref>`, `list <ref>` | Size and listing without fetching, for other tools to call |
 | `get` with no argument | Read a project manifest, the way `cargo build` reads a manifest |

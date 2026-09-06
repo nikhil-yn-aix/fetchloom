@@ -341,11 +341,93 @@ Running a request against an existing destination produces one outcome per entry
 | `modified` | Entry differs from the resolved entry | Stop, name every path, require `--force` or `--adopt` |
 | `foreign` | Present, not in the resolved tree | Stop and name it, require `--force` or `--adopt` |
 
-Which answer `unchanged` is decided by comes from `--verify`, so one policy governs a destination entry and a cache hit rather than two. A destination with no receipt has no recorded fingerprint, so every file is hashed. So does one whose receipt describes a tree other than the one this run resolved, because a recorded fingerprint answers the question the run that wrote it asked and answers no other. That is what keeps `--adopt` from letting the next run report a tree the destination does not hold.
+Which answer `unchanged` is decided by comes from `--verify`, so one policy governs a destination entry and a cache hit rather than two. A destination with no receipt has no recorded fingerprint, so every file is hashed. A fingerprint answers only what the record it was written with states about that path, so it stands for that record's entry and never for the tree this run resolved. That is what keeps `--adopt` from letting the next run report a tree the destination does not hold.
 
 Every entry unchanged writes nothing: no staging, no rename, status `unchanged`, exit 0. Entries missing and nothing modified or foreign builds only the missing entries and publishes them one at a time. Anything modified or foreign stops the run before staging and exits 60.
 
 Numbered directories are never created. A destination is never partially reconciled: it is never left holding a tree that is neither the one it held nor the one that was resolved.
+
+## The record
+
+A run into a destination writes one record beside the cache, keyed by that destination. It states two trees and the filesystem facts that make comparing them cheap.
+
+| Field | Holds |
+|---|---|
+| `entries` | The canonical entry stream of what was materialized, which is what `tree` digests |
+| `resolved` | The canonical entry stream of what the reference resolved to, absent when it is the same |
+| `fingerprints` | Volume, file, size, modification and change time, per file, as they stood after publication |
+| `artifacts` | Per artifact, the digest, where it came from, its trust class, and the name, length, selection, layout and archive format that decide where its members land |
+
+The two trees differ only where a run kept your version of an entry over upstream's. `entries` is what the destination holds, so it is what a fingerprint answers about and what `verify <path>` folds. `resolved` is what upstream last gave, so it is the merge base and what `status`, `diff` and `revert` compare against.
+
+A record naming no entry is not a record. Every command that works against one refuses with `reference.unresolved` naming the destination rather than comparing against nothing.
+
+## Status
+
+`status <path>` and `diff <path>` decide one state per entry, against `resolved` in the record. Both are read only: they change no entry in the destination and issue no request.
+
+| State | Condition |
+|---|---|
+| `unchanged` | The destination holds what the record states |
+| `modified` | It holds something else |
+| `deleted` | The record states it and the destination does not hold it |
+| `added` | The destination holds it and the record does not state it |
+
+There is no fifth state and no summary beyond these. An entry that is unchanged is not printed, so a destination that is exactly what the run left prints nothing at all. `diff` prints the same states and adds what the record states and what the destination holds, as a digest and a length. Neither ever compares the inside of a file.
+
+A file is answered by its recorded fingerprint when `--verify` is not `always` and that fingerprint still matches; otherwise its bytes are read. That is a decision about cost and never about correctness: a fingerprint that matches stands for the digest the record holds for that path, and any difference in volume, file identifier, length, modification time or change time reads the bytes again.
+
+A fingerprint is recorded only for a file whose modification and change times are already behind the instant the run began recording them, so a file written while the record was being taken carries no fingerprint and is always read. One window remains and is not closed by anything short of hashing: a file rewritten to the same length within the same filesystem timestamp tick as the run's own write, before the record was taken. `--verify always` is the answer for a caller who cannot accept that window.
+
+## Three way
+
+`get` against a destination that has a record, when what the reference resolves to now differs from the `resolved` tree that record holds, is a three way compare. The record is the merge base, the destination is your side, and what the reference resolves to is upstream. The comparison is per entry and never per line: a parquet file and a JPEG have no lines, so an entry is the smallest thing that can differ.
+
+| Base | You | Upstream | Outcome |
+|---|---|---|---|
+| present | unchanged | changed | Take upstream |
+| present | changed | unchanged | Keep yours |
+| present | changed | changed, differently | Conflict |
+| present | changed | changed, identically | Unchanged, and nothing is written |
+| present | deleted | unchanged | Stays deleted |
+| present | deleted | changed | Conflict |
+| present | deleted | deleted | Stays deleted |
+| present | unchanged | deleted | Take upstream, which removes it |
+| present | changed | deleted | Conflict |
+| absent | added | absent | Keep yours |
+| absent | absent | added | Take upstream |
+| absent | added | added, differently | Conflict |
+| absent | added | added, identically | Unchanged |
+
+A conflict writes upstream's version beside yours as `<name>.upstream`, leaves yours exactly as it is, names every conflicting path, and exits 60 with `destination.conflict`. Nothing merges the contents of a file, nothing prompts, and nothing chooses for you. A run whose `<name>.upstream` would land on a name either side already holds fails with `destination.conflict` before anything is written, because there is no second name and a numbered one would be a guess.
+
+A conflicted run still writes its record, so the next run compares against what this one left rather than conflicting again on the same entry.
+
+An entry missing from the destination is taken to be a deletion you made, because the record cannot tell a deliberate deletion from a file that vanished and deletion is a change like any other. The other reading is reachable: `--force` rebuilds the destination as upstream states it, and `revert <path> <entry>` puts one entry back. In a two way run, where upstream has not moved, a missing entry is `restored` as it always was, because a run that has nothing new to give has nothing to do but put back what it wrote.
+
+Every one of these publishes the way the rest of the product does. The merged tree is built whole in staging beside the destination and published by rename, so a run killed halfway leaves the old tree or the new one and never a half merged one.
+
+## Revert
+
+`revert <path>` restores the entries the record names, and `revert <path> <entry>...` restores only those. An entry you modified is rewritten, one you deleted comes back, and one you added is removed. Every other entry is left exactly as it is.
+
+The bytes come from the cache and never from the network, so a revert offline is a revert. An entry the cache no longer holds fails with `cache.corrupt` naming the object and the command that would bring it back; it never quietly refetches. A symbolic link the record names by its target's digest rather than by the text of the target cannot be restored from the record alone, and fails naming it.
+
+Revert publishes the way a three way run does: whole, by rename, old tree or new tree.
+
+Revert writes no record. What it restored is what the record already stated, and what it left alone is still yours.
+
+## Promote
+
+`promote <path>` makes the destination as it stands a dataset of its own. It reads every file, keeps the bytes in the cache, and writes a manifest naming one artifact per file with both digests, plus a lock pinning them.
+
+Ingestion happens at promote and at no other time. A run never copies your edits into the cache as you make them, because the bytes are already on disk and the cost belongs at the moment someone asks for it.
+
+The manifest states `derived_from`: the dataset, the manifest digest and the tree digest the record names. A promoted dataset that forgets what it was derived from is worth less than one that remembers.
+
+Promote pins bytes; it does not publish them. The manifest names each artifact by a path relative to the tree, and an artifact whose stated digest the cache already holds resolves from the cache without that path existing at all. `cache export` is how the objects reach another machine.
+
+Promote refuses a destination with no record, because a directory nothing wrote is what `init` describes.
 
 ## Partial success
 

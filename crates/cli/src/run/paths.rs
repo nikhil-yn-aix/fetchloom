@@ -3,24 +3,16 @@
 use super::adapters::unbuilt_form;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::redact::SafeUrl;
-use fetchloom_engine::tree::{Mode, TreeEntry};
+use fetchloom_engine::tree::TreeEntry;
 use std::path::{Path, PathBuf};
 
 #[must_use]
-pub(crate) fn executable_paths(entries: &[TreeEntry]) -> Vec<String> {
-    let mut paths: Vec<String> = entries
-        .iter()
-        .filter_map(|entry| match entry {
-            TreeEntry::File {
-                path,
-                mode: Mode::Executable,
-                ..
-            } => Some(path.as_str().to_owned()),
-            _ => None,
-        })
-        .collect();
-    paths.sort();
-    paths
+pub(crate) fn recorded_entries(entries: &[TreeEntry]) -> Vec<TreeEntry> {
+    let mut ordered = entries.to_vec();
+    ordered.sort_by(|left, right| {
+        fetchloom_engine::canonical::compare(left.path().as_bytes(), right.path().as_bytes())
+    });
+    ordered
 }
 
 pub(crate) fn local_path(reference: &str) -> Result<PathBuf, Error> {

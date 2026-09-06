@@ -39,6 +39,7 @@ pub enum ErrorKind {
     ArchiveCollision,
     ArchiveBomb,
     ArchiveUnsupported,
+    DestinationConflict,
     DestinationModified,
     DestinationForeign,
     DestinationUnrepresentable,
@@ -78,6 +79,7 @@ impl ErrorKind {
             Self::ArchiveCollision => "archive.collision",
             Self::ArchiveBomb => "archive.bomb",
             Self::ArchiveUnsupported => "archive.unsupported",
+            Self::DestinationConflict => "destination.conflict",
             Self::DestinationModified => "destination.modified",
             Self::DestinationForeign => "destination.foreign",
             Self::DestinationUnrepresentable => "destination.unrepresentable",
@@ -117,7 +119,8 @@ impl ErrorKind {
             | Self::ArchiveCollision
             | Self::ArchiveBomb
             | Self::ArchiveUnsupported => Layer::Extract,
-            Self::DestinationModified
+            Self::DestinationConflict
+            | Self::DestinationModified
             | Self::DestinationForeign
             | Self::DestinationUnrepresentable
             | Self::DestinationCrossVolume => Layer::Materialize,
@@ -135,7 +138,7 @@ impl ErrorKind {
         }
     }
 
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::ReferenceUnresolved,
         Self::ManifestInvalid,
         Self::AliasUnstable,
@@ -153,6 +156,7 @@ impl ErrorKind {
         Self::ArchiveCollision,
         Self::ArchiveBomb,
         Self::ArchiveUnsupported,
+        Self::DestinationConflict,
         Self::DestinationModified,
         Self::DestinationForeign,
         Self::DestinationUnrepresentable,

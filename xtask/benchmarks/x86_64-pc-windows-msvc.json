@@ -7,7 +7,7 @@
       "metrics": [
         {
           "name": "binary-size",
-          "value": 8389632.0,
+          "value": 9053696.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -75,7 +75,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files, hashing nothing and verifying nothing",
-        "wall_ms": 564.5766
+        "wall_ms": 836.2075
       }
     },
     {
@@ -116,7 +116,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files again, which is what a tool with no cache must do",
-        "wall_ms": 564.5766
+        "wall_ms": 836.2075
       }
     },
     {
@@ -157,7 +157,7 @@
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server, hashing nothing, verifying nothing and publishing nothing",
-        "wall_ms": 32.9861
+        "wall_ms": 104.9687
       }
     },
     {
@@ -198,7 +198,7 @@
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server after its interruptions are spent, so it never resumes and never pays for one",
-        "wall_ms": 31.493599999999997
+        "wall_ms": 80.8619
       }
     },
     {
@@ -233,7 +233,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 1024 files, hashing nothing and verifying nothing",
-        "wall_ms": 1468.4835999999998
+        "wall_ms": 1365.1557
       }
     },
     {
@@ -268,7 +268,7 @@
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 256 MiB file, hashing nothing and verifying nothing",
-        "wall_ms": 553.4679
+        "wall_ms": 588.9681
       }
     },
     {
@@ -303,7 +303,7 @@
       "alternative": {
         "tool": "curl",
         "does": "fetches the same sixteen objects from the same two servers one after another, hashing nothing, verifying nothing, and never backing off when a host asks it to",
-        "wall_ms": 2051.459
+        "wall_ms": 2227.6549999999997
       }
     },
     {
@@ -338,7 +338,7 @@
       "alternative": {
         "tool": "curl",
         "does": "fetches the same sixteen objects from the same two servers one after another, hashing nothing, verifying nothing, and never backing off when a host asks it to",
-        "wall_ms": 2055.5224000000003
+        "wall_ms": 2428.3842999999997
       }
     },
     {
@@ -373,7 +373,7 @@
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same slow server, hashing nothing and verifying nothing",
-        "wall_ms": 277.5382
+        "wall_ms": 310.4534
       }
     },
     {
@@ -402,7 +402,7 @@
       "alternative": {
         "tool": "the same ingest on a device that answers at once",
         "does": "performs exactly the same work with no wait charged to a flush or a preallocation",
-        "wall_ms": 872.9068
+        "wall_ms": 938.6648
       }
     }
   ]

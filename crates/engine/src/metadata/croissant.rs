@@ -117,29 +117,14 @@ impl MetadataReader for Croissant {
             artifacts[index].select = read_globs(fields.get("includes"))?;
         }
 
-        if artifacts.len() as u64 > context.limits.listing_entries {
-            return Err(Error::new(
-                ErrorKind::ResourceLimit,
-                format!(
-                    "reduce the distribution to at most {} file objects, because this document \
-                     names {}",
-                    context.limits.listing_entries,
-                    artifacts.len()
-                ),
-            ));
-        }
-        if artifacts.is_empty() {
-            return Err(malformed(
-                self.format(),
-                "name at least one file object with a location",
-            ));
-        }
+        within_bounds(self.format(), &artifacts, context)?;
 
         Ok(Manifest {
             name,
             release,
             artifacts,
             license: None,
+            derived_from: None,
         })
     }
 }
@@ -285,6 +270,30 @@ fn read_globs(value: Option<&Value>) -> Result<Vec<Glob>, Error> {
             "includes is a glob string or an array of glob strings",
         )),
     }
+}
+
+fn within_bounds(
+    format: MetadataFormat,
+    artifacts: &[Artifact],
+    context: &Context<'_>,
+) -> Result<(), Error> {
+    if artifacts.len() as u64 > context.limits.listing_entries {
+        return Err(Error::new(
+            ErrorKind::ResourceLimit,
+            format!(
+                "reduce the distribution to at most {} file objects, because this document names {}",
+                context.limits.listing_entries,
+                artifacts.len()
+            ),
+        ));
+    }
+    if artifacts.is_empty() {
+        return Err(malformed(
+            format,
+            "name at least one file object with a location",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

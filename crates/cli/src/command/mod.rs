@@ -27,6 +27,7 @@ pub mod get;
 pub mod init;
 pub mod plan;
 pub mod repair;
+pub mod tracked;
 pub mod verify;
 pub mod why;
 

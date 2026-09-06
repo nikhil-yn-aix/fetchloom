@@ -9,9 +9,11 @@ use crate::digest::{ContentDigest, ManifestDigest, RECEIPT_KEY_CONTEXT, TreeDige
 use crate::error::Error;
 use crate::identity::Fingerprint;
 use crate::license::Acceptance;
+use crate::manifest::ArchiveFormat;
 use crate::redact::SafeUrl;
+use crate::selection::{Glob, Layout, Selection};
 use crate::timestamp::Timestamp;
-use crate::tree::Mode;
+use crate::tree::{Mode, TreeEntry};
 use crate::trust::TrustClass;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +24,27 @@ pub struct ReceiptArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_reason: Option<String>,
     pub trust: TrustClass,
+    pub name: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub select: Vec<Glob>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<Glob>,
+    #[serde(default)]
+    pub layout: Layout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<ArchiveFormat>,
+}
+
+impl ReceiptArtifact {
+    #[must_use]
+    pub fn selection(&self) -> Selection {
+        Selection {
+            include: self.select.clone(),
+            exclude: self.exclude.clone(),
+            layout: self.layout,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +56,9 @@ pub struct Receipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeDigest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub executable: Vec<String>,
+    pub entries: Vec<TreeEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved: Vec<TreeEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fingerprints: BTreeMap<String, RecordedFingerprint>,
     pub destination: PathBuf,
@@ -81,15 +106,30 @@ impl Receipt {
 
     #[must_use]
     pub fn mode_of(&self, path: &str) -> Mode {
-        if self
-            .executable
-            .binary_search_by(|listed| listed.as_str().cmp(path))
-            .is_ok()
-        {
-            Mode::Executable
+        self.entries
+            .binary_search_by(|listed| {
+                crate::canonical::compare(listed.path().as_bytes(), path.as_bytes())
+            })
+            .ok()
+            .and_then(|at| match self.entries.get(at) {
+                Some(TreeEntry::File { mode, .. }) => Some(*mode),
+                _ => None,
+            })
+            .unwrap_or(Mode::ReadWrite)
+    }
+
+    #[must_use]
+    pub fn resolved_entries(&self) -> &[TreeEntry] {
+        if self.resolved.is_empty() {
+            &self.entries
         } else {
-            Mode::ReadWrite
+            &self.resolved
         }
+    }
+
+    #[must_use]
+    pub fn describes(&self, tree: TreeDigest) -> bool {
+        self.tree == Some(tree)
     }
 
     /// # Errors

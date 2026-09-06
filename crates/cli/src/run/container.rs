@@ -8,14 +8,14 @@ use super::context::{Materialization, RunResult};
 use super::dataset::{prior_from, provisional_trust, remember};
 use super::local::{Settlement, entry_size, settle};
 use super::object::place_object;
-use super::paths::{container_name, containing_directory, executable_paths, staging_beside};
+use super::paths::{container_name, containing_directory, recorded_entries, staging_beside};
 use super::selection::selected_entries;
 use fetchloom_cache::Cache;
 use fetchloom_engine::canonical;
 use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::erased::AnySource;
-use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
+use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
 use fetchloom_engine::outcome::RunStatus;
@@ -122,7 +122,9 @@ pub fn materialize_remote_container(
             bytes: built.iter().map(entry_size).sum(),
             work: with.work.taken(),
             trust: provisional_trust(with, None),
-            executable: executable_paths(&built),
+            recorded: recorded_entries(&built),
+            conflicts: Vec::new(),
+            upstream: Vec::new(),
             artifact: None,
         })
     };
@@ -140,6 +142,7 @@ pub fn materialize_remote_container(
             adopt,
             dataset: &dataset,
             artifact: None,
+            fill: &|staging| fill_container_staging(with, staging, &placements),
         },
         &emit,
         &build,
@@ -283,13 +286,15 @@ pub(super) fn place_container_entries(
     destination: &Path,
     placements: &[(String, ContentDigest, u64)],
 ) -> Result<Vec<TreeEntry>, Error> {
-    let staging = staging_beside(destination);
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .map_err(|reason| filesystem_failure(Surface::Destination, &staging, &reason))?;
-    }
-    with.platform.create_directories(&staging)?;
+    let staging = super::staged::open_staging(destination, with)?;
+    fill_container_staging(with, &staging, placements)
+}
 
+pub(super) fn fill_container_staging(
+    with: &Materialization<'_>,
+    staging: &Path,
+    placements: &[(String, ContentDigest, u64)],
+) -> Result<Vec<TreeEntry>, Error> {
     let mut built = Vec::with_capacity(placements.len());
     for (path, digest, size) in placements {
         let target = staging.join(path);
@@ -310,7 +315,7 @@ pub(super) fn place_container_entries(
                 content: *digest,
             }),
             Err(error) => {
-                let _ = std::fs::remove_dir_all(&staging);
+                let _ = std::fs::remove_dir_all(staging);
                 return Err(error);
             }
         }
