@@ -5,38 +5,58 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use fetchloom_engine::compression::{
-    CompressionChoice, PROBE_HEAD_BYTES, PROBE_RATIO, Stored, Transform, shuffle, unshuffle,
+    CompressionChoice, PROBE_HEAD_BYTES, PROBE_RATIO, PROBE_STRIDES, Stored, dictionary_label,
+    shuffle, stride_label, unshuffle,
 };
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::limits::COMPRESSION_FRAME_BYTES;
 
 const MAGIC: [u8; 4] = *b"FLZ1";
 
-const TAIL: usize = 8 + 8 + 1 + 1 + 4 + 4;
+const TAIL: usize = 8 + 8 + 4 + 1 + 1 + 4 + 4;
 
 /// What the probe found, and what it decided from it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Decision {
     pub stored: Stored,
-    pub plain_ratio: f64,
-    pub shuffled_ratio: f64,
+    pub ratios: [f64; PROBE_STRIDES.len()],
     pub probed_bytes: u64,
 }
 
 impl Decision {
     #[must_use]
+    pub fn best_ratio(&self) -> f64 {
+        self.ratios.iter().copied().fold(f64::MIN, f64::max)
+    }
+
+    #[must_use]
+    pub fn measurements(&self) -> String {
+        PROBE_STRIDES
+            .iter()
+            .zip(self.ratios)
+            .map(|(stride, ratio)| format!("{stride}:{ratio:.3}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[must_use]
     pub fn reason(&self) -> String {
         match self.stored {
             Stored::Raw => format!(
-                "its first {} bytes compressed at {:.3} plain and {:.3} byte-shuffled, and neither clears the {PROBE_RATIO:.2} a compressed object has to reach to be worth the processor time",
-                self.probed_bytes, self.plain_ratio, self.shuffled_ratio
-            ),
-            Stored::Zstd { level, transform } => format!(
-                "its first {} bytes compressed at {:.3} plain and {:.3} byte-shuffled, so it is stored zstd:{level} {}",
+                "its first {} bytes measured {} by stride, and the best of those does not clear the {PROBE_RATIO:.2} a compressed object has to reach to be worth the processor time",
                 self.probed_bytes,
-                self.plain_ratio,
-                self.shuffled_ratio,
-                transform.label()
+                self.measurements()
+            ),
+            Stored::Zstd {
+                level,
+                stride,
+                dictionary,
+            } => format!(
+                "its first {} bytes measured {} by stride, so it is stored zstd:{level} {} {}",
+                self.probed_bytes,
+                self.measurements(),
+                stride_label(stride),
+                dictionary_label(dictionary)
             ),
         }
     }
@@ -66,8 +86,8 @@ fn ratio_of(plain: usize, compressed: usize) -> f64 {
     plain as f64 / compressed as f64
 }
 
-/// Decides how one object is stored, by compressing its head rather than by
-/// reading its name.
+/// Decides how one object is stored, by compressing its head at each stride
+/// rather than by reading its name.
 ///
 /// # Errors
 /// `cache.corrupt` when the compressor refuses the head it is given.
@@ -76,8 +96,7 @@ pub fn decide(head: &[u8], choice: CompressionChoice) -> Result<Decision, Error>
         CompressionChoice::None => {
             return Ok(Decision {
                 stored: Stored::Raw,
-                plain_ratio: 1.0,
-                shuffled_ratio: 1.0,
+                ratios: [1.0; PROBE_STRIDES.len()],
                 probed_bytes: 0,
             });
         }
@@ -85,41 +104,48 @@ pub fn decide(head: &[u8], choice: CompressionChoice) -> Result<Decision, Error>
         CompressionChoice::Zstd(level) => level,
     };
     let sample = &head[..head.len().min(PROBE_HEAD_BYTES)];
-    let plain_ratio = ratio_of(sample.len(), compressed_length(sample, level)?);
-    let shuffled_ratio = ratio_of(sample.len(), compressed_length(&shuffle(sample), level)?);
-    let transform = if shuffled_ratio > plain_ratio {
-        Transform::Shuffle
+    let mut ratios = [0.0; PROBE_STRIDES.len()];
+    for (slot, stride) in ratios.iter_mut().zip(PROBE_STRIDES) {
+        *slot = if stride < 2 {
+            ratio_of(sample.len(), compressed_length(sample, level)?)
+        } else {
+            ratio_of(
+                sample.len(),
+                compressed_length(&shuffle(sample, stride), level)?,
+            )
+        };
+    }
+    let mut best = 0;
+    for index in 1..ratios.len() {
+        if ratios[index] > ratios[best] {
+            best = index;
+        }
+    }
+    let stride = if PROBE_STRIDES[best] < 2 {
+        0
     } else {
-        Transform::None
+        PROBE_STRIDES[best]
     };
-    let stored = if matches!(choice, CompressionChoice::Auto)
-        && plain_ratio.max(shuffled_ratio) < PROBE_RATIO
-    {
+    let stored = if matches!(choice, CompressionChoice::Auto) && ratios[best] < PROBE_RATIO {
         Stored::Raw
     } else {
-        Stored::Zstd { level, transform }
+        Stored::Zstd {
+            level,
+            stride,
+            dictionary: 0,
+        }
     };
     Ok(Decision {
         stored,
-        plain_ratio,
-        shuffled_ratio,
+        ratios,
         probed_bytes: sample.len() as u64,
     })
 }
 
-#[must_use]
-fn transform_byte(transform: Transform) -> u8 {
-    match transform {
-        Transform::None => 0,
-        Transform::Shuffle => 1,
-    }
-}
-
-fn transform_of(byte: u8, at: &Path) -> Result<Transform, Error> {
+fn stride_of(byte: u8, at: &Path) -> Result<u8, Error> {
     match byte {
-        0 => Ok(Transform::None),
-        1 => Ok(Transform::Shuffle),
-        other => Err(malformed(at, &format!("a byte transform numbered {other}"))),
+        0 | 2 | 4 | 8 => Ok(byte),
+        other => Err(malformed(at, &format!("a byte shuffle stride of {other}"))),
     }
 }
 
@@ -138,6 +164,10 @@ fn malformed(at: &Path, what: &str) -> Error {
 /// compressed lengths, so a later read decompresses only the frames covering
 /// the range it asked for.
 ///
+/// `dictionary` is the trained dictionary every frame is compressed against, or
+/// `None`. Its identifier is the one zstd wrote into its header, which zstd
+/// also writes into every frame and checks on the way back.
+///
 /// # Errors
 /// `cache.corrupt` when the bytes cannot be read or written, and
 /// `resource.disk` when the volume is full.
@@ -146,13 +176,21 @@ pub fn write_frames(
     into: &mut impl Write,
     at: &Path,
     level: i32,
-    transform: Transform,
+    stride: u8,
+    dictionary: Option<&[u8]>,
 ) -> Result<u64, Error> {
     let frame = usize::try_from(COMPRESSION_FRAME_BYTES).unwrap_or(1 << 20);
     let mut buffer = vec![0u8; frame];
     let mut lengths: Vec<u32> = Vec::new();
     let mut plain_total = 0u64;
     let mut written = 0u64;
+    let mut compressor = match dictionary {
+        Some(bytes) => Some(
+            zstd::bulk::Compressor::with_dictionary(level, bytes)
+                .map_err(|reason| codec_failure(&reason))?,
+        ),
+        None => None,
+    };
     loop {
         let mut filled = 0;
         while filled < frame {
@@ -168,15 +206,17 @@ pub fn write_frames(
             break;
         }
         let staged;
-        let feed = match transform {
-            Transform::None => &buffer[..filled],
-            Transform::Shuffle => {
-                staged = shuffle(&buffer[..filled]);
-                staged.as_slice()
-            }
+        let feed = if stride < 2 {
+            &buffer[..filled]
+        } else {
+            staged = shuffle(&buffer[..filled], stride);
+            staged.as_slice()
         };
-        let compressed =
-            zstd::bulk::compress(feed, level).map_err(|reason| codec_failure(&reason))?;
+        let compressed = match compressor.as_mut() {
+            Some(held) => held.compress(feed),
+            None => zstd::bulk::compress(feed, level),
+        }
+        .map_err(|reason| codec_failure(&reason))?;
         into.write_all(&compressed)
             .map_err(|reason| filesystem_failure(Surface::Cache, at, &reason))?;
         lengths.push(
@@ -198,7 +238,8 @@ pub fn write_frames(
     }
     footer.extend_from_slice(&plain_total.to_le_bytes());
     footer.extend_from_slice(&COMPRESSION_FRAME_BYTES.to_le_bytes());
-    footer.push(transform_byte(transform));
+    footer.extend_from_slice(&identifier_of(dictionary).to_le_bytes());
+    footer.push(stride);
     footer.push(u8::try_from(level).unwrap_or_default());
     footer.extend_from_slice(&count.to_le_bytes());
     footer.extend_from_slice(&MAGIC);
@@ -207,17 +248,40 @@ pub fn write_frames(
     Ok(written + footer.len() as u64)
 }
 
+/// The identifier zstd wrote into a trained dictionary's own header, which it
+/// also writes into every frame compressed against it. Zero for no dictionary.
+#[must_use]
+pub fn identifier_of(dictionary: Option<&[u8]>) -> u32 {
+    match dictionary {
+        Some(bytes) if bytes.len() >= 8 => u32::from_le_bytes(number(&bytes[4..8])),
+        _ => 0,
+    }
+}
+
 /// One compressed object, read by range.
-#[derive(Debug)]
 pub struct Frames {
     file: std::fs::File,
     base: u64,
     starts: Vec<u64>,
     lengths: Vec<u32>,
     frame_bytes: u64,
-    transform: Transform,
+    stride: u8,
+    dictionary: u32,
+    decompressor: Option<zstd::bulk::Decompressor<'static>>,
     plain_length: u64,
     held: Option<(usize, Vec<u8>)>,
+}
+
+impl std::fmt::Debug for Frames {
+    fn fmt(&self, into: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        into.debug_struct("Frames")
+            .field("frames", &self.lengths.len())
+            .field("frame_bytes", &self.frame_bytes)
+            .field("stride", &self.stride)
+            .field("dictionary", &self.dictionary)
+            .field("plain_length", &self.plain_length)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Frames {
@@ -229,19 +293,21 @@ impl Frames {
             .metadata()
             .map_err(|reason| filesystem_failure(Surface::Cache, at, &reason))?
             .len();
-        Self::open_at(file, 0, span, at)
+        Self::open_at(file, 0, span, at, None)
     }
 
     /// The same, for a compressed object written inside a larger file, such as
-    /// one entry of a pack.
+    /// one entry of a pack, and against the dictionary that pack holds.
     ///
     /// # Errors
-    /// The kinds [`Frames::open`] gives.
+    /// The kinds [`Frames::open`] gives, and `cache.corrupt` when the frames
+    /// state a dictionary the caller did not supply.
     pub fn open_at(
         mut file: std::fs::File,
         base: u64,
         span: u64,
         at: &Path,
+        dictionary: Option<&[u8]>,
     ) -> Result<Self, Error> {
         if span < TAIL as u64 {
             return Err(malformed(at, "fewer bytes than a frame table"));
@@ -259,8 +325,11 @@ impl Frames {
         if frame_bytes == 0 {
             return Err(malformed(at, "a frame size of zero"));
         }
-        let transform = transform_of(tail[16], at)?;
-        let count = u32::from_le_bytes(number(&tail[18..22])) as usize;
+        let wanted = u32::from_le_bytes(number(&tail[16..20]));
+        let stride = stride_of(tail[20], at)?;
+        let count = u32::from_le_bytes(number(&tail[22..26])) as usize;
+
+        let decompressor = decompressor_for(wanted, dictionary, at)?;
 
         let table_bytes = count * 4;
         let table_start = on_disk
@@ -292,7 +361,9 @@ impl Frames {
             starts,
             lengths,
             frame_bytes,
-            transform,
+            stride,
+            dictionary: wanted,
+            decompressor,
             plain_length,
             held: None,
         })
@@ -301,6 +372,11 @@ impl Frames {
     #[must_use]
     pub fn plain_length(&self) -> u64 {
         self.plain_length
+    }
+
+    #[must_use]
+    pub fn dictionary(&self) -> u32 {
+        self.dictionary
     }
 
     fn frame(&mut self, index: usize, at: &Path) -> Result<&[u8], Error> {
@@ -316,11 +392,15 @@ impl Frames {
                     .min(self.frame_bytes),
             )
             .unwrap_or(0);
-            let plain =
-                zstd::bulk::decompress(&packed, wanted).map_err(|reason| codec_failure(&reason))?;
-            let plain = match self.transform {
-                Transform::None => plain,
-                Transform::Shuffle => unshuffle(&plain),
+            let plain = match self.decompressor.as_mut() {
+                Some(held) => held.decompress(&packed, wanted),
+                None => zstd::bulk::decompress(&packed, wanted),
+            }
+            .map_err(|reason| codec_failure(&reason))?;
+            let plain = if self.stride < 2 {
+                plain
+            } else {
+                unshuffle(&plain, self.stride)
             };
             if plain.len() != wanted {
                 return Err(malformed(at, "a frame that decompresses to another length"));
@@ -353,6 +433,32 @@ impl Frames {
         into[..taken].copy_from_slice(&frame[within..within + taken]);
         Ok(taken)
     }
+}
+
+fn decompressor_for(
+    wanted: u32,
+    dictionary: Option<&[u8]>,
+    at: &Path,
+) -> Result<Option<zstd::bulk::Decompressor<'static>>, Error> {
+    if wanted == 0 {
+        return Ok(None);
+    }
+    let Some(bytes) = dictionary else {
+        return Err(missing_dictionary(at, wanted));
+    };
+    zstd::bulk::Decompressor::with_dictionary(bytes)
+        .map(Some)
+        .map_err(|reason| codec_failure(&reason))
+}
+
+fn missing_dictionary(at: &Path, wanted: u32) -> Error {
+    Error::new(
+        ErrorKind::CacheCorrupt,
+        format!(
+            "run cache repair {}, because every object in that pack was compressed against dictionary {wanted} and the pack no longer states it, so none of them can be read",
+            at.display()
+        ),
+    )
 }
 
 fn number<const N: usize>(from: &[u8]) -> [u8; N] {

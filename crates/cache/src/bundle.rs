@@ -252,8 +252,7 @@ impl BundleReader {
 
     fn next_member(&mut self, from: &Path) -> Result<Option<BundleMember>, Error> {
         let mut block = [0u8; BLOCK];
-        let filled = fill(&mut self.source, &mut block)
-            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
+        let filled = fill(&mut self.source, &mut block).map_err(|_| truncated(from))?;
         if filled == 0 {
             return Err(truncated(from));
         }
@@ -291,10 +290,7 @@ impl BundleReader {
     }
 
     fn read_body(&mut self, into: &mut [u8]) -> Result<usize, Error> {
-        let filled = self
-            .source
-            .read(into)
-            .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
+        let filled = self.source.read(into).map_err(|_| truncated(&self.path))?;
         self.at += filled as u64;
         Ok(filled)
     }
@@ -306,8 +302,8 @@ impl BundleReader {
         }
         let mut block = [0u8; BLOCK];
         let want = BLOCK - over;
-        let filled = fill(&mut self.source, &mut block[..want])
-            .map_err(|reason| filesystem_failure(Surface::Cache, &self.path, &reason))?;
+        let filled =
+            fill(&mut self.source, &mut block[..want]).map_err(|_| truncated(&self.path))?;
         if filled < want {
             return Err(Error::new(
                 ErrorKind::IntegrityTruncated,

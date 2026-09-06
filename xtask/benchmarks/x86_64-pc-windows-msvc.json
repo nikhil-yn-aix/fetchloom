@@ -6,22 +6,10 @@
       "iterations": 9,
       "metrics": [
         {
-          "name": "startup",
-          "value": 416.9237,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
           "name": "binary-size",
-          "value": 7926784.0,
+          "value": 8389632.0,
           "unit": "bytes",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 8400896.0,
-          "unit": "bytes",
-          "kind": "timing"
         },
         {
           "name": "bytes-read",
@@ -54,14 +42,8 @@
       "iterations": 3,
       "metrics": [
         {
-          "name": "wall",
-          "value": 1663.3524,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
           "name": "cache-growth",
-          "value": 16781824.0,
+          "value": 31074.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -73,7 +55,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 33559040.0,
+          "value": 16808290.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -88,30 +70,18 @@
           "value": 213.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 8839168.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files, hashing nothing and verifying nothing",
-        "wall_ms": 355.7654
+        "wall_ms": 564.5766
       }
     },
     {
       "regime": "warm-cache",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 526.3607999999999,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "cache-growth",
           "value": 0.0,
@@ -141,30 +111,18 @@
           "value": 67.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 8806400.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 64 files again, which is what a tool with no cache must do",
-        "wall_ms": 355.7654
+        "wall_ms": 564.5766
       }
     },
     {
       "regime": "cold-transfer",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 513.6823,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
@@ -179,7 +137,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 8388608.0,
+          "value": 8390090.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -191,33 +149,21 @@
         },
         {
           "name": "file-operations",
-          "value": 38.0,
+          "value": 41.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 9601024.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server, hashing nothing, verifying nothing and publishing nothing",
-        "wall_ms": 33.2811
+        "wall_ms": 32.9861
       }
     },
     {
       "regime": "interrupted-transfer",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 1010.7424000000001,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-materialized",
           "value": 4194304.0,
@@ -232,7 +178,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 8388608.0,
+          "value": 8390090.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -244,33 +190,21 @@
         },
         {
           "name": "file-operations",
-          "value": 58.0,
+          "value": 61.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 10358784.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same server after its interruptions are spent, so it never resumes and never pays for one",
-        "wall_ms": 52.727700000000006
+        "wall_ms": 31.493599999999997
       }
     },
     {
       "regime": "many-small-files",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 9904.6473,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-read",
           "value": 2097152.0,
@@ -279,7 +213,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 2170880.0,
+          "value": 1368270.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -294,18 +228,12 @@
           "value": 3093.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 11366400.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 1024 files, hashing nothing and verifying nothing",
-        "wall_ms": 1287.8654000000001
+        "wall_ms": 1468.4835999999998
       }
     },
     {
@@ -313,20 +241,14 @@
       "iterations": 3,
       "metrics": [
         {
-          "name": "wall",
-          "value": 2080.6426,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
           "name": "bytes-read",
-          "value": 536870912.0,
+          "value": 805306368.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
         {
           "name": "bytes-written",
-          "value": 536887240.0,
+          "value": 536979946.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -338,33 +260,21 @@
         },
         {
           "name": "file-operations",
-          "value": 30.0,
+          "value": 32.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 9154560.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "powershell Copy-Item -Recurse",
         "does": "copies the same 256 MiB file, hashing nothing and verifying nothing",
-        "wall_ms": 445.56329999999997
+        "wall_ms": 553.4679
       }
     },
     {
       "regime": "many-hosts-concurrency",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 1733.1763,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-read",
           "value": 0.0,
@@ -373,7 +283,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 6292608.0,
+          "value": 4200913.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -388,30 +298,18 @@
           "value": 325.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 15052800.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "curl",
         "does": "fetches the same sixteen objects from the same two servers one after another, hashing nothing, verifying nothing, and never backing off when a host asks it to",
-        "wall_ms": 2064.0685
+        "wall_ms": 2051.459
       }
     },
     {
       "regime": "many-hosts-backoff",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 10166.424799999999,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-read",
           "value": 0.0,
@@ -420,7 +318,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 6292608.0,
+          "value": 4200913.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -435,30 +333,18 @@
           "value": 325.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 13987840.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "curl",
         "does": "fetches the same sixteen objects from the same two servers one after another, hashing nothing, verifying nothing, and never backing off when a host asks it to",
-        "wall_ms": 1974.5032999999996
+        "wall_ms": 2055.5224000000003
       }
     },
     {
       "regime": "constrained-network",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 936.2962,
-          "unit": "ms",
-          "kind": "timing"
-        },
         {
           "name": "bytes-read",
           "value": 2097152.0,
@@ -467,7 +353,7 @@
         },
         {
           "name": "bytes-written",
-          "value": 4194304.0,
+          "value": 4195062.0,
           "unit": "bytes",
           "kind": "deterministic"
         },
@@ -479,39 +365,21 @@
         },
         {
           "name": "file-operations",
-          "value": 40.0,
+          "value": 43.0,
           "unit": "operations",
           "kind": "deterministic"
-        },
-        {
-          "name": "peak-memory",
-          "value": 9457664.0,
-          "unit": "bytes",
-          "kind": "timing"
         }
       ],
       "alternative": {
         "tool": "curl --output",
         "does": "downloads the same object from the same slow server, hashing nothing and verifying nothing",
-        "wall_ms": 293.3369
+        "wall_ms": 277.5382
       }
     },
     {
       "regime": "packed-index",
       "iterations": 3,
       "metrics": [
-        {
-          "name": "wall",
-          "value": 505.61140000000006,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
-          "name": "doubling-ratio",
-          "value": 1.1031743694036602,
-          "unit": "times",
-          "kind": "timing"
-        },
         {
           "name": "objects",
           "value": 4000.0,
@@ -525,12 +393,6 @@
       "iterations": 3,
       "metrics": [
         {
-          "name": "wall",
-          "value": 1575.5004999999999,
-          "unit": "ms",
-          "kind": "timing"
-        },
-        {
           "name": "objects",
           "value": 24.0,
           "unit": "objects",
@@ -540,7 +402,7 @@
       "alternative": {
         "tool": "the same ingest on a device that answers at once",
         "does": "performs exactly the same work with no wait charged to a flush or a preallocation",
-        "wall_ms": 1219.0875
+        "wall_ms": 872.9068
       }
     }
   ]

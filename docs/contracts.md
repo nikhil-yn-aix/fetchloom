@@ -210,9 +210,11 @@ Which form an object is in is stated by where it is filed, `objects/<hex>` raw a
 
 A partial is always raw, because a resume appends at a byte offset and verifies by range against the outboard tree. An object is therefore compressed when it is published rather than as it arrives.
 
-Compression that was asked for and did not happen emits `degrade` naming the object, what was asked, and what was measured. Two cases: the probe found the object was not worth compressing, and the volume already compresses what is written to it.
+Compression changes when a failure surfaces, never what anything hashes to. Decoding is not verifying, so an object whose stored form no longer decodes is refused even under a verification policy that would otherwise serve it unread, and it is refused as corruption rather than served as bytes. An object that cannot be decoded is not the bytes its digest names, so `cache verify` quarantines it rather than failing the run, and quarantine keeps it exactly as it was stored, because bytes that cannot be decoded are still the only ones a localized repair has.
 
-A pack belongs to the process and boot that writes it and is only appended to by that writer, so two writers never contend for one pack. An entry is committed by its bytes reaching the pack; an entry whose length runs past the end was cut short by a crash and is not one the cache holds. Removing a packed object rewrites its pack without it, under a lock, because a tombstone would be a second authority on what a pack holds.
+Compression that was asked for and did not happen emits `degrade` naming the object, what was asked, and what was measured. Two cases: the probe found the object was not worth compressing, and the volume already compresses what is written to it. The probe reports its decision for an object that gets a file of its own, and not for one appended to a pack. A packed object is at or below one frame and most of them are too small to compress at all, so reporting each one would put a line in every run for a decision nobody can act on, and a run that degrades nothing would become impossible to have.
+
+A pack belongs to the process and boot that writes it and is only appended to by that writer, so two writers never contend for one pack. Compaction is the one other writer, and it rewrites a pack whole under the same lock that removing a packed object already takes, never appending to one. An entry is committed by its bytes reaching the pack; an entry whose length runs past the end was cut short by a crash and is not one the cache holds. Removing a packed object rewrites its pack without it, under a lock, because a tombstone would be a second authority on what a pack holds.
 
 Publication is write to `partial/`, flush according to the durability tier, then atomic rename. Renames are same volume only; a cross volume rename is an error, never a copy. Under `fast` no flush is issued, so an object can be lost to power failure before it is durable, but a torn object still cannot appear.
 
@@ -233,6 +235,18 @@ A cache directory may be used by several users at once and Fetchloom never assum
 If `format` does not match the running binary, every cache operation fails with instructions to run `cache clear`. There is no migration. `cache clear` is the one command the check does not apply to, because removing a directory does not depend on what wrote it.
 
 A cache that is missing, read only, or out of space does not stop a run. It emits `degrade` and continues in `--no-cache` behavior, which is a scratch store beside the destination rather than no store at all. A format mismatch does stop it, because the user can always fix that with one command, and continuing would silently refetch everything the unusable cache already held.
+
+### Compaction
+
+`cache compact` rewrites packs. It reads every object a pack holds, trains one zstd dictionary over them, recompresses each against that dictionary at a higher level than the append path uses, and writes the dictionary into the pack it belongs to. It is a maintenance command and is never on the fetch path, so the level it compresses at is not bound by the rate the append path has to keep up with. A frame decompresses at the same rate whatever level wrote it, so nothing a read does gets slower.
+
+A dictionary belongs to exactly one pack and is stored in it. No dictionary is shared between packs, because a pack is already the unit that prune, repair and compaction rewrite and forget whole, and a shared dictionary would be a thing that outlives the pack that needs it. Objects above the pack threshold are stored loose, carry no dictionary, and need none: an object that fills a frame already has the context a dictionary would have supplied.
+
+Compaction respects `--compress`. Under `none` it rewrites packs without compressing them and trains no dictionary, because a run that was told never to compress does not get compressed packs from a maintenance command.
+
+A pack whose objects cannot train a dictionary is rewritten without one and emits `degrade` naming what was wanted and why it did not happen. Too few objects and too little total content are ordinary outcomes rather than errors.
+
+A pack records the BLAKE3 of the dictionary it holds beside it, and refuses a dictionary that no longer hashes to it. Every other byte the cache serves is covered by a content digest; a dictionary is not content addressed, so without its own digest a damaged one decompresses into plausible bytes that are silently wrong. A damaged dictionary loses every object in its pack, where a damaged frame loses one object. That is a real loss of failure granularity and it is accepted deliberately: a pack holds only objects at or below the pack threshold, which are small and can be fetched again. A pack whose dictionary no longer reads is reported as corrupt naming the pack and the command that rebuilds it, never as a single missing object.
 
 ### Repair
 

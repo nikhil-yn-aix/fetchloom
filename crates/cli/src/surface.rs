@@ -354,6 +354,8 @@ pub enum CacheCommand {
     Repair,
     /// Mark what nothing refers to, then sweep what has been marked longest.
     Prune,
+    /// Rewrite packs against a dictionary trained over what each one holds.
+    Compact,
     /// Remove every object.
     Clear,
 }

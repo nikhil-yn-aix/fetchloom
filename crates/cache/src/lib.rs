@@ -10,6 +10,7 @@ use tempfile as _;
 use windows_sys as _;
 
 pub mod bundle;
+pub mod compact;
 pub mod compress;
 pub mod diagnosis;
 pub mod format;

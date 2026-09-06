@@ -59,6 +59,8 @@ fn run_observed(source: &Path, destination: &Path, cache: &Path) -> Observed {
         .arg("--output")
         .arg(destination)
         .arg("--json")
+        .arg("--compress")
+        .arg("none")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -98,6 +100,8 @@ fn run_observed(source: &Path, destination: &Path, cache: &Path) -> Observed {
         .arg("--output")
         .arg(destination)
         .arg("--json")
+        .arg("--compress")
+        .arg("none")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .output()
         .unwrap();

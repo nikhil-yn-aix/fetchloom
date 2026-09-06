@@ -283,8 +283,13 @@ fn the_same_manifest_with_yes_completes_and_the_receipt_records_the_acceptance()
         ))
         .unwrap(),
     );
-    let held: Cache<NativePlatform> =
-        cache_cli::require(cache.path(), work, processor).expect("the cache could not be opened");
+    let held: Cache<NativePlatform> = cache_cli::require(
+        cache.path(),
+        fetchloom_engine::compression::CompressionChoice::Auto,
+        work,
+        processor,
+    )
+    .expect("the cache could not be opened");
     let receipt = held
         .read_receipt(&destination)
         .expect("the receipt could not be read")
@@ -356,8 +361,13 @@ fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
         ))
         .unwrap(),
     );
-    let held: Cache<NativePlatform> =
-        cache_cli::require(cache, work, processor).expect("the cache could not be opened");
+    let held: Cache<NativePlatform> = cache_cli::require(
+        cache,
+        fetchloom_engine::compression::CompressionChoice::Auto,
+        work,
+        processor,
+    )
+    .expect("the cache could not be opened");
     held.record_measurement(
         host,
         &fetchloom_engine::tuning::HostMeasurement {

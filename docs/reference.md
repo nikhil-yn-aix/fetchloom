@@ -30,6 +30,7 @@ Anything marked **not built** is written down and not in the binary. There is no
 | `verify` | Reread and rehash everything, quarantine each mismatch |
 | `repair` | Rebuild derived data from what the cache already holds |
 | `prune` | Remove what nothing refers to |
+| `compact` | Rewrite packs against a dictionary trained over what each one holds |
 | `clear` | Remove every object, after confirming |
 | `pin <digest>` | Keep an object from ever being pruned |
 | `unpin <digest>` | Remove that mark |
@@ -73,6 +74,7 @@ Available on every command.
 | `--no-hints` | off | Never print a hint |
 | `--yes` | off | Answer every confirmation with yes |
 | `--threads <n>` | detected | Ceiling on threads for processor work |
+| `--compress <auto|none|zstd:1..19>` | auto | How cached objects are stored |
 
 ## Flags for get, plan and apply
 
@@ -118,6 +120,7 @@ Available on every command.
 | `FETCHLOOM_CONCURRENCY` | Global concurrency |
 | `FETCHLOOM_PER_HOST` | Per host concurrency |
 | `FETCHLOOM_THREADS` | Processor thread ceiling |
+| `FETCHLOOM_COMPRESS` | How cached objects are stored |
 | `FETCHLOOM_BANDWIDTH` | Bandwidth ceiling |
 | `FETCHLOOM_LOG` | `error`, `info`, or `debug` |
 | `FETCHLOOM_TOKEN_<HOST>` | Bearer credential for that host |
@@ -145,6 +148,7 @@ TOML. Manifests take three syntaxes because strangers write them. Configuration 
 | `retries`, `timeout` | Retry policy |
 | `verify` | Cache hit verification policy |
 | `durability`, `io` | Write path |
+| `compress` | How cached objects are stored |
 | `log` | Log level |
 | `color`, `display`, `hints` | Presentation |
 
@@ -274,6 +278,14 @@ All configurable. None may be raised past a ceiling that would allow unbounded m
 | Outboard threshold | 64 MiB |
 | Outboard chunk group | 1 MiB |
 | Pack threshold | 1 MiB |
+| Compression frame | 1 MiB |
+| Compression probe head | 1 MiB |
+| Compression probe ratio | 1.10 |
+| Compression probe strides | 1, 2, 4, 8 |
+| Compaction level | 19 |
+| Compaction dictionary | 16 KiB |
+| Compaction minimum objects | 8 |
+| Compaction minimum content | 128 KiB |
 | Split threshold | 64 MiB |
 | Repair spans | 64 |
 | Repair whole refetch share | 50 percent |
@@ -291,7 +303,7 @@ Written down, not in the binary. Each is refused as an unknown flag or command t
 
 | Thing | What it would do |
 |---|---|
-| `--compress <auto\|none\|zstd:n>` | Compress cached objects. Measured at 3.4x for zstd-1 |
+|none\|zstd:n>` | Compress cached objects. Measured at 3.4x for zstd-1 |
 | `--track` | Keep your edits and the link to upstream, instead of choosing one |
 | `status`, `diff`, `revert`, `promote` | Work with those tracked edits |
 | `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |

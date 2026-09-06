@@ -70,6 +70,7 @@ pub(crate) fn open(
 /// rather than continuing without one.
 pub fn require(
     root: &Path,
+    compression: CompressionChoice,
     work: Arc<WorkCounter>,
     processor: Arc<fetchloom_engine::pool::Processor>,
 ) -> Result<Cache<NativePlatform>, Error> {
@@ -81,7 +82,7 @@ pub fn require(
             tier: DurabilityTier::Normal,
             policy: VerificationPolicy::Fingerprint,
             io: IoMode::Buffered,
-            compression: CompressionChoice::Auto,
+            compression,
         },
         work,
         processor,
@@ -108,11 +109,12 @@ pub(crate) fn report_degrade(
 pub fn run(
     root: &Path,
     command: &CacheCommand,
+    compression: CompressionChoice,
     processor: Arc<fetchloom_engine::pool::Processor>,
     reporter: &crate::Reporter<'_>,
     yes: bool,
 ) -> ExitCode {
-    let held = match require(root, Arc::new(WorkCounter::new()), processor) {
+    let held = match require(root, compression, Arc::new(WorkCounter::new()), processor) {
         Ok(held) => held,
         Err(refused) if matches!(command, CacheCommand::Clear) => {
             let _ = refused;
@@ -135,6 +137,7 @@ pub fn run(
         }
         CacheCommand::Repair => report_rebuild(&held, reporter),
         CacheCommand::Prune => report_prune(&held, reporter),
+        CacheCommand::Compact => report_compact(&held, reporter),
         CacheCommand::Clear => {
             let counted = held.status().ok();
             drop(held);
@@ -265,6 +268,23 @@ fn report_rebuild(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) 
             } else {
                 ExitCode::Cache
             }
+        }
+        Err(refused) => reporter.report(&refused),
+    }
+}
+
+fn report_compact(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) -> ExitCode {
+    match held.compact() {
+        Ok(found) => {
+            if reporter.json() {
+                print_json(&found);
+            } else {
+                println!("packs        {:>12}", found.packs);
+                println!("dictionaries {:>12}", found.dictionaries);
+                println!("bytes before {:>12}", found.bytes_before);
+                println!("bytes after  {:>12}", found.bytes_after);
+            }
+            ExitCode::Success
         }
         Err(refused) => reporter.report(&refused),
     }

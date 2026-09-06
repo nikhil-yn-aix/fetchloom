@@ -141,6 +141,7 @@ fn a_third_adapter_that_states_it_serves_a_reference_is_the_one_a_run_uses() {
     );
     let cache: Cache<NativePlatform> = cache_cli::require(
         &scratch.path().join("cache"),
+        fetchloom_engine::compression::CompressionChoice::Auto,
         Arc::clone(&work),
         Arc::clone(&processor),
     )

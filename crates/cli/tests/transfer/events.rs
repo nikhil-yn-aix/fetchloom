@@ -341,7 +341,13 @@ fn seed_measurement(cache: &Path, host: &str, throughput: u64) {
         .unwrap(),
     );
     let held: fetchloom_cache::Cache<fetchloom_platform::NativePlatform> =
-        fetchloom_cli::cache::require(cache, work, processor).unwrap();
+        fetchloom_cli::cache::require(
+            cache,
+            fetchloom_engine::compression::CompressionChoice::Auto,
+            work,
+            processor,
+        )
+        .unwrap();
     held.record_measurement(
         host,
         &fetchloom_engine::tuning::HostMeasurement {

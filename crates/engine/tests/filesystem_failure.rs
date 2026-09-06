@@ -194,6 +194,10 @@ const PERMITTED: &[(&str, &str)] = &[
         "an entry path a tree cannot represent, which is a name and not a failure the filesystem reported",
         "EntryPath::new",
     ),
+    (
+        "the compressor refusing the bytes it was handed, which is the codec answering and never a path on a volume",
+        "fn codec_failure",
+    ),
 ];
 
 #[test]

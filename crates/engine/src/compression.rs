@@ -10,7 +10,12 @@ pub const PROBE_HEAD_BYTES: usize = 1 << 20;
 
 pub const PROBE_RATIO: f64 = 1.10;
 
-pub const SHUFFLE_STRIDE: usize = 4;
+/// The strides the probe measures. One is the unshuffled measurement, because
+/// rearranging one byte words is a copy, so a stride of one never reaches disk
+/// and is spelled zero there.
+pub const PROBE_STRIDES: [u8; 4] = [1, 2, 4, 8];
+
+pub const MAX_SHUFFLE_STRIDE: u8 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,26 +66,13 @@ impl std::str::FromStr for CompressionChoice {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Transform {
-    None,
-    Shuffle,
-}
-
-impl Transform {
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::None => "no byte transform",
-            Self::Shuffle => "byte-shuffled at stride 4",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Stored {
     Raw,
-    Zstd { level: i32, transform: Transform },
+    Zstd {
+        level: i32,
+        stride: u8,
+        dictionary: u32,
+    },
 }
 
 impl Stored {
@@ -88,10 +80,34 @@ impl Stored {
     pub fn describe(self) -> String {
         match self {
             Self::Raw => "stored raw".to_owned(),
-            Self::Zstd { level, transform } => {
-                format!("stored zstd:{level}, {}", transform.label())
-            }
+            Self::Zstd {
+                level,
+                stride,
+                dictionary,
+            } => format!(
+                "stored zstd:{level}, {}, {}",
+                stride_label(stride),
+                dictionary_label(dictionary)
+            ),
         }
+    }
+}
+
+#[must_use]
+pub fn stride_label(stride: u8) -> String {
+    if stride < 2 {
+        "no byte shuffle".to_owned()
+    } else {
+        format!("byte-shuffled at stride {stride}")
+    }
+}
+
+#[must_use]
+pub fn dictionary_label(dictionary: u32) -> String {
+    if dictionary == 0 {
+        "against no dictionary".to_owned()
+    } else {
+        format!("against dictionary {dictionary}")
     }
 }
 
@@ -99,31 +115,41 @@ impl Stored {
 /// sits beside the same position of every other word. The exponent bytes of a
 /// float array repeat and its mantissa bytes do not, so grouping like
 /// positions is what makes dense numeric data compressible at all.
+///
+/// A stride below two is a copy, because one byte words are already grouped.
 #[must_use]
-pub fn shuffle(bytes: &[u8]) -> Vec<u8> {
-    let whole = bytes.len() / SHUFFLE_STRIDE * SHUFFLE_STRIDE;
+pub fn shuffle(bytes: &[u8], stride: u8) -> Vec<u8> {
+    let stride = usize::from(stride);
+    if stride < 2 {
+        return bytes.to_vec();
+    }
+    let whole = bytes.len() / stride * stride;
     let mut out = Vec::with_capacity(bytes.len());
-    for position in 0..SHUFFLE_STRIDE {
+    for position in 0..stride {
         let mut at = position;
         while at < whole {
             out.push(bytes[at]);
-            at += SHUFFLE_STRIDE;
+            at += stride;
         }
     }
     out.extend_from_slice(&bytes[whole..]);
     out
 }
 
-/// The inverse of [`shuffle`].
+/// The inverse of [`shuffle`], at the same stride.
 #[must_use]
-pub fn unshuffle(bytes: &[u8]) -> Vec<u8> {
-    let whole = bytes.len() / SHUFFLE_STRIDE * SHUFFLE_STRIDE;
-    let words = whole / SHUFFLE_STRIDE;
+pub fn unshuffle(bytes: &[u8], stride: u8) -> Vec<u8> {
+    let stride = usize::from(stride);
+    if stride < 2 {
+        return bytes.to_vec();
+    }
+    let whole = bytes.len() / stride * stride;
+    let words = whole / stride;
     let mut out = vec![0u8; bytes.len()];
     let mut taken = 0;
-    for position in 0..SHUFFLE_STRIDE {
+    for position in 0..stride {
         for word in 0..words {
-            out[word * SHUFFLE_STRIDE + position] = bytes[taken];
+            out[word * stride + position] = bytes[taken];
             taken += 1;
         }
     }
@@ -133,26 +159,37 @@ pub fn unshuffle(bytes: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompressionChoice, shuffle, unshuffle};
+    use super::{CompressionChoice, PROBE_STRIDES, shuffle, unshuffle};
 
     #[test]
-    fn shuffling_is_reversible_at_every_length_around_the_stride() {
-        for length in 0..40 {
-            let bytes: Vec<u8> = (0..length)
-                .map(|index: u8| index.wrapping_mul(7).wrapping_add(3))
-                .collect();
-            assert_eq!(
-                unshuffle(&shuffle(&bytes)),
-                bytes,
-                "a {length} byte buffer did not survive the round trip"
-            );
+    fn shuffling_is_reversible_at_every_length_around_every_stride() {
+        for stride in PROBE_STRIDES {
+            for length in 0..40 {
+                let bytes: Vec<u8> = (0..length)
+                    .map(|index: u8| index.wrapping_mul(7).wrapping_add(3))
+                    .collect();
+                assert_eq!(
+                    unshuffle(&shuffle(&bytes, stride), stride),
+                    bytes,
+                    "a {length} byte buffer did not survive stride {stride}"
+                );
+            }
         }
     }
 
     #[test]
     fn shuffling_groups_the_like_positions_of_each_word() {
         let bytes = [1, 2, 3, 4, 5, 6, 7, 8];
-        assert_eq!(shuffle(&bytes), vec![1, 5, 2, 6, 3, 7, 4, 8]);
+        assert_eq!(shuffle(&bytes, 4), vec![1, 5, 2, 6, 3, 7, 4, 8]);
+        assert_eq!(shuffle(&bytes, 2), vec![1, 3, 5, 7, 2, 4, 6, 8]);
+        assert_eq!(shuffle(&bytes, 8), bytes.to_vec());
+    }
+
+    #[test]
+    fn a_stride_of_one_is_a_copy_because_one_byte_words_are_already_grouped() {
+        let bytes = [9, 8, 7, 6, 5];
+        assert_eq!(shuffle(&bytes, 1), bytes.to_vec());
+        assert_eq!(shuffle(&bytes, 0), bytes.to_vec());
     }
 
     #[test]

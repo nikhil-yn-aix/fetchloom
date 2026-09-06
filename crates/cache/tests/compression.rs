@@ -4,6 +4,7 @@
     clippy::unwrap_used,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
+    clippy::panic,
     reason = "test inputs, where the narrowing is the point and a failure to build one is the assertion"
 )]
 
@@ -209,15 +210,15 @@ fn the_probe_decides_from_the_bytes_and_not_from_a_ratio_below_the_threshold() {
         decided.stored,
         Stored::Raw,
         "dense bytes measured at {:.3} were compressed anyway",
-        decided.plain_ratio
+        decided.best_ratio()
     );
     assert!(
-        decided.plain_ratio < PROBE_RATIO,
+        decided.best_ratio() < PROBE_RATIO,
         "the corpus assumption that dense bytes measure below {PROBE_RATIO} does not hold here: {:.3}",
-        decided.plain_ratio
+        decided.best_ratio()
     );
     assert!(
-        decided.reason().contains("compressed at"),
+        decided.reason().contains("by stride"),
         "the decision does not say what it measured: {}",
         decided.reason()
     );
@@ -228,23 +229,17 @@ fn byte_shuffling_is_chosen_when_it_measures_better_and_never_changes_the_bytes(
     let array = float_array(1 << 18);
     let decided = fetchloom_cache::compress::decide(&array, CompressionChoice::Auto).unwrap();
     assert!(
-        decided.shuffled_ratio > decided.plain_ratio,
+        decided.ratios[2] > decided.ratios[0],
         "shuffling a float array measured no better than not shuffling it: {:.3} against {:.3}",
-        decided.shuffled_ratio,
-        decided.plain_ratio
+        decided.ratios[2],
+        decided.ratios[0]
     );
     assert!(
-        matches!(
-            decided.stored,
-            Stored::Zstd {
-                transform: fetchloom_engine::compression::Transform::Shuffle,
-                ..
-            }
-        ),
-        "the better transform was measured and then not taken"
+        matches!(decided.stored, Stored::Zstd { stride, .. } if stride >= 2),
+        "the better stride was measured and then not taken"
     );
     assert_eq!(
-        unshuffle(&shuffle(&array)),
+        unshuffle(&shuffle(&array, 4), 4),
         array,
         "shuffling a float array did not survive the round trip"
     );
@@ -527,5 +522,136 @@ fn a_compressed_bundle_member_whose_bytes_were_changed_is_refused() {
     assert!(
         into.list().unwrap().is_empty(),
         "a bundle that failed published something"
+    );
+}
+
+#[test]
+fn the_probe_measures_every_stride_and_records_the_one_that_won() {
+    let mut array = Vec::new();
+    for step in 0..(1 << 17) {
+        let value = 240.0_f64 + f64::from(step % 97) / 7.0;
+        array.extend_from_slice(&value.to_le_bytes());
+    }
+    let decided = fetchloom_cache::compress::decide(&array, CompressionChoice::Auto).unwrap();
+    assert_eq!(
+        decided.ratios.len(),
+        4,
+        "the probe did not measure one ratio per stride"
+    );
+    let Stored::Zstd { stride, .. } = decided.stored else {
+        panic!(
+            "an eight byte array measured {:?} and was stored raw",
+            decided.ratios
+        );
+    };
+    assert!(
+        matches!(stride, 0 | 2 | 4 | 8),
+        "the probe chose a stride of {stride}, which is not one this format can state"
+    );
+    let best = decided.ratios.iter().copied().fold(f64::MIN, f64::max);
+    let chosen = match stride {
+        0 => decided.ratios[0],
+        2 => decided.ratios[1],
+        4 => decided.ratios[2],
+        _ => decided.ratios[3],
+    };
+    assert!(
+        (chosen - best).abs() < f64::EPSILON,
+        "the probe measured {best:.3} at its best and then stored the object at {chosen:.3}"
+    );
+    assert!(
+        decided.reason().contains("by stride"),
+        "the decision does not say what each stride measured: {}",
+        decided.reason()
+    );
+}
+
+#[test]
+fn an_eight_byte_array_reads_back_whatever_stride_the_probe_chose() {
+    let scratch = scratch();
+    let held = open_cache_compressed(
+        scratch.path(),
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        CompressionChoice::Auto,
+    )
+    .unwrap();
+    let mut array = Vec::new();
+    for step in 0..(1 << 18) {
+        let value = 101.5_f64 + f64::from(step % 313) / 11.0;
+        array.extend_from_slice(&value.to_le_bytes());
+    }
+    let digest = publish(&held, &array);
+    let mut read = Vec::new();
+    held.read(digest).unwrap().read_to_end(&mut read).unwrap();
+    assert_eq!(
+        read, array,
+        "an eight byte array did not read back the bytes that went in"
+    );
+    assert_eq!(
+        hash_bytes(&read),
+        digest,
+        "an eight byte array no longer hashes to the name it is stored under"
+    );
+}
+
+#[test]
+fn every_pack_opens_with_a_preamble_that_states_its_dictionary() {
+    let scratch = scratch();
+    let held = cache_in(scratch.path());
+    publish(&held, &compressible(4096));
+    let packs = held.packs().unwrap();
+    assert_eq!(packs.len(), 1, "publishing one small object made no pack");
+    let mut file = std::fs::File::open(&packs[0]).unwrap();
+    let mut preamble = [0_u8; 40];
+    file.read_exact(&mut preamble).unwrap();
+    assert_eq!(
+        &preamble[..4],
+        b"FLP1",
+        "a pack does not open with the four bytes that say it is one"
+    );
+    assert_eq!(
+        u32::from_le_bytes(preamble[4..8].try_into().unwrap()),
+        0,
+        "a pack that was only appended to states a dictionary it never trained"
+    );
+    assert!(
+        fetchloom_cache::pack::dictionary_in(&packs[0])
+            .unwrap()
+            .is_empty(),
+        "an appended pack handed back a dictionary"
+    );
+}
+
+#[test]
+fn a_frame_table_stating_a_stride_this_format_cannot_hold_is_refused() {
+    let scratch = scratch();
+    let held = open_cache_compressed(
+        scratch.path(),
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        CompressionChoice::Zstd(1),
+    )
+    .unwrap();
+    let bytes = compressible(PACK_THRESHOLD as usize + (1 << 16));
+    let digest = publish(&held, &bytes);
+    let path = held.layout().compressed_object(digest);
+    let span = std::fs::metadata(&path).unwrap().len();
+
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.seek(SeekFrom::Start(span - 10)).unwrap();
+    std::io::Write::write_all(&mut file, &[3_u8]).unwrap();
+    drop(file);
+
+    let refused = held.read(digest).unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        fetchloom_engine::error::ErrorKind::CacheCorrupt,
+        "a stride of three was read as if this format stated it"
+    );
+    assert!(
+        refused.next_action().contains("stride"),
+        "the refusal does not name what it could not read: {}",
+        refused.next_action()
     );
 }

@@ -19,9 +19,12 @@ fn statements() -> Vec<String> {
         "an outboard tree is outboard/<hex> and is stored only above the threshold".to_owned(),
         "an object at or below the pack threshold is appended to a pack in packs/ rather than written as its own file"
             .to_owned(),
-        "a packed object is a header of the content digest, the interop digest, the stored length and the plain length as eight little-endian bytes each, then the level and the byte transform as one byte each, followed by the bytes"
+        "a packed object is a header of the content digest, the interop digest, the stored length and the plain length as eight little-endian bytes each, then one byte stating whether the entry is framed, followed by the bytes"
             .to_owned(),
         "a pack states what it holds, so no index file can disagree with it".to_owned(),
+        "a pack opens with the four bytes FLP1, the length of the dictionary it holds as four little-endian bytes, the BLAKE3 of that dictionary as thirty-two, then that dictionary, then its entries".to_owned(),
+        "a byte shuffle stride is zero for no shuffle, or two, four or eight".to_owned(),
+        "the dictionary a framed entry names is the one its own pack holds, no other pack can supply it, and it is refused when it does not hash to what its pack recorded".to_owned(),
         format!("an object is packed at or below {PACK_THRESHOLD} bytes"),
         "an in-progress transfer is partial/<hex> and its owner record is partial/<hex>.owner"
             .to_owned(),
@@ -42,7 +45,7 @@ fn statements() -> Vec<String> {
         format!("the outboard chunk group is {OUTBOARD_CHUNK_GROUP} bytes"),
         format!("an outboard tree is stored above {OUTBOARD_THRESHOLD} bytes"),
         format!("a compressed object is objects/<hex>{COMPRESSED_SUFFIX} and an object stored raw is objects/<hex>, so which one it is is never guessed from its bytes"),
-        "a compressed object is zstd frames of the plain bytes, followed by the table of their compressed lengths as four little-endian bytes each, then the plain length and the frame size as eight little-endian bytes each, the byte transform and the level as one byte each, the frame count as four, and the four bytes FLZ1"
+        "a compressed object is zstd frames of the plain bytes, followed by the table of their compressed lengths as four little-endian bytes each, then the plain length and the frame size as eight little-endian bytes each, the dictionary identifier as four, the byte shuffle stride and the level as one byte each, the frame count as four, and the four bytes FLZ1"
             .to_owned(),
         format!("a compression frame covers exactly {COMPRESSION_FRAME_BYTES} bytes of plain input, except the last"),
         "the content digest of a compressed object is over its plain bytes, never over what is stored"

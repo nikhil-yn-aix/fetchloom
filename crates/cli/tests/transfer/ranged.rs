@@ -57,7 +57,13 @@ fn cache_at(root: &Path) -> Cache<NativePlatform> {
         ))
         .unwrap(),
     );
-    cache_cli::require(root, work, processor).unwrap()
+    cache_cli::require(
+        root,
+        fetchloom_engine::compression::CompressionChoice::Auto,
+        work,
+        processor,
+    )
+    .unwrap()
 }
 
 fn measurement(concurrency: u32) -> HostMeasurement {

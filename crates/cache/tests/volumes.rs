@@ -59,10 +59,11 @@ fn a_cache_that_cannot_be_written_is_refused_rather_than_half_opened() {
 fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
     for scratch in scratch_on(Property::Small) {
         let held = support::cache_in(scratch.path());
-        let bytes = bytes_of(1 << 20, 17);
+        let bytes = support::incompressible(1 << 20, 17);
         let mut wrote = 0u32;
         let outcome = loop {
-            let digest = hash_bytes(&bytes_of(1 << 20, u8::try_from(wrote % 251).unwrap_or(1)));
+            let filling = support::incompressible(1 << 20, u64::from(wrote) + 2);
+            let digest = hash_bytes(&filling);
             let lease = match held.lease(PartialKey::of_content(digest)) {
                 Ok(lease) => lease,
                 Err(refused) => break refused,
@@ -71,8 +72,7 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
             match began {
                 Err(refused) => break refused,
                 Ok(mut writer) => {
-                    let filled = writer
-                        .write_all(&bytes_of(1 << 20, u8::try_from(wrote % 251).unwrap_or(1)));
+                    let filled = writer.write_all(&filling);
                     if filled.is_err() {
                         break held.commit(lease, writer).unwrap_err();
                     }

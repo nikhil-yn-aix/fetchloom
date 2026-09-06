@@ -54,6 +54,7 @@ impl Ground {
             .current_dir(self.scratch.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", self.cache())
+            .env("FETCHLOOM_COMPRESS", "none")
             .output()
             .unwrap()
     }
@@ -728,6 +729,7 @@ fn a_local_reference_can_be_repaired_from_the_file_it_named() {
             .current_dir(scratch.path())
             .args(arguments)
             .env("FETCHLOOM_CACHE_DIR", &cache)
+            .env("FETCHLOOM_COMPRESS", "none")
             .output()
             .unwrap()
     };

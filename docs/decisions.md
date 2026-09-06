@@ -9711,3 +9711,434 @@ Sources: `crates/engine/src/capability.rs` `VolumeCapabilities::compresses`;
 `crates/platform/src/windows/probe.rs` `compression_probe`;
 `crates/platform/src/linux/probe.rs` `compression_probe`; `crates/cache/src/lib.rs`
 `Cache::open`.
+
+
+---
+
+
+## The frame footer, extended once for everything three parts needed
+
+Question: The frame footer carried a byte transform. Adaptive shuffle strides and
+per-pack dictionaries both need to state something per object. What shape does the
+footer take, decided before any of it was implemented.
+
+There is no version field and no compatibility code in this repository, so a
+second footer change is a second cache rebuild. This is the one chance.
+
+Chosen:
+
+    count x u32 LE      compressed length of each frame, in order
+    plain_total    u64  uncompressed bytes the frames cover
+    frame_bytes    u64  plain input per frame, == COMPRESSION_FRAME_BYTES
+    dictionary_id  u32  0 = none, else the identifier zstd assigned
+    shuffle_stride u8   0 = not shuffled, else 2, 4 or 8
+    level          u8
+    count          u32
+    MAGIC          4    "FLZ1"
+
+    TAIL = 30, was 26.
+
+One stride byte replaces the transform byte rather than joining it. The old pair
+of `transform: u8` beside a stride hardcoded to 4 could express two states that
+mean nothing: None carrying a stride, and Shuffle at stride 1, which is a copy.
+One byte holding the stride has no illegal state, and `stride_of` refuses anything
+but 0, 2, 4 and 8 on the way back in. Stride 1 never reaches disk because it is
+spelled 0. Keeping Transform as an enum would have been extensibility for
+transforms that do not exist.
+
+The dictionary identifier is the one zstd assigned, read from the dictionary
+header at bytes 4..8, and not a digest of our own. Measured rather than reasoned:
+two dictionaries trained from different samples carried ids 430738267 and
+556833437, and a frame from the first handed the second was refused with
+`Dictionary mismatch`. libzstd already writes that id into every frame and checks
+it, so deriving a second identifier would be a second authority on a fact the
+codec already keeps.
+
+The pack changed in the same edit, because a dictionary has nowhere else to live.
+`contracts.md` refuses a sidecar: a pack is the only authority on what it holds.
+Every pack now opens with the four bytes `FLP1` and a four byte dictionary length,
+then that dictionary. `PREAMBLE` is 8 bytes for a pack that has only been appended
+to.
+
+The pack entry header shrank from 82 bytes to 81. It carried `level` and
+`transform`, which the body's own footer already states, and two copies of one
+fact can disagree. It now carries the single bit the footer cannot supply, which
+is whether there is a footer at all. Checked rather than assumed: only
+`storage.rs` `Placement::is_compressed` reads that field back off disk, and it
+wants exactly that bit.
+
+Costs: four bytes per object footer, one byte saved per pack entry, eight bytes
+per pack. The format fingerprint changes, so every existing cache is discarded
+loudly on the next run, which is why all of it is one edit. No benchmark: a footer
+field has no performance surface.
+
+Sources: `crates/cache/src/compress.rs` `TAIL`, `write_frames`, `Frames::open_at`,
+`stride_of`; `crates/cache/src/pack.rs` `PACK_MAGIC`, `PREAMBLE`, `HEADER`,
+`preamble_of`, `dictionary_in`; `crates/cache/src/format.rs`.
+
+
+---
+
+
+## zstd-sys builds under emulation, so the aarch64 Linux pair is no longer uncertain
+
+Question: The codec record left one thing open. `aarch64-unknown-linux-musl` and
+`aarch64-unknown-linux-gnu` are built only by the emulated `--arm` lane, which is
+off by default, and `zstd-sys` had never been built for either.
+
+Measured, once, on this machine:
+
+    linux arm image                      pass    530.3 s
+    zstd-sys v2.1.0+zstd.1.5.7           compiled for aarch64-unknown-linux-musl
+    cargo clippy, warnings denied        Finished in 7m 57s
+
+It builds. The C in `zstd-sys` needs nothing the emulated toolchain lacks, and the
+lane that was unproven is proven for the thing that was in question.
+
+The lane is off again, and deliberately. It costs about nine minutes per target
+under qemu for an answer that does not change until the dependency does. An
+unproven platform should look unproven, and this one is no longer unproven.
+
+Uncertain: `aarch64-unknown-linux-gnu` was not reached before the lane was stopped.
+Only the musl target of the pair is measured here. The gnu target builds the same
+sources with a toolchain that is strictly better supplied, so it is expected to
+build, and expected is not measured.
+
+Sources: `xtask/src/verify.rs` `ARM_TARGETS`; the codec record above, whose
+Uncertain paragraph this answers.
+
+
+---
+
+
+## Compaction and per-pack dictionaries, and what a dictionary costs when it dies
+
+Question: A pack holds objects at or below the pack threshold, which is exactly
+one frame, so a 1 MiB frame gives those objects no useful context and they
+compress worse than anything else the cache stores. A zstd dictionary supplies
+that context. Where is it trained, what does it cover, and what does it cost.
+
+Chosen: trained at rewrite, scoped to one pack, stored in that pack.
+
+Not at creation. A pack is appended to, so a dictionary trained when the pack was
+created is stale by the next append. `rewrite_pack` already rewrites a pack whole
+for prune, under a lock. Training there makes compaction and dictionaries one
+feature rather than two, and means no dictionary is ever out of date with the
+objects it describes.
+
+The append path is unchanged: level 1, no dictionary. D1.1 chose level 1 on one
+criterion, that the whole pipeline stays ahead of a gigabit link, and the append
+path is on the fetch path. Compaction is not, so it writes at level 19. This costs
+nothing at read time because zstd decompresses at the same rate whatever level
+wrote the frame.
+
+Measured before choosing, on 64 small records of the shape a pack holds:
+
+    plain                    384000 bytes
+    level 1,  no dictionary   47787   ratio  8.036
+    level 19, no dictionary   41467   ratio  9.260
+    level 19, with dictionary 29164   ratio 13.167
+
+The gain is the dictionary and not the level: 9.260 to 13.167. Raising the level
+alone buys 15 percent, and the dictionary buys 42 percent on top of that.
+
+Scoped to the pack and nowhere else. A pack is already the unit prune, repair and
+compaction rewrite and forget whole, so a per-pack dictionary adds no concept
+those subsystems lack. A dictionary shared across packs would be a thing that
+outlives the pack needing it, and is not built. Objects above the threshold are
+loose, carry dictionary 0, and need none: an object that fills a frame already has
+the context a dictionary substitutes for.
+
+A compacted entry is written unshuffled. One dictionary describes one shape of
+bytes, and a dictionary trained over plain objects does not help frames that were
+shuffled first at strides chosen per object. Packs hold small objects, which is
+where the shuffle buys least and the dictionary buys most.
+
+Compaction respects `--compress none`, and rewrites without compressing rather
+than treating a maintenance command as permission to ignore what the run asked
+for.
+
+Not every pack can have one. Measured by accident while proving the round trip:
+`zstd::dict::from_samples` over a single sample is refused with
+`Src size is incorrect`. Too few objects is therefore an ordinary outcome, not an
+error. A pack trains a dictionary only over at least 8 objects and at least
+131072 bytes, which is eight times the 16384 byte dictionary it would store,
+below which the dictionary costs more than it saves. Every pack that does not
+qualify emits `degrade` naming what was wanted, what it holds, and the floor it
+did not reach.
+
+The cost, stated rather than discovered: today a damaged frame loses one object,
+and with a per-pack dictionary a damaged dictionary loses every object in that
+pack. That is a real loss of failure granularity. It is accepted because a pack
+holds only objects at or below the pack threshold, which are small and can be
+fetched again, and it is refused loudly: a pack whose dictionary no longer reads
+reports the pack and the command to run, never a single missing object. It is in
+`contracts.md` and covered by a fault test.
+
+A dictionary carries its own BLAKE3 in the pack preamble, and that was not designed
+in: it was forced by a test. Damaging the middle of a trained dictionary and
+reading an object back produced 6000 bytes of plausible, wrong data with no error
+at all. libzstd puts its dictionary id at offset 4, so damage past the header
+leaves the id intact and the codec sees nothing wrong, and every other byte the
+cache serves is covered by a content digest while a dictionary is not content
+addressed. Without a digest of its own, the failure this record calls a lost pack
+would instead be silent corruption. The preamble is therefore the four bytes FLP1,
+a four byte length, and thirty-two bytes of BLAKE3.
+
+Scanning a pack and reading from it were split for the same reason. `entries_in`
+takes only the preamble length, because an entry header is readable whether or not
+the dictionary beside it is, and `dictionary_in` checks the digest where the
+dictionary is actually used. Without that split the damaged pack vanished from the
+packed index and every object in it reported "this cache does not hold it", which
+is the failure being discovered rather than stated.
+
+Sources: `crates/cache/src/compact.rs`; `crates/cache/src/pack.rs`
+`rewrite_pack_with`; `docs/contracts.md` Compaction.
+
+
+---
+
+
+## Probing four strides instead of one, and what the extra two cost
+
+Question: SHUFFLE_STRIDE was hardcoded to 4, which is float32 and int32. An eight
+byte array shuffles wrong at stride 4. Probe strides 1, 2, 4 and 8 and take the
+winner, but the probe is on the publication path and the many-small-files regime
+is the slowest one measured.
+
+The probe goes from two compressions of the sample to four, not five. Stride 1 is
+the plain measurement, because rearranging one byte words is a copy, so the extra
+cost is two compressions rather than three.
+
+Measured, level 1, 1 MiB head, on arrays generated for this measurement:
+
+    an 8 byte field                       a 4 byte field
+      stride 1  3.073                       stride 1  1.215
+      stride 2  1.302                       stride 2  1.731
+      stride 4  2.147                       stride 4  4.889   winner
+      stride 8  4.388   winner              stride 8  4.641
+
+Whole file at 128 MiB picks the same winner in both, which is the property the
+probe depends on: f64 2.571 / 1.279 / 2.056 / 3.984, f32 1.215 / 1.735 / 4.791 /
+4.501.
+
+Both arrays are synthetic. `spike/corpus` no longer exists, and the optimal stride
+is a property of element width rather than of a dataset, so real data moves the
+absolute ratio and not which stride wins. The recorded ncep float32 1.706 came
+from the real corpus and is untouched.
+
+Stride 4 was never wrong on an eight byte array. `decide` takes the best
+measurement, so float64 measured 2.147 shuffled against 3.073 plain and was
+correctly stored plain. What was lost is the 4.388 stride 8 gives: a missed 30
+percent against what was actually stored, not a defect.
+
+The cost, measured on many-small-files, 1024 objects, one run each:
+
+    four strides   wall 30326.5 ms   file-operations 3093   bytes-written 1368238
+    two strides    wall 28683.5 ms   file-operations 3093   bytes-written 1368238
+
+No deterministic counter moved. File operations, bytes written and bytes read are
+identical, and those are what the gate compares; timing never gates.
+
+Wall is 5.7 percent higher on four strides and that is not attributed to the
+probe. The same pair of runs reported this machine's small-write cost ratio at
+46.39 and 579.44, a twelvefold swing between two runs of one regime, which is the
+variance CONTRIBUTING.md already records for this host. The arithmetic agrees that
+the probe is not what moved it: 1024 objects of roughly two kilobytes is about two
+megabytes of extra compression at level 1, which at the measured throughput is
+some ten milliseconds against a thirty second wall, or three hundredths of one
+percent.
+
+Chosen: no size floor. A floor would be a threshold defending against a cost that
+does not appear in any counter that gates, justified by a wall figure this machine
+cannot measure to that precision.
+
+Uncertain: one run of each. A floor should be revisited if the regime is ever
+measured on a host whose small-write cost is stable enough for a wall difference
+to mean something.
+
+Sources: `crates/engine/src/compression.rs` `PROBE_STRIDES`;
+`crates/cache/src/compress.rs` `decide`.
+
+
+---
+
+
+## Three tests that were failing before this change, and what each one was
+
+Question: The cache suite failed three tests at 5b4f915 and the CLI suite failed
+three more. None of them were introduced here. What is each one, and which are
+tests that were wrong against a contract that is right.
+
+Established by measurement rather than by reading. A worktree at 5b4f915 ran the
+CLI suite: 95 passed, 3 failed. The same three fail there as here, and the fourth
+failure in the working tree, the degrade wording, passes at 5b4f915 and is
+therefore the only one this change caused.
+
+Two of the six were product defects that a test bug was hiding.
+
+`support::damage` wrote 4096 bytes at a packed entry's body offset. A 4096 byte
+object of a repeating pattern compresses to a few hundred bytes, so the write ran
+past the entry and destroyed the pack around it rather than the object in it. That
+is a test bug and it is fixed by bounding the write to the entry's own span. But
+it was hiding two real ones:
+
+`cache verify` returned an error rather than quarantining when an object's stored
+form no longer decoded, so one damaged object hid every other object in the cache.
+An object that cannot be decoded is not the bytes its digest names, which is the
+definition of a mismatch, so it is quarantined and counted.
+
+Quarantine then could not keep it. `place_object` decodes an object to move it,
+which cannot work for the object being quarantined for not decoding.
+`place_stored_bytes` copies the entry out of its pack exactly as stored, because
+`contracts.md` keeps a quarantined object for the bytes a localized repair needs
+and undecodable bytes are still the only ones there are.
+
+`an_object_changed_within_one_tick_is_refused_only_by_rereading_it` asserts that a
+policy of never checking serves an object whose bytes changed. That cannot hold
+for a compressed object, because decoding is not verifying and garbage does not
+decode at any policy. It publishes through a cache set to `compress none`, which
+is what the test is about: verification policy, not storage.
+
+`the_reported_writes_are_the_bytes_left_on_disk` and
+`a_run_reads_and_writes_the_source_a_whole_number_of_times` assert that reported
+writes equal what is on disk. `contracts.md` already says that holds "on a run
+into an empty destination and empty cache that stored every object raw", and that
+a run which compressed an object wrote it twice and counts both. The tests assert
+the equality unconditionally, so they contradict the contract they exist to
+assert. Both now run with `--compress none`, which is the condition the contract
+names.
+
+`no_other_place_turns_a_filesystem_failure_into_an_error` flagged
+`compress.rs` `codec_failure`. It has been there since 5b4f915 and was never
+reached, because the run aborted at the cache failure first. A compressor refusing
+the bytes it was handed is the codec answering rather than a path on a volume, so
+it joins `PERMITTED` beside the archive member and the response body, with its
+reason.
+
+Sources: `crates/cache/tests/support/mod.rs` `damage`, `raw_cache`;
+`crates/cache/src/verify.rs`; `crates/cache/src/storage.rs` `place_stored_bytes`;
+`crates/cli/tests/materialize/kernel.rs` and `work.rs`;
+`crates/engine/tests/filesystem_failure.rs` `PERMITTED`.
+
+
+---
+
+
+## Repair localized against the file rather than the object, and eleven tests said so
+
+Question: The CLI policy suite failed fourteen tests at 5b4f915, eleven of them
+about repair. Measured, not assumed: a worktree at 5b4f915 ran that suite and
+reported 58 passed, 14 failed, the same set.
+
+`localize` opened `held.path()` and read bytes from it directly. For a compressed
+object that path is `objects/<hex>.z` and those bytes are frames, so every group
+was hashed as compressed bytes against a tree built over plain ones and every
+group came back damaged. `contracts.md` already forbids exactly this in the Cache
+section: a caller "is given its bytes, never a path it opens itself". Repair now
+reads through `Cache::read`, which is the same reader every other caller uses, and
+opens the file directly only for a quarantined object, which is stored as it was
+found rather than as the cache would write it.
+
+Three consequences followed from that one line.
+
+An object whose stored form no longer decodes cannot be localized at all, so
+`localize` reports `ObjectUnreadable` and the repair fetches whole with a
+`degrade`, rather than failing. `begin_repair` then could not seed the partial by
+decoding the object it was about to replace, so it starts an empty one when the
+stored form is unreadable. Neither is new behavior in the contract: both are the
+"could not be localized, fetch whole" row that was already there.
+
+The frame table lives at the tail of a compressed object, so truncating one
+removes it and nothing about that object can be localized. In-place damage keeps
+the table and still localizes, which is the common case. The tests that prove
+localization over byte layout publish with `compress none`, because layout is what
+they assert, and a compressed object's layout is the codec's rather than the
+object's.
+
+`--compress` was not reaching two of the three places that open a cache.
+`cache.rs` `require` hardcoded `CompressionChoice::Auto`, so `repair` and every
+`cache` subcommand ignored what the run asked for. That is the flag not doing what
+it says, which `contracts.md` refuses under The surface is not a placeholder. It
+now takes the resolved value, which is also what makes `cache compact` honour
+`compress none`.
+
+A bundle read through a decoder reports a cut file as a codec failure rather than
+as a short read, so a truncated bundle failed as `cache.corrupt` where the failure
+table says `integrity.truncated`. Every read of a bundle stream that ends early is
+now `integrity.truncated`, whichever layer noticed. The flipped-byte test indexes
+a fixed offset into the tar and therefore exports uncompressed: it proves a member
+that does not hash to its name, which is the `integrity.mismatch` row, not the
+frame row.
+
+Result: 72 passed, 0 failed, against 58 and 14 at 5b4f915.
+
+Sources: `crates/cache/src/repair.rs` `localize`, `begin_repair`;
+`crates/cli/src/cache.rs` `require`, `run`; `crates/cache/src/bundle.rs`
+`next_member`, `read_body`, `finish_body`.
+
+
+---
+
+
+## The probe reports its decision for a loose object and not for a packed one
+
+Question: `auto` storing an object raw emits a `degrade` naming what it measured.
+Every small object a run writes is packed, and most of them are too small to
+compress at all, so an ordinary run emitted one degrade per tiny file. A five byte
+file and an empty file each reported that 1.10 was not reached.
+
+That made `a_run_that_degrades_nothing_reports_no_degradation` impossible to
+satisfy, and it failed at 5b4f915 for the same reason with the same three objects,
+measured in a worktree at that commit.
+
+Two statements in `contracts.md` were in conflict. The probe deciding against
+compression is listed as one of the two cases that degrade, and nothing degrades
+silently. But a run that degrades nothing must be possible, or the event stops
+meaning anything: a reader who sees a degrade in every run stops reading them.
+
+Chosen: report the decision for an object that gets a file of its own, and not for
+one appended to a pack. A packed object is at or below one frame and most are too
+small to compress at all, so the decision is not one anybody can act on. A loose
+object is large enough that how it is stored is worth a line.
+
+This is not silence about a fallback. Compression asked for and refused by the
+volume still degrades, an explicit level still applies to packed objects, and the
+probe still decides every object from its bytes. What changed is which decisions
+are worth telling a person about.
+
+Sources: `crates/cache/src/storage.rs` `pack_bytes`, `record_decision`;
+`docs/contracts.md` Compression.
+
+
+---
+
+
+## A cache that compresses cannot fill a small volume with a repeating pattern
+
+Question: `a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache`
+fills a small volume until a write fails. It ran four thousand one megabyte
+writes and reported that the volume "never ran out of room, so it is not a small
+volume".
+
+The volume was fine. The bytes were not. `bytes_of` builds a repeating 251 byte
+pattern, which compresses by roughly five hundred to one, so four gigabytes of it
+occupied a few megabytes and the volume never filled. The test was measuring the
+compressor rather than the volume.
+
+Chosen: fill it with bytes no compressor can shrink. `support::incompressible` is
+an xorshift stream, and a megabyte of it occupies a megabyte however the cache
+stores it.
+
+This is worth writing down because it is the general shape of the problem
+compression introduces to a test suite. A test that needs bytes to occupy space,
+to take time, or to be damaged in place is now testing the stored form rather than
+the object unless it says otherwise. Three other tests in this change hit the same
+wall from different directions: the work counters, which now run under
+`compress none` because the contract's equality is stated for a run that stored
+every object raw; the repair proofs, which assert byte layout and therefore also
+run raw; and `support::damage`, which was writing past the end of a compressed
+entry into the pack around it.
+
+Sources: `crates/cache/tests/volumes.rs`;
+`crates/cache/tests/support/mod.rs` `incompressible`.

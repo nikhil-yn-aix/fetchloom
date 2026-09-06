@@ -34,6 +34,8 @@ fn get_reporting_work(source: &Path, destination: &Path, cache: &Path) -> Work {
         .arg("--output")
         .arg(destination)
         .arg("--json")
+        .arg("--compress")
+        .arg("none")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .output()
         .unwrap();
@@ -55,6 +57,8 @@ fn get_reporting_work_without_cache(source: &Path, destination: &Path, cache: &P
         .arg(destination)
         .arg("--no-cache")
         .arg("--json")
+        .arg("--compress")
+        .arg("none")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .output()
         .unwrap();

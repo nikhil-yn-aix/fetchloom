@@ -53,8 +53,13 @@ impl Placement {
     pub fn is_compressed(&self) -> bool {
         match self {
             Self::Loose { compressed, .. } => *compressed,
-            Self::Packed { entry, .. } => entry.stored != Stored::Raw,
+            Self::Packed { entry, .. } => entry.framed,
         }
+    }
+
+    #[must_use]
+    pub fn is_packed(&self) -> bool {
+        matches!(self, Self::Packed { .. })
     }
 }
 
@@ -197,7 +202,17 @@ impl<P: Platform> Cache<P> {
         let start = placed.offset();
         let span = placed.length().unwrap_or(on_disk - start);
         if placed.is_compressed() {
-            let frames = crate::compress::Frames::open_at(file, start, span, &container)?;
+            let dictionary = if placed.is_packed() {
+                crate::pack::dictionary_in(&container)?
+            } else {
+                Vec::new()
+            };
+            let held = if dictionary.is_empty() {
+                None
+            } else {
+                Some(dictionary.as_slice())
+            };
+            let frames = crate::compress::Frames::open_at(file, start, span, &container, held)?;
             return Ok(Bytes {
                 length: frames.plain_length(),
                 source: Source::Framed(Box::new(frames)),
@@ -272,7 +287,7 @@ impl<P: Platform> Cache<P> {
                 self.platform().publish_file(from, &to, self.tier())?;
                 crate::seal_object(&to)
             }
-            Stored::Zstd { level, transform } => {
+            Stored::Zstd { level, stride, .. } => {
                 let beside = self.scratch_path().with_extension("compressing");
                 let _ = std::fs::remove_file(&beside);
                 let mut reading = std::fs::File::open(from)
@@ -283,7 +298,8 @@ impl<P: Platform> Cache<P> {
                     &mut writing,
                     &beside,
                     level,
-                    transform,
+                    stride,
+                    None,
                 )?;
                 drop(reading);
                 self.work().read_bytes(length);
@@ -329,7 +345,6 @@ impl<P: Platform> Cache<P> {
         bytes: &[u8],
     ) -> Result<(), Error> {
         let decision = crate::compress::decide(bytes, self.compression())?;
-        self.record_decision(digest, decision);
         let entry = self.append_to_pack(digest, interop, bytes, decision.stored)?;
         self.remember_packed(digest, self.own_pack(), entry);
         Ok(())
@@ -365,7 +380,13 @@ impl<P: Platform> Cache<P> {
         if matches!(placed, Placement::Packed { .. }) {
             let aside = self.layout().quarantined(digest);
             let _ = std::fs::remove_file(&aside);
-            self.place_object(digest, &aside)?;
+            match self.place_object(digest, &aside) {
+                Ok(()) => {}
+                Err(reason) if reason.kind() == ErrorKind::CacheCorrupt => {
+                    self.place_stored_bytes(&placed, &aside)?;
+                }
+                Err(reason) => return Err(reason),
+            }
             return self.remove_object(digest);
         }
         let from = placed.container().to_path_buf();
@@ -382,6 +403,28 @@ impl<P: Platform> Cache<P> {
                     ),
                 )
             })
+    }
+
+    /// Copies an entry out of its pack exactly as it is stored, for an object
+    /// whose stored form no longer decodes. Quarantine keeps the bytes a
+    /// localized repair needs, and bytes that cannot be decoded are still the
+    /// only ones there are.
+    fn place_stored_bytes(&self, placed: &Placement, aside: &Path) -> Result<(), Error> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let from = placed.container();
+        let mut file = std::fs::File::open(from)
+            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
+        let span = placed.length().unwrap_or_default();
+        file.seek(SeekFrom::Start(placed.offset()))
+            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
+        let mut stored = vec![0_u8; usize::try_from(span).unwrap_or_default()];
+        file.read_exact(&mut stored)
+            .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
+        let mut into = self.platform().create_file_exclusive(aside)?;
+        into.write_all(&stored)
+            .map_err(|reason| filesystem_failure(Surface::Cache, aside, &reason))?;
+        self.platform().flush(&into, self.tier())
     }
 
     pub(crate) fn owns_object(&self, digest: ContentDigest) -> Result<bool, Error> {

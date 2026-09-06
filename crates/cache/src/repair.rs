@@ -82,12 +82,31 @@ impl<P: Platform> Cache<P> {
         let mut tree = std::fs::File::open(self.layout().outboard_of(digest))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let recorded_len = recorded_length(&mut tree).unwrap_or(object_len);
-        let mut object = std::fs::File::open(&path)
-            .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         let work = self.work();
-        let found = find_damage(&mut tree, recorded_len, digest, &mut |group, into| {
-            read_group(&mut object, &path, group, object_len, into, work)
-        });
+        let found = match held {
+            Held::Published(_) => match self.read(digest) {
+                Ok(mut object) => {
+                    find_damage(&mut tree, recorded_len, digest, &mut |group, into| {
+                        read_group(&mut object, &path, group, object_len, into, work)
+                    })
+                }
+                Err(refused) if refused.kind() == ErrorKind::CacheCorrupt => {
+                    return Ok(Localized {
+                        object_len,
+                        damaged: Vec::new(),
+                        not_localized: Some(NotLocalized::ObjectUnreadable),
+                    });
+                }
+                Err(refused) => return Err(refused),
+            },
+            Held::Quarantined(_) => {
+                let mut object = std::fs::File::open(&path)
+                    .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+                find_damage(&mut tree, recorded_len, digest, &mut |group, into| {
+                    read_group(&mut object, &path, group, object_len, into, work)
+                })
+            }
+        };
         match found {
             Ok(damaged) => Ok(Localized {
                 object_len: recorded_len,
@@ -153,7 +172,13 @@ impl<P: Platform> Cache<P> {
         let path = self.layout().partial_of(digest);
         let _ = std::fs::remove_file(&path);
         match held {
-            Held::Published(_) => self.place_object(digest, &path)?,
+            Held::Published(_) => match self.place_object(digest, &path) {
+                Ok(()) => {}
+                Err(refused) if refused.kind() == ErrorKind::CacheCorrupt => {
+                    drop(self.platform().create_file_exclusive(&path)?);
+                }
+                Err(refused) => return Err(refused),
+            },
             Held::Quarantined(ref at) => {
                 self.platform().clone_or_copy(at, &path).map(|_| ())?;
             }
@@ -310,7 +335,7 @@ pub struct RepairWriter {
 }
 
 fn read_group(
-    object: &mut std::fs::File,
+    object: &mut (impl Read + Seek),
     path: &Path,
     group: u64,
     object_len: u64,

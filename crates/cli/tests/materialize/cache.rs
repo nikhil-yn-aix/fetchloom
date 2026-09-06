@@ -317,8 +317,9 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
         .expect("the cache packed no object")
         .path();
     let held = std::fs::read(&pack).unwrap();
+    let start = usize::try_from(fetchloom_cache::pack::preamble_span(&pack).unwrap()).unwrap();
     let mut name = String::new();
-    for byte in &held[..32] {
+    for byte in &held[start..start + 32] {
         use std::fmt::Write as _;
         let _ = write!(name, "{byte:02x}");
     }
@@ -336,8 +337,9 @@ fn verify_quarantines_an_object_that_changed_on_disk() {
             .write(true)
             .open(&object)
             .unwrap();
-        file.seek(SeekFrom::Start(72)).unwrap();
-        file.write_all(&[held[72] ^ 0xff]).unwrap();
+        let at = start + fetchloom_cache::pack::ENTRY_HEADER;
+        file.seek(SeekFrom::Start(at as u64)).unwrap();
+        file.write_all(&[held[at] ^ 0xff]).unwrap();
     }
 
     let verified = run(&cache, &["cache", "verify", "--json"]);
@@ -479,7 +481,7 @@ fn an_object_the_probe_will_not_compress_says_so_in_the_event_stream() {
         "the degrade does not name what was used instead: {stream}"
     );
     assert!(
-        stream.contains("compressed at"),
+        stream.contains("by stride"),
         "the degrade does not name what was measured: {stream}"
     );
 }

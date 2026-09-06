@@ -323,7 +323,7 @@ fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
 
 #[test]
 fn an_object_changed_within_one_tick_is_refused_only_by_rereading_it() {
-    let (scratch, held) = cache();
+    let (scratch, held) = support::raw_cache();
     let digest = support::publish(&held, &bytes_of(4096, 13));
     support::damage(&held, digest, &bytes_of(4096, 14));
 

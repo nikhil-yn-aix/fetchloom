@@ -79,7 +79,12 @@ pub fn run_repair(
         return ExitCode::Resource;
     };
     let work = Arc::new(WorkCounter::new());
-    let held = match cache::require(&root, Arc::clone(&work), Arc::new(processor)) {
+    let held = match cache::require(
+        &root,
+        resolved.compress.value,
+        Arc::clone(&work),
+        Arc::new(processor),
+    ) {
         Ok(held) => held,
         Err(refused) => return reporter.report(&refused),
     };

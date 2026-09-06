@@ -3,21 +3,28 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use fetchloom_engine::compression::{Stored, Transform};
+use fetchloom_engine::compression::Stored;
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::seam::platform::Platform;
 
 use crate::Cache;
 
-const HEADER: usize = 32 + 32 + 8 + 8 + 1 + 1;
+/// The bytes an entry states about itself before its own bytes begin.
+pub const ENTRY_HEADER: usize = 32 + 32 + 8 + 8 + 1;
+
+const HEADER: usize = ENTRY_HEADER;
+
+const PACK_MAGIC: [u8; 4] = *b"FLP1";
+
+const PREAMBLE: usize = 4 + 4 + 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub offset: u64,
     pub length: u64,
     pub plain_length: u64,
-    pub stored: Stored,
+    pub framed: bool,
     pub interop: InteropDigest,
 }
 
@@ -37,7 +44,7 @@ impl<P: Platform> Cache<P> {
         stored: Stored,
     ) -> Result<Entry, Error> {
         let path = self.own_pack();
-        let body = body_of(bytes, stored, &path)?;
+        let body = body_of(bytes, stored, None, &path)?;
         let _appending = self
             .appending
             .lock()
@@ -47,14 +54,21 @@ impl<P: Platform> Cache<P> {
             .create(true)
             .open(&path)
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
-        let at = file
+        let mut at = file
             .seek(SeekFrom::End(0))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+        if at == 0 {
+            let preamble = preamble_of(&[])?;
+            file.write_all(&preamble)
+                .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+            at = preamble.len() as u64;
+            self.work().wrote_bytes(at);
+        }
         let entry = Entry {
             offset: at + HEADER as u64,
             length: body.len() as u64,
             plain_length: bytes.len() as u64,
-            stored,
+            framed: stored != Stored::Raw,
             interop,
         };
         file.write_all(&header_of(digest, &entry))
@@ -79,7 +93,10 @@ impl<P: Platform> Cache<P> {
             .map_err(|reason| filesystem_failure(Surface::Cache, pack, &reason))?
             .len();
         let mut found = Vec::new();
-        let mut at = 0u64;
+        let mut at = preamble_span(pack)?;
+        if file.seek(SeekFrom::Start(at)).is_err() {
+            return Ok(found);
+        }
         loop {
             let mut header = [0_u8; HEADER];
             if !read_exactly(&mut file, &mut header, pack)? {
@@ -99,7 +116,7 @@ impl<P: Platform> Cache<P> {
                     .try_into()
                     .map_err(|_| malformed(pack, "a length that is not eight bytes"))?,
             );
-            let stored = stored_of(header[80], header[81], pack)?;
+            let framed = framed_of(header[80], pack)?;
             let digest = ContentDigest::from_bytes(name);
             let start = at + HEADER as u64;
             if start.saturating_add(length) > on_disk {
@@ -114,7 +131,7 @@ impl<P: Platform> Cache<P> {
                     offset: start,
                     length,
                     plain_length,
-                    stored,
+                    framed,
                     interop: InteropDigest::from_bytes(interop),
                 },
             ));
@@ -148,56 +165,134 @@ fn header_of(digest: ContentDigest, entry: &Entry) -> [u8; HEADER] {
     header[32..64].copy_from_slice(entry.interop.bytes());
     header[64..72].copy_from_slice(&entry.length.to_le_bytes());
     header[72..80].copy_from_slice(&entry.plain_length.to_le_bytes());
-    let (level, transform) = match entry.stored {
-        Stored::Raw => (0, 0),
-        Stored::Zstd { level, transform } => (
-            u8::try_from(level).unwrap_or(0),
-            match transform {
-                Transform::None => 0,
-                Transform::Shuffle => 1,
-            },
-        ),
-    };
-    header[80] = level;
-    header[81] = transform;
+    header[80] = u8::from(entry.framed);
     header
 }
 
-fn stored_of(level: u8, transform: u8, pack: &std::path::Path) -> Result<Stored, Error> {
-    if level == 0 {
-        return Ok(Stored::Raw);
+fn framed_of(byte: u8, pack: &std::path::Path) -> Result<bool, Error> {
+    match byte {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => Err(malformed(
+            pack,
+            &format!("an entry that states neither raw nor framed but {other}"),
+        )),
     }
-    let transform = match transform {
-        0 => Transform::None,
-        1 => Transform::Shuffle,
-        other => {
-            return Err(malformed(
-                pack,
-                &format!("a byte transform numbered {other}"),
-            ));
-        }
-    };
-    Ok(Stored::Zstd {
-        level: i32::from(level),
-        transform,
-    })
 }
 
-fn body_of(bytes: &[u8], stored: Stored, pack: &std::path::Path) -> Result<Vec<u8>, Error> {
+fn body_of(
+    bytes: &[u8],
+    stored: Stored,
+    dictionary: Option<&[u8]>,
+    pack: &std::path::Path,
+) -> Result<Vec<u8>, Error> {
     match stored {
         Stored::Raw => Ok(bytes.to_vec()),
-        Stored::Zstd { level, transform } => {
+        Stored::Zstd { level, stride, .. } => {
             let mut framed = Vec::with_capacity(bytes.len());
             crate::compress::write_frames(
                 &mut std::io::Cursor::new(bytes),
                 &mut framed,
                 pack,
                 level,
-                transform,
+                stride,
+                dictionary,
             )?;
             Ok(framed)
         }
     }
+}
+
+/// The dictionary a pack states every framed entry in it was compressed
+/// against, empty when the pack states none.
+///
+/// # Errors
+/// `cache.corrupt` when the pack does not open with a preamble this build
+/// reads, or states a dictionary longer than the file holds.
+/// How many bytes the preamble occupies, without checking the dictionary it
+/// holds. Scanning a pack needs to know where its entries start, and an entry
+/// header is readable whether or not the dictionary beside it still is.
+///
+/// # Errors
+/// `cache.corrupt` when the pack does not open with a preamble this build
+/// reads.
+pub fn preamble_span(pack: &std::path::Path) -> Result<u64, Error> {
+    let mut file = match std::fs::File::open(pack) {
+        Ok(file) => file,
+        Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(reason) => return Err(filesystem_failure(Surface::Cache, pack, &reason)),
+    };
+    let mut preamble = [0_u8; PREAMBLE];
+    if !read_exactly(&mut file, &mut preamble, pack)? {
+        return Ok(0);
+    }
+    if preamble[..4] != PACK_MAGIC {
+        return Err(malformed(pack, "no pack preamble"));
+    }
+    let length = u32::from_le_bytes(
+        preamble[4..8]
+            .try_into()
+            .map_err(|_| malformed(pack, "a dictionary length that is not four bytes"))?,
+    );
+    Ok(PREAMBLE as u64 + u64::from(length))
+}
+
+/// # Errors
+/// `cache.corrupt` when the pack does not open with a preamble this build
+/// reads, states a dictionary longer than the file holds, or holds one that no
+/// longer hashes to what the pack recorded beside it.
+pub fn dictionary_in(pack: &std::path::Path) -> Result<Vec<u8>, Error> {
+    let mut file = match std::fs::File::open(pack) {
+        Ok(file) => file,
+        Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(reason) => return Err(filesystem_failure(Surface::Cache, pack, &reason)),
+    };
+    let mut preamble = [0_u8; PREAMBLE];
+    if !read_exactly(&mut file, &mut preamble, pack)? {
+        return Ok(Vec::new());
+    }
+    if preamble[..4] != PACK_MAGIC {
+        return Err(malformed(pack, "no pack preamble"));
+    }
+    let length = u32::from_le_bytes(
+        preamble[4..8]
+            .try_into()
+            .map_err(|_| malformed(pack, "a dictionary length that is not four bytes"))?,
+    ) as usize;
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let mut dictionary = vec![0_u8; length];
+    if !read_exactly(&mut file, &mut dictionary, pack)? {
+        return Err(malformed(
+            pack,
+            "a dictionary length reaching past the end of the pack",
+        ));
+    }
+    let mut stated = [0_u8; 32];
+    stated.copy_from_slice(&preamble[8..40]);
+    if fetchloom_engine::hashing::hash_bytes(&dictionary).bytes() != &stated {
+        return Err(crate::compact::unreadable(
+            pack,
+            "the dictionary it states does not hash to what the pack recorded when it was written",
+        ));
+    }
+    Ok(dictionary)
+}
+
+fn preamble_of(dictionary: &[u8]) -> Result<Vec<u8>, Error> {
+    let length = u32::try_from(dictionary.len()).map_err(|_| {
+        Error::new(
+            ErrorKind::CacheCorrupt,
+            "a dictionary longer than a four byte length describes".to_owned(),
+        )
+    })?;
+    let mut preamble = Vec::with_capacity(PREAMBLE + dictionary.len());
+    preamble.extend_from_slice(&PACK_MAGIC);
+    preamble.extend_from_slice(&length.to_le_bytes());
+    preamble.extend_from_slice(fetchloom_engine::hashing::hash_bytes(dictionary).bytes());
+    preamble.extend_from_slice(dictionary);
+    Ok(preamble)
 }
 
 fn read_exactly(
@@ -284,8 +379,12 @@ impl<P: Platform> Cache<P> {
             .map_err(|reason| filesystem_failure(Surface::Cache, pack, &reason))?;
         let beside = pack.with_extension("rewriting");
         let mut writing = self.platform().create_file_exclusive(&beside)?;
+        let preamble = preamble_of(&dictionary_in(pack)?)?;
+        writing
+            .write_all(&preamble)
+            .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
         let mut moved = Vec::new();
-        let mut at = 0u64;
+        let mut at = preamble.len() as u64;
         for (digest, entry) in kept {
             let mut bytes = vec![0_u8; usize::try_from(entry.length).unwrap_or(0)];
             source
@@ -323,5 +422,68 @@ impl<P: Platform> Cache<P> {
         if let Some(built) = held.as_mut() {
             std::sync::Arc::make_mut(built).retain(|_, (held_in, _)| held_in != pack);
         }
+    }
+}
+
+impl<P: Platform> Cache<P> {
+    /// Writes `objects` into `pack`, compressed against `dictionary`, which the
+    /// pack then states in its preamble so nothing else has to supply it.
+    ///
+    /// # Errors
+    /// `cache.corrupt` when the pack cannot be written or published.
+    pub(crate) fn rewrite_pack_with(
+        &self,
+        pack: &std::path::Path,
+        objects: &[(ContentDigest, Vec<u8>)],
+        dictionary: Option<&[u8]>,
+    ) -> Result<(), Error> {
+        let held = self.platform().lock(&pack.with_extension("lock"))?;
+        let stored = crate::compact::stored_for(dictionary, self.compression());
+        let beside = pack.with_extension("compacting");
+        let _ = std::fs::remove_file(&beside);
+        let mut writing = self.platform().create_file_exclusive(&beside)?;
+        let preamble = preamble_of(dictionary.unwrap_or(&[]))?;
+        writing
+            .write_all(&preamble)
+            .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
+        let mut moved = Vec::new();
+        let mut at = preamble.len() as u64;
+        for (digest, bytes) in objects {
+            let body = body_of(bytes, stored, dictionary, &beside)?;
+            let entry = Entry {
+                offset: at + HEADER as u64,
+                length: body.len() as u64,
+                plain_length: bytes.len() as u64,
+                framed: stored != Stored::Raw,
+                interop: self.interop_of(*digest)?,
+            };
+            writing
+                .write_all(&header_of(*digest, &entry))
+                .and_then(|()| writing.write_all(&body))
+                .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
+            at += HEADER as u64 + entry.length;
+            moved.push((*digest, entry));
+        }
+        self.platform().flush(&writing, self.tier())?;
+        drop(writing);
+        self.platform().publish_file(&beside, pack, self.tier())?;
+        drop(held);
+        self.forget_pack(pack);
+        for (digest, entry) in moved {
+            self.remember_packed(digest, pack.to_path_buf(), entry);
+        }
+        Ok(())
+    }
+
+    fn interop_of(&self, digest: ContentDigest) -> Result<InteropDigest, Error> {
+        self.packed_index()
+            .get(&digest)
+            .map(|(_, entry)| entry.interop)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::CacheCorrupt,
+                    format!("run cache verify, because {digest} left its pack while it was being compacted"),
+                )
+            })
     }
 }

@@ -68,6 +68,20 @@ pub fn cache_in(under: &Path) -> Cache<NativePlatform> {
     open_cache(under).unwrap()
 }
 
+/// A cache that stores every object raw, for tests about something other than
+/// compression whose object has to be readable after its bytes are changed.
+pub fn raw_cache() -> (tempfile::TempDir, Cache<NativePlatform>) {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let held = open_cache_compressed(
+        scratch.path(),
+        VerificationPolicy::Fingerprint,
+        IoMode::Buffered,
+        CompressionChoice::None,
+    )
+    .unwrap();
+    (scratch, held)
+}
+
 pub fn cache() -> (tempfile::TempDir, Cache<NativePlatform>) {
     let scratch = tempfile::TempDir::new().unwrap();
     let held = cache_in(scratch.path());
@@ -318,8 +332,12 @@ pub fn damage(cache: &Cache<NativePlatform>, digest: ContentDigest, with: &[u8])
         .write(true)
         .open(&container)
         .unwrap();
+    let span = placed
+        .length()
+        .unwrap_or_else(|| file.metadata().unwrap().len() - placed.offset());
+    let within = usize::try_from(span).unwrap_or(usize::MAX).min(with.len());
     file.seek(SeekFrom::Start(placed.offset())).unwrap();
-    file.write_all(with).unwrap();
+    file.write_all(&with[..within]).unwrap();
 }
 
 #[derive(Debug, Default)]
@@ -349,4 +367,26 @@ impl Checked {
 
 pub fn scratch() -> tempfile::TempDir {
     tempfile::TempDir::new().unwrap()
+}
+
+/// Bytes no compressor can shrink, for a test that has to occupy a volume
+/// rather than merely write to it. A cache that compresses what it stores will
+/// never fill a small volume with a repeating pattern.
+#[must_use]
+pub fn incompressible(length: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed | 1;
+    (0..length)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "one byte of a 64 bit state is the point"
+            )]
+            {
+                (state >> 24) as u8
+            }
+        })
+        .collect()
 }

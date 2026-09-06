@@ -21,5 +21,12 @@ pub fn run_cache(
         eprintln!("the processor pool could not be built");
         return ExitCode::Resource;
     };
-    cache::run(&root, command, Arc::new(processor), reporter, yes)
+    cache::run(
+        &root,
+        command,
+        resolved.compress.value,
+        Arc::new(processor),
+        reporter,
+        yes,
+    )
 }

@@ -257,9 +257,18 @@ fn exported() -> Hostile {
         .success()
     );
     assert!(
-        run(&["cache", "export", bundle.to_str().unwrap()], &cache)
-            .status
-            .success()
+        run(
+            &[
+                "cache",
+                "export",
+                bundle.to_str().unwrap(),
+                "--compress",
+                "none",
+            ],
+            &cache,
+        )
+        .status
+        .success()
     );
     Hostile {
         _temporary: temporary,
