@@ -42,7 +42,7 @@ pub fn run_get(
         is_dataset,
         remote,
     } = match open_request(
-        reference, transfer, &adapters, resolved, &policy, &limits, observer, sequence,
+        reference, transfer, &adapters, resolved, &policy, &limits, &work, observer, sequence,
     ) {
         Ok(opened) => opened,
         Err(error) => return reporter.report(&error),

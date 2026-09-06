@@ -259,3 +259,89 @@ fn a_local_manifest_past_the_bound_is_refused_rather_than_read_whole() {
          a document is read whole before its size is judged"
     );
 }
+
+fn interop_of(bytes: &[u8]) -> fetchloom_engine::digest::InteropDigest {
+    let processor =
+        fetchloom_engine::pool::Processor::new(fetchloom_engine::threads::ThreadBudget::resolve(
+            std::num::NonZeroUsize::MIN,
+            Some(std::num::NonZeroUsize::MIN),
+        ))
+        .unwrap();
+    let mut pair = fetchloom_engine::hashing::Pair::new();
+    pair.update(&processor, bytes);
+    pair.finish().interop
+}
+
+fn one_artifact_claiming(root: &Path, claim: &str) -> PathBuf {
+    let manifest = root.join("interop.yaml");
+    std::fs::write(
+        &manifest,
+        format!("name: pair\nartifacts:\n  - id: data\n    sources: [data.tar.gz]\n    digest:\n      sha256: \"{claim}\"\n"),
+    )
+    .unwrap();
+    manifest
+}
+
+#[test]
+fn a_sha256_the_manifest_states_is_checked_against_the_bytes() {
+    let mut scene = two_artifacts("a,b\n");
+    let stated = interop_of(&std::fs::read(scene.root.join("data.tar.gz")).unwrap());
+    let wrong: fetchloom_engine::digest::InteropDigest =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .parse()
+            .unwrap();
+    assert_ne!(stated, wrong);
+    scene.manifest = one_artifact_claiming(&scene.root, &wrong.to_string());
+
+    let run = get(&scene, &[]);
+    assert!(
+        !run.status.success(),
+        "a run whose only digest claim disagreed with the bytes succeeded"
+    );
+    assert!(
+        stderr(&run).contains("integrity.mismatch"),
+        "the failure was not an integrity mismatch: {}",
+        stderr(&run)
+    );
+    assert!(
+        !scene.destination.exists(),
+        "a run that failed its digest claim published a destination"
+    );
+}
+
+#[test]
+fn a_sha256_that_matches_the_bytes_is_verified_rather_than_trusted_on_first_use() {
+    let mut scene = two_artifacts("a,b\n");
+    let stated = interop_of(&std::fs::read(scene.root.join("data.tar.gz")).unwrap());
+    scene.manifest = one_artifact_claiming(&scene.root, &stated.to_string());
+
+    let run = get(&scene, &[]);
+    assert!(run.status.success(), "the run failed: {}", stderr(&run));
+    assert_eq!(
+        body(&run)["trust"],
+        "verified",
+        "a digest the publisher stated and the bytes matched was not evidence: {}",
+        body(&run)
+    );
+}
+
+#[test]
+fn a_blake3_that_matches_the_bytes_is_verified_rather_than_trusted_on_first_use() {
+    let scene = two_artifacts("a,b\n");
+    let bytes = std::fs::read(scene.root.join("data.tar.gz")).unwrap();
+    let stated = fetchloom_engine::hashing::hash_bytes(&bytes);
+    std::fs::write(
+        &scene.manifest,
+        format!("name: pair\nartifacts:\n  - id: data\n    sources: [data.tar.gz]\n    digest:\n      blake3: \"{stated}\"\n"),
+    )
+    .unwrap();
+
+    let run = get(&scene, &[]);
+    assert!(run.status.success(), "the run failed: {}", stderr(&run));
+    assert_eq!(
+        body(&run)["trust"],
+        "verified",
+        "a blake3 the publisher stated and the bytes matched was not evidence: {}",
+        body(&run)
+    );
+}

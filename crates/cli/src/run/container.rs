@@ -186,6 +186,12 @@ pub(super) fn transfer_container_entries(
         .map(|entry| fetchloom_sources::joined(location, &entry.path))
         .collect();
     let hosts: Vec<String> = locations.iter().map(|one| host_of(one)).collect();
+    let claimed: std::collections::HashMap<&str, fetchloom_engine::digest::InteropDigest> =
+        locations
+            .iter()
+            .zip(listed)
+            .filter_map(|(at, entry)| entry.interop.map(|held| (at.as_str(), held)))
+            .collect();
     let flights = Flights::new(with.tuning.ceilings, |host: &str| {
         with.tuning.controller(host, Some(cache))
     });
@@ -227,6 +233,18 @@ pub(super) fn transfer_container_entries(
             transferred.bytes_transferred,
             moving.elapsed(),
         );
+        if let Some(claim) = claimed.get(object_location.as_str()) {
+            let hashed_to = match transferred.interop {
+                Some(held) => held,
+                None => cache.recorded_interop(transferred.digest)?.ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::CacheCorrupt,
+                        "run cache verify, because the cache holds an object it recorded nothing about",
+                    )
+                })?,
+            };
+            super::dataset::agrees_with_the_claim(Some(*claim), hashed_to, object_location)?;
+        }
         remember(cache, object_location, &transferred)?;
         for degradation in degradations.take() {
             emit(EventPayload::Degrade {

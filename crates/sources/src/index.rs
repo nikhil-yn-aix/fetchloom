@@ -97,6 +97,8 @@ fn entries(location: &str, raw: &[String]) -> Listing {
             location: SafeUrl::new(&format!("{location}{path}")),
             path,
             size: None,
+            content: None,
+            interop: None,
         });
     }
     Listing {

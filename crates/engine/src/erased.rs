@@ -169,11 +169,63 @@ impl Adapters {
             .find_map(|adapter| Source::serves(adapter, reference).map(|what| (adapter, what)))
     }
 
-    #[must_use]
-    pub fn take_degradations(&self) -> Vec<Degradation> {
+    fn dispatch(&self, location: &str) -> Result<&AnySource, Error> {
+        self.serving(location)
+            .map(|(adapter, _)| adapter)
+            .ok_or_else(|| {
+                Error::new(
+                    crate::error::ErrorKind::ReferenceUnresolved,
+                    format!(
+                        "name a location an adapter of this build serves, because nothing here serves {}",
+                        crate::redact::SafeUrl::new(location)
+                    ),
+                )
+                .with_source(location)
+            })
+    }
+}
+
+impl Source for Adapters {
+    type Body = AnyBody;
+
+    fn serves(&self, reference: &str) -> Option<Serves> {
+        self.serving(reference).map(|(_, what)| what)
+    }
+
+    fn take_degradations(&self) -> Vec<Degradation> {
         self.held
             .iter()
             .flat_map(Source::take_degradations)
             .collect()
+    }
+
+    fn probe(
+        &self,
+        location: &str,
+        credential: Option<&Credential>,
+    ) -> Result<SourceMetadata, Error> {
+        Source::probe(self.dispatch(location)?, location, credential)
+    }
+
+    fn fetch(
+        &self,
+        location: &str,
+        range: Option<ByteRange>,
+        credential: Option<&Credential>,
+    ) -> Result<Served<Self::Body>, Error> {
+        Source::fetch(self.dispatch(location)?, location, range, credential)
+    }
+
+    fn revalidate(
+        &self,
+        location: &str,
+        validator: &Validator,
+        credential: Option<&Credential>,
+    ) -> Result<Revalidated<Self::Body>, Error> {
+        Source::revalidate(self.dispatch(location)?, location, validator, credential)
+    }
+
+    fn list(&self, location: &str, credential: Option<&Credential>) -> Result<Listing, Error> {
+        Source::list(self.dispatch(location)?, location, credential)
     }
 }

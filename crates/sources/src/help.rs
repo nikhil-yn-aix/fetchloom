@@ -188,10 +188,96 @@ fn generic_object_storage(host: &str, necessity: Necessity) -> ProviderHelp {
     }
 }
 
+fn kaggle(host: &str, necessity: Necessity) -> ProviderHelp {
+    let variable = token_variable(&Host::new(host));
+    ProviderHelp {
+        provider: "Kaggle".to_owned(),
+        unlocks: "Listing and downloading a dataset. Kaggle answers an anonymous \
+            request for most public datasets and refuses one for a competition dataset, \
+            a private dataset, or a dataset whose rules you have not accepted."
+            .to_owned(),
+        necessity,
+        steps: vec![
+            "Open https://www.kaggle.com/settings/api in a web browser and sign in.".to_owned(),
+            "Find the section called API and press the button that creates a new token. \
+                One long line of letters and numbers appears. That line is the token. \
+                Select it and copy it."
+                .to_owned(),
+            "Put the token where Fetchloom will find it, using the Placement steps below."
+                .to_owned(),
+        ],
+        placement: format!(
+            "An environment variable named `KAGGLE_API_TOKEN` holding the token exactly as \
+                Kaggle printed it, which is the same variable Kaggle's own program reads, so \
+                a machine that already has it set needs nothing more. A variable named \
+                `{variable}` is read first and holds the whole `Authorization` header rather \
+                than the bare token, which is how a header other than `Bearer` is sent."
+        ),
+        verification: "`fetchloom plan kaggle:uciml/iris` Running it lists the dataset and \
+            moves no bytes."
+            .to_owned(),
+        scope: "A Kaggle token carries your whole account and cannot be narrowed. Create one \
+            for this machine, and revoke it on the same settings page when the machine no \
+            longer needs it."
+            .to_owned(),
+    }
+}
+
+fn github(host: &str, necessity: Necessity) -> ProviderHelp {
+    let variable = token_variable(&Host::new(host));
+    ProviderHelp {
+        provider: "GitHub".to_owned(),
+        unlocks: "Reading the releases of a private repository, and raising the number of \
+            requests an hour GitHub answers from sixty to five thousand. A public \
+            repository's releases need no token."
+            .to_owned(),
+        necessity,
+        steps: vec![
+            "Open https://github.com/settings/personal-access-tokens in a web browser and \
+                sign in."
+                .to_owned(),
+            "Press Generate new token. Choose the one repository whose releases you want, \
+                and under Repository permissions set Contents to Read-only. Nothing else \
+                is needed."
+                .to_owned(),
+            "Press Generate token. One line beginning `github_pat_` appears. That line is \
+                the token, and GitHub shows it once. Select it and copy it."
+                .to_owned(),
+            "Put the token where Fetchloom will find it, using the Placement steps below."
+                .to_owned(),
+        ],
+        placement: format!(
+            "An environment variable named `GITHUB_TOKEN` holding the token exactly as \
+                GitHub printed it, which is the variable GitHub's own tools read. A variable \
+                named `{variable}` is read first and holds the whole `Authorization` header \
+                rather than the bare token."
+        ),
+        verification: "`fetchloom plan github:owner/repo` Running it reads the latest \
+            release and moves no bytes."
+            .to_owned(),
+        scope: "Read-only Contents on the one repository. Do not grant a classic token or \
+            an organization-wide scope."
+            .to_owned(),
+    }
+}
+
+#[must_use]
+pub fn provider_variable(host: &str) -> Option<&'static str> {
+    match host.to_ascii_lowercase().as_str() {
+        "www.kaggle.com" | "kaggle.com" => Some("KAGGLE_API_TOKEN"),
+        "api.github.com" | "github.com" => Some("GITHUB_TOKEN"),
+        _ => None,
+    }
+}
+
 #[must_use]
 pub fn help_for(host: &str, necessity: Necessity) -> ProviderHelp {
     let lowercase = host.to_ascii_lowercase();
-    if lowercase.ends_with("storage.googleapis.com") {
+    if lowercase == "www.kaggle.com" || lowercase == "kaggle.com" {
+        kaggle(host, necessity)
+    } else if lowercase == "api.github.com" || lowercase == "github.com" {
+        github(host, necessity)
+    } else if lowercase.ends_with("storage.googleapis.com") {
         google_cloud_storage(host, necessity)
     } else if lowercase.ends_with("blob.core.windows.net") {
         azure_blob_storage(host, necessity)

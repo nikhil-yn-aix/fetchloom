@@ -3,7 +3,9 @@
 
 #![expect(
     clippy::unwrap_used,
-    reason = "test assertions, where the run that failed is the message"
+    clippy::expect_used,
+    clippy::too_many_lines,
+    reason = "test assertions, where the run that failed is the message, and a scene that names every seam of a materialization is longer than a hundred lines"
 )]
 
 use fetchloom_cache::Cache;
@@ -31,6 +33,7 @@ use fetchloom_platform::NativePlatform;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fetchloom_faults::{Reply, Script, TestServer};
 use tempfile::TempDir;
 
 use crate::support::NoCredentialPolicy;
@@ -224,5 +227,130 @@ fn a_third_adapter_that_states_it_serves_a_reference_is_the_one_a_run_uses() {
         hash_bytes(&written),
         hash_bytes(&bytes),
         "a run did not take the bytes from the adapter that stated it serves the reference"
+    );
+}
+
+#[test]
+fn a_mirror_list_spanning_two_adapters_falls_through_from_one_to_the_other() {
+    let bytes = b"the mirrored bytes\n".to_vec();
+    let record = format!(
+        r#"{{"assets":[{{"name":"object","size":{},"digest":null,"browser_download_url":"REPLACED/object"}}]}}"#,
+        bytes.len()
+    );
+    let failing = TestServer::start(Script::serving(bytes.clone()).replying(vec![
+        Reply::Status {
+            code: 500,
+            retry_after: None,
+        };
+        8
+    ]))
+    .unwrap();
+    let sound = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let releases = TestServer::start(Script::serving(
+        record.replace("REPLACED", &sound.origin()).into_bytes(),
+    ))
+    .unwrap();
+
+    let scratch = TempDir::new().unwrap();
+    let work = Arc::new(WorkCounter::new());
+    let processor = Arc::new(
+        Processor::new(ThreadBudget::resolve(
+            std::num::NonZeroUsize::MIN,
+            Some(std::num::NonZeroUsize::MIN),
+        ))
+        .unwrap(),
+    );
+    let cache: Cache<NativePlatform> = cache_cli::require(
+        &scratch.path().join("cache"),
+        fetchloom_engine::compression::CompressionChoice::Auto,
+        Arc::clone(&work),
+        Arc::clone(&processor),
+    )
+    .unwrap();
+    let platform = NativePlatform::new(Arc::clone(&work));
+    let digester = std::sync::Mutex::new(fetchloom_engine::hashing::Digester::new());
+    let policy = NoCredentialPolicy::default();
+    let tuning = run::Tuning {
+        ceilings: fetchloom_engine::tuning::Ceilings {
+            global: std::num::NonZeroU32::new(4).unwrap(),
+            per_host: std::num::NonZeroU32::new(4).unwrap(),
+        },
+        adapts: false,
+        bandwidth: None,
+    };
+    let adapters = Adapters::new(vec![
+        AnySource::new(fetchloom_sources::described_reaching(
+            fetchloom_sources::Provider::GitHubReleases,
+            releases.origin(),
+            fetchloom_engine::limits::Limits::default(),
+            Arc::clone(&work),
+        )),
+        AnySource::new(fetchloom_sources::HttpSource::new(
+            fetchloom_engine::limits::Limits::default(),
+            Arc::clone(&work),
+        )),
+    ]);
+    let with = Materialization {
+        processor: processor.as_ref(),
+        platform: &platform,
+        durability: DurabilityTier::Fast,
+        cache: Some(&cache),
+        work: &work,
+        extract: false,
+        digester: &digester,
+        verify: fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+        tuning: &tuning,
+        policy: &policy,
+        adapters: &adapters,
+    };
+
+    let manifest = fetchloom_engine::manifest::Manifest {
+        name: "mirrored".to_owned(),
+        release: None,
+        license: None,
+        artifacts: vec![fetchloom_engine::manifest::Artifact {
+            id: "object".to_owned(),
+            sources: vec![
+                format!("{}/object", failing.origin()),
+                "github:o/r/object".to_owned(),
+            ],
+            size: None,
+            digest: Some(fetchloom_engine::manifest::DigestClaims {
+                blake3: Some(hash_bytes(&bytes)),
+                sha256: None,
+            }),
+            media_type: None,
+            select: Vec::new(),
+            layout: fetchloom_engine::selection::Layout::Keep,
+            archive: None,
+        }],
+    };
+
+    let destination = scratch.path().join("out");
+    let run = run::materialize_manifest(
+        &with,
+        &manifest,
+        scratch.path(),
+        &destination,
+        false,
+        false,
+        None,
+        &Quiet,
+        &Sequence::new(),
+    );
+    run.outcome.expect(
+        "a mirror served by a second adapter was not reached, so Artifact.sources is still one \
+         adapter's list rather than a list of mirrors",
+    );
+
+    let written = std::fs::read(destination.join("object")).unwrap();
+    assert_eq!(
+        hash_bytes(&written),
+        hash_bytes(&bytes),
+        "the bytes came from neither mirror"
+    );
+    assert!(
+        !releases.received().is_empty(),
+        "the provider mirror was never asked, so the fall-through never happened"
     );
 }

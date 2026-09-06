@@ -26,6 +26,7 @@ use fetchloom_engine::receipt::{Receipt, RecordedFingerprint};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::platform::Platform;
+use fetchloom_engine::seam::source::Source as _;
 use fetchloom_engine::selection::Selection;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
 use fetchloom_engine::trust::{ArtifactKey, RunId, TrustClass, Witness, classify};
@@ -71,7 +72,11 @@ pub(crate) fn write_receipt(
     let manifest_digest = manifest.digest()?;
     let run = run_identity(cache);
     let mut recorded = std::collections::BTreeMap::new();
-    let mut weakest = result.trust;
+    let mut weakest = if artifacts.is_empty() {
+        result.trust
+    } else {
+        TrustClass::Verified
+    };
     for artifact in artifacts {
         let key = ArtifactKey::of(manifest_digest, &artifact.id);
         if let Some(origin) = artifact.observed.as_deref() {
@@ -89,6 +94,8 @@ pub(crate) fn write_receipt(
         let witnesses = cache.witnesses(&key)?;
         let class = if verify == fetchloom_engine::verification::VerificationPolicy::Never {
             TrustClass::Unverified
+        } else if artifact.interop_prior == Some(artifact.interop) {
+            TrustClass::Verified
         } else {
             classify(artifact.prior, artifact.digest, &witnesses)
         };
@@ -176,6 +183,7 @@ pub(crate) struct ResolvedArtifact {
     pub(crate) selection: Selection,
     pub(crate) declared: Option<ArchiveFormat>,
     pub(crate) prior: Option<ContentDigest>,
+    pub(crate) interop_prior: Option<fetchloom_engine::digest::InteropDigest>,
     pub(crate) observed: Option<String>,
     pub(crate) reason: Option<String>,
 }
@@ -301,6 +309,8 @@ pub(super) fn resolve_artifact(
                 .map(|locked| locked.digest)
         });
 
+    let stated = artifact.digest.and_then(|claims| claims.sha256);
+
     let selection = Selection {
         include: artifact.select.clone(),
         exclude: Vec::new(),
@@ -309,20 +319,23 @@ pub(super) fn resolve_artifact(
     let name = object_name(first);
     let declared = artifact.archive.as_ref().map(|spec| spec.format);
 
-    if let Some((source, _)) = with.adapters.serving(first) {
+    if with.adapters.serving(first).is_some() {
         let moved = transfer_object(
             with,
-            source,
+            with.adapters,
             flights,
             &artifact.sources,
             expected,
             observer,
             sequence,
         )?;
+        agrees_with_the_claim(stated, moved.interop, &artifact.id)
+            .map_err(|reason| reason.with_artifact(artifact.id.clone()))?;
         return Ok(ResolvedArtifact {
             id: artifact.id.clone(),
             digest: moved.digest,
             interop: moved.interop,
+            interop_prior: stated,
             size: moved.size,
             source: moved
                 .chosen
@@ -338,10 +351,13 @@ pub(super) fn resolve_artifact(
     }
 
     let ingested = ingest_artifact(with, artifact, base, first, expected, observer, sequence)?;
+    agrees_with_the_claim(stated, ingested.interop, &artifact.id)
+        .map_err(|reason| reason.with_artifact(artifact.id.clone()))?;
     Ok(ResolvedArtifact {
         id: artifact.id.clone(),
         digest: ingested.digest,
         interop: ingested.interop,
+        interop_prior: stated,
         size: ingested.size,
         source: SafeUrl::new(&resolve_source_path(base, first).to_string_lossy()),
         name,
@@ -351,6 +367,28 @@ pub(super) fn resolve_artifact(
         observed: None,
         reason: None,
     })
+}
+
+/// # Errors
+/// `integrity.mismatch` when the publisher stated a SHA-256 and the bytes
+/// hashed to another.
+pub(crate) fn agrees_with_the_claim(
+    stated: Option<fetchloom_engine::digest::InteropDigest>,
+    observed: fetchloom_engine::digest::InteropDigest,
+    named: &str,
+) -> Result<(), Error> {
+    let Some(stated) = stated else {
+        return Ok(());
+    };
+    if stated == observed {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorKind::IntegrityMismatch,
+        format!(
+            "correct what states the digest or replace the bytes, because {named} hashes to {observed} where {stated} was stated"
+        ),
+    ))
 }
 
 pub(super) fn ingest_artifact(
@@ -659,6 +697,7 @@ pub(crate) fn resolved_object(result: &RunResult, selection: &Selection) -> Vec<
         selection: selection.clone(),
         declared: None,
         prior: artifact.prior,
+        interop_prior: None,
         observed: artifact.observed.clone(),
         reason: None,
     }]

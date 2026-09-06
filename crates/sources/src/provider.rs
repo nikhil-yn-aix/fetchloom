@@ -16,6 +16,7 @@ use fetchloom_engine::seam::source::{
 };
 use fetchloom_engine::work::WorkCounter;
 
+use crate::delegate::delegating_source;
 use crate::http::{HttpBody, HttpSource, Method, check_fetch_status, header};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,113 +210,31 @@ fn record_entries(location: &str, body: &str) -> Result<Vec<ListingEntry>, Error
             location: SafeUrl::new(held),
             path: key.to_owned(),
             size: file.get("size").and_then(serde_json::Value::as_u64),
+            content: None,
+            interop: None,
         });
     }
     entries.sort_by(|one, other| one.path.as_bytes().cmp(other.path.as_bytes()));
     Ok(entries)
 }
 
-macro_rules! delegating_source {
-    ($provider:ty, $scheme:literal, $serves:expr) => {
-        impl Source for $provider {
-            type Body = HttpBody;
-
-            fn serves(&self, reference: &str) -> Option<Serves> {
-                reference
-                    .starts_with(concat!($scheme, ":"))
-                    .then_some($serves)
-            }
-
-            fn take_degradations(&self) -> Vec<Degradation> {
-                self.http.take_degradations()
-            }
-
-            fn probe(
-                &self,
-                location: &str,
-                credential: Option<&Credential>,
-            ) -> Result<SourceMetadata, Error> {
-                let resolved = self.located(location, credential)?;
-                let started = Instant::now();
-                let (answer, served) = self.http.send(Method::Head, &resolved, None, credential)?;
-                let elapsed = started.elapsed();
-                let status = answer.status().as_u16();
-                if !(200..300).contains(&status) {
-                    return Err(crate::http::status_failure(
-                        &resolved,
-                        status,
-                        header(&answer, "retry-after").as_deref(),
-                        credential,
-                    ));
-                }
-                Ok(self.metadata(&served, &answer, elapsed, location))
-            }
-
-            fn fetch(
-                &self,
-                location: &str,
-                range: Option<ByteRange>,
-                credential: Option<&Credential>,
-            ) -> Result<Served<Self::Body>, Error> {
-                let resolved = self.located(location, credential)?;
-                let started = Instant::now();
-                let (answer, served) = self.http.send(Method::Get, &resolved, range, credential)?;
-                let elapsed = started.elapsed();
-                check_fetch_status(&resolved, range, &answer, credential)?;
-                let metadata = self.metadata(&served, &answer, elapsed, location);
-                Ok(Served {
-                    metadata,
-                    body: HttpBody::new(answer.into_body().into_reader()),
-                })
-            }
-
-            fn revalidate(
-                &self,
-                location: &str,
-                validator: &Validator,
-                credential: Option<&Credential>,
-            ) -> Result<Revalidated<Self::Body>, Error> {
-                let resolved = self.located(location, credential)?;
-                let started = Instant::now();
-                let (answer, served) = self.http.send_conditional(
-                    Method::Get,
-                    &resolved,
-                    None,
-                    credential,
-                    validator,
-                )?;
-                let elapsed = started.elapsed();
-                let status = answer.status().as_u16();
-                if status == 304 {
-                    return Ok(Revalidated::Unchanged);
-                }
-                if !(200..300).contains(&status) {
-                    return Err(crate::http::status_failure(
-                        &resolved,
-                        status,
-                        header(&answer, "retry-after").as_deref(),
-                        credential,
-                    ));
-                }
-                let metadata = self.metadata(&served, &answer, elapsed, location);
-                Ok(Revalidated::Changed(Box::new(Served {
-                    metadata,
-                    body: HttpBody::new(answer.into_body().into_reader()),
-                })))
-            }
-
-            fn list(
-                &self,
-                location: &str,
-                credential: Option<&Credential>,
-            ) -> Result<Listing, Error> {
-                self.listed(location, credential)
-            }
-        }
-    };
-}
-
 impl HuggingFaceSource {
+    #[expect(
+        clippy::unused_self,
+        reason = "the delegating macro asks the value it is implemented on for its scheme"
+    )]
+    fn scheme(&self) -> &'static str {
+        "hf"
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "the delegating macro asks the value it is implemented on what a reference names"
+    )]
+    fn serving(&self, _reference: &str) -> Serves {
+        Serves::Container
+    }
+
     fn located(&self, reference: &str, _credential: Option<&Credential>) -> Result<String, Error> {
         self.resolve(reference)
     }
@@ -385,6 +304,22 @@ impl HuggingFaceSource {
 }
 
 impl ZenodoSource {
+    #[expect(
+        clippy::unused_self,
+        reason = "the delegating macro asks the value it is implemented on for its scheme"
+    )]
+    fn scheme(&self) -> &'static str {
+        "zenodo"
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "the delegating macro asks the value it is implemented on what a reference names"
+    )]
+    fn serving(&self, _reference: &str) -> Serves {
+        Serves::Container
+    }
+
     fn located(&self, reference: &str, credential: Option<&Credential>) -> Result<String, Error> {
         let (record, file) = Self::parts(reference);
         let api = self.resolve(&record)?;
@@ -506,6 +441,8 @@ fn tree_entries(location: &str, body: &str, prefix: &str) -> Result<Vec<ListingE
             location: SafeUrl::new(&format!("{prefix}{path}")),
             path: path.to_owned(),
             size: item.get("size").and_then(serde_json::Value::as_u64),
+            content: None,
+            interop: None,
         });
     }
     entries.sort_by(|one, other| one.path.as_bytes().cmp(other.path.as_bytes()));
@@ -533,8 +470,8 @@ fn bounded(
     Ok(Listing { entries, skipped })
 }
 
-delegating_source!(HuggingFaceSource, "hf", Serves::Container);
-delegating_source!(ZenodoSource, "zenodo", Serves::Container);
+delegating_source!(HuggingFaceSource);
+delegating_source!(ZenodoSource);
 
 #[cfg(test)]
 mod tests {

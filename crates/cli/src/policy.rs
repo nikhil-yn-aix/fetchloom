@@ -315,6 +315,17 @@ impl Policy for CommandLinePolicy<'_> {
                 },
             )));
         }
+        if let Some(value) = fetchloom_sources::provider_variable(host.as_str())
+            .and_then(|named| self.environment.get(named))
+        {
+            return Ok(Some(Self::found(
+                host,
+                CredentialOrigin::Environment,
+                Secrets::Bearer {
+                    value: Secret::new(format!("Bearer {value}")),
+                },
+            )));
+        }
         if let Some(keys) = self.host_scoped_keys(host)? {
             return Ok(Some(Self::found(
                 host,

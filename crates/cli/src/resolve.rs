@@ -101,9 +101,27 @@ pub(crate) fn resolve_reference(
     adapters: &Adapters,
     resolved: &settings::Settings,
     policy: &dyn Policy,
+    work: &std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<String, fetchloom_engine::error::Error> {
+    if fetchloom_sources::is_doi(reference) {
+        let router =
+            fetchloom_sources::DoiRouter::new(*policy.limits(), std::sync::Arc::clone(work));
+        let credential = policy.credential(
+            &fetchloom_engine::reference::Host::new("api.datacite.org".to_owned()),
+            fetchloom_engine::credential::Necessity::Optional,
+        )?;
+        let provider = router.route(reference, credential.as_ref())?;
+        observer.emit(&Event::new(
+            sequence,
+            EventPayload::ResolveAlias {
+                from: reference.to_owned(),
+                to: fetchloom_engine::redact::SafeUrl::new(&provider).to_string(),
+            },
+        ));
+        return Ok(provider);
+    }
     if has_explicit_scheme(reference) || !is_name(reference) {
         return Ok(reference.to_owned());
     }

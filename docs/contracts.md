@@ -77,7 +77,9 @@ Mechanical definitions. No other meaning is implied.
 | `tofu` | No prior digest and no witnesses. The observed digest is recorded for future runs |
 | `unverified` | Content could not be digested, or the user disabled verification |
 
-Either algorithm satisfies `verified`, because a publisher's SHA-256 checked against the SHA-256 of the bytes is the same evidence as a publisher's BLAKE3 checked against theirs.
+Either algorithm satisfies `verified`, because a publisher's SHA-256 checked against the SHA-256 of the bytes is the same evidence as a publisher's BLAKE3 checked against theirs. A BLAKE3 that was stated and does not match fails inside the store, which names objects by that digest. A SHA-256 that was stated and does not match fails where the run compares what it got against what was claimed, because the store names an object by the digest of its own bytes and a SHA-256 claim names no address. Either way the run fails with `integrity.mismatch` and the destination is not published.
+
+A digest a provider's listing states is a prior of the same standing as one a manifest states. A digest in an algorithm this build does not compute is not a prior at all: it is not carried, and the trust class says `tofu` rather than implying evidence the run cannot recheck.
 
 `tofu` is allowed by default for a first fetch and never for a locked run. `unverified` requires an explicit flag on every invocation.
 
@@ -164,7 +166,11 @@ Scored in fixed priority: reachable, supports ranges, exposes immutable identity
 
 A transfer moves to the next candidate when it stalls past the idle timeout, exhausts retries, returns a terminal error, or sustains throughput far below what was measured. Verified bytes are kept and the resume rung is recomputed. A switch emits `source.failover` and a `degrade` naming the source left, the source taken, and the failure that ended the first.
 
-Selection may change speed. It may never change bytes.
+Selection may change speed. It may never change bytes. That is arithmetic rather than a promise: the digest is taken over the bytes and not over the location, so any mirror serving those bytes produces the same digest and is correct, and a mirror serving different bytes fails with `integrity.mismatch` exactly as one source would. The lock records the digest, so a rerun is exact whichever mirror answers it. Nothing about which mirror was taken can change what the user gets, which is why choosing the fastest one needs no further justification.
+
+A candidate is served by whichever adapter states it serves it, decided per candidate. A mirror list may therefore name a location and a provider identifier for the same bytes, and the run falls through from one to the other.
+
+Choosing costs nothing when there is nothing to choose. A single source is taken without a probe. A list is probed up to the probe limit, in parallel, each probe a bounded metadata request, so the cost of choosing is one round trip rather than one per candidate. Beyond the probe limit the remaining candidates keep manifest order and are never probed.
 
 ## Splitting
 
@@ -353,7 +359,7 @@ A document past either bound is refused with `resource.limit` and is never read 
 
 A credential has one of two shapes. A bearer credential is one opaque value that is sent. A signing credential is an access key, secret key, region and optional session token, and its secret is never sent: it derives a key that signs a canonical request. Which shape a host needs is decided by the adapter serving it, never by the user.
 
-Lookup order per host: the matching environment variable, then the platform credential store, then the provider's own helper. First match wins and the source is reported without the secret. A signing credential found without a region fails `policy.credential_invalid` naming the region, because a guessed region produces a refusal the user cannot act on.
+Lookup order per host: the matching environment variable, then the provider's own environment variable where the provider defines one, then the platform credential store, then the provider's own helper. First match wins and the source is reported without the secret. There is one credential path and a provider's own variable is a second place it is read from, never a second path: a user who already set the variable the provider's own tools read should not have to restate it. The host-named variable holds the whole `Authorization` header, so a header other than `Bearer` can be sent. A provider's own variable holds the bare token that provider prints, and is sent as `Bearer` followed by it, because the provider defines the contents of its own variable. A signing credential found without a region fails `policy.credential_invalid` naming the region, because a guessed region produces a refusal the user cannot act on.
 
 A credential is bound to the host it was resolved for. It is dropped on any redirect to a different host, and the drop is reported.
 
@@ -374,6 +380,18 @@ A reference naming a container is expanded by listing it. Fetchloom lists. It do
 Supported: object store listing APIs, provider repository and record APIs, WebDAV `PROPFIND`, and standard generated HTML indexes. FTP is not spoken, so an FTP directory is not a container this build lists.
 
 Only entries at or below the given prefix are considered. Links pointing outside the prefix are ignored and counted in the result. Nothing is discovered from the contents of files. No script is executed. Entry count is bounded. An index that is not recognized fails with `reference.unresolved` and is never guessed at.
+
+A provider repository or record API is described once by an endpoint and a field mapping, and every provider reached that way is one description against that shape rather than one adapter of its own. A description states where the files are in the answer, which field names each one, which field locates it or how a location is built when the provider states none, which field sizes it, and which field states a digest.
+
+A member path a listing states is refused with `reference.unresolved` when it is absolute, escapes the record with `..`, or is not one path under the record. A listing is a stranger's document and is bounded and checked as one.
+
+A provider whose reference names the host it reaches carries that host as the first segment of the reference, over HTTPS and with no way to write anything else, so one description reaches every installation. One description therefore serves data.gov.uk and every other CKAN, and Harvard and every other Dataverse.
+
+A DOI names a registration, and a registration names a landing page rather than files, so a DOI is routed and never fetched. The registration is read once from DataCite, and the landing page it states decides which provider holds the record. The reference the router answers with is one an adapter of this build already serves, and it is reported as a resolution alias so the run says what it decided. A DOI resolving to a provider no adapter serves fails with `reference.unresolved`, naming the registrant, where the DOI resolves, and that serving it needs a description of that provider's own listing API. It is never guessed at.
+
+Routing reads the landing page rather than the registrant identity, because a registrant enumerates who paid for the prefix, one per installation, where the landing page names the installation that holds the record, which is the thing a multiplier's reference has to carry.
+
+A file inside a record is named by the record's reference and the path the listing gave it. The listing remembers where each of its own members is fetched from, so naming one costs no further request. A reference that names a file without the listing having been read is resolved by reading the record it names.
 
 ## Output
 

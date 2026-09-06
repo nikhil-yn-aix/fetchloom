@@ -49,6 +49,13 @@ Anything marked **not built** is written down and not in the binary. There is no
 | Local file or directory | `file:///data/raw` |
 | Object store prefix | `https://s3.amazonaws.com/bucket/prefix/` |
 | Provider | `hf:datasets/org/name@rev`, `zenodo:10.5281/zenodo.1234567` |
+| Kaggle dataset | `kaggle:uciml/iris` |
+| OpenML dataset | `openml:61` |
+| GitHub release | `github:owner/repo`, `github:owner/repo@v1.2.0` |
+| Figshare article | `figshare:1234567` |
+| CKAN dataset | `ckan:demo.ckan.org/a-dataset` |
+| Dataverse dataset | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/OMV93V` |
+| DOI | `doi:10.7910/DVN/OMV93V` |
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
 
@@ -128,10 +135,31 @@ Available on every command.
 | `FETCHLOOM_SECRET_KEY_<HOST>` | Secret key of the same credential |
 | `FETCHLOOM_SESSION_TOKEN_<HOST>` | Session token, when it has one |
 | `FETCHLOOM_REGION_<HOST>` | Region the credential signs for |
+| `KAGGLE_API_TOKEN` | Kaggle's own variable, read when `FETCHLOOM_TOKEN_WWW_KAGGLE_COM` is unset |
+| `GITHUB_TOKEN` | GitHub's own variable, read when `FETCHLOOM_TOKEN_API_GITHUB_COM` is unset |
 | `AWS_ACCESS_KEY_ID` and friends | Read only by the provider native tier |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy policy |
 | `XDG_CACHE_HOME` | Cache root on Linux |
 | `NO_COLOR` | Disable color |
+
+## Provider credentials
+
+What each provider needs, and what it states about the bytes it serves.
+
+| Provider | Credential | Where it is read from | Digest it states |
+|---|---|---|---|
+| Hugging Face | Optional bearer | `FETCHLOOM_TOKEN_HUGGINGFACE_CO` | None |
+| Zenodo | Optional bearer | `FETCHLOOM_TOKEN_ZENODO_ORG` | None |
+| Kaggle | Required for a private or competition dataset | `FETCHLOOM_TOKEN_WWW_KAGGLE_COM`, then `KAGGLE_API_TOKEN` | None |
+| GitHub releases | Required for a private repository, optional to raise the rate limit | `FETCHLOOM_TOKEN_API_GITHUB_COM`, then `GITHUB_TOKEN` | SHA-256, on every asset GitHub has digested |
+| OpenML | None | | MD5 only, which is not carried |
+| Figshare | None | | MD5 only, which is not carried |
+| CKAN | Not built. A CKAN install that refuses an anonymous request fails naming the status | | `hash`, carried only when it is written `sha256:<hex>` |
+| Dataverse | Not built. Dataverse authenticates with an `X-Dataverse-key` header rather than `Authorization`, and the credential seam has no per-adapter header name | | The `checksum` the install records, carried only when its `type` is SHA-256 |
+
+A variable named for the host is read before the provider's own, and holds the whole `Authorization` header rather than a bare token, which is how a header other than `Bearer` is sent. The provider's own variable holds the bare token the provider prints, and is sent as `Bearer` followed by it.
+
+An MD5 is never carried as a digest claim. It is not a digest this build computes, and a run that cannot recompute it cannot verify against it, so a provider that states only an MD5 leaves the trust class at `tofu` rather than implying more evidence than exists.
 
 ## Configuration keys
 
@@ -303,12 +331,12 @@ Written down, not in the binary. Each is refused as an unknown flag or command t
 
 | Thing | What it would do |
 |---|---|
-|none\|zstd:n>` | Compress cached objects. Measured at 3.4x for zstd-1 |
 | `--track` | Keep your edits and the link to upstream, instead of choosing one |
 | `status`, `diff`, `revert`, `promote` | Work with those tracked edits |
 | `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |
 | `probe <ref>`, `list <ref>` | Size and listing without fetching, for other tools to call |
 | `get` with no argument | Read a project manifest, the way `cargo build` reads a manifest |
 | Suggestions on a missed name | `did you mean ham10000?` with the command to run |
-| FTP, SFTP | Two more source protocols |
+| FTP, FTPS | One more source protocol, with resume by REST and TLS that no flag turns off |
+| SFTP | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own SECURITY.md section |
 | Installer, signed releases | Distribution |

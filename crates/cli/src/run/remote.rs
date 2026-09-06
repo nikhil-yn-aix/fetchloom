@@ -13,7 +13,7 @@ use super::paths::{containing_directory, object_name, staging_beside};
 use super::selection::selected_entries;
 use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::erased::AnySource;
+
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
@@ -236,7 +236,7 @@ pub(super) fn publish_one_object(
 
 pub(super) fn transfer_object(
     with: &Materialization<'_>,
-    source: &AnySource,
+    source: &fetchloom_engine::erased::Adapters,
     flights: &Flights<'_>,
     locations: &[String],
     expected: Option<ContentDigest>,

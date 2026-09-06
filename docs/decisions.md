@@ -10142,3 +10142,315 @@ entry into the pack around it.
 
 Sources: `crates/cache/tests/volumes.rs`;
 `crates/cache/tests/support/mod.rs` `incompressible`.
+
+
+## One listing shape, and six providers described against it
+
+Question: Kaggle, OpenML, CKAN, Dataverse, GitHub releases and Figshare are all
+reached the same way. An HTTPS endpoint answers with JSON, and the JSON names
+files with locations and sometimes checksums. Six adapters or one shape?
+
+Chosen: one shape. `crates/sources/src/listing.rs` holds a `Described`, which is
+an endpoint function and a field mapping, and `crates/sources/src/described.rs`
+holds six values of it. The whole of a provider is thirteen lines of data. The
+`Source` implementation is written once and shared with the two adapters that
+came before through `crates/sources/src/delegate.rs`, so Hugging Face and Zenodo
+now use the same macro rather than their own copy of it.
+
+The mapping had to grow three things a single provider would not have needed, and
+each of them is a real difference between two of the six rather than a guess at a
+seventh:
+
+`Held::One` against `Held::Each`, because OpenML answers with one record that is
+itself the one file, where the other five answer with an array.
+
+`Naming::FromLocation`, because CKAN's `name` is a human label. The demo install
+answers `"name": "Virtual Tour"` for a file whose URL ends `virtual-tour.mp4`.
+Writing the label to disk would produce a file called `Virtual Tour`. OpenML
+states no name at all. Both take the name from the last segment of the location.
+
+`Naming::Building`, because Kaggle's listing answers `"url": ""` for every file,
+so the location is built from the reference and the name, and because Dataverse
+names a file by a numeric `dataFile.id` that has nothing to do with the filename.
+
+The first cut exported a pair of constructors per provider, twelve public
+functions. `cargo xtask surface` reported six of them named by no other crate,
+which is the duplication this shape existed to avoid, showing up in the public
+surface instead of in the code. They are now one `Provider` enum and two
+functions, and `adapters_for` registers all six by iterating `Provider::ALL`.
+The `own-targets-only` column for `sources` went from six to one.
+
+Sources: `crates/sources/src/listing.rs`; `crates/sources/src/described.rs`;
+`crates/sources/src/delegate.rs`; `crates/sources/tests/provider.rs`.
+
+
+## What the providers' documentation says, and what they answer
+
+Question: The rule is to verify an API against current documentation rather than
+recall. Four of the six answered something the documentation did not describe.
+
+Kaggle: `GET /api/v1/datasets/list/{owner}/{slug}` answers
+`{"datasetFiles":[{"name":"Iris.csv","totalBytes":5107,"url":""}]}`. Every `url`
+is the empty string, and `hasUrl` is `false` beside it. The published
+documentation names no endpoint paths at all. The download location is built as
+`/api/v1/datasets/download/{owner}/{slug}/{name}`, which answers `302` to a
+presigned Google Cloud Storage URL on another origin, so the credential is
+dropped on the redirect by the rule that already existed and the presigned URL
+carries its own authorization. Verified live against `uciml/iris`.
+
+Kaggle's credential also moved. `KAGGLE_USERNAME` and `KAGGLE_KEY` in
+`~/.kaggle/kaggle.json` are named legacy in the current client documentation, and
+the current variable is `KAGGLE_API_TOKEN`, a bearer token. That is the one read.
+
+Dataverse: the native API guide gives the download path as
+`/api/access/datafiles/{id}`. Harvard answers `404` to that and `303` to
+`/api/access/datafile/{id}`, singular. The plural form is the multi-file bundle.
+Verified live against `doi:10.7910/DVN/OMV93V`.
+
+CKAN: the action API reference describes a resource's `hash` as a checksum value.
+Two live installs, `demo.ckan.org` and `ckan.publishing.service.gov.uk`, answer
+`"hash": ""` and `"size": null` for the first resource of the first dataset in
+`package_search`. `catalog.data.gov` answers `404` to `/api/3/action/` entirely,
+so it is no longer a CKAN endpoint at all.
+
+GitHub: the REST reference declares a release asset's `digest` as "string or
+null" and gives no format and no example. The live API answers
+`"sha256:3750b2..."`, algorithm-prefixed. That prefix is what makes it usable,
+and it is the reason GitHub is the only one of the six whose files reach
+`verified` on a first fetch.
+
+Sources: verified 2026-09-06 against the live APIs named above.
+
+
+## A multiplier carries its host in the reference
+
+Question: CKAN and Dataverse are software many organizations run, not sites. One
+adapter has to reach data.gov.uk, the EU portal, Harvard and any institutional
+installation. Where does the host go?
+
+Options: a configuration key per install, a full URL inside the reference
+(`ckan+https://host/id`), or the bare authority as the first segment
+(`ckan:host/id`).
+
+Chosen: the bare authority as the first segment, HTTPS, with no way to write
+anything else. A configuration key would make the same reference mean different
+things on two machines, which is the one thing a reference may never do. A full
+URL inside a reference carries a scheme, and a scheme that can be written can be
+written `http`, which contradicts the TLS rule in SECURITY.md. The bare authority
+can only be reached one way.
+
+Sources: `crates/sources/src/listing.rs` `Reaching::Named`;
+`docs/contracts.md` Listing.
+
+
+## A file inside a record is remembered rather than re-derived
+
+Question: A container listing produces entries, and the run names each one by
+pasting its path onto the container reference. The adapter then has to turn
+`kaggle:uciml/iris/Iris.csv` back into a location. Zenodo does that by fetching
+the record again, once per file.
+
+Chosen: the listing remembers where each of its own members is fetched from, in a
+map on the source, and naming one costs no request at all. The container is
+always listed before its files are transferred, so the map is always warm on the
+path that matters. A reference naming a file when nothing has been listed falls
+back to reading the record.
+
+Splitting the reference into record and file needs to know where the record ends.
+Five of the six have a fixed segment count, which is stated in the description:
+two for Kaggle and GitHub, one for OpenML, Figshare and CKAN. Dataverse does not,
+because a persistent identifier is `doi:` followed by a prefix and a suffix that
+may itself contain slashes, and installations differ:
+`doi:10.7910/DVN/OMV93V` is three segments and `hdl:1902.1/12345` is two. For
+that one the reference is peeled from the right, longest record first, and each
+attempt is one bounded request. A cold reference to one Dataverse file costs two.
+
+No separator was reserved. Reserving one would collide with an identifier some
+provider already issues, and a DOI suffix is exactly the kind of thing that
+contains whatever character was picked.
+
+Sources: `crates/sources/src/listing.rs` `splits`, `located`, `Identifying`.
+
+
+## An MD5 is not carried, and an unlabelled hash is not read as one
+
+Question: Figshare states `computed_md5` and `supplied_md5`. OpenML states
+`md5_checksum`. Harvard's Dataverse states `checksum.type: "MD5"`. CKAN states a
+`hash` with no algorithm beside it. What of that is evidence?
+
+Chosen: none of it. A digest claim is carried only when the algorithm is named
+and is one this build computes, which is SHA-256 or BLAKE3. An MD5 is neither, so
+a run cannot recompute it and cannot verify against it, and carrying it would put
+a number in the manifest that nothing ever checks. CKAN's `hash` is carried only
+when it is written `sha256:<hex>`; sixty-four hexadecimal characters with nothing
+saying what produced them is a guess, and this build does not guess.
+
+The consequence is stated rather than hidden: of the six, only GitHub releases
+reaches `verified` on a first fetch, and Dataverse reaches it on an install
+configured for SHA-256. The other four are `tofu`, which is what the evidence
+supports.
+
+Sources: `crates/sources/src/listing.rs` `interop_of`, `labelled_interop`;
+`docs/reference.md` Provider credentials.
+
+
+## A SHA-256 the manifest states was never checked against the bytes
+
+Question: contracts.md has said since it was written that "either algorithm
+satisfies `verified`". Carrying a provider's SHA-256 as a digest claim depends on
+it. It was not true.
+
+`resolve_artifact` read `artifact.digest.blake3` and nothing else. A BLAKE3 claim
+becomes the `PartialKey` the store commits under, so the store catches a
+mismatch. A SHA-256 claim was parsed, written to the lock, and never compared to
+anything. A manifest stating a SHA-256 that disagreed with the bytes materialized
+them and exited zero.
+
+Chosen: check it where the run compares what it got against what was claimed,
+rather than inside the store. The store names an object by the digest of its own
+bytes, and a SHA-256 claim names no address, so there is nothing for the store to
+key on. The object commits under its true BLAKE3 address, which is correct
+content addressing and not corruption, and the artifact then fails with
+`integrity.mismatch` before anything is published.
+
+Sources: `crates/cli/src/run/dataset.rs` `agrees_with_the_claim`;
+`crates/cli/tests/materialize/manifest.rs`
+`a_sha256_the_manifest_states_is_checked_against_the_bytes`.
+
+
+## A run that verified every artifact reported that it had trusted them
+
+Question: The test written for the SHA-256 fix asserted a matching claim reports
+`verified`. It still reported `tofu` after the check landed. So did a matching
+BLAKE3 claim, which had supposedly worked all along.
+
+`write_receipt` computes the run's class as `weakest = weakest.max(class)` over
+the artifacts, and seeded `weakest` from `result.trust`. For a manifest run
+`result.trust` is `provisional_trust(with, None)`, which is `Tofu` because it has
+no artifact to look at. `TrustClass` orders `Verified` before `Tofu`, so
+`max(Tofu, Verified)` is `Tofu` and the seed could never be improved on. Every
+per-artifact class in the receipt was right; the one number the run printed was
+not.
+
+Chosen: seed from the strongest class when there are artifacts, and from
+`result.trust` when there are none, which is the container case where there is
+nothing else to seed from. `--verify never` still dominates, because the loop
+already writes `Unverified` for every artifact under it.
+
+This was not introduced by this change. It is written down because it is the
+shape of the bug that survives a suite: every part was tested and the fold over
+them was not.
+
+Sources: `crates/cli/src/run/dataset.rs` `write_receipt`;
+`crates/cli/tests/materialize/manifest.rs`
+`a_blake3_that_matches_the_bytes_is_verified_rather_than_trusted_on_first_use`.
+
+
+## A provider's own variable is a second place to read, not a second path
+
+Question: Kaggle prints a token and tells you to set `KAGGLE_API_TOKEN`. GitHub's
+tools read `GITHUB_TOKEN`. A user with either already set should not have to
+restate it as `FETCHLOOM_TOKEN_WWW_KAGGLE_COM`.
+
+Chosen: read the provider's own variable inside the existing per-host lookup, as
+the tier immediately after the host-named variable and before the platform store.
+There is one credential path and one `Credential` type; a provider's variable is
+another place the same bearer is found.
+
+The two variables differ in what they hold, and that is stated rather than
+smoothed over. `FETCHLOOM_TOKEN_<HOST>` is sent as the `Authorization` header
+verbatim, which is what lets a user send a header that is not `Bearer`. A
+provider's own variable holds the bare token that provider prints, so it is sent
+as `Bearer` followed by it. Rewriting the host-named variable the same way would
+break the one property it has.
+
+Sources: `crates/cli/src/policy.rs` `credential`;
+`crates/sources/src/help.rs` `provider_variable`.
+
+
+## A DOI is routed, and the landing page is what routes it
+
+Question: A DOI resolves to a landing page, not to files, so it cannot be a
+source. It has to become the reference of a provider that already is one. What
+decides which provider?
+
+Options: the DataCite registrant, which is `data.relationships.client.data.id`,
+or the landing page, which is `data.attributes.url`.
+
+Chosen: the landing page. A registrant enumerates who registered the prefix, and
+there is one per installation: Harvard's Dataverse registers as
+`gdcc.harvard-dv`, and every other Dataverse install has its own. Routing on it
+would mean a table that grows by one row per organization and is wrong the day
+after it is written. The landing page names the installation that holds the
+record, which is exactly what a multiplier's reference has to carry.
+
+The rules are three, verified live on 2026-09-06:
+
+`persistentId=doi:` in the query routes to Dataverse, keeping the host.
+`https://dataverse.harvard.edu/citation?persistentId=doi:10.7910/DVN/OMV93V`
+becomes `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/OMV93V`. The guide says
+the landing page is `/dataset.xhtml?persistentId=`; Harvard answers `/citation?`,
+so the parameter is the signal and the path is not.
+
+A host under `zenodo.org` routes to `zenodo:<doi>`.
+`https://zenodo.org/doi/10.5281/zenodo.20546670`.
+
+A host under `figshare.com` routes to `figshare:<article>`, where the article is
+the digits the DOI itself states between `figshare.` and any `.v` version, not
+anything read out of the landing path. `10.6084/m9.figshare.29575358.v1` becomes
+`figshare:29575358`, where the landing page is
+`https://figshare.com/articles/online_resource/A_Title/29575358/1` and the title
+slug in it is not something to parse.
+
+Everything else fails naming the registrant, the landing page, and that serving
+it needs a description in `described.rs`. The rule against guessing at an API
+applies hardest here, because a router that guesses turns one wrong reference
+into a request to a stranger's server.
+
+The router lives at the reference-resolution step rather than in the adapter
+list, because it answers with a different reference rather than with bytes, and
+`resolve_reference` already emits `resolve.alias` for exactly that. It is given
+the run's own work counter so the one registry request is counted, which meant
+threading the counter through `open_request`.
+
+Sources: `crates/sources/src/doi.rs`; `crates/cli/src/resolve.rs`;
+`crates/sources/tests/provider.rs`.
+
+
+## Artifact.sources was a mirror list one adapter deep
+
+Question: `manifest.rs` has declared `Artifact.sources` as `Vec<String>` since it
+was written, and the engine has scored, probed, chosen and failed over across the
+whole of it since `Transfer::select` was written. So what was actually missing?
+
+The dispatch. `resolve_artifact` took `adapters.serving(sources.first())` and
+handed that one adapter to `Transfer`, which holds one `source: &S`. Every
+candidate after the first went to whichever adapter happened to serve the first.
+A manifest naming an HTTPS mirror and a provider mirror for the same bytes fell
+over on the second with "github:o/r/object names no scheme this source reaches",
+which is the HTTP adapter being asked to fetch something it never claimed.
+
+Chosen: implement `Source` for `Adapters`, dispatching per location, and hand the
+whole set to `Transfer`. Nothing in the engine changed. `Transfer` is generic
+over `S: Source + Sync` and `Adapters` is now one, so probing, scoring, failover
+and the degrade event all work per candidate with no new code path. The
+alternative was to make `Transfer` hold a list of sources, which would have put
+adapter dispatch inside the transfer loop and given the engine a second way to
+decide something the adapter set already decides.
+
+`Adapters::take_degradations` was an inherent method and became the trait one, so
+that there is one of it rather than two that could disagree.
+
+What was already right and stayed untouched: the probe is skipped entirely for a
+single source, bounded at `probed_candidates` for a list, and issued in parallel
+in `probe_all` under `std::thread::scope`, so choosing costs one round trip and
+never one per candidate. Both of those are asserted by tests that predate this
+change. No wall-clock regime was added for the mirror case, so the cost of
+choosing is stated here as a request count and a round trip, which is what the
+code and the existing tests establish, and not as a measured duration.
+
+Sources: `crates/engine/src/erased.rs`; `crates/cli/src/run/dataset.rs`;
+`crates/cli/src/run/remote.rs` `transfer_object`;
+`crates/cli/tests/transfer/adapters.rs`
+`a_mirror_list_spanning_two_adapters_falls_through_from_one_to_the_other`;
+`crates/cli/tests/transfer/probe.rs`.

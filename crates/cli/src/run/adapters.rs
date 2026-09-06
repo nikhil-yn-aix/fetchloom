@@ -17,18 +17,35 @@ use std::sync::Arc;
 
 #[must_use]
 pub fn adapters_for(work: &Arc<WorkCounter>, limits: &Limits) -> Adapters {
-    Adapters::new(vec![
-        AnySource::new(fetchloom_sources::HuggingFaceSource::new(
-            *limits,
-            Arc::clone(work),
-        )),
-        AnySource::new(fetchloom_sources::ZenodoSource::new(
-            *limits,
-            Arc::clone(work),
-        )),
-        AnySource::new(ObjectStoreSource::new(*limits, Arc::clone(work))),
-        AnySource::new(HttpSource::new(*limits, Arc::clone(work))),
-    ])
+    Adapters::new(
+        vec![
+            AnySource::new(fetchloom_sources::HuggingFaceSource::new(
+                *limits,
+                Arc::clone(work),
+            )),
+            AnySource::new(fetchloom_sources::ZenodoSource::new(
+                *limits,
+                Arc::clone(work),
+            )),
+        ]
+        .into_iter()
+        .chain(
+            fetchloom_sources::Provider::ALL
+                .into_iter()
+                .map(|provider| {
+                    AnySource::new(fetchloom_sources::described(
+                        provider,
+                        *limits,
+                        Arc::clone(work),
+                    ))
+                }),
+        )
+        .chain([
+            AnySource::new(ObjectStoreSource::new(*limits, Arc::clone(work))),
+            AnySource::new(HttpSource::new(*limits, Arc::clone(work))),
+        ])
+        .collect(),
+    )
 }
 
 pub(super) fn resolve_credential(

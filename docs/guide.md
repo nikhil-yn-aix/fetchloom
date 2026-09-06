@@ -27,6 +27,31 @@ blake3:9f2c...                           bytes by their digest
 silesia                                  a name, if you configured a source for it
 ```
 
+Eight providers are reached by their own identifier rather than by a location.
+
+```
+hf:datasets/org/name@rev                       a Hugging Face repository
+zenodo:10.5281/zenodo.1234567                  a Zenodo record
+kaggle:uciml/iris                              a Kaggle dataset
+openml:61                                      an OpenML dataset
+github:BurntSushi/ripgrep@15.2.0               the assets of one GitHub release
+figshare:1234567                               a Figshare article
+ckan:demo.ckan.org/a-dataset                   a dataset on any CKAN install
+dataverse:dataverse.harvard.edu/doi:10.7910/DVN/OMV93V   a dataset on any Dataverse
+```
+
+CKAN and Dataverse are not one site each, they are software many organizations run, so the host is part of the reference. `ckan:data.gov.uk/...` and `ckan:demo.ckan.org/...` go to different installations through the same adapter.
+
+Leave the tag off a GitHub release and it takes the latest one. Every one of these names the whole record; take part of it with `--select`.
+
+If all you have is a DOI, give it the DOI.
+
+```
+fetchloom get doi:10.7910/DVN/OMV93V
+```
+
+It reads the registration, works out which provider holds the record, and tells you what it decided. A DOI belonging to a provider it has no adapter for stops and says which provider that is, rather than guessing at an API.
+
 A folder, an object store prefix, a WebDAV directory, or a generated HTML index all expand to the files inside them. It lists what you point at. It does not follow links out of that prefix and it never opens a file to find more work.
 
 ## Where things land
@@ -134,6 +159,15 @@ For sources that sign requests instead of sending a secret:
 ```
 FETCHLOOM_ACCESS_KEY_<HOST>, FETCHLOOM_SECRET_KEY_<HOST>, FETCHLOOM_REGION_<HOST>
 ```
+
+Two providers define a variable of their own, and Fetchloom reads it so you do not have to restate a token you already set:
+
+```
+KAGGLE_API_TOKEN=...    for Kaggle
+GITHUB_TOKEN=...        for GitHub releases
+```
+
+Those hold the bare token the provider printed. `FETCHLOOM_TOKEN_<HOST>` holds the whole `Authorization` header instead, is read first, and is how you send a header that is not `Bearer`.
 
 If a source needs a credential you do not have, the run stops and prints numbered steps: which page to open, which button to press, the narrowest permission that works, where to put the value, and the command that confirms it worked. Those steps assume you have never used that provider before.
 

@@ -70,6 +70,8 @@ pub struct ListingEntry {
     pub location: SafeUrl,
     pub path: String,
     pub size: Option<u64>,
+    pub content: Option<ContentDigest>,
+    pub interop: Option<InteropDigest>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

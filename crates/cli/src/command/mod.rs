@@ -233,7 +233,7 @@ pub(crate) struct Requested {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "resolution reads the reference, the flags, the adapters, the settings, the policy, the limits, and both observers"
+    reason = "resolution reads the reference, the flags, the adapters, the settings, the policy, the limits, the work a routed request counts against, and both observers"
 )]
 pub(crate) fn open_request(
     reference: &str,
@@ -242,13 +242,14 @@ pub(crate) fn open_request(
     resolved: &settings::Settings,
     policy: &dyn Policy,
     limits: &fetchloom_engine::limits::Limits,
+    work: &std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> Result<Requested, fetchloom_engine::error::Error> {
     run::allowed_offline(reference, policy)?;
     let describes_metadata = crate::resolve::is_metadata_document(reference);
     let reference = crate::resolve::resolve_reference(
-        reference, adapters, resolved, policy, observer, sequence,
+        reference, adapters, resolved, policy, work, observer, sequence,
     )?;
     let remote = run::is_served(adapters, &reference);
 

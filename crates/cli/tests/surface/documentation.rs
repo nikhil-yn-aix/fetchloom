@@ -1,5 +1,6 @@
 //! The proof that every flag, command, event and error kind reference.md names
-//! above its Not built section is one this binary actually has.
+//! above its Not built section is one this binary actually has, and that no flag
+//! below that section is one it offers.
 //!
 //! Three audits found false sentences in the documentation by hand and each
 //! recorded that nothing enforced the convention. This is the enforcement.
@@ -166,5 +167,42 @@ fn every_dotted_name_the_reference_uses_is_an_event_or_an_error_kind() {
         missing.is_empty(),
         "reference.md names {missing:?}, which is neither an event in EVENT_NAMES nor an error kind \
          in ErrorKind::ALL. A dotted lowercase name in that document is one or the other."
+    );
+}
+
+fn unbuilt() -> String {
+    let whole = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/reference.md"
+    ))
+    .unwrap();
+    whole
+        .split_once(UNBUILT)
+        .map(|(_, rest)| rest.to_owned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn no_flag_the_not_built_table_names_is_one_the_binary_offers() {
+    let offered = flags();
+    let text = unbuilt();
+    assert!(
+        !text.trim().is_empty(),
+        "reference.md has no Not built section, so the marker this test splits on has moved"
+    );
+    let mut built = Vec::new();
+    for token in claimed(&text) {
+        let Some(word) = token.split_whitespace().next() else {
+            continue;
+        };
+        if word.starts_with("--") && offered.contains(word) {
+            built.push(token.clone());
+        }
+    }
+    assert!(
+        built.is_empty(),
+        "reference.md lists {built:?} under Not built and the binary offers them. A flag that \
+         graduated has to leave that table in the same change, or the document says the opposite \
+         of what runs."
     );
 }
