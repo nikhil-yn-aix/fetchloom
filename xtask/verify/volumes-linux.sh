@@ -4,7 +4,12 @@ set -euo pipefail
 env_file=${1:-/tmp/fetchloom-volumes.env}
 root=/mnt/fetchloom
 images=/var/tmp/fetchloom-images
+other=fetchloom-other
 mkdir -p "$root" "$images"
+
+# The suite needs a second account to prove what a foreign owner does. The
+# container image used to create it, and nothing on a build machine will.
+id "$other" >/dev/null 2>&1 || useradd --create-home --shell /bin/sh "$other"
 
 # A loop device outlives the container that attached it, and the machine has
 # eight. Release the ones a previous run left before asking for six more.
@@ -55,6 +60,7 @@ bindfs -o allow_other "$root/fuse-source" "$root/fuse"
 
 memory=/dev/shm/fetchloom
 mkdir -p "$memory"
+chmod 1777 "$memory"
 
 {
   echo "FETCHLOOM_TEST_CLONE_VOLUMES=$root/btrfs:$root/xfs"
@@ -66,7 +72,7 @@ mkdir -p "$memory"
   echo "FETCHLOOM_TEST_SMALL_VOLUMES=$root/small"
   echo "FETCHLOOM_TEST_READ_ONLY_VOLUMES=$root/readonly"
   echo "FETCHLOOM_TEST_SECOND_VOLUMES=$root/second"
-  echo "FETCHLOOM_TEST_OTHER_OWNER=fetchloom-other"
+  echo "FETCHLOOM_TEST_OTHER_OWNER=$other"
 } > "$env_file"
 
 findmnt --noheadings --output TARGET,FSTYPE,OPTIONS --types btrfs,xfs,vfat,ext4,fuse.bindfs

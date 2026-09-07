@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-binary=/target/x86_64-unknown-linux-musl/debug/fetchloom
+binary="$1"
+work="$2"
+mode="$3"
 subject=https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz
-work=/offline
-mode="$1"
 
 if [ "$mode" = "prepare" ]; then
   mkdir -p "$work"
@@ -31,6 +31,10 @@ if [ -f "$work/skipped" ]; then
   echo "skip: nothing was prepared"
   exit 0
 fi
+
+# The apply half runs as root inside a network namespace, so anything it writes
+# would otherwise be undeletable by the next prepare.
+trap 'chown -R "$(stat -c %u:%g "$work")" "$work"' EXIT
 
 if getent hosts ftp.gnu.org > /dev/null 2>&1; then
   echo "the offline lane still resolves names, so it is not offline"
