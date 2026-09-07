@@ -715,12 +715,13 @@ pub enum Command {
         #[command(subcommand)]
         command: LibraryCommand,
     },
-    /// Watch a run as it happens, or replay one that already did.
+    /// Replay a run's event stream from a file, or render one live from a pipe.
     #[command(
-        long_about = "Watch a run as it happens, or replay one that already did.\n\n\
+        long_about = "Replay a run's event stream from a file, or render one live from a pipe.\n\n\
             Every run can write a stream of events, one JSON object per line, with \
-            `--events <path>`. Watch renders that stream: live if you point it at a run in \
-            progress, or after the fact if you point it at a file one left behind.\n\n\
+            `--events <path>`. Watch renders that stream: from `-` it renders each line as it \
+            arrives, and from a file it renders what the file holds and stops at the end of \
+            it rather than following.\n\n\
             This is also how you keep a record of what a run did without scraping its \
             progress output.",
         after_help = "Examples:\n  \

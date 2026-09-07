@@ -14,7 +14,6 @@ pub struct Observed {
     pub(crate) declined_provider: Option<String>,
     pub(crate) projected_gain: Option<Duration>,
     pub placement: Option<String>,
-    restarted_from_zero: bool,
     pub(crate) cache_unusable: bool,
     pub(crate) lock_written: Option<String>,
     pub(crate) entries_taken_whole: Option<u64>,
@@ -46,14 +45,6 @@ impl Observed {
                 key: "cache-unusable".to_owned(),
                 line: "nothing this run fetched was kept, because the cache could not be opened; \
                        set FETCHLOOM_CACHE_DIR to a writable directory to reuse it next time"
-                    .to_owned(),
-            });
-        }
-        if self.restarted_from_zero {
-            return Some(Hint {
-                key: "restarted-from-zero".to_owned(),
-                line: "this transfer restarted from zero because the source states nothing that \
-                       identifies its bytes; a source that does can resume instead"
                     .to_owned(),
             });
         }
@@ -167,11 +158,6 @@ mod tests {
                 ..Observed::default()
             }
             .hint(),
-            Observed {
-                restarted_from_zero: true,
-                ..Observed::default()
-            }
-            .hint(),
         ];
         for hint in every.into_iter().flatten() {
             let said = hint.line.to_lowercase();
@@ -184,7 +170,6 @@ mod tests {
             assert!(
                 said.contains("would have")
                     || said.contains("set ")
-                    || said.contains("can resume")
                     || said.contains("commit it")
                     || said.contains("you can take"),
                 "the hint names no action the user could take: {said}"
@@ -230,7 +215,6 @@ mod tests {
             declined_provider: Some("Example".to_owned()),
             projected_gain: Some(Duration::from_secs(600)),
             placement: Some("FETCHLOOM_TOKEN_X".to_owned()),
-            restarted_from_zero: true,
             cache_unusable: true,
             lock_written: Some("fetchloom.lock".to_owned()),
             entries_taken_whole: Some(4000),

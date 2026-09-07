@@ -71,9 +71,7 @@ It is slower than `cp` and `curl`, on every workload, on purpose. It hashes ever
 
 There is no installer, no signed release, and no package manager entry. You build from source.
 
-It speaks HTTP/1.1 only. No FTP, no SFTP yet.
-
-There is no way to keep local edits to a fetched dataset without either losing them or losing the link to upstream.
+It speaks HTTP/1.1, FTP and FTPS. No SFTP, and that one is deliberate.
 
 ## Docs
 

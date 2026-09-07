@@ -23,7 +23,7 @@ Anything marked **not built** is written down and not in the binary. There is no
 | `diff <path>` | The same states, with the digest and the length on each side |
 | `revert <path> [entry...]` | Put back what the record states, from the cache |
 | `promote <path>` | Make the directory as it stands a dataset of its own |
-| `watch <events>` | Render a run's event stream, live or after the fact |
+| `watch <events>` | Replay an event stream from a file, or render one live from a pipe |
 | `cache <subcommand>` | Inspect and change what is kept between runs |
 | `doctor` | Check this machine, change nothing |
 | `why <ref>` | Explain a reference, its source, and its trust |
@@ -274,12 +274,11 @@ TOML. Manifests take three syntaxes because strangers write them. Configuration 
 | `library` | Library location, as `library = { dir = "..." }` |
 | `datasets` | What `get` with no reference fetches |
 | `offline` | Forbid network activity |
-| `concurrency`, `per_host` | In flight ceilings |
+| `concurrency`, `per-host` | In flight ceilings |
 | `bandwidth` | Rate ceiling |
 | `threads` | Processor thread ceiling |
 | `retries`, `timeout` | Retry policy |
-| `verify` | Cache hit verification policy |
-| `durability`, `io` | Write path |
+| `io` | Write path |
 | `compress` | How cached objects are stored |
 | `log` | Log level |
 | `color`, `display`, `hints` | Presentation |

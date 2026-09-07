@@ -195,6 +195,8 @@ the reason step 2 does not start until it has.
 Sources: the deleted workflow at `04c3c14`; `xtask/verify/volumes-linux.sh`;
 standards.md Measure; the phase 1 gate record for what stopped running.
 
+Superseded by "A laptop paid three taxes to answer a question a free runner answers natively": the account can run it again, the local matrix is eight lanes rather than thirteen steps, and five of them run on hosted runners that are natively the platform they prove.
+
 ## Thread pool sizing policy
 
 Question: How is available parallelism read on each platform, how are container CPU limits, process affinity and user-set limits honored, and how are the async runtime and the CPU pool kept separate.
@@ -1070,6 +1072,8 @@ Uncertain: the list itself is only as complete as this session's view of it. It 
 
 Sources: roadmap.md phase 0 Prove and Done when; the capability detection, advisory locking, atomic publication, and preallocation records; the real command output in this session.
 
+Superseded in part by "A laptop paid three taxes to answer a question a free runner answers natively": the Linux and aarch64 entries on this list are covered by a run on every push, and what remains is the Apple targets.
+
 ## The platform seam is one behavior behind three sets of syscalls
 
 Question: how the Platform seam is split between what is shared and what is per platform, given that a previous attempt produced two and a half thousand lines with the decisions scattered through the platform modules.
@@ -1652,6 +1656,8 @@ run rather than by a claim here.
 
 Sources: `mkfs.btrfs(8)`; `mkfs.xfs(8)` on the reflink option; `hdiutil(1)`;
 Microsoft Learn on Dev Drive and `Format-Volume`; the phase 0 gate record.
+
+Superseded twice. First by "The verification matrix runs on one machine, and names what it cannot reach", which deleted the workflow, and now by "A laptop paid three taxes to answer a question a free runner answers natively", which builds the Linux filesystems on a runner again and the Windows ones for the first time. APFS, HFS+ and the network-backed volume are still made nowhere.
 
 ## Asking whether an object is present takes no lock
 
@@ -2469,6 +2475,17 @@ variables. The evidence found says it does not.
 Sources: `docs.rs/ureq/3.4.0`; `curl.se/libcurl/c/libcurl-env.html`, which
 documents the same three variables and states that libcurl has no support for
 detecting a system proxy either; contracts.md phase 2 Decide.
+
+Corrected: the build does read the Windows registry, and did on the day this was
+written. `Cargo.toml` has enabled ureq's `win-system-proxy` feature since 5646786,
+the commit this record came with, and that feature makes `try_from_env` fall back
+to `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+and read `ProxyEnable` and `ProxyServer` when none of the three variables is set.
+So the Chosen paragraph describes a build that was never shipped: the environment
+still wins, and the registry is the fallback rather than nothing. What is written
+above about auto-configuration scripts still holds, because the feature reads the
+static values only. Whether the feature stays belongs to whoever owns the proxy
+contract; the reason `winreg` carries in deny.toml is the accurate one.
 
 ## What a source is scored on, and when a transfer leaves one
 
@@ -9076,6 +9093,8 @@ Sources: a 5 s sampler over `Win32_PerfRawData_PerfOS_Memory` and the Docker
 process set, 474 samples across the container lane on this machine;
 `docker info` reporting `MemTotal` 8128204800 and `NCPU` 16.
 
+Superseded by "A laptop paid three taxes to answer a question a free runner answers natively": there is no container lane on this machine to take half of it.
+
 ## Phase 3. Linux ran for the first time, and it found one thing
 
 The `linux image` step had failed in every run this project has made, always with
@@ -9588,6 +9607,8 @@ lints musl at all, and prints its usual NOT VERIFIED line for the lane that does
 Sources: `xtask/src/verify.rs` `LINT_TARGETS`; `xtask/verify/linux.sh`;
 `xtask/verify/Dockerfile`.
 
+Superseded by "A laptop paid three taxes to answer a question a free runner answers natively": the container the lint moved into is deleted, and the musl lint runs on a Linux runner beside the gnu one.
+
 
 ---
 
@@ -9810,6 +9831,8 @@ build, and expected is not measured.
 
 Sources: `xtask/src/verify.rs` `ARM_TARGETS`; the codec record above, whose
 Uncertain paragraph this answers.
+
+Superseded by "A laptop paid three taxes to answer a question a free runner answers natively": the emulated lane is gone, and both aarch64 Linux targets are built and tested natively on every push.
 
 
 ---
@@ -11592,3 +11615,306 @@ Uncertain: whether `cargo-deny` should be a pinned binary release rather than
 Sources: `xtask/src/verify.rs`; `.github/workflows/verify.yml` and `hosts.yml`;
 the record above under "zstd-sys builds under emulation" for the emulated numbers;
 runs 34120222080 and 34120222064 on branch `ci`.
+
+---
+
+## What survives of the spike, and what shipping code has since settled
+
+`spike/` was 1,558 lines holding nine measurements taken before phase 6. Most of
+it has since been answered by code that shipped: the compression constants it
+argued for are in `compression.rs` and already have their own records here, the
+record-size defect it found is fixed, and the two commands it said the Python
+adapter needed are `probe` and `list`. What is folded in below is only what still
+decides something, and the rest is deleted rather than carried.
+
+Everything below was measured on one machine, and a number taken on another does
+not compare: a 12th Gen Intel Core i5-12500H, 4 P + 8 E cores, 16 GiB with 5.5 to
+6.1 GiB free, `D:` NTFS, Windows 11 10.0.26200, rustc 1.98.0 x86_64-pc-windows-msvc.
+Defender real-time protection was on with no exclusion for the tree, Docker
+Desktop was running, and the machine was not quiet. Every timing is the median of
+at least seven runs, taken serially; ratios and byte counts are deterministic.
+
+**The compression pipeline, not the codec, is what decided level 1.** Hashing and
+writing without compression tops out at 354 MiB/s here, which is 2.9 Gbit/s, so
+above roughly 2.5 Gbit/s this tool is hash-and-disk bound and compression can
+never be the right trade. zstd-1 runs the whole pipeline at 124 to 259 MiB/s and
+stays ahead of a gigabit link, 119 MiB/s, on every corpus entry; the worst case,
+124 on FASTA, clears it by four per cent. zstd-3 falls behind on float arrays at
+86 and zstd-6 falls behind on three of four at 37 to 51. The price of compressing
+is 3.96 to 8.23 CPU-seconds per gigabyte, and effectively nothing for what the
+probe stores raw. Ranged repair pays for compression forever: one random 1 MiB
+range costs 1.30 to 7.91 ms against 0.43 to 0.97 ms uncompressed.
+
+**Content-defined chunking was measured and declined.** Across eighteen genuinely
+distinct real objects it saves 4.34 to 5.39 per cent. Between two consecutive
+releases of the same dataset it saves 35.87 and 32.78 per cent uncompressed and
+**0.00 per cent** as the exact `.tar.gz` and `.gz` the publishers actually serve,
+which is the only form this tool ever sees. Cost was never the objection: FastCDC
+runs at about 700 MiB/s, twice the whole hash-and-write pipeline, and the whole
+corpus index is 17.8 MB at a 16 KiB average with 20 ns lookups. Two numbers fix
+the terms if it is ever built. Chunking byte-identical content under two seeds
+dedups at 0.00 per cent against 50.00 per cent for one seed, so per-user keying
+and cross-user dedup are mutually exclusive rather than a dial. And an unkeyed
+shared index answers "has anyone on this machine fetched this object" with 100.00
+per cent chunk hits when they have and 0.00 when they have not, across 5,015
+chunks, which is an exact existence oracle against a cache `contracts.md` says two
+users may share. The finding worth keeping is not chunking: this tool sees zero
+version-to-version similarity because publishers serve compressed archives, so
+incremental fetch would have to obtain uncompressed bytes, not chunk compressed
+ones.
+
+**Keeping the whole archive costs about 16 per cent** on top of the extracted
+tree, and that is the number to state rather than a guess: the Linux kernel
+`.tar.gz` is 224,925,704 bytes beside a tree of 1,393,614,166 bytes in 87,703
+files, a 6.20x extraction multiple, and the overhead is bounded by the archive's
+own compression ratio. The decision itself was taken on design grounds: the
+publisher's stated digest is over the archive bytes and is the only independent
+evidence in the system.
+
+**Three tuning numbers are still contradicted by measurement and have not moved.**
+The per-host ceiling is 4, and 2 is the only setting that improved any real host:
+an academic mirror went 1.6 to 2.5 MiB/s, a 1.56x gain. 4 was never better than 2
+anywhere and was worse there, where it also tripled request latency.
+The global ceiling is 8 and against sixteen local hosts throughput scaled 1.00x,
+1.70x, 2.67x, 3.94x and 4.71x at 4, 8, 16, 32 and 64 with non-overlapping
+interquartile ranges, so 8 leaves about 2.8x unused, and 32 rather than 64 is
+where the evidence stops. The split threshold is 64 MiB and splitting at exactly
+that size on a saturated link measured 2.6x *worse* than not splitting, while
+aria2's 10 MiB gained 1.06x, inside the noise; the four preconditions already
+prevent the harmful case, so the threshold stays and the rows are weak. None of
+these were changed, and the sweeps were run against a link that saturates at 5.7
+MiB/s, which is below where per-host concurrency or splitting can show value.
+Politeness is the one thing that table settles cleanly: one request in roughly
+1,400 was not a 200 or a 206, no host ever sent 429, 503 or `Retry-After`, and the
+single event was a 21.7 second transport stall at per-host concurrency 1. No
+configuration tested was faster because it hammered a server.
+
+**HTTP/2 stays rejected on a measured dependency count.** Three separate
+workspaces with their own lockfiles: `ureq` HTTP/1.1 configured the way
+`crates/sources/src/http.rs` configures it is 80 crates, `reqwest` with tokio for
+HTTP/2 is 176, and HTTP/3 with quinn is 181, against 161 for this whole workspace.
+An HTTP/2 client alone would carry more crates than the tool does. Two facts about
+protocol negotiation came out of the same run and outlive the decision:
+`cdn.kernel.org` advertises `h3` in `alt-svc` and its QUIC handshake timed out
+from this network, so advertisement is not availability; and a request that does
+not pin a version silently fell back to HTTP/1.1 and returned 200, which is the
+shape of a number that looks like a result and is not one.
+
+**SFTP is still declined and FTP shipped.** Both land on resume rung 4, byte-
+verified against four real servers: each states a length and a modification time
+and neither can state an entity tag or an immutable identity. SFTP therefore buys
+no resume capability FTP does not already have, while `russh-sftp` requires tokio
+and the synchronous alternative `ssh2` requires a C toolchain.
+
+**The fsspec adapter is viable and unbuilt.** pandas, two pyarrow readers and dask
+all returned the same 2,964,624 rows from a real published Parquet file through
+`fetchloom://` unmodified, at 0.306 s against 0.310 s reading the identical file
+off local disk, which is -1.3 per cent and inside the noise; the cold first access
+cost 1.324 s, of which the subprocess was 0.747 s. Two of the three gaps it found
+are closed: `probe` states length and identity without transferring and `list`
+resolves a container without materialising it. The third is open and is a library
+concern, not a flag: reading a byte range out of a cached object without writing
+the whole object somewhere first, which is the same capability the seekable frames
+already provide.
+
+**SHA-256 is the entire cost of the hashing pass, not a tax on it.** BLAKE3 with
+rayon runs at 6,845 MiB/s at 64 MiB; SHA-256 with SHA-NI runs at about 1,300; the
+combined two-thread pass lands at 1,124, within a few per cent of SHA-256 alone.
+Hardware acceleration is real and detected: forcing `sha2`'s soft backend costs a
+factor of 4.8 to 10 on the same bytes. The interop digest therefore costs 0.76
+CPU-seconds per GiB, and future work on hashing throughput must target it, because
+making BLAKE3 faster would gain nothing. One number here is still contradicted by
+the code: the two-thread split is taken above `POOL_THRESHOLD`, 1 MiB, and the
+sweep says the crossover is between 4 and 16 MiB, below which the split is 1.4x to
+5.9x slower than hashing serially, 119 against 701 MiB/s at 64 KiB.
+
+**The hint fires once per cache, ever.** Across fifteen console runs against the
+real binary, two hints printed, and a ten-run sequence on one cache printed one.
+Every hint file written had the name `blake3("lock-written")`, so one of the five
+branches has ever fired. `lock_written` is set by every successful `get` and
+outranks `selection`, and `offer_a_hint` returns rather than falling through when
+a hint has already been said, so on any cache that has completed one `get` no
+other hint can print.
+
+What is deleted with `spike/`: the corpus inventory, every full sweep table, the
+per-experiment confidence sections, and four results that shipping code has since
+settled. The compression constants the spike argued for — 1 MiB frames, a 1 MiB
+probe head at ratio 1.10, stride-4 shuffling — are in `compression.rs` and carry
+their own records above. The reflink comparison it could not make for want of
+hardware is now made on every push, because the Linux lanes mount btrfs and XFS
+with `reflink=1` and the Windows lanes attach a ReFS DevDrive. And the failure it
+found instead of a reconcile cost curve — a 93,182-entry tree that materialised
+and could then never be verified, because the record `get` wrote was 19,288,996
+bytes against a 16 MiB reader limit — is fixed: a record this tool wrote is bounded
+by `record_size`, 268,435,456 bytes, and only a foreign manifest is held to
+`manifest_size`. Reconcile's cost curve at scale is still unmeasured.
+
+Costs: every number above is from one machine under stated conditions, and the raw
+JSON it was derived from is deleted with the spike. Anything needing a
+re-measurement re-measures rather than reading a table here.
+
+Sources: `spike/RESULTS.md` and `spike/DECISIONS.md` at 5b4f915, the only commit
+that ever carried them.
+
+---
+
+## One hint nothing could print, and why the rest of the public surface stayed
+
+contracts.md line 573 says JSON field names are additive only, and the same
+reasoning binds command names, flags, exit codes, event names, error kinds and
+config keys. This build carries no version field anywhere by design, so after
+0.1.0 a removal is a break with nothing to negotiate it. That makes now the last
+moment removing public surface is free, and it is why the surface was enumerated
+against the code that would have to produce or consume each piece of it rather
+than against a lint.
+
+The compiler already refuses an unreferenced private item and an unused
+dependency, so nothing here re-finds those. What it cannot see is surface that is
+reachable, compiles, and is never produced. Each category was checked against its
+producer, and the counting is the evidence.
+
+Every one of the 34 error kinds is constructed outside `error.rs`, the thinnest
+being `archive.bomb` and `cache.cross_volume` at one construction site each. Every
+one of the 35 event names is emitted outside `event.rs`, the thinnest being
+`cache.wait`, `source.probe`, `transfer.resume`, `verify.range`, `extract.start`
+and `reconcile.outcome` at one emitter each. Every one of the eleven exit codes is
+reachable, because ten of them are derived from a `Layer` and every `Layer` is
+constructed. Every flag in reference.md reaches a branch outside the surface
+definition. Every documented environment variable is read, and the two undocumented
+`FETCHLOOM_TOKEN_` names are the per-host form's own test fixtures. Every field of
+every JSON result is populated with a value that varies, except the one already
+recorded as contracted and unreachable: `corroborated`, which contracts.md names as
+such in the same sentence it defines it.
+
+One thing was dead and is deleted. `Observed::restarted_from_zero` and the
+`restarted-from-zero` hint it guards were set nowhere but inside `hint.rs`'s own
+test module, so no run could ever reach that branch, and the hint line was a string
+the tool could not print. The field, the branch, the two test constructions that
+were its only writers, and the clause in the phrasing test that existed to accept
+its wording are gone. That is a user-visible string leaving the surface, which is
+exactly what is free today and expensive after 1.0.
+
+Three statements were removed from the documents because the build does not do
+them, and the binary is what proved each one. `per_host` is not a configuration
+key: the file is read with `rename_all = "kebab-case"`, so the key is `per-host`,
+and `deny_unknown_fields` means the documented spelling is an error rather than a
+setting. `verify` and `durability` are not configuration keys at all; they are
+flags, and `ConfigFile` names neither. The error the binary prints lists the
+seventeen keys it accepts, and that list is what the table now matches.
+
+Three things are reachable, work, and are called by nothing in this workspace, and
+they are left alone because deleting them is a scope decision rather than a
+measurement. `Store::stage` is implemented by the cache and called by no run,
+because the command layer stages beside the destination instead. `Store::open_outboard`
+and `Store::format_fingerprint` are the same shape: implemented, forwarded by one
+test double, called by nothing, while the facts they expose are reached another way,
+the format check by reading the fingerprint file directly. A seam method is a
+contract with an implementer that does not exist yet, and internals.md says widening
+a seam takes the same justification as changing a contract, so narrowing one does
+too.
+
+One more is reachable in the type system and unreachable in practice, and the
+distinction is the point. The `selection` hint needs `entries_taken_whole`, which is
+set on exactly the code path that also sets `lock_written`, and `lock_written` is
+tested first and returns. `offer_a_hint` does not fall through when a hint has
+already been said. So no run can print it, on any cache, ever. The fix that would
+make it reachable is a fall-through, which is behaviour and belongs to a session
+that changes behaviour; deleting it instead would be choosing one of two answers
+without being asked. It stays, named here.
+
+`cargo xtask surface` still reports 134 public items no other crate names. That
+number is not a defect list and its own record says why: an item can be reachable
+without being named, as an associated type, as an inferred return type, or as a
+field another crate builds by literal. The demotion pass those items survived was
+compiler-driven and is not repeated here.
+
+Costs: the hint machinery now has four branches where the code says five, and one
+of the four cannot fire. That is a smaller lie than the five were, not the absence
+of one.
+
+Sources: `crates/cli/src/hint.rs`; `crates/cli/src/command/get.rs` `finish_get`'s
+recorder; `crates/cli/src/config.rs` `ConfigFile`; `fetchloom explain --config` on a
+file naming `per_host`; `crates/engine/src/error.rs`, `event.rs` and `outcome.rs`
+against every construction site in `crates/*/src`; the phase 5 public surface record.
+
+---
+
+## A lock in a shared directory belonged to whoever created it, and the container hid it
+
+contracts.md supports a cache shared between users on one machine, and
+`share_directory` writes `0o1777` for exactly that reason: any user the machine
+admits may create a file in it, and only its owner may remove it. The lock files
+in it were created by `File::options().create(true)`, which takes the process
+umask, so a lock taken by one user landed at `0o644`. A second user could see it
+and could not open it, and `try_lock` needs it open for writing before it can ask
+for the flock at all.
+
+So the second user got `cache.corrupt` naming `Permission denied` where the
+contract says a held lock is reported as held. Two users could not share a cache,
+which is the thing the sticky directory exists to allow.
+
+Nothing caught this because nothing ever ran as an ordinary user.
+`a_lock_is_honored_across_users` has existed since phase 1 and passed every time,
+inside a container whose only user was root, and root opens a file whatever its
+mode says. The native Linux lanes are the first runs of this suite as a user who
+is not root, and they found it on the first push.
+
+Chosen: create the lock file `0o666` and chmod it once at creation, because the
+umask would otherwise mask the bits away, and open an existing one unchanged. The
+lock file carries no content — it is an empty name that `flock` and the file
+identity check are taken against — so its mode is a question about who may
+participate, not about who may read anything. It sits in a directory this build
+already publishes at `0o1777`, and a mode narrower than the directory it lives in
+is what the defect was.
+
+Not chosen: mapping `EACCES` to `cache.locked`. That reports the failure more
+honestly and still leaves two users unable to share a cache, which is the actual
+contract.
+
+Costs: a lock file another user may write is a lock file another user may truncate
+or replace. `attempted` already re-reads the file identity after taking the lock
+and retries when it changed, up to sixteen times, and refuses rather than
+proceeding when every attempt was replaced, so replacing it under a holder is
+already a case with a defined answer.
+
+Windows keeps the previous body. Its sharing rules are handled by the platform
+rather than by a mode, and `share_directory` is a no-op there.
+
+Sources: `crates/platform/src/lib.rs` `open_lock_file` and `attempted`;
+`crates/cache/src/lib.rs` `SHARED_DIRECTORY_MODE`; `crates/platform/tests/locking.rs`
+`a_lock_is_honored_across_users`; the linux and linux-arm lanes of run 34135876732.
+
+---
+
+## The one record in the cache that was not renamed onto its name
+
+"A record is written beside its name and renamed onto it" states the rule this
+build writes every record by. The format fingerprint did not follow it:
+`check_format` wrote it with `std::fs::write`, straight onto `format`, on the path
+where a cache is opened for the first time.
+
+Two runs starting together against one fresh cache both find no fingerprint, and
+both write one. The bytes are identical, so the outcome looks safe, and it is not:
+a reader between the truncation and the write sees a short file, compares it
+against the fingerprint this build renders, finds them different, and refuses with
+`cache.format_mismatch`, whose next action is to clear a cache that was never
+wrong.
+
+It was found by the `linux-arm` lane on the first run in which the lanes reached
+this test at all, and not by `linux` in the same run, which is what a race looks
+like. The window is the time between `write` truncating the file and the bytes
+landing, on a run that has nothing else to do yet.
+
+Chosen: write it beside its name as `format.<pid>` and rename it on, so a reader
+sees no file or the whole file and never a part of one. The rename is the same one
+`publish_file` is built on, and on Windows `std::fs::rename` replaces an existing
+destination, so one form serves both platforms and no lock is taken for a file
+written once per cache.
+
+Costs: a run killed between the write and the rename leaves a `format.<pid>` in
+the cache root that nothing removes. It is a few bytes, it is never read, and the
+next run writes its own; a sweep for it would be more code than the thing it
+cleans.
+
+Sources: `crates/cache/src/lib.rs` `check_format`; `crates/cache/src/layout.rs`
+`format`; the `linux-arm` lane of run 34138302083; the record named above.

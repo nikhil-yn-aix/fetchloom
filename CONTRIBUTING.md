@@ -47,7 +47,7 @@ The gate is eight lanes. A lane runs where it is native or it does not run.
 | `offline` | A plan and a bundle prepared connected, then applied inside a network namespace holding no interface. | Linux |
 | `benchmark` | Measurement, and the five percent comparison gate. | the machine that recorded the baseline |
 
-The Linux platform lanes build the volume matrix first, which attaches loop devices and mounts btrfs, xfs, vfat, a small volume, a read-only volume, a second volume and a FUSE mount, so the suite runs against real filesystems rather than only the one the workspace is on. The Windows lane asks for the same and does not get it: the virtual disks need Hyper-V, which no runner offers, so that lane degrades and says which rows are unproven.
+The Linux platform lanes build the volume matrix first, which attaches loop devices and mounts btrfs, xfs, vfat, a small volume, a read-only volume, a second volume and a FUSE mount, so the suite runs against real filesystems rather than only the one the workspace is on. The Windows lanes build their own: a ReFS DevDrive for block cloning and case sensitivity, a 32 MB volume and a 64 MB volume, each a VHD attached by the volume script.
 
 ```
 cargo xtask verify
@@ -88,7 +88,7 @@ Rust 1.98.0, pinned in `rust-toolchain.toml`, which is the only place a version 
 
 Everything else a lane needs, `cargo xtask verify --provision` installs: the target triples, the 1.89.0 toolchain the MSRV step builds at, `cargo-deny`, and on Linux the musl C toolchain and the filesystem tools the volume matrix formats with.
 
-The Linux volume matrix needs passwordless `sudo`, because attaching a loop device and mounting a filesystem is root's work. Without it that lane degrades and the suite runs against one volume. The Windows volume script needs an elevated shell and Hyper-V.
+The Linux volume matrix needs passwordless `sudo`, because attaching a loop device and mounting a filesystem is root's work. Without it that lane degrades and the suite runs against one volume. The Windows volume script needs an elevated shell, because attaching a VHD is an administrator's work. It needs no hypervisor.
 
 Docker is not needed and is not used. It was, so that a Windows laptop could reach Linux and emulate aarch64; CI runs both natively now and the container plumbing is gone.
 

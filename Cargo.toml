@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/archive", "crates/engine", "crates/view", "crates/platform", "crates/cache", "crates/sources", "crates/faults", "crates/cli", "xtask"]
-exclude = ["spike"]
 
 [workspace.package]
 version = "0.1.0"
