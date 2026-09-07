@@ -1,0 +1,39 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lane:
+    name: ${{ matrix.lane }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: checks
+            runner: ubuntu-24.04
+          - lane: linux
+            runner: ubuntu-24.04
+          - lane: linux-arm
+            runner: ubuntu-24.04-arm
+          - lane: windows
+            runner: windows-2025
+          - lane: windows-arm
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.lane }}
+      - run: cargo xtask verify --lane ${{ matrix.lane }} --provision
+      - run: cargo xtask verify --lane ${{ matrix.lane }}

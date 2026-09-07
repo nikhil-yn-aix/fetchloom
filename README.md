@@ -1,5 +1,8 @@
 # Fetchloom
 
+[![verify](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/verify.yml/badge.svg)](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/verify.yml)
+[![hosts](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/hosts.yml/badge.svg)](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/hosts.yml)
+
 Point it at a dataset. It gives you the exact files and a record proving what it gave you.
 
 ```

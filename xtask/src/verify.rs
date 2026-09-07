@@ -5,13 +5,164 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-const LINT_TARGETS: [&str; 1] = ["x86_64-pc-windows-msvc"];
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Machine {
+    Anywhere,
+    Windows,
+    Linux,
+}
 
-const COMPILE_ONLY_TARGETS: [&str; 1] = ["aarch64-pc-windows-msvc"];
+struct Lane {
+    name: &'static str,
+    machine: Machine,
+    arch: &'static str,
+    packages: &'static [&'static str],
+    tools: &'static [&'static str],
+    msrv: bool,
+}
 
-const LINUX_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"];
+const VOLUME_PACKAGES: &[&str] = &[
+    "bindfs",
+    "btrfs-progs",
+    "dosfstools",
+    "e2fsprogs",
+    "fuse3",
+    "xfsprogs",
+];
 
-const ARM_TARGETS: [&str; 2] = ["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"];
+const LANES: [Lane; 8] = [
+    Lane {
+        name: "checks",
+        machine: Machine::Anywhere,
+        arch: "",
+        packages: &[],
+        tools: &["cargo-deny"],
+        msrv: false,
+    },
+    Lane {
+        name: "windows",
+        machine: Machine::Windows,
+        arch: "x86_64",
+        packages: &[],
+        tools: &[],
+        msrv: true,
+    },
+    Lane {
+        name: "windows-arm",
+        machine: Machine::Windows,
+        arch: "aarch64",
+        packages: &[],
+        tools: &[],
+        msrv: false,
+    },
+    Lane {
+        name: "linux",
+        machine: Machine::Linux,
+        arch: "x86_64",
+        packages: VOLUME_PACKAGES,
+        tools: &[],
+        msrv: true,
+    },
+    Lane {
+        name: "linux-arm",
+        machine: Machine::Linux,
+        arch: "aarch64",
+        packages: VOLUME_PACKAGES,
+        tools: &[],
+        msrv: false,
+    },
+    Lane {
+        name: "network",
+        machine: Machine::Anywhere,
+        arch: "",
+        packages: &[],
+        tools: &[],
+        msrv: false,
+    },
+    Lane {
+        name: "offline",
+        machine: Machine::Linux,
+        arch: "",
+        packages: &[],
+        tools: &[],
+        msrv: false,
+    },
+    Lane {
+        name: "benchmark",
+        machine: Machine::Anywhere,
+        arch: "",
+        packages: &[],
+        tools: &[],
+        msrv: false,
+    },
+];
+
+impl Lane {
+    fn here(&self) -> bool {
+        let machine = match self.machine {
+            Machine::Anywhere => true,
+            Machine::Windows => cfg!(windows),
+            Machine::Linux => cfg!(target_os = "linux"),
+        };
+        machine && (self.arch.is_empty() || self.arch == std::env::consts::ARCH)
+    }
+
+    fn wants(&self) -> String {
+        let machine = match self.machine {
+            Machine::Anywhere => "any machine",
+            Machine::Windows => "windows",
+            Machine::Linux => "linux",
+        };
+        if self.arch.is_empty() {
+            machine.to_owned()
+        } else {
+            format!("{machine} {}", self.arch)
+        }
+    }
+
+    fn elsewhere(&self) -> String {
+        format!(
+            "this lane needs {}, and this machine is {} {}. The verify workflow runs it on a runner that is",
+            self.wants(),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    }
+
+    fn targets(&self) -> Vec<String> {
+        let arch = if self.arch.is_empty() {
+            std::env::consts::ARCH
+        } else {
+            self.arch
+        };
+        if cfg!(windows) {
+            vec![format!("{arch}-pc-windows-msvc")]
+        } else {
+            vec![
+                format!("{arch}-unknown-linux-gnu"),
+                format!("{arch}-unknown-linux-musl"),
+            ]
+        }
+    }
+
+    fn builds(&self) -> bool {
+        !matches!(self.name, "checks" | "benchmark")
+    }
+
+    fn packages(&self) -> Vec<&'static str> {
+        let mut packages = self.packages.to_vec();
+        if cfg!(target_os = "linux") && self.builds() {
+            packages.push("musl-tools");
+        }
+        packages.sort_unstable();
+        packages.dedup();
+        packages
+    }
+}
+
+fn lane(name: &str) -> Option<&'static Lane> {
+    LANES.iter().find(|lane| lane.name == name)
+}
 
 struct Step {
     name: String,
@@ -114,84 +265,121 @@ pub fn run(workspace: &Path, arguments: &[String]) -> bool {
     {
         return install_hook(workspace);
     }
-    let fast = arguments.iter().any(|argument| argument == "--fast");
-    let arm = arguments.iter().any(|argument| argument == "--arm");
+    let named = crate::argument_value(arguments, "--lane");
+    let asked = match named.map(|name| (name, lane(name))) {
+        Some((name, None)) => {
+            eprintln!(
+                "no lane is named {name}. The lanes are {}",
+                LANES
+                    .iter()
+                    .map(|lane| lane.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return false;
+        }
+        Some((_, found)) => found,
+        None => None,
+    };
+    if arguments.iter().any(|argument| argument == "--provision") {
+        return provision(workspace, asked);
+    }
 
     let mut report = Report::new();
-    native(workspace, &mut report, fast);
-    if fast {
-        for lane in ["network", "benchmark", "linux suite", "linux arm suite"] {
-            report.skipped(
-                lane,
-                Duration::ZERO,
-                "the push gate runs only what is fast enough to run on every push. cargo xtask verify runs this",
+    if let Some(lane) = asked {
+        if !lane.here() {
+            eprintln!(
+                "{} was asked for by name and {}",
+                lane.name,
+                lane.elsewhere()
             );
+            return false;
         }
+        work(lane, workspace, &mut report);
+    } else if arguments.iter().any(|argument| argument == "--fast") {
+        push_gate(workspace, &mut report);
     } else {
-        container(workspace, &mut report, "amd64", &LINUX_TARGETS, "linux");
-        if arm {
-            container(workspace, &mut report, "arm64", &ARM_TARGETS, "linux arm");
-        } else {
-            report.degrade(
-                "the aarch64 Linux pair built and run",
-                "nothing",
-                "the emulated lane runs only behind --arm, because it is slow",
-            );
+        for lane in &LANES {
+            if lane.here() {
+                work(lane, workspace, &mut report);
+            } else {
+                report.skipped(lane.name, Duration::ZERO, &lane.elsewhere());
+            }
         }
-        unreachable(&mut report);
+        report.degrade(
+            "arm64ec-pc-windows-msvc compiled",
+            "nothing",
+            "the cryptography provider refuses the arm64ec architecture, and the emulation ABI it exists for is for mixing with x64 code rather than for a standalone binary",
+        );
     }
     summary(&report);
     !report.failed()
 }
 
-fn native(workspace: &Path, report: &mut Report, fast: bool) {
-    report.step(
-        "format",
-        cargo(workspace, &["fmt", "--all", "--", "--check"]),
-    );
-    dependencies(workspace, report);
-    for target in LINT_TARGETS {
-        let lint = cargo(
-            workspace,
-            &[
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--target",
-                target,
-                "--",
-                "-D",
-                "warnings",
-            ],
-        );
-        report.step(&format!("lint {target}"), lint);
-    }
-    report.step(
-        "build",
-        cargo(workspace, &["build", "--workspace", "--exclude", "xtask"]),
-    );
-    for target in COMPILE_ONLY_TARGETS {
-        let check = cargo(
-            workspace,
-            &["check", "--workspace", "--all-targets", "--target", target],
-        );
-        report.step(&format!("compile {target}"), check);
-    }
+fn native() -> Option<&'static Lane> {
+    LANES
+        .iter()
+        .find(|lane| lane.machine != Machine::Anywhere && lane.here())
+}
 
-    if fast {
+fn push_gate(workspace: &Path, report: &mut Report) {
+    let native = native();
+    format(workspace, report);
+    dependencies(workspace, report);
+    if let Some(lane) = native {
+        for target in lane.targets() {
+            lint(workspace, report, &target);
+            build(workspace, report, &target);
+        }
+    }
+    for lane in &LANES {
+        if lane.name == "checks" || native.is_some_and(|native| native.name == lane.name) {
+            continue;
+        }
         report.skipped(
-            "test x86_64-pc-windows-msvc",
+            lane.name,
             Duration::ZERO,
-            "the suite takes about ten minutes here, and a gate nobody waits for is a gate that gets bypassed. cargo xtask verify runs it",
+            "the push gate runs only what is fast enough to run on every push. cargo xtask verify runs what this machine can prove, and the workflows run every lane on a runner that is native to it",
+        );
+    }
+    if let Some(lane) = native {
+        report.skipped(
+            &format!("test {}", lane.targets().join(" and ")),
+            Duration::ZERO,
+            "the suite takes about twenty minutes here, and a gate nobody waits for is a gate that gets bypassed. cargo xtask verify runs it",
         );
         report.skipped(
             &format!("msrv {}", rust_version(workspace)),
             Duration::ZERO,
             "building the workspace a second time at its rust-version costs as much as building it once. cargo xtask verify runs it",
         );
-    } else {
-        let volumes = host_volumes(workspace, report);
-        let mut test = cargo(workspace, &["test", "--workspace"]);
+    }
+}
+
+fn work(lane: &Lane, workspace: &Path, report: &mut Report) {
+    match lane.name {
+        "checks" => {
+            format(workspace, report);
+            dependencies(workspace, report);
+        }
+        "network" => network(workspace, lane, report),
+        "offline" => offline(workspace, report),
+        "benchmark" => {
+            report.step_here("benchmark", || {
+                crate::run_bench(workspace, &["--compare".to_owned()], true)
+                    == std::process::ExitCode::SUCCESS
+            });
+        }
+        _ => platform(lane, workspace, report),
+    }
+}
+
+fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
+    let volumes = volumes(workspace, report);
+    for target in lane.targets() {
+        lint(workspace, report, &target);
+        build(workspace, report, &target);
+        let mut test = cargo(workspace, &["test", "--workspace", "--target", &target]);
         test.env("FETCHLOOM_VERIFY", "1");
         for (name, value) in &volumes {
             test.env(name, value);
@@ -199,13 +387,74 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
         if !volumes.is_empty() {
             test.env("FETCHLOOM_VERIFY_VOLUMES", "1");
         }
-        report.step("test x86_64-pc-windows-msvc", test);
-
+        report.step(&format!("test {target}"), test);
+    }
+    if lane.msrv {
         msrv(workspace, report);
+    }
+}
+
+fn format(workspace: &Path, report: &mut Report) {
+    report.step(
+        "format",
+        cargo(workspace, &["fmt", "--all", "--", "--check"]),
+    );
+}
+
+fn lint(workspace: &Path, report: &mut Report, target: &str) {
+    let lint = cargo(
+        workspace,
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--",
+            "-D",
+            "warnings",
+        ],
+    );
+    report.step(&format!("lint {target}"), lint);
+}
+
+fn build(workspace: &Path, report: &mut Report, target: &str) -> bool {
+    let build = cargo(
+        workspace,
+        &[
+            "build",
+            "--workspace",
+            "--exclude",
+            "xtask",
+            "--target",
+            target,
+        ],
+    );
+    report.step(&format!("build {target}"), build)
+}
+
+fn built(workspace: &Path, target: &str) -> std::path::PathBuf {
+    workspace
+        .join("target")
+        .join(target)
+        .join("debug")
+        .join(if cfg!(windows) {
+            "fetchloom.exe"
+        } else {
+            "fetchloom"
+        })
+}
+
+fn network(workspace: &Path, lane: &Lane, report: &mut Report) {
+    for target in lane.targets() {
+        if !build(workspace, report, &target) {
+            continue;
+        }
+        let name = format!("network {target}");
         let started = Instant::now();
-        match crate::network::run(workspace, None) {
+        match crate::network::run(workspace, Some(&built(workspace, &target))) {
             crate::network::Outcome::Skipped(reason) => {
-                report.skipped("network", started.elapsed(), &reason);
+                report.skipped(&name, started.elapsed(), &reason);
                 report.degrade(
                     "real archives fetched from real servers",
                     "nothing",
@@ -213,18 +462,64 @@ fn native(workspace: &Path, report: &mut Report, fast: bool) {
                 );
             }
             crate::network::Outcome::Passed => {
-                report.already_ran("network", true, started.elapsed());
+                report.already_ran(&name, true, started.elapsed());
             }
             crate::network::Outcome::Failed(reason) => {
                 println!("{reason}");
-                report.already_ran("network", false, started.elapsed());
+                report.already_ran(&name, false, started.elapsed());
             }
         }
-        report.step_here("benchmark", || {
-            crate::run_bench(workspace, &["--compare".to_owned()], true)
-                == std::process::ExitCode::SUCCESS
-        });
     }
+}
+
+fn offline(workspace: &Path, report: &mut Report) {
+    let target = format!("{}-unknown-linux-musl", std::env::consts::ARCH);
+    if !build(workspace, report, &target) {
+        return;
+    }
+    let script = workspace
+        .join("xtask")
+        .join("verify")
+        .join("offline.sh")
+        .display()
+        .to_string();
+    let here = workspace
+        .join("target")
+        .join("offline")
+        .display()
+        .to_string();
+    let binary = built(workspace, &target).display().to_string();
+
+    let mut prepare = Command::new("bash");
+    prepare
+        .current_dir(workspace)
+        .args([&script, &binary, &here, "prepare"]);
+    if !report.step("offline prepare", prepare) {
+        report.degrade(
+            "a plan and a bundle prepared from a real host",
+            "nothing",
+            "the connected half of the offline lane did not run",
+        );
+        return;
+    }
+
+    let Some(mut apply) = privileged() else {
+        report.skipped(
+            "offline apply",
+            Duration::ZERO,
+            "the apply half runs in a network namespace holding no interface, which needs root, and sudo answered nothing here",
+        );
+        report.degrade(
+            "an apply proven to reach no host",
+            "nothing",
+            "no network namespace could be entered on this machine",
+        );
+        return;
+    };
+    apply
+        .current_dir(workspace)
+        .args(["unshare", "--net", "bash", &script, &binary, &here, "apply"]);
+    report.step("offline apply", apply);
 }
 
 fn dependencies(workspace: &Path, report: &mut Report) {
@@ -237,7 +532,7 @@ fn dependencies(workspace: &Path, report: &mut Report) {
         report.skipped(
             "dependencies",
             started.elapsed(),
-            "cargo-deny is not installed, so nothing checked the graph against the allow list, the advisory database, the licences, or the registries",
+            "cargo-deny is not installed, so nothing checked the graph against the allow list, the advisory database, the licences, or the registries. Install it with cargo xtask verify --lane checks --provision",
         );
         report.degrade(
             "every crate in the graph checked against the allow list, the advisories, the licences and the registries",
@@ -262,7 +557,8 @@ fn msrv(workspace: &Path, report: &mut Report) {
             &name,
             started.elapsed(),
             &format!(
-                "the {version} toolchain is not installed, so the rust-version this workspace states was not built. Install it with rustup toolchain install {version}"
+                "the {version} toolchain is not installed, so the rust-version this workspace states was not built. Install it with cargo xtask verify --lane {} --provision",
+                native().map_or("checks", |lane| lane.name)
             ),
         );
         report.degrade(
@@ -314,32 +610,64 @@ fn cargo_program() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned())
 }
 
-fn host_volumes(workspace: &Path, report: &mut Report) -> BTreeMap<String, String> {
-    if !cfg!(windows) {
-        return BTreeMap::new();
+fn privileged() -> Option<Command> {
+    if !answers(Command::new("sudo").args(["-n", "true"])) {
+        return None;
     }
-    let script = workspace
-        .join("xtask")
-        .join("verify")
-        .join("volumes-windows.ps1");
+    let mut command = Command::new("sudo");
+    command.arg("-n");
+    Some(command)
+}
+
+fn volumes(workspace: &Path, report: &mut Report) -> BTreeMap<String, String> {
     let file = workspace.join("target").join("volumes.env");
-    let built = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            &script.display().to_string(),
-            &file.display().to_string(),
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
+    let script = |name: &str| {
+        workspace
+            .join("xtask")
+            .join("verify")
+            .join(name)
+            .display()
+            .to_string()
+    };
+    let built = if cfg!(windows) {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &script("volumes-windows.ps1"),
+                &file.display().to_string(),
+            ])
+            .status()
+            .is_ok_and(|status| status.success())
+    } else {
+        privileged().is_some_and(|mut command| {
+            command
+                .args([
+                    "bash",
+                    &script("volumes-linux.sh"),
+                    &file.display().to_string(),
+                ])
+                .status()
+                .is_ok_and(|status| status.success())
+        })
+    };
     if !built {
-        report.degrade(
-            "ReFS, a small volume and a case-sensitive directory on this host",
-            "only the volume the workspace is on",
-            "the Windows volume script needs an elevated shell, and Hyper-V for the virtual disks, so block cloning and the small-volume and case-sensitive rows are unproven here",
-        );
+        let _ = std::fs::remove_file(&file);
+        if cfg!(windows) {
+            report.degrade(
+                "ReFS, a small volume and a case-sensitive directory on this host",
+                "only the volume the workspace is on",
+                "the Windows volume script needs an elevated shell, and Hyper-V for the virtual disks, so block cloning and the small-volume and case-sensitive rows are unproven here",
+            );
+        } else {
+            report.degrade(
+                "btrfs, xfs, vfat, a small volume, a read-only volume, a second volume and a FUSE mount",
+                "only the volume the workspace is on",
+                "the Linux volume script attaches loop devices and mounts filesystems, which needs root, and sudo answered nothing here",
+            );
+        }
         return BTreeMap::new();
     }
     read_env(&file)
@@ -349,121 +677,86 @@ fn read_env(file: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(file) else {
         return BTreeMap::new();
     };
-    text.lines()
+    text.trim_start_matches('\u{feff}')
+        .lines()
         .filter_map(|line| line.split_once('='))
         .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
         .collect()
 }
 
-fn container(workspace: &Path, report: &mut Report, arch: &str, targets: &[&str], lane: &str) {
-    let channel = channel(workspace);
-    let image = format!("fetchloom-verify:{arch}");
-    let platform = format!("linux/{arch}");
-    let mut build = Command::new("docker");
-    build.args([
-        "build",
-        "--platform",
-        &platform,
-        "--build-arg",
-        &format!("RUST_CHANNEL={channel}"),
-        "--build-arg",
-        &format!("RUST_TARGETS={}", targets.join(" ")),
-        "--tag",
-        &image,
-        &workspace.join("xtask").join("verify").display().to_string(),
-    ]);
-    if !report.step(&format!("{lane} image"), build) {
-        report.degrade(
-            &format!("{lane} built and run"),
-            "nothing",
-            "the container image did not build, so no Linux target ran",
-        );
-        return;
+fn provision(workspace: &Path, asked: Option<&'static Lane>) -> bool {
+    let wanted: Vec<&Lane> = match asked {
+        Some(lane) => vec![lane],
+        None => LANES.iter().filter(|lane| lane.here()).collect(),
+    };
+    let mut targets: Vec<String> = Vec::new();
+    let mut packages: Vec<&str> = Vec::new();
+    let mut tools: Vec<&str> = Vec::new();
+    let mut msrv = false;
+    for lane in &wanted {
+        if lane.builds() {
+            targets.extend(lane.targets());
+        }
+        packages.extend(lane.packages());
+        tools.extend(lane.tools);
+        msrv |= lane.msrv;
     }
+    targets.sort_unstable();
+    targets.dedup();
+    packages.sort_unstable();
+    packages.dedup();
+    tools.sort_unstable();
+    tools.dedup();
 
-    let mut run = Command::new("docker");
-    run.args([
-        "run",
-        "--rm",
-        "--privileged",
-        "--platform",
-        &platform,
-        "--volume",
-        &format!("{}:/workspace", workspace.display()),
-        "--volume",
-        &format!("fetchloom-target-{arch}:/target"),
-        &image,
-        "bash",
-        "/workspace/xtask/verify/linux.sh",
-    ]);
-    run.args(targets);
-    if !report.step(&format!("{lane} suite"), run) {
-        return;
+    let mut ready = true;
+    if !targets.is_empty() {
+        println!("targets {}", targets.join(" "));
+        ready &= Command::new("rustup")
+            .current_dir(workspace)
+            .args(["target", "add"])
+            .args(&targets)
+            .status()
+            .is_ok_and(|status| status.success());
     }
-    offline(workspace, report, arch, &image, &platform, lane);
-}
-
-fn offline(
-    workspace: &Path,
-    report: &mut Report,
-    arch: &str,
-    image: &str,
-    platform: &str,
-    lane: &str,
-) {
-    let mounts = [
-        format!("{}:/workspace", workspace.display()),
-        format!("fetchloom-target-{arch}:/target"),
-        format!("fetchloom-offline-{arch}:/offline"),
-    ];
-    let mut prepare = Command::new("docker");
-    prepare.args(["run", "--rm", "--privileged", "--platform", platform]);
-    for mount in &mounts {
-        prepare.args(["--volume", mount]);
+    if msrv {
+        let version = rust_version(workspace);
+        println!("toolchain {version}");
+        ready &= Command::new("rustup")
+            .current_dir(workspace)
+            .args(["toolchain", "install", &version, "--profile", "minimal"])
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .status()
+            .is_ok_and(|status| status.success());
     }
-    prepare.args([
-        image,
-        "bash",
-        "/workspace/xtask/verify/offline.sh",
-        "prepare",
-    ]);
-    if !report.step(&format!("{lane} offline prepare"), prepare) {
-        report.degrade(
-            "a plan and a bundle prepared from a real host",
-            "nothing",
-            "the connected half of the offline lane did not run",
-        );
-        return;
+    if !packages.is_empty() {
+        println!("packages {}", packages.join(" "));
+        let Some(mut update) = privileged() else {
+            eprintln!("system packages need root, and sudo answered nothing here");
+            return false;
+        };
+        ready &= update
+            .args(["apt-get", "update", "--quiet"])
+            .status()
+            .is_ok_and(|status| status.success());
+        let Some(mut install) = privileged() else {
+            return false;
+        };
+        ready &= install
+            .args(["apt-get", "install", "--yes", "--no-install-recommends"])
+            .args(&packages)
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .status()
+            .is_ok_and(|status| status.success());
     }
-
-    let mut apply = Command::new("docker");
-    apply.args([
-        "run",
-        "--rm",
-        "--privileged",
-        "--network",
-        "none",
-        "--platform",
-        platform,
-    ]);
-    for mount in &mounts {
-        apply.args(["--volume", mount]);
+    for tool in tools {
+        println!("tool {tool}");
+        ready &= Command::new(cargo_program())
+            .current_dir(workspace)
+            .args(["install", "--locked", tool])
+            .status()
+            .is_ok_and(|status| status.success());
     }
-    apply.args([image, "bash", "/workspace/xtask/verify/offline.sh", "apply"]);
-    report.step(&format!("{lane} offline apply"), apply);
-}
-
-fn unreachable(report: &mut Report) {
-    report.degrade(
-        "aarch64-pc-windows-msvc compiled and run",
-        "compiled only",
-        "this machine is not a Windows on ARM machine, and compiling is not running",
-    );
-    report.degrade(
-        "arm64ec-pc-windows-msvc compiled",
-        "nothing",
-        "the cryptography provider refuses the arm64ec architecture, and the emulation ABI it exists for is for mixing with x64 code rather than for a standalone binary",
-    );
+    ready
 }
 
 fn summary(report: &Report) {
@@ -510,18 +803,6 @@ fn cargo(workspace: &Path, arguments: &[&str]) -> Command {
     command.current_dir(workspace);
     command.args(arguments);
     command
-}
-
-fn channel(workspace: &Path) -> String {
-    let path = workspace.join("rust-toolchain.toml");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return "stable".to_owned();
-    };
-    text.lines()
-        .find_map(|line| line.trim().strip_prefix("channel"))
-        .and_then(|rest| rest.split('"').nth(1))
-        .unwrap_or("stable")
-        .to_owned()
 }
 
 const HOOK: &str = "#!/bin/sh\nexec cargo xtask verify --fast\n";
@@ -578,7 +859,25 @@ mod tests {
         reason = "test setup, where a failure to build the input is the assertion"
     )]
 
-    use super::{HOOK, install_hook};
+    use super::{HOOK, LANES, install_hook, lane};
+
+    fn lanes_the_workflows_name() -> Vec<String> {
+        let workflows = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(".github")
+            .join("workflows");
+        let mut named = Vec::new();
+        for entry in std::fs::read_dir(&workflows).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for line in text.lines() {
+                if let Some(rest) = line.trim().strip_prefix("- lane: ") {
+                    named.push(rest.trim().to_owned());
+                }
+            }
+        }
+        named
+    }
 
     #[test]
     fn installing_into_a_repository_with_no_hook_writes_the_hook() {
@@ -607,5 +906,56 @@ mod tests {
 
         assert!(!install_hook(scratch.path()));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_rename_the_first_volume_variable() {
+        let scratch = tempfile::TempDir::new().unwrap();
+        let path = scratch.path().join("volumes.env");
+        std::fs::write(
+            &path,
+            "\u{feff}FETCHLOOM_TEST_CLONE_VOLUMES=E:\\\nFETCHLOOM_TEST_SMALL_VOLUMES=F:\\\n",
+        )
+        .unwrap();
+        let read = super::read_env(&path);
+        assert_eq!(
+            read.get("FETCHLOOM_TEST_CLONE_VOLUMES").map(String::as_str),
+            Some("E:\\"),
+            "the mark Windows PowerShell writes at the head of a utf8 file became part of the name"
+        );
+    }
+
+    #[test]
+    fn every_lane_a_workflow_names_is_a_lane_this_file_defines() {
+        let named = lanes_the_workflows_name();
+        assert!(!named.is_empty(), "no workflow names a lane");
+        for name in &named {
+            assert!(lane(name).is_some(), "no lane is named {name}");
+        }
+    }
+
+    #[test]
+    fn every_lane_but_the_benchmark_runs_somewhere_in_ci() {
+        let named = lanes_the_workflows_name();
+        for lane in &LANES {
+            if lane.name == "benchmark" {
+                continue;
+            }
+            assert!(
+                named.iter().any(|name| name == lane.name),
+                "{} is a lane no workflow runs",
+                lane.name
+            );
+        }
+    }
+
+    #[test]
+    fn at_most_one_platform_lane_claims_this_machine() {
+        let here: Vec<&str> = LANES
+            .iter()
+            .filter(|lane| !lane.arch.is_empty() && lane.here())
+            .map(|lane| lane.name)
+            .collect();
+        assert!(here.len() <= 1, "{here:?} all claim this machine");
     }
 }

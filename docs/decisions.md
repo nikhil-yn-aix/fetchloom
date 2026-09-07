@@ -11436,3 +11436,159 @@ binary grew.
 Sources: `xtask/benchmarks/x86_64-pc-windows-msvc.json` across a3b15ee, 49f5bc8,
 33425d7 and a4a7de7; release builds of each in worktrees on rustc 1.98.0;
 `llvm-objdump -h`; a `-Clink-arg=-MAP` link of a4a7de7.
+
+---
+
+## A laptop paid three taxes to answer a question a free runner answers natively
+
+The gate was thirteen steps because one Windows machine had to prove things about
+Linux and about aarch64. It built a Docker image, mounted the workspace into it,
+and for aarch64 emulated the whole machine under qemu. The repository is public
+now, and GitHub Actions runs Linux x86_64, Linux aarch64, Windows x86_64 and
+Windows aarch64 natively and free. Three layers of indirection existed to reach
+machines that can now be asked directly.
+
+Chosen: the container lanes go, `--arm` goes, and `xtask/verify/Dockerfile` and
+`linux.sh` are deleted. `volumes-linux.sh` and `offline.sh` survive, because what
+they prove was never the container; they were merely running inside one. The
+volume script now creates the second account the image used to create, and makes
+the tmpfs directory world writable, because it no longer runs as the only user on
+the machine. `offline.sh` takes the binary and a working directory as arguments,
+and its apply half runs under `unshare --net` rather than `docker run --network
+none`, which is the same isolation without the daemon.
+
+What the emulated lane cost here, from the record that measured it: 530.3 seconds
+to build the arm64 image, then 7 minutes 57 seconds for `cargo clippy` on one of
+the two aarch64 targets. That run never reached the tests and never reached the
+gnu target of the pair. What the same work costs on an `ubuntu-24.04-arm` runner,
+measured on this session's first push: 3 minutes 31 seconds for lint, build and
+test of both aarch64 targets, including installing the targets and the musl C
+toolchain and formatting six filesystem images. The lane that was too slow to run
+by default is now the second fastest lane there is.
+
+The Linux x86_64 comparison is the same shape. The container suite was 1929
+seconds last session; the native lane is 325 seconds for both targets and the
+MSRV build together.
+
+                 cold      warm    runner
+    checks       2 m 39 s    23 s  ubuntu-24.04
+    linux        5 m 25 s  4 m 27 s  ubuntu-24.04
+    linux-arm    3 m 31 s  3 m 19 s  ubuntu-24.04-arm
+    windows     23 m 48 s 19 m 51 s  windows-2025
+    windows-arm 22 m 16 s 21 m 18 s  windows-11-arm
+    hosts        3 m 07 s  3 m 06 s  five lanes across four runners, wall clock
+
+The Windows numbers are dominated by the suite, which is 1007 seconds on the
+runner against 1088 seconds on this laptop. Nothing about CI made the suite
+meaningfully faster. What it made possible is running it somewhere else, at the
+same time as three other platforms, and running it on a machine that can build
+the volumes this one cannot.
+
+The cache is measured rather than assumed. `Swatinem/rust-cache` is worth 136
+seconds on `checks`, which is almost the whole lane, because what it restores is
+the compiled `cargo-deny`. It is worth 58 seconds on `linux`, 12 on `linux-arm`
+and about four minutes on `windows`. It is never slower than the rebuild it
+replaces, and on `checks` it is the difference between a two and a half minute
+lane and a twenty-three second one.
+
+Eight lanes, and each is argued rather than symmetrical. `checks` is format and
+the dependency graph, which are properties of the source and not of a machine, so
+they run once rather than four times. `windows`, `windows-arm`, `linux` and
+`linux-arm` each lint, build and test every target native to that machine. The
+MSRV build is on `windows` and `linux` only, because what a stated rust-version
+has to support is an operating system's API surface and not an architecture.
+
+Volumes are not a lane. `volumes-linux.sh` and `volumes-windows.ps1` produce no
+verdict of their own; they build an environment the platform suite then runs in.
+Making them a lane means running the same suite twice against two environments,
+which is twice the cost for a distinction the suite already reports.
+
+`network` and `offline` are their own workflow, on a push to `main` and once a
+day, and not on pull requests. They reach ftp.gnu.org and files.pythonhosted.org,
+which owe this project nothing, and a stranger's pull request should not go red
+because a third party is down. `network` runs on all four platforms because what
+it exercises differs on each: musl resolves names with its own resolver rather
+than glibc's, Windows verifies a certificate chain through the platform store,
+and the TLS provider carries architecture-specific arithmetic.
+
+`benchmark` runs nowhere in CI. A baseline is recorded on one machine, no baseline
+exists for a fresh runner, and the path for a missing baseline records the run and
+passes. That is a step that would run to look thorough and prove nothing.
+
+The one design rule was that a workflow step is `cargo xtask verify --lane <name>`
+and nothing more, so that the session which rewrites the test suite never opens a
+workflow file. No cargo invocation, target triple, test name or lint flag appears
+in YAML. What a lane needs is installed by `--provision`, which asks the same lane
+table the run does, so a lane that gains a target or a system package gains it in
+one place. The matrix pairs a lane name with a runner label and stops there, and a
+test asserts that every lane a workflow names exists and that every lane but
+`benchmark` runs somewhere.
+
+Three things are proven now that were never proven here.
+`aarch64-pc-windows-msvc` is run rather than compiled, which retires the degrade
+that said so. The aarch64 Linux pair is tested rather than linted. And the Windows
+volume matrix builds: the script creates a ReFS DevDrive, a 32 MB volume and a
+64 MB volume through `New-VHD` on `windows-2025`, which this laptop has never
+managed because it wants an elevated shell and Hyper-V. Research said that would
+fail, on the grounds that the Azure instances behind these runners do not offer
+nested virtualization; the run says otherwise, because attaching a VHD is a
+storage driver and not a hypervisor. The run is the evidence and the search was
+wrong.
+
+Three failures came out of the first push, and two of them belong to the session
+that owns the test suite.
+
+`a_frame_table_stating_a_stride_this_format_cannot_hold_is_refused` fails on all
+four Linux targets with `PermissionDenied` at `crates/cache/tests/compression.rs`
+line 641. It opens a published cache object for writing, in order to corrupt it.
+The container ran as root, and root ignores a mode that denies write. The test
+never passed on Linux for a reason; it passed because nobody on Linux was ever an
+ordinary user.
+
+`cloning_shares_blocks_on_a_volume_that_supports_it` fails on both Windows targets
+because `FETCHLOOM_TEST_CLONE_VOLUMES` is unset while `FETCHLOOM_VERIFY_VOLUMES`
+is set, which the support module correctly calls a contradiction. That one was
+this session's own defect and is fixed here. Windows PowerShell 5.1 writes a byte
+order mark at the head of an `-Encoding utf8` file, so the first line of the
+volume environment file named a variable called `\u{feff}FETCHLOOM_TEST_CLONE_VOLUMES`
+while the other three parsed fine. The mark is stripped where the file is read
+rather than where it is written, because a reader that tolerates it is correct
+against any writer. It was never seen before because this laptop cannot build
+those volumes at all, so the file was never written.
+
+Both failures are the gate being observed to fail, which is the only thing that
+makes it a gate. They also show what `fail-fast: false` is for: `linux-arm` went
+red at twelve minutes past while `linux`, `windows` and `windows-arm` all ran to
+completion and reported, so "does this break everywhere or only on Windows" was
+answerable from one push. No synthetic break was needed and none was made.
+
+Every API here was read rather than recalled. Runner labels and their availability
+for public repositories, from the GitHub-hosted runners reference and the August
+2025 changelog making arm64 generally available. `actions/checkout` v7.0.1 and
+`Swatinem/rust-cache` v2.9.2, from each repository's latest release, pinned to the
+commit each tag dereferences to, because the current secure-use guidance says a
+full-length commit SHA is the only immutable way to name an action. Least
+privilege on `GITHUB_TOKEN`, and the advice against `pull_request_target`, from
+the same page; nothing here needs a token beyond `contents: read` and no lane
+reads a secret. Rust 1.98.0 is preinstalled on all four runner images along with
+rustup, which is exactly what `rust-toolchain.toml` pins, so no toolchain action
+is installed and no workflow names a version: `rustup` reads the file. The Ubuntu
+images carry none of `musl-tools`, `btrfs-progs`, `xfsprogs`, `dosfstools`,
+`bindfs` or `fuse3`, which is why `--provision` installs them.
+
+The second push, carrying only the byte order mark fix, turned both Windows lanes
+green: `cloning_shares_blocks_on_a_volume_that_supports_it` and
+`case_folding_is_reported_on_a_case_sensitive_volume` both pass on
+`windows-2025` and on `windows-11-arm`, with no degradation reported, which is
+block cloning on ReFS and a case-sensitive directory proven for the first time.
+The two Linux lanes stay red on the root-versus-ordinary-user failure above,
+which is correct: nothing was weakened to make a lane green, and the lane that
+found a defect reports it.
+
+Uncertain: whether `cargo-deny` should be a pinned binary release rather than
+`cargo install --locked`. Warm, it costs nothing; cold, it is most of the
+`checks` lane.
+
+Sources: `xtask/src/verify.rs`; `.github/workflows/verify.yml` and `hosts.yml`;
+the record above under "zstd-sys builds under emulation" for the emulated numbers;
+runs 34120222080 and 34120222064 on branch `ci`.
