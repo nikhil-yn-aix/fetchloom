@@ -49,6 +49,7 @@ pub struct Settings {
     pub threads: Sourced<Option<NonZeroU32>>,
     pub display: Sourced<DisplayMode>,
     pub cache_dir: Sourced<PathBuf>,
+    pub library_dir: Sourced<PathBuf>,
     pub concurrency: Sourced<Option<NonZeroU32>>,
     pub per_host: Sourced<Option<NonZeroU32>>,
     pub bandwidth: Sourced<Option<Bandwidth>>,
@@ -94,8 +95,38 @@ pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
     PathBuf::from(".fetchloom-cache")
 }
 
+#[must_use]
+pub fn default_library_dir(environment: &dyn Environment) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = environment.get("LOCALAPPDATA") {
+            return PathBuf::from(local).join("Fetchloom").join("Library");
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Some(base) = environment.get("XDG_DATA_HOME") {
+            return PathBuf::from(base).join("fetchloom").join("library");
+        }
+        if let Some(home) = environment.get("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("fetchloom")
+                .join("library");
+        }
+    }
+    PathBuf::from(".fetchloom-library")
+}
+
 fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
     let named = loaded.values.cache.as_ref()?.dir.as_ref()?;
+    let beside = loaded.path.parent().unwrap_or(Path::new("."));
+    Some(without_here(&beside.join(named)))
+}
+
+fn project_library_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
+    let named = loaded.values.library.as_ref()?.dir.as_ref()?;
     let beside = loaded.path.parent().unwrap_or(Path::new("."));
     Some(without_here(&beside.join(named)))
 }
@@ -285,6 +316,8 @@ pub fn resolve_all(
         Sourced::new(default_cache_dir(environment), Origin::Default)
     };
 
+    let library_dir = resolve_library_dir(flags, discovered, environment);
+
     let (log, log_clamped) = resolve_log(flags, &levels, environment)?;
     let defaults = Limits::default();
     let retries = resolve(
@@ -307,6 +340,7 @@ pub fn resolve_all(
         threads,
         display,
         cache_dir,
+        library_dir,
         concurrency,
         per_host,
         bandwidth,
@@ -513,4 +547,28 @@ fn resolve_presentation(flags: &GlobalFlags, levels: &Levels<'_>) -> Result<Pres
             true,
         ),
     })
+}
+
+fn resolve_library_dir(
+    flags: &GlobalFlags,
+    discovered: &Discovered,
+    environment: &dyn Environment,
+) -> Sourced<PathBuf> {
+    if let Some(named) = flags.library_dir.clone() {
+        return Sourced::new(named, Origin::CommandLine);
+    }
+    if let Some(named) = environment.get("FETCHLOOM_LIBRARY_DIR") {
+        return Sourced::new(PathBuf::from(named), Origin::Environment);
+    }
+    if let Some(named) = discovered.project.as_ref().and_then(project_library_dir) {
+        return Sourced::new(named, Origin::ProjectConfig);
+    }
+    if let Some(named) = discovered
+        .user
+        .as_ref()
+        .and_then(|loaded| loaded.values.library.as_ref()?.dir.clone())
+    {
+        return Sourced::new(named, Origin::UserConfig);
+    }
+    Sourced::new(default_library_dir(environment), Origin::Default)
 }

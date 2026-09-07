@@ -516,7 +516,7 @@ fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
     let bytes = object(1024 * 1024, 12);
     let server = TestServer::start(
         Script::serving(bytes.clone())
-            .delayed(Latency::default().every_request(std::time::Duration::from_millis(1200))),
+            .delayed(Latency::default().every_request(std::time::Duration::from_secs(5))),
     )
     .unwrap();
     let manifest = format!(
@@ -537,13 +537,18 @@ fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
             .arg("--events")
             .arg(&stream)
             .env("FETCHLOOM_CACHE_DIR", &cache)
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         running.push((child, stream));
     }
-    for (mut child, stream) in running {
-        let status = child.wait().unwrap();
-        assert!(status.success(), "a contending run failed");
+    for (child, stream) in running {
+        let finished = child.wait_with_output().unwrap();
+        assert!(
+            finished.status.success(),
+            "a contending run failed: {}",
+            String::from_utf8_lossy(&finished.stderr)
+        );
         seen.extend(names_in(&stream));
     }
 }

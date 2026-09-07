@@ -60,6 +60,58 @@ A reference naming one object materializes a directory holding that one entry un
 
 Nothing there fails with `reference.unresolved` saying nothing is there. Something there that cannot be read fails with `reference.unresolved` saying to make it readable. The two are never reported as each other.
 
+## The project file
+
+`fetchloom.toml` is found by walking up from the working directory to the root of the volume, and the first one found is the one used. There is one project file, one syntax and one discovery rule; `--config` names one instead and `--no-config` uses none.
+
+Every relative path that file states resolves against the directory holding it, and never against the working directory. That covers the `datasets` table's destinations and the cache and library directories it names. The lock a run writes lands beside it too, unless `--lock` names somewhere else. A run from a subdirectory therefore writes what a run from the top writes, which is the difference between a project file that is usable from a script and one that is not.
+
+`get` with no reference fetches every entry of the `datasets` table, in the order the table sorts. An entry is either a reference or a table stating `ref` and optionally `output`, `select`, `exclude` and `layout`. A string is never read as a table and a table always states `ref`, so one shape never means the other. An unknown key inside an entry is an error naming the key, as every other key in the file is.
+
+An entry with no `output` lands at the entry's own name beside the project file. Two entries that would write to one destination fail with exit 2 naming both, before anything is resolved or fetched, and two spellings of one path are one destination. Every entry of the table is read and checked before the first is fetched, so a value no run can take — a destination this platform cannot name, a `layout` that is neither `keep` nor `flatten:<n>` — fails with nothing fetched rather than after the entries before it landed.
+
+A dataset that fails does not stop the ones after it, because each is its own destination and each publishes whole or not at all. The run exits with the code of the first failure.
+
+`get` with no reference and `--output`, `--select`, `--exclude`, `--layout` or `--library` is refused, because one destination and one selection cannot describe several datasets and the table already states each. `--locked` is the reproducible install: every dataset pinned exactly, refusing where resolution differs.
+
+## Probe and list
+
+`probe <ref>` resolves the reference, asks the source, and moves no payload bytes. It reports the resolved location redacted, the size, every digest the source states with the algorithm each one is, the trust class a fetch would land in, whether the source serves ranges, and whether the cache already holds the object. A fact the source does not state is unknown, unknown is an answer, and probe exits 0. Under `--offline` it answers from what the cache holds, or fails with `policy.offline`.
+
+The trust class a probe reports is `verified` when a digest a run could compare against is already stated, and `tofu` otherwise. It never reports `corroborated`, because corroboration is a fact about witnesses of bytes this machine has seen and a probe has seen none.
+
+`list <ref>` enumerates what a container holds, moving as few bytes as the format allows.
+
+| What is listed | What it costs |
+|---|---|
+| An object the cache holds | The cache read, and no request |
+| A directory or a prefix | The walk a run would do, or the listing seam the source already offers |
+| A zip over a source serving ranges | The end of central directory record, the central directory, and the local header of each member, which is checked against it |
+| A zip over a source refusing ranges | The whole object |
+| A tar under any compression | The whole object, because a tar states no index |
+
+Where the cheap path is not available, the run emits a `degrade` naming what was requested, what it cost instead and why, before the bytes move. It then proceeds rather than refusing: the caller asked what is inside, a refusal would need a flag to override it and there is no such flag, and a refusal that cannot be overridden is a question with no answer. What it read is kept in the cache, so the second listing of one object costs nothing.
+
+`list` is bounded by the listing limits rather than the archive limits, and an archive past them fails while it is being enumerated rather than after it has been buffered.
+
+Output is stable and machine readable: one entry per member with its path, its size, its entry type, and the digest where one is known. An archive states no digest for its members, so that field is absent there and present for a listing that states one.
+
+## The library
+
+The library is one directory holding materialized datasets, separate from the cache. Its default is the platform's data location, not the cache location, and `--library-dir`, `FETCHLOOM_LIBRARY_DIR` and `library = { dir = "..." }` move it in that order.
+
+An entry's path is `<library>/<sanitized name>/<identity>`. The identity is derived from what the reference resolved to and from nothing about this machine: the manifest digest, the release, and the selection, folded under a key of their own so a value from one domain can never be mistaken for another. `where <ref>` therefore answers without an index to consult, two versions of one dataset coexist, and two runs of one reference land in one place.
+
+A name is a convenience component and is sanitized deterministically: every byte outside letters, digits, `-`, `_` and `.` becomes `_`, trailing dots and spaces are dropped, an empty result becomes `dataset`, and a name whose stem is a Windows device is prefixed with `_`. Two names that sanitize identically stay separate, because the identity component differs.
+
+A library file is never a hard link to a cache object. It is a copy-on-write clone where the volume offers one and a plain copy where it does not, with a `degrade` naming the refusal. One in-place edit through a hard link would corrupt the content addressed store for every dataset sharing that object.
+
+A library tree is a destination like any other. It carries a record, so `status`, `diff`, `revert`, `promote` and `verify` work against it unchanged, and a second run into it reconciles rather than rebuilds.
+
+Nothing is removed from the library on its own, and no run prunes it. `library rm <path>` removes one entry and the record of the run that wrote it, and refuses a path outside the library. Inside is decided after `.` and `..` are resolved, so a path that climbs out and back in is refused rather than followed. `library ls` states what the library holds and what it takes.
+
+`--library` and `--output` together are refused, because two destinations is not a run.
+
 ## Selection
 
 Selection is part of identity. Changing it changes the lock entry, not the dataset name.
@@ -515,6 +567,28 @@ An operation with nothing to do exits 0 with status `unchanged`.
 The result's `status` is one of exactly four values and no other is ever written: `materialized`, `unchanged`, `restored`, `adopted`.
 
 The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests` and `file_operations`. Bytes read and written count content only, so on a run into an empty destination and empty cache that stored every object raw, bytes written is exactly what the run left on disk. A run that compressed an object wrote it twice, once to the partial as it arrived and once compressed as it was published, and both are counted, because compressing an object is moving content rather than bookkeeping about it. Neither counts the cache's own records, its fingerprint, its locks, or the receipt: those are bookkeeping about a run rather than the content it moved. Requests counts every request including retries and probes. File operations counts every file or directory created, every rename, and every flush, bookkeeping included. All four are identical on identical inputs, which is what a benchmark gates on. None is a duration.
+
+### The JSON a command prints
+
+Other tools parse this, so the field names are a contract rather than a convenience. They are additive only: a field may be added, and one that is present is never renamed, retyped or removed. There is no version field anywhere in this build, so a rename is a break with nothing to negotiate it, and the field names of every result are asserted by a test rather than by care.
+
+| Command | Object |
+|---|---|
+| `get`, `apply` | `status`, `dataset`, `tree`, `destination`, `entries`, `bytes`, `trust`, `work` |
+| `probe` | `dataset`, `artifacts[]` of `artifact`, `location`, `size`, `digests[]` of `algorithm` and `value`, `trust`, `ranges`, `cached` |
+| `list` | `entries[]` of `path`, `type`, `size`, and `digest` where one is known; `skipped` |
+| `where` | `dataset`, `path`, `held` |
+| `library ls` | `entries[]` of `dataset`, `path`, `held`; `bytes` |
+| `library rm` | `path`, `bytes` |
+| `status` | `entries[]` of `path` and `state` |
+| `diff` | `entries[]` of `path`, `state`, `record`, `found` |
+| `revert` | `restored`, `path` |
+| `promote` | `dataset`, `artifacts`, `lock`, `derived_from` |
+| `verify` | `status`, `tree`, `entries`, `path` |
+
+`work` holds `bytes_read`, `bytes_written`, `requests` and `file_operations`. A field whose value is unknown is absent rather than null, and a field whose value is empty is written empty.
+
+A run that failed prints the error object instead, on stdout, and the process exit code is what the kind says it is.
 
 Terminal output is dense, aligned and quiet. It is not a user interface. One accent color, and beyond it color carries meaning only. Color is never the only way a fact is conveyed. `NO_COLOR` and `--color` are honored and all styling is stripped when the stream is not a terminal. One progress renderer for the whole run, aggregated, redrawn at a fixed rate, never one indicator per file. A value the source did not supply is shown as `?` and never estimated to make a line look complete. No emoji, no box drawing, no full screen mode.
 

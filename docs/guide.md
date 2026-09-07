@@ -249,6 +249,76 @@ With `--locked` the run fails rather than fetching anything the lock does not de
 
 That is your dataset version control. Check out last March's commit, run with `--locked`, and you get March's bytes or a loud failure.
 
+## A project, and one command that fetches all of it
+
+Put a `fetchloom.toml` at the top of your project and name what it needs:
+
+```toml
+[datasets]
+imagenet = "acme/imagenet@2012"
+eeg      = { ref = "https://lab.edu/eeg.yaml", output = "data/eeg" }
+corpus   = { ref = "https://lab.edu/corpus.zip", select = ["train/*"] }
+```
+
+Then, from anywhere inside the project:
+
+```
+fetchloom get
+```
+
+Three datasets, in one command. `imagenet` lands at `./imagenet` beside that file, `eeg` at `./data/eeg`, `corpus` at `./corpus` with only the training members taken. Paths resolve against the file, not against where you are standing, so this works the same from the top of the tree and from four directories down inside it. The lock lands beside the file too.
+
+In CI, one line:
+
+```
+fetchloom get --locked
+```
+
+Every dataset, pinned to exactly what the lock records, and a loud failure rather than a quiet difference. That is the reproducible install.
+
+Two entries that would write to the same place fail before anything is fetched, naming both. A key you misspelled inside an entry is an error naming the key.
+
+## Asking what is there, before taking it
+
+```
+fetchloom probe https://example.org/data.tar.gz --json
+```
+
+The size, every digest the source states, whether it serves byte ranges, how far a fetch could be trusted, and whether your cache already holds it. It moves no payload bytes. Anything the source will not say comes back unknown rather than guessed at, and unknown is still an answer: it exits 0.
+
+```
+fetchloom list https://example.org/big.zip --json
+```
+
+What is inside, without downloading it. A zip keeps its index at the end, so over a source that serves ranges this costs a few small reads. A tar keeps no index at all, so listing one means reading all of it: fetchloom says so before it spends the bandwidth, and keeps what it read, so asking twice costs once.
+
+## One place for datasets, and a path a script can read
+
+A library is one directory holding materialized datasets, so no script has to carry a path and two projects do not fetch the same bytes twice.
+
+```
+fetchloom get hf:datasets/org/name --library
+fetchloom where hf:datasets/org/name
+```
+
+`where` prints the path and fetches nothing. The path is decided by what the reference resolves to, so it is the same on every run and two versions of one dataset sit beside each other. From Python:
+
+```python
+import subprocess, pathlib
+
+path = pathlib.Path(
+    subprocess.run(
+        ["fetchloom", "where", "hf:datasets/org/name"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+)
+rows = (path / "train.parquet").read_bytes()
+```
+
+If you want to fetch and be told the path in one step, `fetchloom get <ref> --library --json` prints `destination`.
+
+Nothing is ever removed from the library on its own. `fetchloom library ls` shows what it holds and what that costs you; `fetchloom library rm <path>` removes one entry.
+
 ## Working offline
 
 Plan on a connected machine, carry the plan, run it somewhere with no network:
@@ -332,8 +402,11 @@ command line  >  environment  >  fetchloom.toml  >  user config  >  default
 ```toml
 sources = ["https://lab.edu/data/", "hf:datasets/acme/"]
 cache = { dir = "D:/fetchloom-cache" }
+library = { dir = "D:/datasets" }
 hints = false
 ```
+
+Every relative path in that file is read as relative to the file, so `cache = { dir = "D:/fetchloom-cache" }` and `cache = { dir = ".fetchloom" }` both mean the same thing from anywhere in the project.
 
 `sources` is what makes a bare name work. The name is appended to each base in order and the first that resolves wins.
 

@@ -9,6 +9,11 @@ Anything marked **not built** is written down and not in the binary. There is no
 | Command | Does |
 |---|---|
 | `get <ref>` | Resolve, transfer, verify, unpack, record |
+| `get` | The same, for every dataset the project file names |
+| `probe <ref>` | What the source states about an object, moving none of it |
+| `list <ref>` | What a container holds, moving as few bytes as the format allows |
+| `where <ref>` | The library path a dataset lands at, fetching nothing |
+| `library <subcommand>` | Inspect and change what the library holds |
 | `init <url\|dir>` | Write a manifest for data that has none |
 | `plan <ref>` | Report what a run would do, move no bytes |
 | `apply <plan>` | Execute a plan, possibly made elsewhere |
@@ -40,6 +45,58 @@ Anything marked **not built** is written down and not in the binary. There is no
 | `unpin <digest>` | Remove that mark |
 | `export <bundle>` | Write every object into a bundle |
 | `import <bundle>` | Read a bundle in |
+
+### library subcommands
+
+| Subcommand | Does |
+|---|---|
+| `ls` | Every entry the library holds, and the bytes they take |
+| `rm <path>` | Remove one entry, and the record of the run that wrote it |
+
+## The datasets a project file names
+
+`fetchloom.toml` takes a `datasets` table, and `get` with no reference fetches every entry in it. An entry is a reference, or a table stating `ref` and any of `output`, `select`, `exclude` and `layout`. A string is never a table and a table always states `ref`, so one shape never means the other.
+
+```toml
+[datasets]
+imagenet = "acme/imagenet@2012"
+eeg = { ref = "https://lab.edu/eeg.yaml", output = "data/eeg" }
+corpus = { ref = "https://lab.edu/corpus.zip", select = ["train/*"] }
+```
+
+Every path in that file resolves against the directory holding it, not against the directory you are standing in, and the lock is written beside it. A run from four directories down writes what a run from the top writes.
+
+`get --locked` with no reference is the reproducible install: every dataset in the table, pinned exactly, refusing if resolution differs.
+
+The whole table is read and checked before the first dataset is fetched. Two entries that would write to one destination fail naming both, an unknown key inside an entry is an error as everywhere else, and a `layout` no run can take fails with nothing fetched rather than after the entries before it landed. A dataset the source fails to give does not stop the ones after it, and the run exits with the first failure's code. `--output`, `--select`, `--exclude`, `--layout` and `--library` on a project run are refused, because one destination and one selection cannot describe several datasets; the table states each.
+
+## The library
+
+One directory holding materialized datasets, separate from the cache, so a script does not carry a path and two projects do not fetch the same bytes twice. It sits at the platform's data location by default: `%LOCALAPPDATA%\Fetchloom\Library` on Windows, `$XDG_DATA_HOME/fetchloom/library` or `~/.local/share/fetchloom/library` on Linux. `--library-dir`, `FETCHLOOM_LIBRARY_DIR` and `library = { dir = "..." }` move it, in that order of precedence.
+
+An entry's path is `<library>/<name>/<identity>`, decided by what the reference resolves to and by nothing else, so `where` answers without an index to consult and two versions of one dataset sit beside each other. The name component is a convenience and the identity component is the truth. A name is sanitized deterministically: every byte that is not a letter, a digit, a hyphen, an underscore or a dot becomes an underscore, trailing dots and spaces are dropped, and a name that would be a Windows device — `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through `LPT9`, with or without an extension — is prefixed with `_`.
+
+A library file is never a hard link to a cache object. It is a copy-on-write clone where the filesystem offers one and a plain copy everywhere else, with a `degrade` when the clone is refused, because one in-place edit through a hard link would corrupt the content addressed store for every dataset sharing that object.
+
+Nothing is ever removed from the library on its own. It grows until `library rm` removes an entry, which removes the tree and the record of the run that wrote it. `library ls` states what it holds and what that takes.
+
+`--library` and `--output` together are an error. Two destinations is not a run.
+
+## What probe and list report
+
+`probe <ref>` resolves, asks the source, and moves no payload bytes: the resolved location, the size, every digest the source states with its algorithm, the trust class a fetch would land in, whether the source serves ranges, and whether the cache already holds it. Anything unstated is unknown, and unknown is an answer that exits 0. Under `--offline` it answers from the cache, or fails with `policy.offline`.
+
+`list <ref>` enumerates what a container holds, moving as few bytes as the format allows.
+
+| What is being listed | What it costs |
+|---|---|
+| An object the cache already holds | The cache read, and no request |
+| A directory or a prefix | The walk a run would do, or the listing the source already offers |
+| A zip over a source that serves ranges | Its index, and one small read at the head of each member. The archive is never downloaded |
+| A zip over a source that refuses them | The whole object, with a `degrade` first |
+| A tar under any compression | The whole object, with a `degrade` first, because a tar states no index |
+
+Where the cheap path is gone, the run says so before spending the bandwidth and keeps what it read in the cache, so asking twice costs once. It proceeds rather than refusing, because the question was what is inside and no flag exists to answer it a second way.
 
 ## What status and diff report
 
@@ -101,6 +158,7 @@ Available on every command.
 | `--config <path>` | discovered | Use this configuration file only |
 | `--no-config` | off | Ignore every configuration file |
 | `--cache-dir <path>` | platform default | Where the cache lives |
+| `--library-dir <path>` | platform default | Where the library lives |
 | `--offline` | off | Forbid all network activity |
 | `--json` | off | Machine readable result on stdout |
 | `--events <path\|->` | off | Write the event stream here |
@@ -119,6 +177,7 @@ Available on every command.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--output <path>` | `./<name>` | Destination directory |
+| `--library` | off | Materialize into the library instead, at the path `where` names |
 | `--select <glob>` | all | Include members, repeatable |
 | `--exclude <glob>` | none | Exclude members, applied after includes |
 | `--layout <keep\|flatten:n>` | keep | Drop the first n path components |
@@ -163,6 +222,7 @@ Available on every command.
 | Variable | Effect |
 |---|---|
 | `FETCHLOOM_CACHE_DIR` | Cache location |
+| `FETCHLOOM_LIBRARY_DIR` | Library location |
 | `FETCHLOOM_CONFIG` | Configuration file path |
 | `FETCHLOOM_OFFLINE` | Offline when set to `1` |
 | `FETCHLOOM_CONCURRENCY` | Global concurrency |
@@ -211,6 +271,8 @@ TOML. Manifests take three syntaxes because strangers write them. Configuration 
 |---|---|
 | `sources` | Ordered base locations a bare name resolves against |
 | `cache` | Cache location, as `cache = { dir = "..." }` |
+| `library` | Library location, as `library = { dir = "..." }` |
+| `datasets` | What `get` with no reference fetches |
 | `offline` | Forbid network activity |
 | `concurrency`, `per_host` | In flight ceilings |
 | `bandwidth` | Rate ceiling |
@@ -375,8 +437,5 @@ Written down, not in the binary. Each is refused as an unknown flag or command t
 
 | Thing | What it would do |
 |---|---|
-| `--library`, `where <ref>` | A central directory for datasets, and a path a script can read |
-| `probe <ref>`, `list <ref>` | Size and listing without fetching, for other tools to call |
-| `get` with no argument | Read a project manifest, the way `cargo build` reads a manifest |
-| SFTP | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own SECURITY.md section |
+| `sftp://` | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own SECURITY.md section |
 | Installer, signed releases | Distribution |

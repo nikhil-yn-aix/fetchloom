@@ -18,6 +18,7 @@ pub mod event;
 pub mod flights;
 pub mod hashing;
 pub mod identity;
+pub mod library;
 pub mod license;
 pub mod limits;
 pub mod lock;

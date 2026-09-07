@@ -172,6 +172,13 @@ impl<P: Platform> Cache<P> {
         self.degradations.take()
     }
 
+    /// What the platform this cache writes through recorded, kept apart from
+    /// the cache's own so a run drains it once at the end rather than at
+    /// whichever moment the volume happened to be asked about itself.
+    pub fn take_platform_degradations(&self) -> Vec<Degradation> {
+        self.platform().take_degradations()
+    }
+
     /// What this run was asked to do, which is not always what it does: a
     /// volume that compresses on its own is stored raw whatever was asked.
     #[must_use]

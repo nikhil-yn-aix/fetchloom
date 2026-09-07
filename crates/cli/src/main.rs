@@ -183,8 +183,12 @@ fn transfer_flags(command: &Command) -> surface::TransferFlags {
         Command::Get { transfer, .. }
         | Command::Plan { transfer, .. }
         | Command::Apply { transfer, .. }
+        | Command::Probe { transfer, .. }
+        | Command::List { transfer, .. }
+        | Command::Where { transfer, .. }
         | Command::Repair { transfer, .. } => (**transfer).clone(),
-        Command::Verify { .. }
+        Command::Library { .. }
+        | Command::Verify { .. }
         | Command::Status { .. }
         | Command::Diff { .. }
         | Command::Revert { .. }
@@ -215,13 +219,7 @@ fn dispatch(
         Command::Why { reference } => {
             command::why::run_why(reference, parsed, resolved, observer, sequence)
         }
-        Command::Watch { stream } => match fetchloom_cli::observer::watch(stream) {
-            Ok(()) => ExitCode::Success,
-            Err(reason) => {
-                eprintln!("could not read the event stream at {stream}: {reason}");
-                ExitCode::Usage
-            }
-        },
+        Command::Watch { stream } => watch(stream),
         Command::Verify { target } => {
             command::verify::run_verify(target, resolved, parsed.global.json, observer, sequence)
         }
@@ -256,7 +254,30 @@ fn dispatch(
         Command::Get {
             reference,
             transfer,
-        } => command::get::run_get(reference, transfer, parsed, resolved, observer, sequence),
+        } => get(
+            reference.as_deref(),
+            transfer,
+            parsed,
+            resolved,
+            discovered,
+            observer,
+            sequence,
+        ),
+        Command::Probe {
+            reference,
+            transfer,
+        } => command::inspect::run_probe(reference, transfer, parsed, resolved, observer, sequence),
+        Command::List {
+            reference,
+            transfer,
+        } => command::inspect::run_list(reference, transfer, parsed, resolved, observer, sequence),
+        Command::Where {
+            reference,
+            transfer,
+        } => command::library::run_where(reference, transfer, parsed, resolved, observer, sequence),
+        Command::Library { command } => {
+            command::library::run_library(command, parsed, resolved, observer, sequence)
+        }
         Command::Plan {
             reference,
             transfer,
@@ -298,4 +319,33 @@ fn warn_about_aggressive(resolved: &settings::Settings) {
         "--aggressive raises the transfers in flight for one host past the {} a run holds itself to, so a source may answer with a rate limit or refuse the run outright",
         fetchloom_engine::limits::Limits::default().connections_per_host
     );
+}
+
+fn watch(stream: &str) -> ExitCode {
+    match fetchloom_cli::observer::watch(stream) {
+        Ok(()) => ExitCode::Success,
+        Err(reason) => {
+            eprintln!("could not read the event stream at {stream}: {reason}");
+            ExitCode::Usage
+        }
+    }
+}
+
+fn get(
+    reference: Option<&str>,
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    discovered: &config::Discovered,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let Some(reference) = reference else {
+        return command::get::run_project(
+            transfer, parsed, resolved, discovered, observer, sequence,
+        );
+    };
+    let mut transfer = transfer.clone();
+    transfer.lock = Some(command::get::lock_beside(&transfer, discovered));
+    command::get::run_get(reference, &transfer, parsed, resolved, observer, sequence)
 }

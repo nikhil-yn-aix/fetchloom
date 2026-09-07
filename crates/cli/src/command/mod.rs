@@ -9,6 +9,7 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
+use fetchloom_engine::seam::platform::Platform as _;
 use fetchloom_engine::seam::policy::Policy;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::work::WorkCounter;
@@ -25,6 +26,8 @@ pub mod doctor;
 pub mod explain;
 pub mod get;
 pub mod init;
+pub mod inspect;
+pub mod library;
 pub mod plan;
 pub mod repair;
 pub mod tracked;
@@ -148,6 +151,24 @@ pub(crate) struct Opened {
     scratch: Option<Scratch>,
 }
 
+impl Opened {
+    pub(crate) fn processor(&self) -> &Processor {
+        self.processor.as_ref()
+    }
+
+    pub(crate) fn platform(&self) -> &NativePlatform {
+        &self.platform
+    }
+
+    pub(crate) fn durability(&self) -> DurabilityTier {
+        self.durability
+    }
+
+    pub(crate) fn cache(&self) -> Option<&fetchloom_cache::Cache<NativePlatform>> {
+        self.held.as_deref()
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the settings, the flags, the counter, and the two observers each name a piece of what a run opens"
@@ -246,8 +267,13 @@ pub(crate) fn open_request(
     work: &std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     observer: &dyn Observer,
     sequence: &Sequence,
+    answerable_offline: bool,
 ) -> Result<Requested, fetchloom_engine::error::Error> {
-    run::allowed_offline(reference, policy)?;
+    if answerable_offline {
+        run::forbid_when_offline(policy);
+    } else {
+        run::allowed_offline(reference, policy)?;
+    }
     let describes_metadata = crate::resolve::is_metadata_document(reference);
     let reference = crate::resolve::resolve_reference(
         reference, adapters, resolved, policy, work, observer, sequence,
@@ -269,7 +295,7 @@ pub(crate) fn open_request(
         });
     }
 
-    let (source, named) = get::resolve_places(adapters, &reference, transfer, policy)?;
+    let (source, named) = get::resolve_places(adapters, &reference, transfer)?;
     let (manifest, is_dataset) =
         crate::resolve::resolve_manifest(adapters, &reference, &source, remote)?;
     Ok(Requested {
@@ -282,18 +308,29 @@ pub(crate) fn open_request(
     })
 }
 
-/// Every degradation the cache recorded while the run was publishing, drained
-/// once at the end rather than at each of the places that publish, so no path
-/// through a run can record one and never say it.
+/// Every degradation the cache and the platform recorded while the run was
+/// publishing, drained once at the end rather than at each of the places that
+/// publish, so no path through a run can record one and never say it.
 pub(crate) fn report_cache_degradations(
     held: Option<&fetchloom_cache::Cache<NativePlatform>>,
+    platform: Option<&NativePlatform>,
     observer: &dyn Observer,
     sequence: &Sequence,
 ) {
-    let Some(held) = held else {
-        return;
-    };
-    for entry in held.take_degradations() {
+    let recorded = held
+        .map(fetchloom_cache::Cache::take_degradations)
+        .unwrap_or_default()
+        .into_iter()
+        .chain(
+            held.map(fetchloom_cache::Cache::take_platform_degradations)
+                .unwrap_or_default(),
+        )
+        .chain(
+            platform
+                .map(fetchloom_platform::NativePlatform::take_degradations)
+                .unwrap_or_default(),
+        );
+    for entry in recorded {
         observer.emit(&Event::new(
             sequence,
             EventPayload::Degrade {

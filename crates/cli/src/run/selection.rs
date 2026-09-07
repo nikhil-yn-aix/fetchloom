@@ -159,14 +159,23 @@ pub(crate) fn assert_terms(
     }
 }
 
+/// Forbids the network when the run is offline, and says whether it did, so a
+/// command that can answer from the cache decides for itself what to do next.
+pub fn forbid_when_offline(policy: &dyn Policy) -> bool {
+    if !policy.offline() {
+        return false;
+    }
+    fetchloom_engine::network::forbid();
+    true
+}
+
 /// # Errors
 /// `policy.offline` when the run was told not to reach the network and the
 /// reference names something that is not already here.
 pub fn allowed_offline(reference: &str, policy: &dyn Policy) -> Result<(), Error> {
-    if !policy.offline() {
+    if !forbid_when_offline(policy) {
         return Ok(());
     }
-    fetchloom_engine::network::forbid();
     if names_something_here(reference) {
         return Ok(());
     }

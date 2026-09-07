@@ -56,7 +56,10 @@ pub fn run_plan(
         sequence,
         &policy::StdinPrompter,
     );
-    let (source, named) = match resolve_places(&adapters, reference, transfer, &policy) {
+    if let Err(error) = run::allowed_offline(reference, &policy) {
+        return reporter.report(&error);
+    }
+    let (source, named) = match resolve_places(&adapters, reference, transfer) {
         Ok(places) => places,
         Err(error) => return reporter.report(&error),
     };

@@ -527,9 +527,6 @@ pub(super) fn remember(
     location: &str,
     transferred: &fetchloom_engine::transfer::Transferred,
 ) -> Result<(), Error> {
-    if !transferred.validator.can_be_asked_with() {
-        return Ok(());
-    }
     cache.record_resolution(
         location,
         &fetchloom_cache::resolution::Resolution {

@@ -133,6 +133,10 @@ pub(super) fn record_measurement(
     );
 }
 
+pub(crate) fn credential_for(policy: &dyn Policy, host: &str) -> Result<Option<Credential>, Error> {
+    resolve_credential(policy, host)
+}
+
 pub(super) fn credentials_for(
     policy: &dyn Policy,
 ) -> impl Fn(&str) -> Result<Option<Credential>, Error> + Sync + '_ {

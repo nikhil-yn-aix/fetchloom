@@ -27,6 +27,7 @@ pub mod materialize;
 pub mod observer;
 pub mod planning;
 pub mod policy;
+pub mod project;
 pub mod repair;
 pub mod resolve;
 pub mod run;

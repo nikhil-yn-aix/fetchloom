@@ -32,6 +32,18 @@ impl<P: Platform> Cache<P> {
     }
 
     /// # Errors
+    /// `cache.corrupt` when the receipt exists and cannot be removed. No
+    /// receipt for that destination is success rather than an error.
+    pub fn forget_receipt(&self, destination: &Path) -> Result<(), Error> {
+        let path = self.layout().receipt_of(Receipt::key(destination));
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(reason) => Err(filesystem_failure(Surface::Cache, &path, &reason)),
+        }
+    }
+
+    /// # Errors
     /// `cache.corrupt` when a receipt exists and cannot be read, and
     /// `manifest.invalid` when it does not parse. No receipt, or one written
     /// for another destination, is `None` rather than an error.

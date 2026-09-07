@@ -104,6 +104,9 @@ pub struct GlobalFlags {
     /// Where the cache is.
     #[arg(hide_short_help = true, long, global = true, value_name = "path")]
     pub cache_dir: Option<PathBuf>,
+    /// Where the library is.
+    #[arg(hide_short_help = true, long, global = true, value_name = "path")]
+    pub library_dir: Option<PathBuf>,
     /// Answer every confirmation with yes.
     #[arg(hide_short_help = true, long, global = true)]
     pub yes: bool,
@@ -227,6 +230,9 @@ pub struct TransferFlags {
     /// Destination directory.
     #[arg(help_heading = "Where it lands", long, short, value_name = "path")]
     pub output: Option<PathBuf>,
+    /// Materialize into the library rather than beside you.
+    #[arg(help_heading = "Where it lands", long, conflicts_with = "output")]
+    pub library: bool,
     /// Include members. Repeatable.
     #[arg(
         help_heading = "Choosing what to take",
@@ -317,6 +323,19 @@ pub struct TransferFlags {
     pub(crate) deterministic_io: bool,
 }
 
+/// What to do with the library.
+#[derive(Subcommand, Clone, Debug)]
+pub enum LibraryCommand {
+    /// List what the library holds, one line each.
+    Ls,
+    /// Remove one entry the library holds.
+    Rm {
+        /// The entry's path, as `where` prints it.
+        #[arg(value_name = "path")]
+        target: String,
+    },
+}
+
 /// What to do with the cache.
 #[derive(Subcommand, Clone, Debug)]
 pub enum CacheCommand {
@@ -395,9 +414,9 @@ pub enum Command {
             out. `fetchloom get --help` lists all of them."
     )]
     Get {
-        /// What to fetch.
+        /// What to fetch, or nothing for every dataset the project file names.
         #[arg(value_name = "ref")]
-        reference: String,
+        reference: Option<String>,
         /// The flags that control materialization.
         #[command(flatten)]
         transfer: Box<TransferFlags>,
@@ -621,6 +640,80 @@ pub enum Command {
         /// Where the lock is written.
         #[arg(long, value_name = "path", default_value = "fetchloom.lock")]
         lock: PathBuf,
+    },
+    /// Ask a source what it holds, without moving a byte of it.
+    #[command(
+        long_about = "Ask a source what it holds, without moving a byte of it.\n\n\
+            Probe resolves the reference and asks the source about the object: how big it \
+            is, every digest it states and which algorithm each one is, how far a fetch \
+            could be trusted, whether it serves byte ranges, and whether the cache here \
+            already holds it.\n\n\
+            Anything the source does not state is reported as unknown rather than guessed \
+            at, and unknown is an answer: probe exits 0.\n\n\
+            With --offline it answers out of the cache, or fails saying the network was \
+            forbidden.",
+        after_help = "Example:\n  \
+            fetchloom probe https://example.org/data.tar.gz --json"
+    )]
+    Probe {
+        /// What to ask about.
+        #[arg(value_name = "ref")]
+        reference: String,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Say what a container holds, moving as few bytes as the format allows.
+    #[command(
+        long_about = "Say what a container holds, moving as few bytes as the format allows.\n\n\
+            A zip keeps its index at the end, so a source that serves byte ranges costs two \
+            small reads and no download. A directory or a prefix is a listing the source \
+            already offers. An object the cache holds is read from the cache and costs \
+            nothing.\n\n\
+            A tar, under any compression, states no index at all, so the only way to know \
+            what is inside is to read all of it. Where that is what it takes, list says so \
+            before spending the bandwidth and keeps what it read in the cache, so asking \
+            twice costs once.",
+        after_help = "Examples:\n  \
+            fetchloom list https://example.org/big.zip\n\n  \
+            fetchloom list https://example.org/big.zip --json"
+    )]
+    List {
+        /// What to enumerate.
+        #[arg(value_name = "ref")]
+        reference: String,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Print the library path a dataset lands at, and fetch nothing.
+    #[command(
+        long_about = "Print the library path a dataset lands at, and fetch nothing.\n\n\
+            The path is decided by what the reference resolves to and by nothing else, so \
+            it is the same on every run, two versions of one dataset sit beside each other, \
+            and a script can read it without a run happening first.\n\n\
+            Where answers the question and does not fetch. To fetch and be told the path, \
+            run `get --library --json`.",
+        after_help = "Example:\n  \
+            fetchloom where hf:datasets/org/name"
+    )]
+    Where {
+        /// What to name a path for.
+        #[arg(value_name = "ref")]
+        reference: String,
+        /// The flags that control materialization.
+        #[command(flatten)]
+        transfer: Box<TransferFlags>,
+    },
+    /// Inspect and change what the library holds.
+    #[command(long_about = "Inspect and change what the library holds.\n\n\
+            The library is one directory holding materialized datasets, so a script does \
+            not carry a path and two projects do not fetch the same bytes twice. Nothing \
+            is ever removed from it on its own: it grows until you remove something.")]
+    Library {
+        /// What to do with the library.
+        #[command(subcommand)]
+        command: LibraryCommand,
     },
     /// Watch a run as it happens, or replay one that already did.
     #[command(

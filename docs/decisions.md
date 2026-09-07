@@ -10784,3 +10784,428 @@ Sources: `crates/cli/src/command/tracked.rs` `run_promote`;
 `crates/cli/src/run/dataset.rs` `ingest_artifact`;
 `crates/cli/tests/materialize/tracked.rs`
 `promote_keeps_the_edited_bytes_so_a_locked_run_can_fetch_them_again`.
+
+---
+
+## A datasets entry is a reference or a table, and never a shape that is both
+
+`fetchloom.toml` already existed and was already found by walking up from the
+working directory. `get` with no reference reads a `datasets` table in it and
+fetches every entry. No second file, no second format, no second discovery rule.
+
+An entry is a string, which is the reference and nothing else, or a table stating
+`ref` and optionally `output`, `select`, `exclude` and `layout`. TOML tells the
+two apart before any of this code runs, so one shape can never quietly mean the
+other. The rejected alternative was one shape: a table always, which makes the
+common case three times as long to write, or a string always, which leaves
+nowhere to say where a dataset lands. Both shapes cost one custom `Deserialize`
+that dispatches on `visit_str` against `visit_map`, and that is also what keeps
+the error message: an unknown key inside an entry names the key, where an
+untagged enum would have said only that the value matched no variant.
+
+Every relative path the file states resolves against the directory holding it,
+and the lock lands beside it. A run from four directories down therefore writes
+what a run from the top writes. Without that a project file is a thing you can
+only use from one directory, which is not a thing a script can use at all.
+
+Two entries that would write to one destination fail before anything is resolved,
+naming both, and two spellings of one path are one destination: the key is the
+path with `.` and `..` resolved textually, lowercased on Windows because the
+volume is. The alternative, letting the second entry overwrite the first, is a
+run that quietly gives you one dataset where you asked for two.
+
+`--output`, `--select`, `--exclude`, `--layout` and `--library` are refused on a
+project run rather than applied to every entry, because one destination cannot
+describe several datasets and a selection meant for one archive is not meant for
+another.
+
+Sources: `crates/cli/src/project.rs`; `crates/cli/src/command/get.rs`
+`run_project` and `lock_beside`; `crates/cli/tests/surface/project.rs`.
+
+---
+
+## Probe and list are not plan, and the lock is what proves it
+
+`plan` refuses with `policy.trust_refused` when the lock pins nothing for the
+dataset: `crates/cli/src/planning.rs:33`, which is the first statement of
+`planning::build`. A plan states resolved digests, and a dataset nobody has
+fetched has none, so `plan` cannot answer a single question about a reference
+before its first run. That is the whole of what `probe` is for.
+
+The second half is shape. A `PlanArtifact` is a top-level artifact of a run, one
+per thing the run would transfer, carrying a digest, a size, a selection and a
+layout. A member inside an archive is none of those things: it has no digest the
+container states, it is not a unit of transfer, and it is not something a lock can
+pin. `list` answers about members. Putting members into a plan would mean either
+lying about what a plan's artifacts are or growing a second collection inside it
+that no other consumer reads.
+
+So `probe` asks the source and reports what it states, `list` enumerates a
+container, and `plan` remains what it was: what a run would do, stated against a
+lock that already exists.
+
+Sources: `crates/cli/src/planning.rs:33`; `crates/engine/src/plan.rs`
+`PlanArtifact`; `crates/cli/src/command/inspect.rs`.
+
+---
+
+## What a listing costs per format, and why an expensive one proceeds
+
+A zip keeps its central directory at the end, so over a source that serves ranges
+the index is a small read of the tail and a read of the directory it points at.
+It is not two reads and this build should not claim it is: listing also reads the
+local header of each member and checks that it agrees with the central directory
+on the name, the method and the sizes, which is a security property older than
+this change. Measured against a two member zip of 2,097,370 bytes over a local
+HTTP server, listing asked for 197,239 bytes across five requests: one `HEAD`,
+the tail, and one read per member. The archive was never downloaded.
+
+A tar under any compression states no index at all. There is no cheap path to
+lose, so what it costs is all of it.
+
+Where the cheap path is not available the run emits a `degrade` naming what was
+requested, what it cost instead and why, before the bytes move, and then
+proceeds. It does not refuse. A refusal needs a flag to override it, this build
+has no such flag written down, and a refusal nobody can override is a question
+with no answer. The caller asked what is inside; the honest answers are the
+listing with what it cost, or nothing.
+
+What it read is kept in the cache, so the second listing of one location reads
+the cache and issues no request. That required one change: a run recorded a
+resolution for a location only when the source stated a validator, so a source
+with no `ETag` and no `Last-Modified` left nothing tying the location to the
+bytes it gave. The record is now written either way. It is safe because the only
+consumer that acts on it, `Transfer::ask_whether_it_changed`, already refuses to
+revalidate with a validator that cannot be asked with, and `repair <ref>` now
+finds the object for such a source rather than failing to name it. `--no-cache`
+is what asks the source again.
+
+A listing is bounded by the listing limits rather than the archive limits, which
+is one line: the archive enumeration is handed `archive_entries` set to
+`listing_entries`. The bomb guard already counts entries as it walks, so an
+archive past the bound fails while it is being enumerated rather than after it
+has been buffered.
+
+Sources: `crates/cli/src/command/inspect.rs` `list_one` and `listing_limits`;
+`crates/cli/src/run/ranged.rs`; `crates/cli/src/run/dataset.rs` `remember`;
+`crates/cli/tests/surface/inspect.rs`.
+
+---
+
+## The library path is derived from identity, and the name is only a convenience
+
+`where <ref>` has to answer before anything is fetched and without an index to
+consult, so the path can depend only on what the reference resolves to. It is
+`<library>/<sanitized name>/<identity>`, where the identity is a key derived fold
+over the manifest digest, the release and the selection: exactly the fields the
+lock keys on, because they are exactly what makes two runs the same run. Two
+releases of one dataset therefore sit beside each other, a run with `--select`
+does not overwrite the run that took the whole thing, and two runs of one
+reference land in one place and reconcile.
+
+The tree digest is not in the path, and cannot be: it is what the bytes turn out
+to be, and the path has to exist before there are bytes. The tree digest remains
+what proves the directory holds what the record says, which is what `verify` and
+`status` are for.
+
+The name component is a convenience for a person reading a directory listing.
+Every byte outside letters, digits, `-`, `_` and `.` becomes `_`, trailing dots
+and spaces go, and a name whose stem is `CON`, `PRN`, `AUX`, `NUL`, `COM1`
+through `COM9` or `LPT1` through `LPT9` is prefixed with `_`. Windows refuses
+those names with or without an extension, and a tool that only fails on the
+machine that has such a dataset is a tool that fails at the worst moment. Two
+names that sanitize the same stay separate, because the identity component does
+not collide.
+
+Sources: `crates/engine/src/library.rs`; `crates/engine/src/digest.rs`
+`LIBRARY_KEY_CONTEXT`; `crates/cli/tests/surface/library.rs`.
+
+---
+
+## A library file is never a hard link, and this build never made one
+
+One in-place edit through a hard link would rewrite the object the cache holds,
+for every dataset that shares it, with no error anywhere. That is why the rule is
+absolute rather than a preference.
+
+It was already the behavior. `Cache::place_object` clones or copies and has never
+linked: `platform::clone_or_copy` attempts a copy-on-write clone, records a
+`degrade` naming the refusal, remembers that the volume refused, and copies the
+bytes instead. What this change adds is the test that proves it end to end rather
+than by reading: a file in the library is edited in place, `cache verify` is run,
+and it passes. If the file had been a link to the object, it would not.
+
+The reflink saving is not measured here and this build ships no new complexity
+for it. Windows block cloning exists on ReFS and not on NTFS, this machine has no
+ReFS volume, and `cargo xtask verify` already reports that as a degradation on
+every run. The clone path predates this session; nothing was added to it.
+
+Sources: `crates/cache/src/storage.rs` `place_object`;
+`crates/platform/src/lib.rs` `clone_or_copy`;
+`crates/cli/tests/surface/library.rs`
+`a_library_file_is_never_a_hardlink_to_the_object_the_cache_holds`.
+
+---
+
+## Removal is a command, and the read-only premise it was asked for is false
+
+The library needed a removal story on the grounds that every tree this tool
+writes is read-only, so telling someone to remove an entry with the shell is
+telling them to hit permission denied on Windows. That premise does not hold in
+this build: nothing sets a read-only attribute or clears a write permission on a
+published tree, which is exactly why `status`, `diff` and `revert` exist and why
+a three way run has something to merge. An entry can be removed with the shell.
+
+`library rm` exists anyway, for a different reason. The library sits at a platform
+data location the user did not choose and mostly cannot recite, its entries are
+named by a digest fold, and the run that wrote one also left a record beside the
+cache keyed by that path. Removing the tree by hand leaves that record behind. So
+`library rm <path>` removes the tree and the record together, and refuses a path
+outside the library rather than deleting whatever it is pointed at.
+
+Growth is stated rather than managed: nothing is removed from the library on its
+own, no run prunes it, and `library ls` says how many entries it holds and how
+many bytes they take. A tool that silently deleted a dataset someone was using
+would be worse than one that grows.
+
+Sources: `crates/cli/src/command/library.rs`; `crates/cache/src/receipts.rs`
+`forget_receipt`; `docs/reference.md` The library.
+
+---
+
+## Field names are the contract, and a test is what holds them
+
+`--json` is parsed by other tools now, which makes the field names a published
+interface. There is no version field anywhere in this build and there will not be
+one, so a rename cannot be negotiated: it is a break, and the only question is
+whether it breaks here or in a pipeline someone else runs.
+
+The rule is additive only. A field may be added. A field that exists is never
+renamed, retyped or removed. `contracts.md` states the object each command
+prints, and one test asserts the exact set of field names of every `--json`
+result, including the object inside a result and the error object a failed run
+prints, so a rename fails the gate.
+
+The alternative, a version field, was rejected for the reason CONTRIBUTING gives
+for all of them: it is a second way of doing something, it makes every consumer
+carry a branch, and it turns a break into a thing you are allowed to do.
+
+Sources: `docs/contracts.md` The JSON a command prints;
+`crates/cli/tests/surface/machine.rs`.
+
+---
+
+## A path is inside the library only after its navigation is resolved
+
+`library rm` refuses a path outside the library, and the first version of that
+check compared `std::path::absolute(target)` against the library root with
+`starts_with`. That is a lexical comparison against a path that may still hold
+`..`, and `std::path::absolute` deliberately does not resolve `..` on POSIX,
+because a component before it may be a symbolic link. So
+`<library>/../../something` starts with `<library>` by that comparison, and the
+command would have removed a directory that is not the library's.
+
+The check now resolves `.` and `..` textually on both sides before comparing, by
+the same function that decides whether two `datasets` entries name one
+destination. Textual resolution is the conservative direction for a refusal: a
+path that traverses a symbolic link and comes back is refused rather than
+followed, and the only thing this rejects that a canonicalizing check would have
+allowed is a spelling nobody needs.
+
+The test that covers it names a path climbing out of the library and back into a
+directory beside it. On Windows it passes either way, because `absolute` does
+normalize there; on Linux it is what fails without this change, and the Linux
+container lane runs the same suite.
+
+Sources: `crates/cli/src/command/library.rs` `remove_entry`;
+`crates/cli/src/project.rs` `without_navigation`;
+`crates/cli/tests/surface/library.rs`
+`the_library_lists_what_it_holds_and_removes_only_what_it_is_told_to`.
+
+---
+
+## The cache owns a platform, and its degradations were never said
+
+`Cache::place_object` clones or copies through `self.platform()`, and the
+platform records a `degrade` when a volume refuses to reference-count blocks.
+That queue was never drained. The cache drained only its own queue, and the
+command drained only the cache's, so a run that copied every byte instead of
+cloning it reported nothing at all. Measured on this machine, on NTFS, with an
+incompressible three megabyte artifact: no `degrade` in the event stream before
+this change, and one after.
+
+It is a real breach of the rule rather than a cosmetic one, and it is older than
+this session. The library is what made it visible: `--library` is the case where
+cloning is the point, and reference.md now states that a library file is a clone
+where the filesystem offers one and a copy with a `degrade` where it does not.
+A sentence like that is only true if the run says it.
+
+`take_degradations` moved onto the `Platform` seam so a caller that owns a
+platform can drain it generically, and `Cache::take_degradations` now returns
+its own queue followed by its platform's. The one place that already drained a
+platform by hand keeps working, because draining twice yields the second time
+nothing.
+
+Two other things this turned up, both worth knowing before reading a run's
+output. An object at or below one frame is packed, and a packed object is read
+out rather than cloned, so no clone is attempted for a small artifact. An object
+the cache stored compressed is decompressed on the way out for the same reason.
+Only a loose raw object is a candidate, which is why the test that gates this
+writes bytes a compressor cannot shrink, and why the first version of it passed
+without proving anything.
+
+Sources: `crates/engine/src/seam/platform.rs` `Platform::take_degradations`;
+`crates/cache/src/lib.rs` `take_degradations`;
+`crates/cli/src/command/mod.rs` `report_cache_degradations`;
+`crates/cli/tests/surface/library.rs`
+`a_volume_that_refuses_a_clone_says_the_bytes_were_copied`.
+
+---
+
+## The whole table is read before the first dataset is fetched
+
+Two entries writing to one destination fail before anything moves, and that was
+always the intent. The first version only half held it: a `layout` an entry
+stated was parsed at the moment that entry was about to run, so a file whose
+third entry said `layout = "sideways"` fetched the first two and then failed.
+A project file that is half applied is worse than one that is refused, because
+the half is what someone has to notice and undo.
+
+So the model a project run works from holds a parsed `Layout` rather than the
+text of one, and `datasets_of` is where the text becomes it. Everything a value
+can be wrong about is now decided in one pass over the table before the run
+begins: the destination, the collision with another entry, and the layout. What
+remains reachable only per dataset is what only the source can answer, and a
+failure there is `partial success`, which contracts.md already governs: each
+destination publishes whole or not at all, the ones after it still run, and the
+run exits with the first failure's code.
+
+Sources: `crates/cli/src/project.rs` `stated_layout`;
+`crates/cli/src/command/get.rs` `run_project`;
+`crates/cli/tests/surface/project.rs`
+`a_layout_no_run_can_take_stops_the_run_before_anything_lands`.
+
+---
+
+## The test that proved nothing degrades was proving that nothing was drained
+
+`a_run_that_degrades_nothing_reports_no_degradation` asserted that a walk of a
+filesystem tree emits exactly two degradations and no others. It passed for the
+wrong reason. On this host the platform also records that it could not learn
+whether an on-access scanner inspects writes, because the filter manager refuses
+to list its filters for a process that is not elevated, and that record went into
+the queue nothing drained. The test was reading an event stream that the run was
+quietly keeping things out of.
+
+Draining the platform's queue made it fail, which is the correct outcome and the
+proof that the test was wrong rather than the change. Three facts settle it: the
+degradation is recorded on every run on this machine, it was recorded before this
+change and never said, and `cargo xtask verify` already names that same elevation
+limit as a degradation of its own on this host.
+
+So the assertion now says what it always meant. Its own allowlist already carried
+two degradations it expects, which is what "degrades nothing" means here: no
+degradation beyond the ones a walk of a bare filesystem tree must state. The
+scanner answer is a third of those on an unelevated Windows shell and absent
+everywhere else, so the count of exactly two became a count of exactly one for
+each degradation a walk must state, which holds on both platforms and still fails
+if either goes missing or is said twice.
+
+Sources: `crates/cli/tests/surface/contract.rs`
+`a_run_that_degrades_nothing_reports_no_degradation`;
+`crates/platform/src/windows/probe.rs`.
+
+---
+
+## Four commands cost 561 kilobytes, and the gate is what made that a number
+
+The benchmark step failed on `binary-size`: 9,053,696 bytes against 9,614,848,
+which is 6.20% and past the five percent a deterministic metric is allowed to
+move. Measured directly rather than inferred, by comparing the release binary
+this tree builds against the one the base commit builds in its own worktree,
+both with the same toolchain and profile.
+
+The growth is the surface this change adds. Four commands — `probe`, `list`,
+`where`, `library` with two subcommands — each carrying the derived parser, the
+help text, the JSON result type and the body behind it, plus `project.rs`,
+`inspect.rs`, `command/library.rs`, `run/ranged.rs` and `engine/library.rs`.
+That is about 140 kilobytes a command on a nine megabyte binary, which is what a
+clap subcommand with a result of its own costs in this build.
+
+The recorded value moves to what was measured. The gate is not a promise that the
+binary never grows; it is a promise that it never grows without someone looking,
+and this is the looking. Nothing was traded away to make the number smaller,
+because the alternative to the bytes is not having the commands.
+
+Two things this rules out as the cause, both checked. The help text is static
+string data and four commands' worth of `long_about` and `after_help` is about
+three kilobytes, which is half a percent of the growth. And the new engine module
+is one hash and a string sanitizer, which is not where kilobytes come from.
+
+Sources: `xtask/benchmarks/x86_64-pc-windows-msvc.json` `no-op` `binary-size`;
+`xtask/src/bench.rs` `REGRESSION_GATE`.
+
+---
+
+## A platform degradation is drained once at the end, because where it lands is otherwise a race
+
+Draining the platform's queue inside `Cache::take_degradations` was the wrong
+seam, and the Linux lane found it. A cache is drained twice in a run: once by
+`open_cache`, which reports what opening the cache degraded, and once at the end,
+which reports the rest. Folding the platform's queue into the same call meant
+that whether a volume's capability answer reached the stream at the first drain
+or the second depended on whether anything had asked the volume about itself
+before the cache finished opening.
+
+That is a race, and it broke a contract that has nothing to do with degradations:
+`every_display_mode_produces_the_same_result_code_and_event_stream` compares two
+runs and one of them carried an extra `degrade` between `run.start` and
+`resolve.start`. The stream is what the live view consumes, so an event whose
+position moves is an event that cannot be relied on.
+
+So the two queues stay separate. `Cache::take_degradations` returns what the
+cache itself recorded, `Cache::take_platform_degradations` returns what the
+platform it writes through recorded, and only the second is drained at the end of
+a run, beside the run's own platform. Every degradation is still said exactly
+once, and now always in the same place.
+
+It also explains why the Windows lane passed while the container failed twice on
+different tests: the probe that records the degradation is timing-dependent, so
+which run observes the early drain is a matter of scheduling rather than of
+platform.
+
+Sources: `crates/cache/src/lib.rs` `take_degradations` and
+`take_platform_degradations`; `crates/cli/src/command/mod.rs`
+`report_cache_degradations`; `crates/cli/tests/surface/display.rs`
+`every_display_mode_produces_the_same_result_code_and_event_stream`.
+
+---
+
+## A test that needs one run to wait must make the waiting certain, not likely
+
+`one_run_waits_for_another` is how `cache.wait` gets into the event stream, and
+`every_event_name_the_contract_lists_is_emitted_by_a_run` fails if it never does.
+The scene spawns two runs against one cache and delayed the source by 1200
+milliseconds, which is the window the second run has to arrive in while the first
+still holds the lease. Spawning a process on a machine running the whole
+workspace's tests takes longer than that, so the second run found the object
+already in the cache, returned without waiting, and the contract test reported an
+event nobody emits.
+
+The window is now five seconds. Nothing about the contract changed: a run that
+arrives while another holds the lease still waits and still says so. What changed
+is that the precondition the scene depends on is now reached on a loaded machine
+rather than only on an idle one. Measured, the scene takes 30 seconds where it
+took 17.
+
+The sibling assertion in the same scene now prints the failing run's standard
+error. It asserted `status.success()` and said only "a contending run failed",
+which is what the first of this session's gate runs reported and what left the
+cause unknown. A test that can fail for a reason it does not print is a test that
+costs a run to learn nothing from.
+
+Neither of these is the code under test being wrong. They are two fixtures that
+were sound on an idle machine and unsound on a busy one, which is the machine the
+gate actually runs on.
+
+Sources: `crates/cli/tests/transfer/events.rs` `one_run_waits_for_another`.

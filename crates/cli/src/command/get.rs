@@ -19,6 +19,82 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[must_use]
+pub fn run_project(
+    transfer: &surface::TransferFlags,
+    parsed: &CommandLine,
+    resolved: &settings::Settings,
+    discovered: &crate::config::Discovered,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> ExitCode {
+    let Some(project) = discovered.project.as_ref() else {
+        eprintln!(
+            "name what to fetch, or write a fetchloom.toml stating a datasets table, because get \
+             with no reference fetches what a project file names and no project file was found \
+             above this directory"
+        );
+        return ExitCode::Usage;
+    };
+    let named = project.datasets();
+    let datasets = match crate::project::datasets_of(project.beside(), &named, project.path()) {
+        Ok(datasets) => datasets,
+        Err(refused) => {
+            eprintln!("{refused}");
+            return ExitCode::Usage;
+        }
+    };
+    if transfer.library
+        || transfer.output.is_some()
+        || !transfer.select.is_empty()
+        || !transfer.exclude.is_empty()
+        || transfer.layout.is_some()
+    {
+        eprintln!(
+            "state where each dataset lands in {} instead, because a project run fetches several \
+             datasets and one destination or one selection cannot describe them all",
+            project.path().display()
+        );
+        return ExitCode::Usage;
+    }
+    let lock = lock_beside(transfer, discovered);
+    let mut code = ExitCode::Success;
+    for dataset in &datasets {
+        let mut each = transfer.clone();
+        each.output = Some(dataset.destination.clone());
+        each.select.clone_from(&dataset.select);
+        each.exclude.clone_from(&dataset.exclude);
+        each.lock = Some(lock.clone());
+        each.layout = dataset.layout.map(crate::surface::LayoutArg);
+        let outcome = run_get(
+            &dataset.reference,
+            &each,
+            parsed,
+            resolved,
+            observer,
+            sequence,
+        );
+        if !matches!(outcome, ExitCode::Success) && matches!(code, ExitCode::Success) {
+            code = outcome;
+        }
+    }
+    code
+}
+
+#[must_use]
+pub fn lock_beside(
+    transfer: &surface::TransferFlags,
+    discovered: &crate::config::Discovered,
+) -> PathBuf {
+    if let Some(named) = transfer.lock.clone() {
+        return named;
+    }
+    match discovered.project.as_ref() {
+        Some(project) => project.beside().join("fetchloom.lock"),
+        None => PathBuf::from("fetchloom.lock"),
+    }
+}
+
+#[must_use]
 pub fn run_get(
     reference: &str,
     transfer: &surface::TransferFlags,
@@ -34,29 +110,27 @@ pub fn run_get(
     let environment = ProcessEnvironment;
     let policy = get_policy(transfer, parsed, resolved, &environment, observer, sequence);
 
-    let Requested {
-        reference: named_reference,
-        source,
-        named,
-        manifest,
-        is_dataset,
-        remote,
-    } = match open_request(
+    let prepared = prepare(
         reference, transfer, &adapters, resolved, &policy, &limits, &work, observer, sequence,
-    ) {
-        Ok(opened) => opened,
+    );
+    let Prepared {
+        requested:
+            Requested {
+                reference: named_reference,
+                source,
+                named: _named,
+                manifest,
+                is_dataset,
+                remote,
+            },
+        destination,
+        accepted_terms,
+    } = match prepared {
+        Ok(prepared) => prepared,
         Err(error) => return reporter.report(&error),
     };
     let reference = named_reference.as_str();
     let dataset = manifest.name.clone();
-    let accepted_terms = match run::assert_terms(&policy, manifest.license.as_ref()) {
-        Ok(accepted) => accepted,
-        Err(error) => return reporter.report(&error),
-    };
-    let destination = match destination_for(named, &dataset) {
-        Ok(destination) => destination,
-        Err(error) => return reporter.report(&error),
-    };
 
     let Opened {
         processor,
@@ -124,6 +198,7 @@ pub fn run_get(
             pinned: pinned.as_ref(),
             locked: transfer.locked,
             cache: held.as_deref(),
+            platform: Some(&platform),
             policy: &policy,
             json: parsed.global.json,
             accepted_terms,
@@ -195,6 +270,7 @@ pub(crate) struct Recording<'a> {
     pinned: Option<&'a fetchloom_engine::lock::LockedDataset>,
     locked: bool,
     cache: Option<&'a fetchloom_cache::Cache<NativePlatform>>,
+    platform: Option<&'a NativePlatform>,
     policy: &'a dyn fetchloom_engine::seam::policy::Policy,
     json: bool,
     accepted_terms: Option<fetchloom_engine::license::Acceptance>,
@@ -217,7 +293,7 @@ pub(crate) fn record(
     observer: &dyn Observer,
     sequence: &Sequence,
 ) -> ExitCode {
-    report_cache_degradations(into.cache, observer, sequence);
+    report_cache_degradations(into.cache, into.platform, observer, sequence);
     let tree = produced.outcome.as_ref().ok().map(|result| result.tree);
     let settled = locked::resolved(into.manifest, &produced.resolved, tree).and_then(|recorded| {
         locked::settle(
@@ -254,6 +330,74 @@ pub(crate) fn record(
         }
         Err(error) => reporter.report(error),
     }
+}
+
+pub(crate) struct Prepared {
+    requested: Requested,
+    destination: PathBuf,
+    accepted_terms: Option<fetchloom_engine::license::Acceptance>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preparing a run reads the reference, the flags, the adapters, the settings, the policy, the limits, the work a routed request counts against, and both observers"
+)]
+fn prepare(
+    reference: &str,
+    transfer: &surface::TransferFlags,
+    adapters: &Adapters,
+    resolved: &settings::Settings,
+    policy: &dyn Policy,
+    limits: &fetchloom_engine::limits::Limits,
+    work: &Arc<WorkCounter>,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Prepared, fetchloom_engine::error::Error> {
+    let requested = open_request(
+        reference, transfer, adapters, resolved, policy, limits, work, observer, sequence, false,
+    )?;
+    let accepted_terms = run::assert_terms(policy, requested.manifest.license.as_ref())?;
+    let destination = where_it_lands(
+        &requested.manifest,
+        requested.named.clone(),
+        &requested.manifest.name.clone(),
+        transfer,
+        resolved,
+    )?;
+    Ok(Prepared {
+        requested,
+        destination,
+        accepted_terms,
+    })
+}
+
+fn where_it_lands(
+    manifest: &fetchloom_engine::manifest::Manifest,
+    named: Option<PathBuf>,
+    dataset: &str,
+    transfer: &surface::TransferFlags,
+    resolved: &settings::Settings,
+) -> Result<PathBuf, fetchloom_engine::error::Error> {
+    if transfer.library {
+        library_destination(manifest, transfer, resolved)
+    } else {
+        destination_for(named, dataset)
+    }
+}
+
+pub(crate) fn library_destination(
+    manifest: &fetchloom_engine::manifest::Manifest,
+    transfer: &surface::TransferFlags,
+    resolved: &settings::Settings,
+) -> Result<PathBuf, fetchloom_engine::error::Error> {
+    let root = run::resolve_path(&resolved.library_dir.value)?;
+    Ok(fetchloom_engine::library::entry_path(
+        &root,
+        &manifest.name,
+        manifest.digest()?,
+        manifest.release.as_deref(),
+        &selection_of(transfer),
+    ))
 }
 
 pub(crate) fn destination_for(
@@ -330,9 +474,7 @@ pub(crate) fn resolve_places(
     adapters: &Adapters,
     reference: &str,
     transfer: &surface::TransferFlags,
-    policy: &dyn Policy,
 ) -> Result<(PathBuf, Option<PathBuf>), fetchloom_engine::error::Error> {
-    run::allowed_offline(reference, policy)?;
     let source = if run::is_served(adapters, reference) {
         PathBuf::from(run::remote_name(reference))
     } else {

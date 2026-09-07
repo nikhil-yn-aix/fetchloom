@@ -20,6 +20,8 @@ pub const RESOLUTION_KEY_CONTEXT: &str = "fetchloom resolution key";
 
 pub const MEASUREMENT_KEY_CONTEXT: &str = "fetchloom measurement key";
 
+pub const LIBRARY_KEY_CONTEXT: &str = "fetchloom library key";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Algorithm {
     Blake3,

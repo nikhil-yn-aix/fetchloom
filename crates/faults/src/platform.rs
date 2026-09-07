@@ -45,6 +45,10 @@ impl<P: Platform> FaultyPlatform<P> {
 impl<P: Platform> Platform for FaultyPlatform<P> {
     type Lock = P::Lock;
 
+    fn take_degradations(&self) -> Vec<fetchloom_engine::degrade::Degradation> {
+        self.inner.take_degradations()
+    }
+
     fn volume_id(&self, path: &Path) -> Result<VolumeId, Error> {
         self.gate(Operation::VolumeId)?;
         self.inner.volume_id(path)

@@ -145,7 +145,7 @@ pub(crate) fn remote_name(location: &str) -> String {
     object_name(location)
 }
 
-pub(super) fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
+pub(crate) fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
     let stated = PathBuf::from(source.strip_prefix("file://").unwrap_or(source));
     if stated.is_absolute() {
         stated

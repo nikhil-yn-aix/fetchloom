@@ -35,6 +35,10 @@ pub enum Liveness {
 pub trait Platform: Send + Sync {
     type Lock: Send;
 
+    /// Every degradation this platform recorded since it was last asked, so a
+    /// caller that owns a platform can say what it fell back to.
+    fn take_degradations(&self) -> Vec<crate::degrade::Degradation>;
+
     /// # Errors
     /// When the volume cannot be identified.
     fn volume_id(&self, path: &Path) -> Result<VolumeId, Error>;

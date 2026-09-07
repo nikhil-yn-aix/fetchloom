@@ -220,6 +220,26 @@ pub(super) fn fill_object_staging(
     }
 }
 
+pub(crate) fn fetch_into_cache(
+    with: &Materialization<'_>,
+    location: &str,
+    observer: &dyn Observer,
+    sequence: &Sequence,
+) -> Result<Moved, Error> {
+    let flights = Flights::new(with.tuning.ceilings, |host: &str| {
+        with.tuning.controller(host, with.cache)
+    });
+    transfer_object(
+        with,
+        with.adapters,
+        &flights,
+        &[location.to_owned()],
+        None,
+        observer,
+        sequence,
+    )
+}
+
 pub(super) fn transfer_object(
     with: &Materialization<'_>,
     source: &fetchloom_engine::erased::Adapters,

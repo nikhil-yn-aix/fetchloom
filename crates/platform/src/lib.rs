@@ -123,11 +123,6 @@ impl NativePlatform {
         }
         Ok(())
     }
-
-    #[must_use]
-    pub fn take_degradations(&self) -> Vec<Degradation> {
-        self.degradations.take()
-    }
 }
 
 fn cross_volume(from: &Path, to: &Path) -> Error {
@@ -157,6 +152,10 @@ fn random_suffix() -> String {
 
 impl Platform for NativePlatform {
     type Lock = PlatformLock;
+
+    fn take_degradations(&self) -> Vec<Degradation> {
+        self.degradations.take()
+    }
 
     fn volume_id(&self, path: &Path) -> Result<VolumeId, Error> {
         imp::volume_id(path)

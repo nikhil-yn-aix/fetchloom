@@ -74,6 +74,14 @@ pub(crate) struct ConfigFile {
     pub(crate) color: Option<String>,
     pub(crate) hints: Option<bool>,
     pub(crate) compress: Option<String>,
+    pub(crate) library: Option<LibrarySection>,
+    pub(crate) datasets: Option<std::collections::BTreeMap<String, crate::project::DatasetEntry>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct LibrarySection {
+    pub(crate) dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -113,6 +121,23 @@ impl std::error::Error for ConfigError {}
 pub struct LoadedConfig {
     pub(crate) path: PathBuf,
     pub(crate) values: ConfigFile,
+}
+
+impl LoadedConfig {
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn beside(&self) -> &Path {
+        self.path.parent().unwrap_or(Path::new("."))
+    }
+
+    #[must_use]
+    pub fn datasets(&self) -> std::collections::BTreeMap<String, crate::project::DatasetEntry> {
+        self.values.datasets.clone().unwrap_or_default()
+    }
 }
 
 /// # Errors
