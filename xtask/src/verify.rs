@@ -1,4 +1,4 @@
-//! The verification matrix, and everything it cannot reach.
+﻿//! The verification matrix, and everything it cannot reach.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -677,7 +677,8 @@ fn read_env(file: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(file) else {
         return BTreeMap::new();
     };
-    text.lines()
+    text.trim_start_matches('\u{feff}')
+        .lines()
         .filter_map(|line| line.split_once('='))
         .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
         .collect()
@@ -905,6 +906,23 @@ mod tests {
 
         assert!(!install_hook(scratch.path()));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_rename_the_first_volume_variable() {
+        let scratch = tempfile::TempDir::new().unwrap();
+        let path = scratch.path().join("volumes.env");
+        std::fs::write(
+            &path,
+            "\u{feff}FETCHLOOM_TEST_CLONE_VOLUMES=E:\\\nFETCHLOOM_TEST_SMALL_VOLUMES=F:\\\n",
+        )
+        .unwrap();
+        let read = super::read_env(&path);
+        assert_eq!(
+            read.get("FETCHLOOM_TEST_CLONE_VOLUMES").map(String::as_str),
+            Some("E:\\"),
+            "the mark Windows PowerShell writes at the head of a utf8 file became part of the name"
+        );
     }
 
     #[test]

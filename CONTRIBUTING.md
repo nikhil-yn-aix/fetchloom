@@ -34,18 +34,47 @@ Only `platform` lifts `unsafe_code`, per item, with a stated reason.
 
 ## The gate
 
+The gate is eight lanes. A lane runs where it is native or it does not run.
+
+| Lane | What it proves | Machine |
+|---|---|---|
+| `checks` | Format, and the dependency graph against the allow list, the advisories, the licences and the registries. | any |
+| `windows` | Lint with warnings denied, build, the suite, and a build at the stated MSRV, on `x86_64-pc-windows-msvc`. | Windows x86_64 |
+| `windows-arm` | The same on `aarch64-pc-windows-msvc`, run rather than compiled. | Windows aarch64 |
+| `linux` | The same on `x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl`, both linted, both tested. | Linux x86_64 |
+| `linux-arm` | The same pair on `aarch64`. | Linux aarch64 |
+| `network` | Real archives fetched from real servers, over every target native to the machine. | any |
+| `offline` | A plan and a bundle prepared connected, then applied inside a network namespace holding no interface. | Linux |
+| `benchmark` | Measurement, and the five percent comparison gate. | the machine that recorded the baseline |
+
+The Linux platform lanes build the volume matrix first, which attaches loop devices and mounts btrfs, xfs, vfat, a small volume, a read-only volume, a second volume and a FUSE mount, so the suite runs against real filesystems rather than only the one the workspace is on. The Windows lane asks for the same and does not get it: the virtual disks need Hyper-V, which no runner offers, so that lane degrades and says which rows are unproven.
+
 ```
 cargo xtask verify
 ```
 
-Thirteen steps: format, dependencies, lint, build, aarch64 cross compile, the test suite, a build at the stated MSRV, network, benchmarks, and the Linux container lanes. The host lints the Windows target only. Every Linux target is linted, with warnings denied, inside the container that also builds and tests it, because that is where a C toolchain for musl exists.
+Runs every lane this machine can prove and declines the rest by name, with a NOT VERIFIED line naming the machine each one needs. A declined lane is never counted as a pass.
 
 ```
-cargo xtask verify --fast        format, deps, lint, build, cross compile
-cargo xtask verify --install-hook   writes .git/hooks/pre-push running --fast
+cargo xtask verify --lane <name>              one lane, and an error if this machine is not the one it needs
+cargo xtask verify --lane <name> --provision  install the targets, toolchain, system packages and tools it needs
+cargo xtask verify --fast                     format, dependencies, lint and build
+cargo xtask verify --install-hook             writes .git/hooks/pre-push running --fast
 ```
 
-A fast run prints a NOT VERIFIED line for every lane it declines. It never reports a skipped step as a pass.
+`--provision` with no lane provisions every lane this machine can run.
+
+## What CI runs
+
+`.github/workflows/verify.yml` runs `checks`, `linux`, `linux-arm`, `windows` and `windows-arm` on every push and every pull request, each on a runner that is natively that platform. Nothing is emulated and nothing is containerised. The matrix does not fail fast, because "does this break everywhere or only on Windows" is the question it exists to answer.
+
+`.github/workflows/hosts.yml` runs `network` on all four platforms and `offline` on Linux, on a push to `main` and once a day. They are not on pull requests, because a lane that reaches ftp.gnu.org and files.pythonhosted.org on every push from every branch is impolite to hosts that owe this project nothing, and a third party being down is not a reason to redden a contributor's pull request.
+
+`benchmark` runs nowhere in CI. A baseline is recorded on one machine, no baseline exists for a fresh runner, and a run with no baseline to compare against records one and passes. That is a step that runs to look thorough, and it is not run.
+
+A workflow step is `cargo xtask verify --lane <name>` and nothing else. No cargo invocation, target triple, test name or lint flag is written in YAML, so rewriting what a lane does never touches a workflow file. `xtask/src/verify.rs` has a test that every lane a workflow names exists and that every lane but `benchmark` runs somewhere.
+
+Before opening a pull request, run `cargo xtask verify` and read what it declined. The lanes it declined are the lanes CI will run, and they will run whether or not you looked.
 
 ```
 cargo xtask bench              measure
@@ -55,11 +84,13 @@ cargo xtask surface            report what crosses a crate boundary
 
 ## Prerequisites
 
-Rust 1.98.0, pinned in `rust-toolchain.toml`. The stated MSRV is 1.89.0 and verify builds at it, so `rustup toolchain install 1.89.0` if you want that step to run.
+Rust 1.98.0, pinned in `rust-toolchain.toml`, which is the only place a version is named. Nothing else states one.
 
-`cargo-deny` for the dependencies step.
+Everything else a lane needs, `cargo xtask verify --provision` installs: the target triples, the 1.89.0 toolchain the MSRV step builds at, `cargo-deny`, and on Linux the musl C toolchain and the filesystem tools the volume matrix formats with.
 
-Docker Desktop for the Linux lanes. Without it those steps fail rather than being skipped, which is deliberate: an unproven platform should look unproven.
+The Linux volume matrix needs passwordless `sudo`, because attaching a loop device and mounting a filesystem is root's work. Without it that lane degrades and the suite runs against one volume. The Windows volume script needs an elevated shell and Hyper-V.
+
+Docker is not needed and is not used. It was, so that a Windows laptop could reach Linux and emulate aarch64; CI runs both natively now and the container plumbing is gone.
 
 ## What this machine costs
 
@@ -67,9 +98,7 @@ Worth knowing before you blame the code.
 
 Windows Defender inspects every write. It has been measured at 3.5 GB resident during a run, and the many small files regime has reported cost ratios of 47x, 49x, 57x and 173x across four identical runs. If you are benchmarking, an exclusion on the working tree and the cache changes the numbers substantially. Fetchloom reports the ratio and never works around it.
 
-The Docker VM peaked at 7.3 GB working set on a 16 GB machine during the container lane. That, not the test suite, is what causes memory pressure during a full verify. The kill test that usually dies is the process alive when the machine runs short, not the one that made it short: measured, its whole process tree peaked at 65.7 MB.
-
-Run one crate's suite at a time in the foreground if memory is tight.
+Run one crate's suite at a time in the foreground if memory is tight. The kill test that usually dies under pressure is the process alive when the machine runs short, not the one that made it short: measured, its whole process tree peaked at 65.7 MB.
 
 ## Reporting a change
 
