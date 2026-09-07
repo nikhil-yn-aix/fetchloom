@@ -202,7 +202,6 @@ pub fn run_get(
             policy: &policy,
             json: parsed.global.json,
             accepted_terms,
-            selected: !transfer.select.is_empty() || !transfer.exclude.is_empty(),
         },
         observer,
         sequence,
@@ -274,7 +273,6 @@ pub(crate) struct Recording<'a> {
     policy: &'a dyn fetchloom_engine::seam::policy::Policy,
     json: bool,
     accepted_terms: Option<fetchloom_engine::license::Acceptance>,
-    selected: bool,
 }
 
 fn unpinned(produced: &run::DatasetRun) -> locked::Unpinned {
@@ -314,9 +312,6 @@ pub(crate) fn record(
         Ok(result) => {
             crate::hint::record(|observed| {
                 observed.lock_written = Some(into.lock_path.display().to_string());
-                if !into.selected {
-                    observed.entries_taken_whole = Some(result.entries);
-                }
             });
             finish_get(
                 result,

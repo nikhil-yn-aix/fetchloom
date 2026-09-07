@@ -11918,3 +11918,62 @@ cleans.
 
 Sources: `crates/cache/src/lib.rs` `check_format`; `crates/cache/src/layout.rs`
 `format`; the `linux-arm` lane of run 34138302083; the record named above.
+
+---
+
+## Three things the last session named and did not settle, and one it settled correctly
+
+`resident_memory` was a limit with a default and no reader. reference.md says
+every limit is configurable and that none may be raised past a ceiling allowing
+unbounded memory use, and this one bounded nothing: a run could hold any amount
+and no code compared anything to it. It was not in reference.md's table of
+limits either, so the only reader it ever had was someone reading the struct and
+believing it. The phase 4 record that deferred enforcing it stands, and what it
+says is that enforcement needs a resident set query behind the Platform seam and
+a measurement nobody has taken. A future session adds the field back against
+that measurement; a default that reads as a bound is worse than its absence.
+
+`local_path` told the user that this build resolves only a local path or a
+`file:` location. It serves http, https, ftp, ftps, an object store and eight
+described providers. The question was whether a user can reach the sentence, and
+the answer is that any reference carrying a scheme no adapter claims reaches it,
+because `get` calls `local_path` exactly when `is_served` said no: `fetchloom get
+sftp://host/x` prints it, so do `gopher://`, a `blake3:` content address, and any
+lowercase scheme that is not a path. The sentence is replaced by what is true
+there, which is that nothing here serves that reference, and that is the wording
+`unserved` already uses at the two other places a run reaches the same
+conclusion. The test that covered these forms asserted the exit code and the
+error kind and never read the sentence, which is how a false one survived a
+review and every green run since; the test now reads it and fails against the old
+wording on the first reference it tries.
+
+The `selection` hint could not fire, and the previous record left it in place
+saying so. `entries_taken_whole` had exactly one writer, `record` in `get.rs`,
+which sets `lock_written` on the same statement two lines above it; `hint()`
+returns at `lock_written`; and `offer_a_hint` returns rather than falling through
+when the hint it was handed has already been said. So the state the branch needs
+is one no run can construct, on any cache, ever. There is no test that can
+observe a state nothing produces, which is why the field goes with the branch:
+after this the state is not expressible, and that is a stronger guard than a test
+would have been. Deleting it is not a choice between two answers, because the
+other answer is a fall-through in `offer_a_hint`, which is behavior, and a
+session that changes behavior can write both together against a contract that
+says what a run prints when its first hint is spent.
+
+`Store::stage`, `Store::open_outboard` and `Store::format_fingerprint` stay,
+unchanged and untouched. They are implemented, reachable, and called by nothing
+in this workspace, and internals.md says widening a seam takes the same
+justification as changing a contract, so narrowing one does too. That is a scope
+decision about the six seams rather than a measurement about these three
+methods, and it belongs to the session that takes the seams as its subject.
+
+Costs: the hint machinery is three branches, all of which can fire. A reference
+this build cannot serve now gets a message that names no alternative form, where
+the old one named two, one of them wrongly.
+
+Sources: `crates/engine/src/limits.rs`; `crates/cli/src/run/paths.rs`;
+`crates/cli/src/run/adapters.rs` `unserved` and `unbuilt_form`;
+`crates/cli/src/command/get.rs` `record`; `crates/cli/src/main.rs`
+`offer_a_hint`; `crates/cli/tests/surface/surface.rs`
+`a_reference_no_adapter_serves_says_that_and_never_that_the_build_serves_only_local_paths`,
+run against both wordings; the public surface record above.

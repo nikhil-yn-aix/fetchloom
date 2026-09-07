@@ -16,12 +16,9 @@ pub struct Observed {
     pub placement: Option<String>,
     pub(crate) cache_unusable: bool,
     pub(crate) lock_written: Option<String>,
-    pub(crate) entries_taken_whole: Option<u64>,
 }
 
 const WORTH_SAYING: Duration = Duration::from_secs(120);
-
-const CROWDED: u64 = 200;
 
 impl Observed {
     #[must_use]
@@ -54,17 +51,6 @@ impl Observed {
                 line: format!(
                     "{path} records exactly what you got; commit it and any later run, on any \
                      machine, can check the source still serves the same thing"
-                ),
-            });
-        }
-        if let Some(entries) = self.entries_taken_whole
-            && entries >= CROWDED
-        {
-            return Some(Hint {
-                key: "selection".to_owned(),
-                line: format!(
-                    "that was {entries} files; you can take part of it next time with \
-                     --select '<pattern>', which is faster and writes less"
                 ),
             });
         }
@@ -168,10 +154,7 @@ mod tests {
                 );
             }
             assert!(
-                said.contains("would have")
-                    || said.contains("set ")
-                    || said.contains("commit it")
-                    || said.contains("you can take"),
+                said.contains("would have") || said.contains("set ") || said.contains("commit it"),
                 "the hint names no action the user could take: {said}"
             );
         }
@@ -186,15 +169,6 @@ mod tests {
         let hint = written.hint().unwrap_or_else(|| unreachable!());
         assert_eq!(hint.key, "lock-written");
         assert!(hint.line.contains("fetchloom.lock"), "{}", hint.line);
-    }
-
-    #[test]
-    fn a_small_tree_earns_no_selection_hint() {
-        let small = Observed {
-            entries_taken_whole: Some(3),
-            ..Observed::default()
-        };
-        assert_eq!(small.hint(), None);
     }
 
     #[test]
@@ -217,7 +191,6 @@ mod tests {
             placement: Some("FETCHLOOM_TOKEN_X".to_owned()),
             cache_unusable: true,
             lock_written: Some("fetchloom.lock".to_owned()),
-            entries_taken_whole: Some(4000),
         };
         let hint = everything.hint();
         assert!(hint.is_some());
