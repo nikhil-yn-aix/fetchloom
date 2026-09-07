@@ -478,6 +478,35 @@ fn replaced_under_every_attempt(path: &Path) -> Error {
     )
 }
 
+#[cfg(unix)]
+const SHARED_LOCK_MODE: u32 = 0o666;
+
+#[cfg(unix)]
+fn open_lock_file(path: &Path) -> Result<File, Error> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let created = File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(SHARED_LOCK_MODE)
+        .open(path);
+    match created {
+        Ok(file) => {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(SHARED_LOCK_MODE))
+                .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))?;
+            Ok(file)
+        }
+        Err(reason) if reason.kind() == std::io::ErrorKind::AlreadyExists => File::options()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|why| filesystem_failure(Surface::Cache, path, &why)),
+        Err(reason) => Err(filesystem_failure(Surface::Cache, path, &reason)),
+    }
+}
+
+#[cfg(windows)]
 fn open_lock_file(path: &Path) -> Result<File, Error> {
     File::options()
         .read(true)

@@ -96,6 +96,20 @@ pub fn another_user() -> Option<String> {
     named
 }
 
+#[cfg(unix)]
+pub fn as_another_user() -> std::process::Command {
+    let root = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .is_ok_and(|answer| answer.stdout.starts_with(b"0"));
+    if root {
+        return std::process::Command::new("env");
+    }
+    let mut elevated = std::process::Command::new("sudo");
+    elevated.args(["-n", "env"]);
+    elevated
+}
+
 pub fn volumes_were_built() -> bool {
     std::env::var_os("FETCHLOOM_VERIFY_VOLUMES").is_some()
 }

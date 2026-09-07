@@ -261,8 +261,20 @@ fn a_lock_is_honored_across_users() {
     let path = shared.path().join("digest.lock");
     let ready = shared.path().join("ready");
 
-    let mut child = Command::new("setpriv")
-        .args(["--reuid", &user, "--regid", &user, "--clear-groups", "--"])
+    let mut child = support::as_another_user()
+        .args([
+            format!("{LOCK_PATH}={}", path.display()),
+            format!("{READY_PATH}={}", ready.display()),
+        ])
+        .args([
+            "setpriv",
+            "--reuid",
+            &user,
+            "--regid",
+            &user,
+            "--clear-groups",
+            "--",
+        ])
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -270,8 +282,6 @@ fn a_lock_is_honored_across_users() {
             "--ignored",
             "--nocapture",
         ])
-        .env(LOCK_PATH, &path)
-        .env(READY_PATH, &ready)
         .spawn()
         .unwrap();
 

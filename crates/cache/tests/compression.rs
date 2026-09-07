@@ -638,6 +638,7 @@ fn a_frame_table_stating_a_stride_this_format_cannot_hold_is_refused() {
     let path = held.layout().compressed_object(digest);
     let span = std::fs::metadata(&path).unwrap().len();
 
+    support::make_writable(&path);
     let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.seek(SeekFrom::Start(span - 10)).unwrap();
     std::io::Write::write_all(&mut file, &[3_u8]).unwrap();

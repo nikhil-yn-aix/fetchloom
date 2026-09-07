@@ -363,7 +363,12 @@ fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
             ),
         )),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::write(layout.format(), ours)
+            let beside = layout
+                .format()
+                .with_extension(std::process::id().to_string());
+            std::fs::write(&beside, ours)
+                .map_err(|why| filesystem_failure(Surface::Cache, &beside, &why))?;
+            std::fs::rename(&beside, layout.format())
                 .map_err(|why| filesystem_failure(Surface::Cache, &layout.format(), &why))?;
             work.touched_file();
             Ok(())

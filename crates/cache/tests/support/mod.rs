@@ -267,14 +267,18 @@ pub fn another_owner() -> Option<String> {
 }
 
 pub fn give_away(path: &Path, owner: &str) {
-    let status = std::process::Command::new("chown")
-        .arg(owner)
-        .arg(path)
-        .status()
-        .unwrap();
+    let chown = |mut command: std::process::Command| {
+        command
+            .arg(owner)
+            .arg(path)
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let mut elevated = std::process::Command::new("sudo");
+    elevated.args(["-n", "chown"]);
     assert!(
-        status.success(),
-        "{} could not be given away",
+        chown(std::process::Command::new("chown")) || chown(elevated),
+        "{} could not be given away, with or without sudo",
         path.display()
     );
 }

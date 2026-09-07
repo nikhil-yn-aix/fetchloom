@@ -599,6 +599,13 @@ fn damage_one_object(cache: &Path) {
             let mut held = std::fs::read(&path).unwrap();
             let at = held.len() / 2;
             held[at] ^= 0xff;
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "damaging an object needs the permissions the platform gives a new file"
+            )]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&path, permissions).unwrap();
             std::fs::write(&path, &held).unwrap();
             damaged += 1;
         }
