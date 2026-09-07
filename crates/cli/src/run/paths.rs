@@ -30,7 +30,7 @@ pub(crate) fn local_path(reference: &str) -> Result<PathBuf, Error> {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
             format!(
-                "this build resolves only a local path or a file: location, not {}",
+                "name a location an adapter of this build serves, because nothing here serves {}",
                 SafeUrl::new(reference)
             ),
         ));
@@ -39,7 +39,7 @@ pub(crate) fn local_path(reference: &str) -> Result<PathBuf, Error> {
         return Err(Error::new(
             ErrorKind::ReferenceUnresolved,
             format!(
-                "this build resolves only a local path or a file: location, not {} which is {form}",
+                "name a location an adapter of this build serves, because nothing here serves {}, which is {form}",
                 SafeUrl::new(reference)
             ),
         ));

@@ -496,6 +496,27 @@ fn a_form_this_build_cannot_resolve_says_what_it_resolves() {
 }
 
 #[test]
+fn a_reference_no_adapter_serves_says_that_and_never_that_the_build_serves_only_local_paths() {
+    let workspace = Workspace::new();
+    for reference in [
+        "sftp://host/dataset.tar",
+        "gopher://host/dataset.tar",
+        "blake3:0000000000000000000000000000000000000000000000000000000000000000",
+        "unserved:record",
+    ] {
+        let run = workspace.run(&["get", reference, "--output", "out", "--json"]);
+        assert_eq!(run.code(), 10, "{reference} said {}", run.out());
+        assert_eq!(run.kind(), "reference.unresolved", "{reference}");
+        let action = run.json()["next_action"].as_str().unwrap().to_owned();
+        assert!(action.contains(reference), "{reference}: {action}");
+        assert!(action.contains("serves"), "{reference}: {action}");
+        for denied in ["file:", "only a local path"] {
+            assert!(!action.contains(denied), "{reference}: {action}");
+        }
+    }
+}
+
+#[test]
 fn a_reference_naming_nothing_says_so_and_names_the_reference() {
     let workspace = Workspace::new();
     let missing = workspace.run(&["get", "./not-here", "--json"]);
