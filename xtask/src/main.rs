@@ -46,7 +46,7 @@ usage:
   cargo xtask network [path to a built fetchloom]
   cargo xtask profile [--rounds <n>]
   cargo xtask surface [--list] [--crate <name>]
-  cargo xtask verify [--fast] [--arm] [--install-hook]";
+  cargo xtask verify [--fast] [--lane <name>] [--provision] [--install-hook]";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
