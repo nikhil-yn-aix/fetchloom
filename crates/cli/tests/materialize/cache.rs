@@ -117,7 +117,7 @@ fn a_run_asked_for_no_cache_retains_nothing() {
             "--no-cache",
         ],
     );
-    assert!(done.status.success());
+    assert!(done.status.success(), "{}", events(&done));
     assert!(
         !cache.exists(),
         "a run asked for no cache created one anyway"
@@ -140,7 +140,7 @@ fn status_counts_what_a_run_put_in_the_cache() {
         ],
     );
     let status = run(&cache, &["cache", "status", "--json"]);
-    assert!(status.status.success());
+    assert!(status.status.success(), "{}", events(&status));
     let body: serde_json::Value = serde_json::from_str(text(&status).trim()).unwrap();
     assert_eq!(body["objects"], 2);
     assert_eq!(body["quarantined"], 0);
@@ -172,7 +172,7 @@ fn ls_prints_the_digests_pin_takes() {
     assert!(pinned.status.success(), "{}", events(&pinned));
 
     let pruned = run(&cache, &["cache", "prune", "--json"]);
-    assert!(pruned.status.success());
+    assert!(pruned.status.success(), "{}", events(&pruned));
     let again = run(&cache, &["cache", "ls"]);
     assert!(
         text(&again).contains(&first),

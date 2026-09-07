@@ -6,7 +6,9 @@ use super::tar::{
     TYPEFLAG_BLOCKDEV, TYPEFLAG_CHARDEV, TYPEFLAG_DIRECTORY, TYPEFLAG_FIFO, TYPEFLAG_HARDLINK,
     TYPEFLAG_PAX, TYPEFLAG_REGULAR, TYPEFLAG_SYMLINK, TarHeader, TarWriter, pax_block, pax_record,
 };
-use super::zip::{METHOD_DEFLATE, ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter, crc32};
+use super::zip::{
+    METHOD_DEFLATE, Zip64End, ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter, crc32,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Container {
@@ -752,7 +754,7 @@ fn corpus_entries() -> Vec<CorpusEntry> {
                 central,
                 data: data.to_vec(),
             });
-            writer.finish_zip64()
+            writer.finish_zip64(Zip64End::default())
         },
         "a zip using Zip64 end-of-central-directory records",
         Expectation::Benign,

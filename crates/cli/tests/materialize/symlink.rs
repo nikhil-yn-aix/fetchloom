@@ -97,7 +97,11 @@ fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
 
     let destination = temporary.path().join("out");
     let output = get(&source, &destination, &temporary.path().join("cache"));
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let reported: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let materialized = reported["tree"].as_str().expect("a tree digest").to_owned();
 

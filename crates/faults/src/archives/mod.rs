@@ -12,5 +12,6 @@ pub use tar::{
     TYPEFLAG_SYMLINK, TarHeader, TarWriter, pax_block, pax_record,
 };
 pub use zip::{
-    METHOD_DEFLATE, METHOD_STORE, ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter, crc32,
+    METHOD_DEFLATE, METHOD_STORE, Zip64End, ZipCentralHeader, ZipLocalHeader, ZipMember, ZipWriter,
+    crc32,
 };

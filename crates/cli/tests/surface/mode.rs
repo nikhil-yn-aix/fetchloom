@@ -108,7 +108,11 @@ fn get_and_verify_agree_for_a_directory_source() {
     let destination = temporary.path().join("out");
     let cache = temporary.path().join("cache");
     let fetched = get(&root, &destination, &cache, &[]);
-    assert!(fetched.status.success());
+    assert!(
+        fetched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
     let verified = verify_with_cache(&destination, &cache);
     assert!(
         verified.status.success(),
@@ -261,7 +265,11 @@ fn verify_reads_no_mode_when_no_receipt_names_the_destination() {
         .env("FETCHLOOM_CACHE_DIR", &elsewhere)
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let events = String::from_utf8_lossy(&output.stdout);
     assert!(
         events.contains("\"event\":\"degrade\"") && events.contains("mode"),
@@ -289,7 +297,11 @@ fn a_receipt_naming_another_destination_is_not_read_for_this_one() {
         .env("FETCHLOOM_CACHE_DIR", &cache)
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let events = String::from_utf8_lossy(&output.stdout);
     assert!(
         events.contains("\"event\":\"degrade\"") && events.contains("mode"),

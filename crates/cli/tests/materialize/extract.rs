@@ -91,7 +91,11 @@ fn no_extract_keeps_the_archive_as_one_file() {
         &temporary.path().join("cache"),
         &["--no-extract"],
     );
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         destination.join("corpus.tar.gz").is_file(),
         "--no-extract must leave the archive as one file"

@@ -186,15 +186,15 @@ impl ZipWriter {
 
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
-        self.finish_inner(false)
+        self.finish_inner(None)
     }
 
     #[must_use]
-    pub(crate) fn finish_zip64(self) -> Vec<u8> {
-        self.finish_inner(true)
+    pub fn finish_zip64(self, end: Zip64End) -> Vec<u8> {
+        self.finish_inner(Some(end))
     }
 
-    fn finish_inner(mut self, zip64: bool) -> Vec<u8> {
+    fn finish_inner(mut self, zip64: Option<Zip64End>) -> Vec<u8> {
         let cd_offset = u32::try_from(self.bytes.len()).unwrap_or(u32::MAX);
         for central in &self.centrals {
             self.bytes.extend_from_slice(&central.to_bytes());
@@ -203,11 +203,12 @@ impl ZipWriter {
         let count = self.centrals.len();
         let count16 = u16::try_from(count).unwrap_or(u16::MAX);
 
-        if zip64 {
+        if let Some(end) = zip64 {
             let zip64_eocd_offset = self.bytes.len() as u64;
             self.bytes
                 .extend_from_slice(&ZIP64_EOCD_SIGNATURE.to_le_bytes());
-            self.bytes.extend_from_slice(&44u64.to_le_bytes());
+            self.bytes
+                .extend_from_slice(&end.record_size.unwrap_or(44).to_le_bytes());
             self.bytes.extend_from_slice(&45u16.to_le_bytes());
             self.bytes.extend_from_slice(&45u16.to_le_bytes());
             self.bytes.extend_from_slice(&0u32.to_le_bytes());
@@ -227,16 +228,37 @@ impl ZipWriter {
             self.bytes.extend_from_slice(&1u32.to_le_bytes());
         }
 
+        let stated_count = if zip64.is_some_and(|end| end.count_sentinel) {
+            u16::MAX
+        } else {
+            count16
+        };
+        let stated_offset = if zip64.is_some_and(|end| end.offset_sentinel) {
+            u32::MAX
+        } else {
+            cd_offset
+        };
         self.bytes.extend_from_slice(&EOCD_SIGNATURE.to_le_bytes());
         self.bytes.extend_from_slice(&0u16.to_le_bytes());
         self.bytes.extend_from_slice(&0u16.to_le_bytes());
-        self.bytes.extend_from_slice(&count16.to_le_bytes());
-        self.bytes.extend_from_slice(&count16.to_le_bytes());
+        self.bytes.extend_from_slice(&stated_count.to_le_bytes());
+        self.bytes.extend_from_slice(&stated_count.to_le_bytes());
         self.bytes.extend_from_slice(&cd_size.to_le_bytes());
-        self.bytes.extend_from_slice(&cd_offset.to_le_bytes());
+        self.bytes.extend_from_slice(&stated_offset.to_le_bytes());
         self.bytes.extend_from_slice(&0u16.to_le_bytes());
         self.bytes
     }
+}
+
+/// What the classic end record states where a zip64 end record sits behind it. A
+/// writer states a sentinel only where the true value does not fit; a fixture
+/// states one where it does, so a reader that trusts the classic field alone is
+/// caught by a small archive rather than a four gigabyte one.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Zip64End {
+    pub count_sentinel: bool,
+    pub offset_sentinel: bool,
+    pub record_size: Option<u64>,
 }
 
 #[must_use]

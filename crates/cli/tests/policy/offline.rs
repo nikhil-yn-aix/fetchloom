@@ -103,7 +103,10 @@ fn an_offline_run_of_a_remote_reference_issues_no_request() {
             .stderr(Stdio::null())
             .output()
             .unwrap();
-        assert!(!output.status.success());
+        assert!(
+            !output.status.success(),
+            "an offline run against a source it had never seen succeeded"
+        );
 
         let stream = std::fs::read_to_string(&events).unwrap_or_default();
         assert!(

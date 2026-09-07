@@ -320,7 +320,11 @@ fn a_directory_source_writes_no_lock_and_says_so() {
         .env("FETCHLOOM_CACHE_DIR", &scene.cache)
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         !scene.lock.exists(),
         "a directory source wrote a lock naming bytes it cannot pin"

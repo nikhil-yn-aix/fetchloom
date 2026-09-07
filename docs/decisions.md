@@ -3387,11 +3387,15 @@ regime. It also means the record layout is written down in this codebase and mus
 stay correct; the corpus's own writer is the thing that keeps it honest, because
 the two disagree loudly if either drifts.
 
-Uncertain: whether Zip64 archives with more than 65,535 entries need the Zip64
-end record read instead, which this does not do. The benign Zip64 corpus entry
-passes because it is small. An archive above that count is the entry limit's
-territory and is refused there, so the gap is bounded, but it is a gap and it is
-named here rather than found later.
+Corrected: this did need the zip64 end record read instead, and the reason given
+here for leaving it was wrong. The entry limit is a million and the listing limit
+is half of that, both far above 65,535, so an archive between those counts was
+never refused anywhere; it was read with a truncated list of names. The benign
+zip64 corpus entry passes because it is small enough that the classic fields
+carry the true values and no sentinel is reached, so it never exercised the case
+at all. What the truncation actually costs, and what now reads the zip64 record,
+is under "A count that does not fit is a sentinel, and reading it as a count is a
+wrong answer".
 
 Sources: `crates/faults/src/archives.rs` zip writer and its record layout tests;
 the APPNOTE record layouts for the local file header, the central directory file
@@ -11209,3 +11213,226 @@ were sound on an idle machine and unsound on a busy one, which is the machine th
 gate actually runs on.
 
 Sources: `crates/cli/tests/transfer/events.rs` `one_run_waits_for_another`.
+
+---
+
+## A count that does not fit is a sentinel, and reading it as a count is a wrong answer
+
+`central_directory_names` read the entry count out of the classic end of central
+directory record as sixteen bits and the directory's location as thirty-two.
+Where a zip's true values do not fit those fields the format writes a sentinel
+into them and the real ones into a zip64 end of central directory record, found
+through a locator sitting immediately before the classic record. Nothing looked
+for that locator, so an archive holding more than 65,535 members had its name
+pre-scan silently truncated to the first 65,535 while the enumeration behind it,
+which goes through `zip` 8.6 and does read zip64, returned all of them.
+
+What that costs was established before anything was written, because two of the
+three things it could have cost turned out not to be true.
+
+Path validation and collision detection are not skipped for the entries past the
+truncation. `list_members` re-runs `zip_member_path` and `claim_member_path` per
+member inside the enumeration loop, against a claim set of its own. Every member
+the archive holds is validated and every collision is found regardless of what
+the pre-scan saw. This is a wrong answer and not an escape, and saying otherwise
+would be inflating it.
+
+`list` does not under-report either. It reaches the same enumeration through the
+archive seam, so the count it prints is the archive's own.
+
+The separator decision is the real wrong answer. `decide_and_record_separator`
+reads the truncated list and its verdict is then applied to every member. It is
+steerable in both directions. An archive whose first 65,535 names hold backslashes
+and whose only forward slash is past the truncation is read as backslash
+separated, so 65,535 files whose names legally contain a backslash are silently
+placed into directories the archive never described, and the run announces that
+as a degradation, which is the wrong answer being stated confidently. The
+opposite steer refuses a legal archive rather than escaping anything, because
+`validate_member_path` rejects a backslash outright when the separator was not
+decided. Neither steer escapes the destination.
+
+The offset sentinel already failed loudly: a seek to `0xFFFFFFFF` lands past the
+end of any archive under four gigabytes, and inside a larger one it lands on
+bytes without the central header signature. Both refuse. It was the count that
+was silent.
+
+Options: refuse when either field states its sentinel, which is what the reader
+already does to a zip64 member at `agrees_with_central_directory`; or find the
+locator and read the true values.
+
+Chosen: read them.
+
+Because refusing regresses an archive that works today. An archive of a hundred
+thousand small files is ordinary, is under four gigabytes, states the count
+sentinel and a real directory offset, and is enumerated correctly right now
+except for the separator decision. Turning that into a refusal to serve it is a
+larger change to what the tool does than reading twenty bytes and then fifty-six.
+The consistency argument for refusing is also thinner than it looks: what
+`agrees_with_central_directory` refuses is a member whose own sizes are stated in
+sixty-four bits, which is the whole zip64 member format and a real surface.
+Finding where the central directory starts is not that, and it stays refused.
+
+A count field of `0xFFFF` is not by itself a sentinel: an archive holding exactly
+65,535 members states the same bits and carries no locator. So the locator is
+looked for and its absence means the classic values stand, which is also what the
+crate behind the enumeration does at `may_be_zip64`. The two therefore agree by
+construction rather than by coincidence. A locator that is present but points at
+bytes without the zip64 signature, or at a record shorter than the format's
+smallest, is `archive.unsupported` naming zip64, and the pre-scan now runs before
+`ZipArchive::new` so that this reader's own diagnosis is the one a caller sees
+rather than the crate's.
+
+One divergence between the pre-scan and the enumeration is left standing and is
+named here rather than found later. The crate tolerates bytes prepended before
+the first local header, which is what a self-extracting archive is, by locating
+the first central header and working out the offset everything else is relative
+to. The pre-scan seeks to the offset the record states and nothing else. The two
+therefore disagree for such an archive, but they disagree loudly: the seek lands
+on bytes without the central header signature and the archive is refused. A wrong
+answer is the thing worth fixing; a refusal of an archive nothing has asked for
+is not.
+
+The previous session recorded this case as untestable because the corpus writer
+saturates the classic count at 65,535 and its zip64 writer was crate-private.
+Both halves of that were wrong. The saturation is the sentinel, so the writer
+produces exactly the archive that reaches the case; the zip64 writer is three
+lines from public; and the fixtures that matter need no bulk at all, because a
+`Zip64End` that writes a sentinel into a classic record standing over three
+members reaches the same code as one standing over a hundred thousand. Two of the
+five fixtures are large only because proving the separator steer needs a real
+member past the classic count, and proving that `0xFFFF` alone is not a sentinel
+needs a real archive of exactly that many.
+
+Sources: `crates/archive/src/zip_reader.rs` `directory_location` and
+`zip64_directory`; `crates/faults/src/archives/zip.rs` `Zip64End`;
+`crates/archive/tests/zip64.rs`; APPNOTE 4.3.14 through 4.3.16; contracts.md
+Rejected during extraction.
+
+---
+
+## A third cause was looked for under load and not found, and that is the answer
+
+Three gate runs last session each failed in a different scene while the whole
+workspace was building and testing, and one clean full run is not evidence of
+anything. This session went looking for a cause that was never named.
+
+Two sweeps first, by reading. Every test that waits on a duration rather than a
+condition: `flights.rs` holds workers at a rendezvous with a 250 millisecond
+window, `selection.rs` gives a glob one second to decide through a thread and a
+channel, `cancel.rs` asserts an interrupted run stops inside two seconds,
+`concurrent.rs` and `events.rs` delay a source so two runs overlap, and
+`reconcile.rs` waits twenty seconds on a channel. Every test that asserts a
+process failed or succeeded without asserting on what it said: fourteen, of which
+`kernel.rs` was the worst because it routed the run's standard error to the null
+device before asserting on the exit status, so its message could never say
+anything.
+
+Then the reproduction. The machine was loaded with two concurrent release builds
+of the workspace, which is what the gate's benchmark step does to it, and the
+timing-sensitive binaries were run twelve times each: `flights`, `selection`,
+`reconcile`, `cancel`, `concurrent`, `events`. Seventy-two runs, no failures.
+`flights` was then reverted to its original 250 millisecond rendezvous on purpose
+and run forty more times under the same load. Forty passes.
+
+So the strongest candidate found by reading did not reproduce, and it is recorded
+here as hardening rather than as a fix. The rendezvous is now two phases: a thirty
+second wait for the ceiling's worth of workers to assemble, which is a hang guard
+and is not reached on the happy path, and a 250 millisecond grace after that for
+one too many to appear, which is the observation the test actually needs. A gate
+that gives up now says it gave up, where before a missed assembly was reported as
+"the per-host ceiling of three admitted a different count", which is a wrong
+diagnosis of a working ceiling. That the window survived forty loaded runs does
+not make a test that reports the wrong thing when it loses acceptable.
+
+`cancel.rs` is a real correction rather than hardening. It asserted that an
+interrupted run stops within two seconds, and no document states that bound;
+contracts.md says only that the first interrupt stops new work and exits 130. The
+assertion was a wall clock standing in for a contract nobody wrote, and it is
+replaced by the contract's own evidence: the run exits 130 and publishes no
+destination. `selection.rs` keeps its bound but at sixty seconds and under a name
+that says what it discriminates, because a pattern of sixteen recursive wildcards
+either decides or explores every alignment of them forever, and one second was
+never the line between those.
+
+The bounded negative: two full workspace runs under sustained release-build load,
+plus the hundred and twelve targeted runs above, plus this session's own baseline
+of thirteen of thirteen with the Windows suite at 1088 seconds and the Linux suite
+at 1929 seconds, produced no failure in any of the scenes that failed before. The
+three earlier failures are accounted for without a third cause: two were real
+defects in the code, the undrained platform degradation queue and the event
+ordering that depended on when the volume was probed, and the third was the 1200
+millisecond wait window, now five seconds. The silent standard error was found
+alongside them and is a defect in diagnosis, not a fourth flake. Nothing here
+proves a third cause does not exist. It bounds where it is not.
+
+Sources: `crates/engine/tests/flights.rs`; `crates/engine/tests/selection.rs`;
+`crates/cli/tests/materialize/cancel.rs`; `crates/cli/tests/materialize/kernel.rs`
+and the thirteen other assertions given their run's output; contracts.md
+Cancellation.
+
+---
+
+## Where the binary's bytes are, measured once, so the next re-baseline is a decision
+
+The recorded binary size moved three times: 7,926,784, then 8,389,632, then
+9,053,696, then 9,614,848. Each move was justified on its own and the trend was
+never looked at. This is the look.
+
+Every commit that moved it was rebuilt on one toolchain so the numbers compare.
+49f5bc8 is 8,747,520, 33425d7 is 9,053,696, a4a7de7 is 9,615,360. Two of those
+match what is recorded against them. 49f5bc8 does not, and it is the interesting
+one: it is 357,888 bytes larger than the value in its own benchmark file, because
+that value was inherited from a3b15ee and never re-recorded. Growth of 4.27 per
+cent stayed under the five per cent gate and accumulated invisibly.
+
+So the gate is a ratchet with slack, and the recorded series understates real
+growth. A re-baseline looks like a habit partly because the jump being recorded
+is larger than the increment that caused it: the honest per-session deltas on one
+toolchain are 3.50 per cent and 6.20 per cent, not the 7.92 and 6.20 the recorded
+numbers suggest.
+
+The growth is code. Across those three commits `.text` moves 7,156,001 to
+7,404,449 to 7,873,153, while `.rdata` moves 1,396,334 to 1,446,310 to 1,523,822
+and `.data` is 1,024 bytes at every one of them. Help text and tables are not
+where the bytes went.
+
+`strip = "symbols"` leaves nothing in the image, so `.text` was attributed by
+linking once with a map. Fat LTO collapses every Rust crate into a single object,
+so the object column says nothing and the attribution is by mangled crate instead;
+it accounts for 7,873,139 of the 7,873,153 bytes in the section.
+
+```
+fetchloom_cli    2,201,169     ureq               251,809
+graviola         1,220,352     core               242,077
+rustls             757,892     serde_json         188,352
+clap_builder       616,240     std                128,795
+other              509,026     clap_complete      126,411
+fetchloom_engine   449,523     alloc              111,429
+fetchloom_sources  287,872     toml                85,744
+```
+
+Speaking TLS is 2,057,972 bytes, or 26 per cent of the section, across graviola,
+rustls, webpki and rustls_pki_types. The single largest symbol in the binary is
+graviola's `p384::PublicKey::from_x962_uncompressed` at 256,288 bytes, which is
+unrolled field arithmetic in a crypto library and is a fixed cost of the TLS
+choice rather than anything this tool did. clap is 742,651 across builder and
+completion. Fetchloom's own seven crates are 3,198,490, or 40.6 per cent.
+
+Nothing is duplicated. The dependency graph carries one duplicate pair,
+`getrandom` 0.3 and 0.4, and the 0.4 is a build dependency that never links,
+which deny.toml already states. The `cli` crate has no generic public function
+and ten generic functions in total, none of them per command, so there is no
+monomorphization fan-out at the command layer. The largest symbol Fetchloom owns
+is `surface::Command::augment_subcommands` at 92,880 bytes, which is clap's
+derive-generated builder for the whole subcommand tree: one shared function that
+grows as commands are added, which is the per-command cost showing up exactly
+where it should and only once.
+
+Nothing is being shrunk. Four commands cost what four commands cost, and no
+correctness check is worth trading for bytes. What changes is that the next
+re-baseline can name which of these lines moved rather than restating that the
+binary grew.
+
+Sources: `xtask/benchmarks/x86_64-pc-windows-msvc.json` across a3b15ee, 49f5bc8,
+33425d7 and a4a7de7; release builds of each in worktrees on rustc 1.98.0;
+`llvm-objdump -h`; a `-Clink-arg=-MAP` link of a4a7de7.

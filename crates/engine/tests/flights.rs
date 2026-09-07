@@ -53,34 +53,52 @@ fn fixed(at: u32) -> impl Fn(&str) -> Controller + Sync {
     move |_| Controller::fixed(NonZeroU32::new(at).unwrap())
 }
 
-const PATIENCE: Duration = Duration::from_millis(250);
+const PATIENCE: Duration = Duration::from_secs(30);
+
+const GRACE: Duration = Duration::from_millis(250);
 
 struct Gate {
     arrived: Mutex<u32>,
     opened: Condvar,
-    wanted: u32,
+    ceiling: u32,
+    gave_up: AtomicU32,
 }
 
 impl Gate {
-    fn wanting(wanted: u32) -> Self {
+    fn holding(ceiling: u32) -> Self {
         Self {
             arrived: Mutex::new(0),
             opened: Condvar::new(),
-            wanted,
+            ceiling,
+            gave_up: AtomicU32::new(0),
         }
     }
 
     fn arrive(&self) {
         let mut arrived = self.arrived.lock().unwrap();
         *arrived += 1;
-        if *arrived >= self.wanted {
+        if *arrived >= self.ceiling {
             self.opened.notify_all();
+        }
+        let (held, assembly) = self
+            .opened
+            .wait_timeout_while(arrived, PATIENCE, |count| *count < self.ceiling)
+            .unwrap();
+        if assembly.timed_out() {
+            self.gave_up.fetch_max((*held).max(1), Ordering::SeqCst);
             return;
         }
-        let (_held, _timed_out) = self
+        let _ = self
             .opened
-            .wait_timeout_while(arrived, PATIENCE, |count| *count < self.wanted)
+            .wait_timeout_while(held, GRACE, |count| *count <= self.ceiling)
             .unwrap();
+    }
+
+    fn assembled(&self) -> Result<(), u32> {
+        match self.gave_up.load(Ordering::SeqCst) {
+            0 => Ok(()),
+            most => Err(most),
+        }
     }
 }
 
@@ -96,11 +114,12 @@ impl Announcement {
         self.changed.notify_all();
     }
 
-    fn hear(&self) {
-        let (_held, _timed_out) = self
+    fn hear(&self) -> bool {
+        let (_held, outcome) = self
             .changed
             .wait_timeout_while(self.made.lock().unwrap(), PATIENCE, |made| !*made)
             .unwrap();
+        !outcome.timed_out()
     }
 }
 
@@ -108,17 +127,22 @@ impl Announcement {
 fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
     let flights = Flights::new(ceilings(8, 3), fixed(3));
     let seen = Watermark::default();
-    let one_too_many = Gate::wanting(4);
+    let the_ceiling = Gate::holding(3);
     let items: Vec<u32> = (0..16).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         seen.entered();
-        one_too_many.arrive();
+        the_ceiling.arrive();
         seen.left();
         Ok::<u32, Error>(*item)
     });
 
+    assert_eq!(
+        the_ceiling.assembled(),
+        Ok(()),
+        "the gate gave up before three jobs were ever in flight at once, so nothing here measures the ceiling"
+    );
     assert_eq!(
         seen.most(),
         3,
@@ -139,7 +163,7 @@ fn a_per_host_ceiling_holds_that_many_jobs_in_flight_for_one_host() {
 fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
     let flights = Flights::new(ceilings(2, 4), fixed(4));
     let seen = Watermark::default();
-    let one_too_many = Gate::wanting(3);
+    let the_ceiling = Gate::holding(2);
     let items: Vec<u32> = (0..12).collect();
     let hosts: Vec<String> = items
         .iter()
@@ -148,11 +172,16 @@ fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
 
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         seen.entered();
-        one_too_many.arrive();
+        the_ceiling.arrive();
         seen.left();
         Ok::<u32, Error>(*item)
     });
 
+    assert_eq!(
+        the_ceiling.assembled(),
+        Ok(()),
+        "the gate gave up before two jobs were ever in flight at once, so nothing here measures the ceiling"
+    );
     assert_eq!(
         seen.most(),
         2,
@@ -165,13 +194,13 @@ fn a_global_ceiling_holds_that_many_jobs_in_flight_across_every_host() {
 fn one_ceiling_admits_one_job_at_a_time() {
     let flights = Flights::new(ceilings(1, 1), fixed(1));
     let seen = Watermark::default();
-    let one_too_many = Gate::wanting(2);
+    let the_ceiling = Gate::holding(1);
     let items: Vec<u32> = (0..6).collect();
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
     flights.each(&items, &hosts, &|_: &u32| {
         seen.entered();
-        one_too_many.arrive();
+        the_ceiling.arrive();
         seen.left();
         Ok::<u32, Error>(0)
     });
@@ -190,6 +219,7 @@ fn the_failure_reported_is_the_first_in_order_however_the_jobs_finished() {
     let hosts: Vec<String> = items.iter().map(|_| "one.example".to_owned()).collect();
 
     let the_later_one_failed = Announcement::default();
+    let heard = AtomicU32::new(0);
 
     let outcomes = flights.each(&items, &hosts, &|item: &u32| {
         if *item == 5 {
@@ -197,11 +227,16 @@ fn the_failure_reported_is_the_first_in_order_however_the_jobs_finished() {
             return Err(Error::new(ErrorKind::NetworkRefused, "the later one"));
         }
         if *item == 2 {
-            the_later_one_failed.hear();
+            heard.store(u32::from(the_later_one_failed.hear()), Ordering::SeqCst);
             return Err(Error::new(ErrorKind::NetworkRefused, "the earlier one"));
         }
         Ok::<u32, Error>(*item)
     });
+    assert_eq!(
+        heard.load(Ordering::SeqCst),
+        1,
+        "the earlier job never heard the later one fail, so it did not finish second and this measures nothing"
+    );
     assert_eq!(
         outcomes.outputs,
         vec![0, 1],

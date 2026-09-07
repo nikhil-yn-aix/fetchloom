@@ -63,14 +63,21 @@ fn run_observed(source: &Path, destination: &Path, cache: &Path) -> Observed {
         .arg("none")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
 
     let mut body = Vec::new();
     child.stdout.take().unwrap().read_to_end(&mut body).unwrap();
+    let mut said = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut said)
+        .unwrap();
     let status = child.wait().unwrap();
-    assert!(status.success(), "the run failed");
+    assert!(status.success(), "{said}");
 
     let mut counters = IO_COUNTERS {
         ReadOperationCount: 0,

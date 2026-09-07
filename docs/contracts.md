@@ -86,7 +86,7 @@ The trust class a probe reports is `verified` when a digest a run could compare 
 |---|---|
 | An object the cache holds | The cache read, and no request |
 | A directory or a prefix | The walk a run would do, or the listing seam the source already offers |
-| A zip over a source serving ranges | The end of central directory record, the central directory, and the local header of each member, which is checked against it |
+| A zip over a source serving ranges | The end of central directory record, the zip64 one behind it where the classic fields state a sentinel, the central directory, and the local header of each member, which is checked against it |
 | A zip over a source refusing ranges | The whole object |
 | A tar under any compression | The whole object, because a tar states no index |
 
@@ -368,6 +368,7 @@ Every rejection stops the whole run, emits `extract.reject`, and publishes nothi
 | Two members on one path | `archive.collision` |
 | Two members colliding under the volume's folding or normalization | `archive.collision` |
 | A local header disagreeing with the central directory | `archive.unsafe_path` or `archive.unsupported` |
+| A zip64 locator pointing at bytes that are not a zip64 end of central directory record | `archive.unsupported` |
 | A zip compression method that is not store or deflate | `archive.unsupported` |
 | A container or compression this build does not carry | `archive.unsupported` |
 | A header the format does not permit, or a truncated archive | `archive.unsupported` |
@@ -375,6 +376,8 @@ Every rejection stops the whole run, emits `extract.reject`, and publishes nothi
 | A name the target volume refuses | `destination.unrepresentable` |
 
 A backslash is a legal byte in a member name and is never a separator, with one exception decided from the archive itself. When no member path in a zip holds a forward slash and at least one holds a backslash, that zip states its structure with backslashes and nothing else, so every backslash becomes a forward slash before any rejection is applied, and `..\..\x` is refused as `../../x` rather than accepted as a name. The run emits `degrade`. A zip holding both is ambiguous and refused. A tar is never translated.
+
+A zip states how many members it holds in sixteen bits and where its central directory starts in thirty-two. Where a true value does not fit, the format writes a sentinel into that field and the real one into a zip64 end of central directory record, found through a locator sitting immediately before the classic record. Fetchloom reads that record whenever either field states its sentinel and a locator is there, so the count and the location every later decision is made from are the archive's own rather than a truncation of them. An archive holding exactly 65,535 members states the same sixteen bits and carries no locator, which is not zip64 and is read as it stands. A locator pointing at bytes that are not a zip64 end of central directory record, or at one shorter than the format's smallest, is refused naming zip64. A member stating its own sizes in zip64 form is still refused, because reading those is a different thing from finding the directory.
 
 Collisions are found by creating each entry exclusively in staging, so the target filesystem's own folding decides rather than a table Fetchloom would have to keep correct.
 

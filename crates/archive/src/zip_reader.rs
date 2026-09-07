@@ -22,6 +22,20 @@ const END_RECORD_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x05, 0x06];
 
 const CENTRAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
 
+const ZIP64_END_RECORD_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x06, 0x06];
+
+const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4B, 0x06, 0x07];
+
+const ZIP64_LOCATOR_LENGTH: usize = 20;
+
+const ZIP64_END_RECORD_LENGTH: usize = 56;
+
+const SMALLEST_ZIP64_RECORD_SIZE: u64 = 44;
+
+const COUNT_SENTINEL: u16 = u16::MAX;
+
+const NAMES_RESERVED_UP_FRONT: u64 = 1024;
+
 const MAXIMUM_END_RECORD_SEARCH: u64 = 22 + 0xFFFF;
 
 #[derive(Clone, Copy, Debug)]
@@ -176,10 +190,70 @@ fn read_local_header<R: Read + Seek>(
     })
 }
 
-fn central_directory_names<R: Read + Seek>(
-    mut source: R,
+struct Directory {
+    declared: u64,
+    at: u64,
+}
+
+fn little_endian_u64(bytes: &[u8], at: usize) -> u64 {
+    let mut eight = [0_u8; 8];
+    eight.copy_from_slice(&bytes[at..at + 8]);
+    u64::from_le_bytes(eight)
+}
+
+fn zip64_directory<R: Read + Seek>(
+    source: &mut R,
+    end_record_at: u64,
     archive_name: &str,
-) -> Result<Vec<Vec<u8>>, Error> {
+) -> Result<Option<Directory>, Error> {
+    let io_error = |error: std::io::Error| {
+        unsupported_archive(archive_name, &format!("is truncated or malformed: {error}"))
+    };
+    let Some(locator_at) = end_record_at.checked_sub(ZIP64_LOCATOR_LENGTH as u64) else {
+        return Ok(None);
+    };
+    source.seek(SeekFrom::Start(locator_at)).map_err(io_error)?;
+    let mut locator = [0_u8; ZIP64_LOCATOR_LENGTH];
+    if source.read_exact(&mut locator).is_err() || locator[0..4] != ZIP64_LOCATOR_SIGNATURE {
+        return Ok(None);
+    }
+    let record_at = little_endian_u64(&locator, 8);
+    if record_at >= locator_at {
+        return Err(unsupported_archive(
+            archive_name,
+            "places its zip64 end of central directory record at or after the locator pointing at it",
+        ));
+    }
+    source.seek(SeekFrom::Start(record_at)).map_err(io_error)?;
+    let mut record = [0_u8; ZIP64_END_RECORD_LENGTH];
+    source.read_exact(&mut record).map_err(|_| {
+        unsupported_archive(
+            archive_name,
+            "states a zip64 end of central directory record shorter than the zip64 format's smallest",
+        )
+    })?;
+    if record[0..4] != ZIP64_END_RECORD_SIGNATURE {
+        return Err(unsupported_archive(
+            archive_name,
+            "points a zip64 locator at bytes without the zip64 end of central directory signature",
+        ));
+    }
+    if little_endian_u64(&record, 4) < SMALLEST_ZIP64_RECORD_SIZE {
+        return Err(unsupported_archive(
+            archive_name,
+            "states a zip64 end of central directory record shorter than the zip64 format's smallest",
+        ));
+    }
+    Ok(Some(Directory {
+        declared: little_endian_u64(&record, 32),
+        at: little_endian_u64(&record, 48),
+    }))
+}
+
+fn directory_location<R: Read + Seek>(
+    source: &mut R,
+    archive_name: &str,
+) -> Result<Directory, Error> {
     let io_error = |error: std::io::Error| {
         unsupported_archive(archive_name, &format!("is truncated or malformed: {error}"))
     };
@@ -196,18 +270,42 @@ fn central_directory_names<R: Read + Seek>(
         .ok_or_else(|| {
             unsupported_archive(archive_name, "holds no end of central directory record")
         })?;
-    let declared = usize::from(u16::from_le_bytes([tail[at + 10], tail[at + 11]]));
-    let directory_at = u64::from(u32::from_le_bytes([
-        tail[at + 16],
-        tail[at + 17],
-        tail[at + 18],
-        tail[at + 19],
-    ]));
+    let declared = u16::from_le_bytes([tail[at + 10], tail[at + 11]]);
+    let directory_size =
+        u32::from_le_bytes([tail[at + 12], tail[at + 13], tail[at + 14], tail[at + 15]]);
+    let directory_at =
+        u32::from_le_bytes([tail[at + 16], tail[at + 17], tail[at + 18], tail[at + 19]]);
+    let classic = Directory {
+        declared: u64::from(declared),
+        at: u64::from(directory_at),
+    };
+    if declared != COUNT_SENTINEL
+        && directory_size != ZIP64_SENTINEL
+        && directory_at != ZIP64_SENTINEL
+    {
+        return Ok(classic);
+    }
+    let end_record_at = length - window + u64::try_from(at).unwrap_or(u64::MAX);
+    Ok(zip64_directory(source, end_record_at, archive_name)?.unwrap_or(classic))
+}
+
+fn central_directory_names<R: Read + Seek>(
+    mut source: R,
+    archive_name: &str,
+) -> Result<Vec<Vec<u8>>, Error> {
+    let io_error = |error: std::io::Error| {
+        unsupported_archive(archive_name, &format!("is truncated or malformed: {error}"))
+    };
+    let Directory {
+        declared,
+        at: directory_at,
+    } = directory_location(&mut source, archive_name)?;
 
     source
         .seek(SeekFrom::Start(directory_at))
         .map_err(io_error)?;
-    let mut names = Vec::with_capacity(declared);
+    let mut names =
+        Vec::with_capacity(usize::try_from(declared.min(NAMES_RESERVED_UP_FRONT)).unwrap_or(0));
     for _ in 0..declared {
         let mut fixed = [0_u8; 46];
         source.read_exact(&mut fixed).map_err(io_error)?;
@@ -306,11 +404,11 @@ pub(crate) fn list_members<R: Read + Seek + 'static>(
     limits: Limits,
     degradations: &DegradeQueue,
 ) -> Result<(Vec<ArchiveMember>, Vec<ZipOffset>), Error> {
+    let central_names = central_directory_names(source.clone(), archive_name)?;
     let mut archive = zip::ZipArchive::new(source.clone()).map_err(|error| {
         unsupported_archive(archive_name, &format!("is truncated or malformed: {error}"))
     })?;
     let mut guard = BombGuard::new(archive_name, on_disk_bytes, limits);
-    let central_names = central_directory_names(source.clone(), archive_name)?;
     let backslash_separated =
         decide_and_record_separator(&central_names, archive_name, degradations);
     validate_central_directory_paths(&central_names, backslash_separated, limits.nesting_depth)?;
