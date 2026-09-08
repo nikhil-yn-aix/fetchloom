@@ -13321,3 +13321,58 @@ one machine's.
 
 Sources: `crates/cli/Cargo.toml`, `crates/cli/src/main.rs`, `deny.toml`,
 `docs/perf-audit.md` F7.
+
+## What is at its floor, so a later session does not measure it again
+
+The audit's list, carried forward with one correction and the reasons kept.
+
+- **`materialize::copy_file`.** One open, one read pass, one write pass, both
+  digests taken on the bytes going past through a `Tee`. There are not fewer.
+- **Connection reuse.** One TCP connection for a probe and a fetch, no repeated
+  handshake, `max_idle_connections_per_host` set explicitly to
+  `max(TRANSFERS_CEILING, connections_per_host)` and one agent per host, with a
+  test guarding it.
+- **Memory.** 7.5 to 21 MB across every regime on both runners, including the
+  one that moves 256 MiB. Nothing buffers an object.
+- **File operations per file.** 1.02 per file over 1024 files now that the pack
+  is flushed once, against a derived floor of about 2 that the pack layout beat.
+- **Concurrency against one cache.** Two runs of one object cost one transfer,
+  and the second waits rather than refetching.
+- **The event stream.** `--json`, `--quiet` and the default over 2000 files are
+  indistinguishable inside the noise. A run emits a few thousand events and
+  serializing them does not measure.
+- **Zip enumeration.** A central directory, one pass, no second walk.
+- **The compression probe.** `--compress none` over 2000 objects is
+  indistinguishable from the default. Four strides of a 1 MiB head cost nothing
+  measurable, as the arithmetic predicted.
+- **The binary.** TLS is 2.0 MiB of it, 26 per cent of `.text`, which the link
+  map and `cargo bloat --crates` agree on.
+
+The correction: **hashing was on this list and is not at its floor.** It was
+1.35x off it, and the entry above about the split is where that went. A list of
+things not to touch is only useful if being on it was earned, so this one is
+worth the reminder that it is a record of measurements rather than of beliefs.
+
+Also settled with numbers and not to be revisited: chunk deduplication, keeping
+the archive after extraction, and the choice not to run HTTP/2. Each has its own
+entry above.
+
+### How the blind derivation scored
+
+The audit wrote down what each stage cannot avoid before opening a profiler, and
+kept it unedited. Seven predictions, and the scoring is worth keeping because it
+says what deriving from contracts is good for.
+
+Right: the CPU is never the bottleneck in any regime; process start plus the
+volume probe dominates a run that does nothing, and it named the probe as the
+mechanism; the event stream costs nothing measurable; the 1 MiB weld is a
+correctness constraint rather than a tunable; and the deterministic counters are
+stable run to run while wall time is unusable.
+
+Half right: a locally sourced object is read 3x, but only when it compresses, and
+it was not the largest finding. Wrong: the compression probe is a measurable
+fraction of a small-files run. It is not, and `--compress none` proves it.
+
+So deriving from contracts found the shape of every real finding and got the
+ranking wrong, which is the argument for doing it first and for not stopping
+there.
