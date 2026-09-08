@@ -12967,3 +12967,142 @@ for one volume shape and is deleted rather than carried.
 
 Sources: `.github/workflows/verify.yml`, `xtask/src/bench.rs`, `CONTRIBUTING.md`,
 `docs/perf-audit.md` Phase 0.
+
+## The three passes over a locally sourced object, and which of them is not paid for
+
+Question: a `get` of one 256 MiB local file reads it 2.000x and writes 2.000x,
+and reads it 3.000x when it compresses. Exact ratios mean whole passes rather
+than overhead. What is each pass for.
+
+Measured on this machine, one run each, the same file in both shapes:
+
+```
+urandom   read 536,870,912 (2.000x)  written 536,887,240 (2.000x)  ops 34
+zeroes    read 805,306,368 (3.000x)  written 536,901,350 (2.000x)  ops 36
+```
+
+Pass one is `materialize::copy_file`: one read of the source, one write of the
+destination, both digests taken on the bytes going past. It is at its floor and
+nothing about it is a finding.
+
+Pass two is `Cache::adopt` calling `clone_or_copy`: one read, one write, because
+the cache holds its own copy of everything it holds and the caller's file is the
+caller's. On a volume that reference counts blocks this is metadata and no bytes
+move. No volume in this matrix does, which is the phase 0 debt that is still
+open, so on every machine measured here it is a real copy. Inherent until a
+volume clones, not inherent in principle.
+
+Pass three exists only when the object compresses: `publish_object` reads the
+scratch back to write frames. It is bought by compression happening at
+publication, and compression happens at publication because a partial must stay
+raw for a resume to append at an offset and for a ranged verify to check against
+the outboard tree. A `file:` source has no partial and no resume, so on that path
+the constraint is paid for nothing.
+
+Chosen: not removed, and the reason is a rule rather than a measurement.
+Compressing from the source as it is copied means a second way to publish an
+object, one that writes an already framed scratch, beside the one that writes a
+raw scratch and frames it afterwards. This project forbids a second way of doing
+anything that already exists, and a publication path is the last place to make
+an exception. What would clear it is one publication path that takes the frames
+as an argument, which is a change to how publication is shaped rather than an
+optimization laid beside it.
+
+What did change is the contract. contracts.md said "a packed object is written
+twice, once to the partial and once into the pack" without saying which path it
+meant. Measured, 2000 local files of 1 KiB write 4,096,000 bytes for a 2,048,000
+byte corpus: the destination once and the pack once. A packed object from a local
+source is written once, because there is no partial, and the sentence now says
+so.
+
+Sources: `crates/cache/src/ingest.rs`, `crates/cache/src/storage.rs`,
+`docs/perf-audit.md` F3.
+
+## A tar is decompressed twice and one of those passes is the extraction
+
+Question: `ArchiveReader::populate` decompresses the whole stream to enumerate,
+and extraction decompresses it again. Measured at about 270 ms of a 2500 ms run
+on a 32 MB tar.gz, roughly eleven per cent: `gzip -dc` alone is 257 to 272 ms,
+`fetchloom get` on the same archive is 2060 to 2943, and `tar -xzf` is 2781 to
+2801.
+
+Chosen: inherent in the shape, and the shape is not this session's to change.
+
+Only one of the two passes is avoidable, and it is the enumeration. Extraction
+has to decompress because that is where the bytes come from. Enumeration exists
+because selection, the plan, and the bomb guard all take the member list as
+input: `select_members` needs every member before it can apply an include or an
+exclude, `build_plan` needs the whole plan before a directory is created, and the
+guard rejects an archive before anything is written rather than after. Removing
+the pass means extracting while enumerating, which changes when a rejection
+surfaces and turns three ordered stages into one interleaved one.
+
+Nothing is served differently either way, because a rejected archive's staging
+tree is discarded whole and never published. So the change is safe and it is a
+restructure, which belongs to the session that restructures rather than to the
+one that measured it. Zip pays none of this: it reads a central directory, and
+that is why it is the format with an index.
+
+Sources: `crates/archive/src/reader.rs`, `crates/archive/src/tar_reader.rs`,
+`docs/perf-audit.md` F6.
+
+## The hashing split was right and the BLAKE3 inside it was wrong
+
+Question: the spike recorded that running the two digests on separate threads is
+slower than running them one after the other, and that the crossover sits between
+4 and 16 MiB. `POOL_THRESHOLD` is 1 MiB. The audit re-measured and reported the
+split as 2x faster at that threshold, which contradicts both. Which is it.
+
+Both were measuring, and neither was measuring the shape that ships. `cargo run
+--release --package xtask -- profile` prints four shapes, and the difference
+between two of them is the whole answer:
+
+- `inline`: `content.update` then `interop.update`, one thread.
+- `install-once`: `rayon::join(content.update, interop.update)`, serial BLAKE3 on
+  one thread and SHA-256 on the other.
+- `install-once-parallel-content`: `rayon::join(content.update_rayon,
+  interop.update)`, which is what `Pair::update` was doing above the threshold.
+
+Two runs of nine rounds, MB/s, this machine:
+
+| Input | inline | install-once | install-once-parallel-content |
+| --- | --- | --- | --- |
+| 128 KiB | 1299, 1266 | 1087, 1131 | 1400, 1086 |
+| 256 KiB | 1214, 1282 | 1309, 1320 | 1495, 1258 |
+| 512 KiB | 500, 485 | 604, 628 | 661, 650 |
+| 1 MiB | 495, 473 | 642, 619 | 461, 473 |
+| 4 MiB | 471, 466 | 646, 666 | 404, 440 |
+| 16 MiB | 491, 557 | 683, 655 | 415, 595 |
+
+The split is right: above 512 KiB `install-once` beats `inline` by 1.30x to 1.43x
+in every one of six measurements. The parallel BLAKE3 inside it is wrong: above
+512 KiB it is the worst of the three, because `update_rayon` claims every core
+for the content digest while SHA-256 is trying to run beside it on one of them.
+internals.md already said that in words -- "the parallel BLAKE3 already owns every
+core" -- and the code did it anyway.
+
+Chosen: `Pair::update` runs serial BLAKE3 inside the join. One line, and
+`Groups::update_parallel` and the `across_threads` argument it existed for both
+go. Digests are unchanged, which the whole engine suite asserts.
+
+Measured on the shape that ships, before and after, at 1 MiB: 461 and 473 MB/s
+against 642 and 619. At 4 MiB: 404 and 440 against 646 and 666. At 16 MiB: 415
+and 595 against 683 and 655.
+
+So three claims about this are now settled. The spike's crossover between 4 and
+16 MiB does not reproduce and that open item is closed: measured against the
+shape that ships, the split wins from about 256 KiB up. The audit's "hashing is
+at its floor" is wrong, and this is the correction: it was 1.35x off its floor
+and the audit measured the right shapes without noticing which one `Pair` uses.
+And `POOL_THRESHOLD` at 1 MiB is conservative rather than wrong -- the curves
+cross lower -- which is left alone, because moving a threshold on two runs of one
+machine is how the 4-to-16-MiB claim got recorded in the first place.
+
+Uncertain: the absolute rates here are well below the audit's, which recorded
+1274 and 1336 MB/s for the split at 1 MiB against 642 and 619 today, on the same
+machine and the same binary shape. Every regime measured today is slower than the
+audit's by a similar factor, so this is the machine and not the code, and it is
+the reason the comparison above is within-run rather than across days.
+
+Sources: `crates/engine/src/hashing.rs`, `xtask/src/profile.rs`,
+`docs/perf-audit.md` "What is already at or near its floor".

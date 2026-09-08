@@ -145,7 +145,7 @@ Measured on this machine, MiB/s, medians of nine runs.
 | 1 MiB | 3007 | 6321 | 1440 | 1081 | 868 |
 | 4 MiB | 3277 | 10557 | 1393 | 1105 | 421 |
 
-Three things follow. Parallel BLAKE3 is slower than serial below 1 MiB and faster above it, which is why the threshold is exactly there. Running the two digests on separate threads is slower than running them one after the other, because the parallel BLAKE3 already owns every core. And SHA-256 caps the combined pass at about 1.1 GB/s no matter how fast BLAKE3 gets, so interop compatibility costs 0.76 CPU seconds per GiB. Hardware SHA is present here and worth 5x over the software path.
+Two things follow, and the third thing that used to be here was wrong for four months. SHA-256 caps the combined pass no matter how fast BLAKE3 gets, so interop compatibility is what the pass costs, and hardware SHA is present here and worth 5x over the software path. Running the two digests on separate threads is faster than running them one after the other above about 256 KiB, by 1.30x to 1.43x measured six times. What is slower is running a parallel BLAKE3 on one of those threads, because it claims every core while SHA-256 is trying to use one of them: at 1 MiB that shape measures 461 and 473 MB/s where the serial split measures 642 and 619. The table above was measured against the parallel shape and reads as an argument against splitting at all. It was an argument against `update_rayon` inside the split, and the split now runs serial BLAKE3.
 
 ## Where the numbers came from
 
@@ -177,3 +177,41 @@ because per-object durability is what `strict` is for. Disabling the batch is
 `--durability strict`, which pushes more rather than less, and no check moves in
 either direction: a pack states each entry's length ahead of its bytes, so an
 entry cut short by a crash is not one the cache holds whatever was flushed.
+
+### What a request buys
+
+A cold transfer used to be a `HEAD` and then a `GET` on one connection. The
+`HEAD` answers three questions: what a partial is keyed by when the key is not a
+content digest, where a resume starts when a partial exists, and how wide to
+split an object, which needs its length before the first byte. On a first fetch
+of one source under a digest the manifest already states, all three are answered
+without it — the key is the digest, no partial is recorded, and `parts_for`
+refuses to split a host whose recorded concurrency is not above one, which a host
+never has on a first fetch. So that fetch is one request, and every other fetch
+still probes. `cold-transfer requests` is 1 where it was 2.
+
+The lease is claimed before any request whenever the digest is known. That is
+what makes the skip safe: the `GET` cannot start ahead of the deduplication that
+stops two runs fetching one digest twice.
+
+### The passes over a locally sourced object
+
+One 256 MiB local file, measured: read 2.000x and written 2.000x when it does not
+compress, read 3.000x when it does. Three passes and each is named. The
+destination copy is one read and one write with both digests taken on the way
+past, and is at its floor. The cache's own copy is one read and one write,
+because the cache holds its own bytes and the caller's file is the caller's; on a
+volume that reference counts blocks it is metadata instead, and no volume in this
+matrix does. The third read happens only when the object compresses, because
+compression is at publication and publication is where it has to be for a partial
+to stay raw and resumable. A `file:` source has no partial, so that path pays for
+a guarantee it never uses — and removing it means a second way to publish, which
+is a change to the shape of publication rather than an optimization beside it.
+
+### The archive read twice
+
+A tar is decompressed to enumerate and decompressed again to extract, about 270
+ms of a 2500 ms run on a 32 MB tar.gz. Only the enumeration is avoidable, and it
+exists because selection, the plan and the bomb guard all take the whole member
+list as input and reject before anything is written. Zip pays none of it, which
+is what a central directory is for.
