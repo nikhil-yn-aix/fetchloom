@@ -85,6 +85,10 @@ pub enum BenchError {
         regime: String,
         metric: String,
     },
+    /// Every metric that moved, rather than the first one found. A gate that
+    /// names one failure when there are three is a gate that gets read as one
+    /// failure.
+    Diverged(Vec<BenchError>),
 }
 
 impl std::fmt::Display for BenchError {
@@ -125,6 +129,13 @@ impl std::fmt::Display for BenchError {
                 f,
                 "{regime} stopped producing {metric}, which the baseline carries"
             ),
+            Self::Diverged(found) => {
+                writeln!(f, "{} deterministic metrics moved:", found.len())?;
+                for one in found {
+                    writeln!(f, "  {one}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -246,28 +257,34 @@ pub fn load(path: &Path) -> Result<Baseline, BenchError> {
 }
 
 pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError> {
+    let mut found = Vec::new();
     for regime in &current.regimes {
-        let recorded = baseline
+        let Some(recorded) = baseline
             .regimes
             .iter()
             .find(|candidate| candidate.regime == regime.regime)
-            .ok_or_else(|| BenchError::RegimeMissing(regime.regime.clone()))?;
-        for metric in &regime.metrics {
-            if metric.kind == MetricKind::Timing {
-                continue;
-            }
-            let found = recorded
+        else {
+            found.push(BenchError::RegimeMissing(regime.regime.clone()));
+            continue;
+        };
+        for metric in regime
+            .metrics
+            .iter()
+            .filter(|metric| metric.kind != MetricKind::Timing)
+        {
+            let Some(previous) = recorded
                 .metrics
                 .iter()
-                .find(|candidate| candidate.name == metric.name);
-            let Some(previous) = found else {
-                return Err(BenchError::MetricAdded {
+                .find(|candidate| candidate.name == metric.name)
+            else {
+                found.push(BenchError::MetricAdded {
                     regime: regime.regime.clone(),
                     metric: metric.name.clone(),
                 });
+                continue;
             };
             if (metric.value - previous.value).abs() > previous.value.abs() * REGRESSION_GATE {
-                return Err(BenchError::Moved {
+                found.push(BenchError::Moved {
                     regime: regime.regime.clone(),
                     metric: metric.name.clone(),
                     baseline: previous.value,
@@ -275,23 +292,27 @@ pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError
                 });
             }
         }
-        for previous in &recorded.metrics {
-            if previous.kind == MetricKind::Timing {
-                continue;
-            }
+        for previous in recorded
+            .metrics
+            .iter()
+            .filter(|metric| metric.kind != MetricKind::Timing)
+        {
             if !regime
                 .metrics
                 .iter()
                 .any(|candidate| candidate.name == previous.name)
             {
-                return Err(BenchError::MetricMissing {
+                found.push(BenchError::MetricMissing {
                     regime: regime.regime.clone(),
                     metric: previous.name.clone(),
                 });
             }
         }
     }
-    Ok(())
+    if found.is_empty() {
+        return Ok(());
+    }
+    Err(BenchError::Diverged(found))
 }
 
 fn cargo() -> String {
@@ -1678,6 +1699,30 @@ mod tests {
             found > 0,
             "no baseline is committed, so the benchmark lane records one every run and gates nothing"
         );
+    }
+
+    #[test]
+    fn a_gate_that_finds_three_failures_reports_three() {
+        let recorded = baseline_of(vec![
+            counted("bytes_written", 1000.0),
+            counted("bytes_read", 2000.0),
+            counted("file_operations", 40.0),
+        ]);
+        let current = baseline_of(vec![
+            counted("bytes_written", 500.0),
+            counted("bytes_read", 4000.0),
+            counted("file_operations", 80.0),
+        ]);
+        let complaint = compare(&recorded, &current)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        for named in ["bytes_written", "bytes_read", "file_operations"] {
+            assert!(
+                complaint.contains(named),
+                "the gate found three metrics moved and named fewer, so a red step reads as one failure: {complaint}"
+            );
+        }
     }
 
     #[test]

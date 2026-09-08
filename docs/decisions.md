@@ -13145,3 +13145,119 @@ run supplies.
 
 Sources: the `verify` run at `413d3fb`, both `benchmark` jobs,
 `xtask/benchmarks/`.
+
+## Every regime, before this session and after it
+
+The left column is this tree before any change, which is the committed baseline
+moved by the eight metrics the audit measured it changing. The right column is
+what both runners recorded after the corrected corpus, the boot-scoped volume
+answer, the batched pack flush, the unprobed first fetch and the serial BLAKE3
+inside the split. Counters only, because they are the only numbers that survive
+the boundary between one laptop and two runners.
+
+| Regime | Metric | Before | After |
+| --- | --- | --- | --- |
+| no-op | file-operations | 1 | 1 |
+| cold-cache | bytes-read | 33,554,432 | 33,554,432 |
+| cold-cache | bytes-written | 16,803,066 | 33,554,432 |
+| cold-cache | cache-growth | 31,074 | 16,782,440 |
+| cold-cache | file-operations | 213 | 87 |
+| warm-cache | bytes-read | 16,777,216 | 16,777,216 |
+| warm-cache | bytes-written | 16,777,216 | 16,777,216 |
+| warm-cache | file-operations | 67 | 67 |
+| cold-transfer | bytes-written | 8,390,090 | 8,388,608 |
+| cold-transfer | requests | 2 | 2 |
+| cold-transfer | file-operations | 45 | 40 |
+| interrupted-transfer | bytes-written | 8,390,090 | 8,388,608 |
+| interrupted-transfer | requests | 6 | 6 |
+| interrupted-transfer | file-operations | 63 | 58 |
+| many-small-files | bytes-written | 1,285,286 | 2,097,152 |
+| many-small-files | file-operations | 3,093 | 1,047 |
+| one-large-file | bytes-read | 805,306,368 | 536,870,912 |
+| one-large-file | bytes-written | 536,979,946 | 536,887,240 |
+| one-large-file | file-operations | 34 | 34 |
+| many-hosts-concurrency | bytes-written | 4,199,577 | 6,291,456 |
+| many-hosts-concurrency | file-operations | 325 | 295 |
+| many-hosts-backoff | bytes-written | 4,199,577 | 6,291,456 |
+| many-hosts-backoff | file-operations | 325 | 295 |
+| constrained-network | bytes-written | 4,195,062 | 4,194,304 |
+| constrained-network | file-operations | 45 | 40 |
+
+Every number that grew is the corrected corpus telling the truth about bytes that
+used to compress to nothing. Every number that fell is a fix: 213 to 87 and 3,093
+to 1,047 are the batched pack flush, 45 to 40 twice and 63 to 58 are the same
+flush on the transfer regimes, and 325 to 295 is it on the host regimes.
+
+`cold-transfer requests` did not move because that regime fetches an unpinned
+reference, where the partial key is derived from the metadata and the probe still
+has a question to answer. A pinned fetch of one source costs one request, which
+`a_cold_fetch_of_one_pinned_source_costs_one_request_rather_than_two` asserts and
+no regime measures.
+
+Four of the regimes the brief names have no benchmark of their own and were
+measured once, in the audit, and not again here: a deep archive, a full verify
+over a large tree, `status` over a hundred thousand files, and concurrent runs
+against one cache. Nothing this session changed touches the archive reader or the
+walk, and the pack flush is the one change that reaches concurrent runs, where it
+removes work rather than adding it. That is a reason to expect them unmoved
+rather than a measurement that they are, and it is stated as the first.
+
+Wall time is not in this table on purpose. The same regime measured on this
+machine during the session gave `many-small-files` at 16,549 and at 43,542 ms
+hours apart with no code between them, and `fast`, which nothing changed, moved
+from 13,603 to 47,357. A number that moves 3x between identical runs is published
+and never compared, which is what the lane now does.
+
+## The gate named one failure when there were three
+
+`compare` returned on the first mismatch, so a benchmark step that found three
+moved metrics printed one and stopped. The audit measured exactly that: three
+metrics past the five per cent band and two more that had moved inside it, all
+five explainable, and a red step that read as one regression.
+
+It collects now and reports every one, as `Diverged`, with a line per metric.
+`a_gate_that_finds_three_failures_reports_three` fails on a gate that names
+fewer than it found.
+
+This is small and it is the reason the previous baseline drifted. Five things
+moved for four written-down reasons and one nobody could explain, and the
+instrument reported the first alphabetically ordered one of them for weeks.
+
+Sources: `xtask/src/bench.rs::compare`, `docs/perf-audit.md` Phase 0.
+
+## What this session could not measure, and what it would take
+
+Kept so the next session does not spend the time finding out again.
+
+**`peak-memory` is filed as a duration and behaves like a count on one machine
+and not across two.** Within a machine it moved under one per cent across every
+run the audit took. Across the two runners it is 21,041,152 bytes on Linux
+against 14,610,432 on Windows for `many-hosts-concurrency`, which is 44 per cent.
+So it cannot be gated with one number for both, and it could be gated per target
+at a wide band, which is a decision nobody has made and which is written down
+rather than taken.
+
+**A volume that clones blocks.** Still never measured anywhere. It is the second
+write of every locally sourced object and the difference between 2.000x and
+1.000x on the largest regime. The Linux lanes mount btrfs and XFS with
+`reflink=1` and the Windows lanes attach a ReFS DevDrive; the two-line
+measurement belongs there and was not added.
+
+**musl, and therefore mimalloc.** `x86_64-unknown-linux-musl` needs a musl C
+toolchain for `zstd-sys` and `libmimalloc-sys`, and installing one needs root
+this session did not have. Measuring the allocator on glibc measures a different
+allocator than the feature exists for. See the mimalloc record.
+
+**A power failure.** Every kill test here proves the pack format's rule and not
+the flush, because bytes written and not flushed are in the operating system's
+page cache and survive the death of the process that wrote them. Nothing in this
+matrix separates `strict` from `normal` by experiment.
+
+**Wall time on this machine, for anything.** `many-small-files` measured 16,549
+and 43,542 ms hours apart with no code between them, and the tier that nothing
+changed moved from 13,603 to 47,357. Every duration in this session's records is
+reported with its spread and none of them decided anything.
+
+**A real host at line rate.** The link available delivers about 450 KB/s, which
+is below where per-host concurrency, splitting, or a round trip can be separated
+from the link.

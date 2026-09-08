@@ -83,21 +83,41 @@ It is kept for three reasons. The publisher's stated digest is over the archive 
 
 Fetchloom is slower than `cp` and `curl` on every workload. It hashes every byte twice, builds a chunk tree, publishes through staging, and writes a record. Those tools do none of that.
 
-Measured on one machine, `x86_64-pc-windows-msvc`. Wall time is a property of the machine as much as the code, so it is published and never gated. The deterministic counters are what gate, at five percent.
+Measured in CI on `ubuntu-24.04` and `windows-2025`, which is where the baseline
+lives. Every deterministic counter below is the same number on both. Wall time is
+a property of the machine as much as of the code, so it is published in the
+lane's own output and never gated and never transcribed here.
 
-| Regime | Fetchloom | Alternative | Ratio |
-|---|---|---|---|
-| cold cache, 64 files | 1463 ms | Copy-Item 322 ms | 4.5x |
-| warm cache, 64 files | 478 ms | Copy-Item 322 ms | 1.5x |
-| cold transfer | 123 ms | curl 23 ms | 5.4x |
-| interrupted transfer | 190 ms | curl 31 ms | 6.1x |
-| 1024 small files | 7150 ms | Copy-Item 1049 ms | 6.8x |
-| one 256 MiB file | 759 ms | Copy-Item 347 ms | 2.2x |
-| many hosts | 9672 ms | curl 2114 ms | 4.6x |
+| Regime | bytes read | bytes written | requests | file operations |
+|---|---|---|---|---|
+| no-op | 2,048 | 0 | 0 | 1 |
+| cold cache, 64 files of 256 KiB | 33,554,432 | 33,554,432 | 0 | 87 |
+| warm cache, the same 64 | 16,777,216 | 16,777,216 | 0 | 67 |
+| cold transfer, 4 MiB | 4,194,304 | 8,388,608 | 2 | 40 |
+| interrupted transfer, two kills | 8,388,608 | 8,388,608 | 6 | 58 |
+| 1024 files of 1 KiB | 2,097,152 | 2,097,152 | 0 | 1,047 |
+| one 256 MiB file | 536,870,912 | 536,887,240 | 0 | 34 |
+| many hosts, concurrency | 0 | 6,291,456 | 32 | 295 |
+| many hosts, backoff | 0 | 6,291,456 | 40 | 295 |
+| constrained network | 2,097,152 | 4,194,304 | 2 | 40 |
 
-Peak memory is 8.4 MB on every regime including the 256 MiB single file one. Nothing is ever loaded whole. Binary is 9,053,696 bytes, startup 8 ms. Four commands and the help text they carry moved it 664 KB from where it stood before them, which the benchmark gate reported and this baseline now records.
+Read the ratios rather than the totals. A cold cache reads its corpus twice and
+writes it twice: once into the destination and once into the cache's own copy,
+which is metadata instead of bytes on a volume that reference counts blocks and
+which no volume in this matrix does. A warm cache reads and writes it once, which
+is the speculative ingest write and has its own record. One 256 MiB file is
+2.000x read and 2.000x written for the same reason, and 3.000x read when it
+compresses, which is the publication-time compression pass. 1024 files of 1 KiB
+cost 1.02 file operations each.
 
-The many hosts ratio is mostly not transfer cost. That regime injects 100 ms of latency into 40 requests and rate limits one host. Most of the time measured is backoff this run waits out one request at a time, because a host asking to be left alone drives its concurrency back to one. The alternative waits out none of it.
+Peak memory is 7.5 to 21 MB across every regime including the 256 MiB single file
+one. Nothing is ever loaded whole. The binary is 9,667,072 bytes on Windows and
+8,815,488 on Linux.
+
+The many hosts regimes are mostly not transfer cost. They inject 100 ms of
+latency into 40 requests and rate limit one host, and most of what a clock would
+show is backoff this run waits out one request at a time, because a host asking
+to be left alone drives its concurrency back to one.
 
 ### What a volume accepts
 
@@ -215,3 +235,28 @@ ms of a 2500 ms run on a 32 MB tar.gz. Only the enumeration is avoidable, and it
 exists because selection, the plan and the bomb guard all take the whole member
 list as input and reject before anything is written. Zip pays none of it, which
 is what a central directory is for.
+
+### The floor of each stage
+
+Derived from the contracts before any of it was measured, kept because knowing
+what a stage cannot avoid is what makes a measurement of it readable. Where the
+measurement disagreed, the measurement is what the sections above record.
+
+| Stage | What it cannot avoid | It is falling short if |
+|---|---|---|
+| resolve | One stat and one small read per document consulted; one round trip for a network reference | It consults the network for something a lock pins, or re-reads one document per artifact |
+| plan | Nothing. It is arithmetic over what resolve produced | It stats the destination or the cache per artifact |
+| source-select | Nothing when a lock pins the source; one probe per candidate otherwise, bounded by the probe limit | It probes candidates it will not use, or probes serially |
+| transfer | The object length once, one connect and one handshake per host per run, one request per object | A handshake repeats per object, a resume refetches verified bytes, or a rung falls to a restart where a range would serve |
+| hash | One pass, capped by SHA-256 | Anything hashes an object twice on a path that already has the digest |
+| verify | Zero additional bytes during transfer; five stat fields on a fingerprint hit; one full read under `--verify always` | It reads bytes the fingerprint settled |
+| store | A rename for an object that arrived over the network; one read and one write for one already local, or metadata where the volume clones | A locally sourced object moves more times than that |
+| compress | The head read once and four level-1 compressions of 1 MiB for a decision, and no rewrite when the answer is raw | A raw decision costs a full extra read and write |
+| unpack | One pass for tar, one seek and one directory read for zip | Validation walks the archive and extraction walks it again |
+| reconcile | One directory walk and one stat per entry | It reads bytes the fingerprint settled |
+| publish | One rename per published tree, one directory flush under a strict tier | It is per file |
+| record | One small write and one rename, once per run | It is once per object |
+
+Two of those are where the findings were. `store` and `compress` between them are
+the two reads and two writes of a locally sourced object, and `record` at two file
+operations each is what made the session record visible in the counters.
