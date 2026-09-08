@@ -64,6 +64,7 @@ pub struct NativePlatform {
     degradations: DegradeQueue,
     refused_cloning: std::sync::Mutex<std::collections::BTreeSet<std::ffi::OsString>>,
     work: std::sync::Arc<fetchloom_engine::work::WorkCounter>,
+    probes_in: std::sync::Mutex<Option<PathBuf>>,
 }
 
 impl NativePlatform {
@@ -73,7 +74,50 @@ impl NativePlatform {
             degradations: DegradeQueue::new(),
             refused_cloning: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             work,
+            probes_in: std::sync::Mutex::new(None),
         }
+    }
+
+    fn probe_memo(&self, probe_directory: &Path) -> Option<PathBuf> {
+        let directory = self
+            .probes_in
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        let volume = imp::volume_id(probe_directory).ok()?;
+        Some(directory.join(format!("volume-{:016x}", volume.value())))
+    }
+
+    fn recalled_path_length(&self, probe_directory: &Path) -> Option<u32> {
+        let path = self.probe_memo(probe_directory)?;
+        let boot = imp::boot_id()?;
+        let held = std::fs::read_to_string(&path).ok()?;
+        let (recorded, length) = held.trim_end().split_once(' ')?;
+        if recorded != boot.as_str() {
+            return None;
+        }
+        length.parse().ok()
+    }
+
+    fn remember_path_length(&self, probe_directory: &Path, length: u32) {
+        let Some(path) = self.probe_memo(probe_directory) else {
+            return;
+        };
+        let Some(boot) = imp::boot_id() else {
+            return;
+        };
+        let mut beside = path.as_os_str().to_owned();
+        beside.push(format!(".{}.writing", std::process::id()));
+        let beside = PathBuf::from(beside);
+        if std::fs::write(&beside, format!("{} {length}", boot.as_str())).is_err() {
+            return;
+        }
+        self.work.touched_file();
+        if std::fs::rename(&beside, &path).is_err() {
+            let _ = std::fs::remove_file(&beside);
+            return;
+        }
+        self.work.touched_file();
     }
 
     #[must_use]
@@ -187,8 +231,22 @@ impl Platform for NativePlatform {
         Ok(imp::volume_backing(path))
     }
 
+    fn remember_probes_in(&self, directory: &Path) {
+        *self
+            .probes_in
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(directory.to_path_buf());
+    }
+
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {
-        imp::volume_capabilities(probe_directory, &self.degradations)
+        let remembered = self.recalled_path_length(probe_directory);
+        let mut measured =
+            imp::volume_capabilities(probe_directory, &self.degradations, remembered)?;
+        match remembered {
+            Some(length) => measured.max_path_length = length,
+            None => self.remember_path_length(probe_directory, measured.max_path_length),
+        }
+        Ok(measured)
     }
 
     fn processor_capabilities(&self, requested: Option<NonZeroUsize>) -> ProcessorCapabilities {

@@ -33,6 +33,7 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
 pub(crate) fn capabilities(
     directory: &Path,
     degradations: &DegradeQueue,
+    remembered_path_length: Option<u32>,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
     let folding = fold_probe(directory, degradations)?;
@@ -44,7 +45,7 @@ pub(crate) fn capabilities(
     let decided = if let Some(found) = held {
         found
     } else {
-        let measured = measure(directory, volume, folding)?;
+        let measured = measure(directory, volume, folding, remembered_path_length)?;
         cache()
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -71,6 +72,7 @@ fn measure(
     directory: &Path,
     volume: VolumeId,
     folding: (CaseFolding, Normalization),
+    remembered_path_length: Option<u32>,
 ) -> Result<VolumeCapabilities, Error> {
     let handle = ffi::open_for_query(directory)
         .map_err(|reason| filesystem_failure(Surface::Destination, directory, &reason))?;
@@ -90,11 +92,9 @@ fn measure(
         symlink,
         hard_link: information.flags & FILE_SUPPORTS_HARD_LINKS != 0,
         max_component_length: information.max_component_length,
-        max_path_length: crate::pathlen::measure(
-            directory,
-            &PATH_LENGTHS,
-            information.max_component_length,
-        ),
+        max_path_length: remembered_path_length.unwrap_or_else(|| {
+            crate::pathlen::measure(directory, &PATH_LENGTHS, information.max_component_length)
+        }),
         backing: if ffi::is_remote_drive(directory) {
             Backing::Network
         } else {

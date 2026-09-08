@@ -99,8 +99,9 @@ pub(crate) fn fingerprint(path: &Path) -> Result<Fingerprint, Error> {
 pub(crate) fn volume_capabilities(
     probe_directory: &Path,
     degradations: &DegradeQueue,
+    remembered_path_length: Option<u32>,
 ) -> Result<VolumeCapabilities, Error> {
-    probe::capabilities(probe_directory, degradations)
+    probe::capabilities(probe_directory, degradations, remembered_path_length)
 }
 
 pub(crate) fn detected_parallelism() -> NonZeroUsize {

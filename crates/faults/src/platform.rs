@@ -74,6 +74,10 @@ impl<P: Platform> Platform for FaultyPlatform<P> {
         self.inner.volume_backing(path)
     }
 
+    fn remember_probes_in(&self, directory: &Path) {
+        self.inner.remember_probes_in(directory);
+    }
+
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {
         self.gate(Operation::VolumeCapabilities)?;
         self.inner.volume_capabilities(probe_directory)

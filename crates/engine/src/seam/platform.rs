@@ -68,6 +68,12 @@ pub trait Platform: Send + Sync {
     /// nothing is `Backing::Unknown` rather than an error.
     fn volume_backing(&self, path: &Path) -> Result<Backing, Error>;
 
+    /// Where an answer that holds for a whole boot may be kept, so a probe
+    /// costing more than the run it precedes is paid once per volume per boot
+    /// rather than once per process. A platform told nothing measures
+    /// everything, every time.
+    fn remember_probes_in(&self, directory: &Path);
+
     /// # Errors
     /// When the probe directory cannot be written. A capability the probe
     /// cannot decide is reported as unknown rather than as an error.

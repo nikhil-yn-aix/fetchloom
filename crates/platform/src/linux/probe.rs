@@ -27,6 +27,7 @@ fn cache() -> &'static Mutex<HashMap<u64, VolumeCapabilities>> {
 pub(super) fn capabilities(
     directory: &Path,
     degradations: &DegradeQueue,
+    remembered_path_length: Option<u32>,
 ) -> Result<VolumeCapabilities, Error> {
     let volume = super::volume_id(directory)?;
     let folding = fold_probe(directory, degradations)?;
@@ -38,7 +39,7 @@ pub(super) fn capabilities(
     let decided = if let Some(found) = held {
         found
     } else {
-        let measured = measure(directory, folding)?;
+        let measured = measure(directory, folding, remembered_path_length)?;
         cache()
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -64,6 +65,7 @@ pub(super) fn capabilities(
 fn measure(
     directory: &Path,
     folding: (CaseFolding, Normalization),
+    remembered_path_length: Option<u32>,
 ) -> Result<VolumeCapabilities, Error> {
     let symlink = symlink_probe(directory);
     let hard_link = hard_link_probe(directory);
@@ -78,11 +80,9 @@ fn measure(
         symlink,
         hard_link,
         max_component_length: max_component_length(directory),
-        max_path_length: crate::pathlen::measure(
-            directory,
-            &PATH_LENGTHS,
-            max_component_length(directory),
-        ),
+        max_path_length: remembered_path_length.unwrap_or_else(|| {
+            crate::pathlen::measure(directory, &PATH_LENGTHS, max_component_length(directory))
+        }),
         backing: backing(directory),
         scanner,
         compresses: compression_probe(directory),

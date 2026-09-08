@@ -120,6 +120,7 @@ impl<P: Platform> Cache<P> {
         check_one_volume(&platform, &layout)?;
         check_locking(&platform, &layout)?;
 
+        platform.remember_probes_in(&layout.meta());
         let capabilities = platform.volume_capabilities(&layout.objects())?;
         let degradations = DegradeQueue::new();
         let io_mode = resolve_io_mode(

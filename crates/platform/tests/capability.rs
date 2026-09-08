@@ -602,3 +602,58 @@ fn the_path_length_is_measured_on_the_volume_and_not_assumed_from_the_platform()
         "the same volume answered two different path lengths"
     );
 }
+
+#[test]
+fn an_answer_this_boot_already_measured_is_read_rather_than_measured_again() {
+    let scratch = support::scratch();
+    let memo = scratch.path().join("memo");
+    std::fs::create_dir_all(&memo).unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let volume = platform.volume_id(scratch.path()).unwrap();
+    let boot = platform.owner_token().unwrap().boot;
+    std::fs::write(
+        memo.join(format!("volume-{:016x}", volume.value())),
+        format!("{} 4242", boot.as_str()),
+    )
+    .unwrap();
+
+    platform.remember_probes_in(&memo);
+    let found = platform.volume_capabilities(scratch.path()).unwrap();
+
+    assert_eq!(
+        found.max_path_length, 4242,
+        "the probe ran again over a volume whose answer this boot had already recorded, which is \
+         the whole cost the recording exists to remove"
+    );
+}
+
+#[test]
+fn an_answer_another_boot_measured_is_measured_again() {
+    let scratch = support::scratch();
+    let memo = scratch.path().join("memo");
+    std::fs::create_dir_all(&memo).unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let volume = platform.volume_id(scratch.path()).unwrap();
+    let recorded = memo.join(format!("volume-{:016x}", volume.value()));
+    std::fs::write(&recorded, "a-boot-this-machine-is-not-in 4242").unwrap();
+
+    platform.remember_probes_in(&memo);
+    let found = platform.volume_capabilities(scratch.path()).unwrap();
+
+    assert!(
+        found.max_path_length > 0,
+        "a volume whose recorded answer was refused reported no limit at all"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&recorded)
+            .unwrap()
+            .split_once(' ')
+            .map(|(boot, _)| boot.to_owned()),
+        Some(platform.owner_token().unwrap().boot.as_str().to_owned()),
+        "the stale answer was left where the next run will read it again"
+    );
+}

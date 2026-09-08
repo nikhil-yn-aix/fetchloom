@@ -578,14 +578,24 @@ fn write_corpus(into: &Path) -> Result<(), BenchError> {
     Ok(())
 }
 
+/// A corpus no compressor shrinks, because a regime named for one enormous
+/// file exists to measure what a run does with bytes rather than what zstd
+/// does with a pattern. The shape before this one repeated every 251 bytes, so
+/// 256 MiB of it stored as 109,034 and both large regimes measured the
+/// compressed publication path with its extra full read.
 fn non_repeating_bytes(index: usize, length: usize) -> Vec<u8> {
-    let seed = u8::try_from(index % 251).unwrap_or(0);
-    let mut bytes: Vec<u8> = (0..length)
-        .map(|offset| {
-            let offset = u8::try_from(offset % 251).unwrap_or(0);
-            offset.wrapping_mul(seed).wrapping_add(seed)
-        })
-        .collect();
+    let mut state = u64::try_from(index)
+        .unwrap_or(0)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        | 1;
+    let mut bytes = Vec::with_capacity(length + 8);
+    while bytes.len() < length {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        bytes.extend_from_slice(&state.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes());
+    }
+    bytes.truncate(length);
     for (at, byte) in index.to_le_bytes().iter().enumerate() {
         if let Some(slot) = bytes.get_mut(at) {
             *slot = *byte;
@@ -1612,6 +1622,30 @@ mod tests {
         assert!(
             compare(&recorded, &current).is_err(),
             "a run that stopped producing a metric the baseline carries passed the gate"
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a probe that cannot decide is the assertion"
+    )]
+    fn the_corpus_every_regime_is_measured_against_is_one_no_compressor_shrinks() {
+        let bytes = super::non_repeating_bytes(
+            3,
+            fetchloom_engine::compression::PROBE_HEAD_BYTES.saturating_mul(2),
+        );
+        let decision = fetchloom_cache::compress::decide(
+            &bytes,
+            fetchloom_engine::compression::CompressionChoice::Auto,
+        )
+        .unwrap();
+        assert_eq!(
+            decision.stored,
+            fetchloom_engine::compression::Stored::Raw,
+            "the benchmark corpus compresses, so every regime named for a large object measures \
+             the compressed publication path and its extra full read rather than the object: {}",
+            decision.reason()
         );
     }
 

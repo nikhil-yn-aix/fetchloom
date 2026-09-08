@@ -99,6 +99,30 @@ Peak memory is 8.4 MB on every regime including the 256 MiB single file one. Not
 
 The many hosts ratio is mostly not transfer cost. That regime injects 100 ms of latency into 40 requests and rate limits one host. Most of the time measured is backoff this run waits out one request at a time, because a host asking to be left alone drives its concurrency back to one. The alternative waits out none of it.
 
+### What a volume accepts
+
+The longest path a volume takes cannot be queried, only built. On Windows the two
+candidates are 32,767 and 260, so measuring it meant building a chain of 139
+nested 255-character directories, writing into it, failing, and removing the
+chain: 325 to 450 ms, against 0.7 ms for the answer that turns out to be right.
+That was 78 percent of a run that fetched nothing and correctly said `unchanged`.
+
+The probe is still the authority. What changed is how often it runs: a cache
+records the answer in `meta/volume-<volume id>` against the boot that measured it,
+and a run whose cache holds a record for this boot and this volume reads it. Warm
+`get`, twelve runs each, this machine: 105–131–187 ms with the record against
+499–652–991 ms without it. `cache status`: 77 to 109 ms against 442 to 622 ms,
+where `fetchloom --version` opens no cache at all and costs 92 to 174 ms.
+
+Disabling it is removing the record, which the next run rewrites, and `--no-cache`
+measures every time because a scratch store holds no record from a previous run.
+Neither disables a check: the answer is still the volume's own, and a record from
+another boot is refused rather than trusted.
+
+Linux pays the same shape and almost none of the cost. Its candidates are 4096 and
+255, so the chain is sixteen directories, and 4096 is refused on ext4 exactly as
+32,767 is on NTFS. Timed on ext4, five rounds: 3.0 to 3.7 ms for the whole probe.
+
 ### Asking what changed
 
 `status` answers from the record where it can and reads bytes where it cannot. Medians of three, release, on the same machine.
@@ -128,6 +152,8 @@ Three things follow. Parallel BLAKE3 is slower than serial below 1 MiB and faste
 Every performance claim above comes from a repeatable harness, not from a one off run. Timings are medians with quartiles, because this machine has measured the same regime at 773, 2364 and 4165 ms across identical runs. Where an interquartile range overlaps, there is no result.
 
 The corpus is a choice, not a sample of what users fetch: text, columnar, precompressed, images, genomics, audio, many small files, one large file, and consecutive releases of three real datasets. Anything phrased as across the corpus inherits that.
+
+The regime harness has a corpus of its own, and until it was measured it repeated every 251 bytes, so 256 MiB of it stored as 109,034 and the regime named for one enormous file was measuring the compressed publication path. It is a stream no compressor shrinks now, a unit test asserts that against the product's own probe, and every regime number recorded before that boundary was taken against a different corpus than every number recorded after it.
 
 ## Rules that do not move
 

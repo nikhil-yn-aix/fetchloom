@@ -12669,3 +12669,148 @@ the only reason the second run was ever slow. The gate is on the condition being
 waited for, which is what CONTRIBUTING asks of every wait, and the function now
 asserts `cache.wait` by name rather than leaving the aggregate to report a
 missing event with no clue which run should have emitted it.
+
+## The benchmark corpus compressed, so two regimes measured the wrong path
+
+Question: `bench::non_repeating_bytes` built `offset % 251 * seed + seed`, which
+has period 251. What did every regime built on it actually measure.
+
+Chosen: the corpus is a stream no compressor shrinks, and a unit test asserts it
+against the product's own probe rather than against a ratio picked here.
+
+The old shape compressed 256 MiB to 109,034 bytes. `one-large-file`'s recorded
+`bytes-written` of 536,979,946 is `2 x 268,435,456 + 109,034`, and that 109,034
+is the whole object. So the regime named for one enormous file measured the
+compressed publication path with its extra full read, and `cold-transfer`
+measured a 4 MiB object stored as 1,482 bytes. Real scientific data is already
+compressed and takes neither path.
+
+What moved, measured on this machine at three iterations, the corpus being the
+only change:
+
+| Regime | Metric | Compressible corpus | Corrected corpus |
+| --- | --- | --- | --- |
+| cold-cache | cache-growth | 31,074 | 16,782,440 |
+| cold-cache | bytes-written | 16,803,066 | 33,554,432 |
+| cold-transfer | bytes-written | 8,390,090 | 8,388,608 |
+| cold-transfer | file-operations | 45 | 40 |
+| interrupted-transfer | bytes-written | 8,390,090 | 8,388,608 |
+| interrupted-transfer | file-operations | 63 | 58 |
+| many-small-files | bytes-written | 1,285,286 | 2,097,152 |
+| one-large-file | bytes-read | 805,306,368 | 536,870,912 |
+| one-large-file | bytes-written | 536,979,946 | 536,887,240 |
+| one-large-file | file-operations | 34 | 32 |
+| many-hosts-concurrency | bytes-written | 4,199,577 | 6,291,456 |
+| many-hosts-backoff | bytes-written | 4,199,577 | 6,291,456 |
+| constrained-network | bytes-written | 4,195,062 | 4,194,304 |
+| constrained-network | file-operations | 45 | 40 |
+
+The left column is the committed baseline moved by the eight metrics
+`docs/perf-audit.md` measured this tree changing since it was recorded, and every
+other metric reproduced that baseline to the byte, so it is exact rather than
+remembered.
+
+Three of those are the finding rather than the fix. `one-large-file` read 3.000x
+its source and now reads 2.000x: the third read was the compression pass and
+nothing else, so a locally sourced object is read twice, not three times, unless
+it compresses. `cold-cache` wrote 1x the corpus and now writes 2x, which was
+never a property of packing; the pack entry was simply the corpus compressed to
+nothing. And `cold-cache` reported a cache holding a 16 MiB corpus as having
+grown by 31,074 bytes, which read as a packing result and was a compression one.
+
+
+Which earlier records this invalidates:
+
+- **Three findings that get a disposition rather than a fix**, on every cold
+  local fetch writing the bytes twice, priced the shape at `805322696` bytes
+  written for a `268435456`-byte source and read that as the destination, the
+  cache copy and the tree. Against a corpus that does not compress the number is
+  `536887240`, which is the destination and the cache copy, and the third term
+  was the compressed rewrite. The finding stands. Its arithmetic does not.
+- **What the counters said the first time they ran** records `cold-cache`
+  bytes-written at 16,777,216 and reads it as the speculative ingest write. That
+  reading is right and the number was right for a reason nobody stated: the
+  corpus was reported once because the second copy compressed away. It is
+  33,554,432 now and the conclusion is unchanged.
+- Every `one-large-file` and `cold-transfer` wall time in this log was taken
+  against an object that compressed. They were never gated and are not corrected
+  here, but a comparison across that boundary is not one.
+
+Costs: a re-baseline of twelve deterministic metrics, which this session was
+re-baselining anyway. Generating 256 MiB costs a multiply and three shifts per
+eight bytes rather than a modulo per byte, so it is cheaper than what it replaces.
+
+Uncertain: nothing about the corpus. Whether a regime that measures the
+compressed path should exist at all is a separate question, and the answer here
+is that `crates/cache/tests/compression.rs` proves the path and no regime needs
+to.
+
+Sources: `cargo xtask bench --iterations 3` on this machine before and after;
+`xtask/src/bench.rs`; `docs/perf-audit.md` F5.
+
+## What a volume accepts is measured once per boot rather than once per run
+
+Question: `Platform::volume_capabilities` measured 362 to 414 ms on its first
+call in every process, and `pathlen::measure` inside it was 325 to 450 ms of
+that. `PATH_LENGTHS` on Windows is `[32_767, 260]`, so every run built a chain of
+139 nested 255 character directories, wrote into it, failed, removed the chain
+recursively, and then got the right answer, 260, in 0.7 ms. That was 78 percent
+of a run that correctly reported `unchanged`.
+
+Chosen: the probe stays the authority and its answer is recorded beside the cache
+in `meta/volume-<volume id>`, holding the boot that measured it and the length it
+measured. A run whose cache holds a record naming this boot and this volume reads
+it. A record from another boot is refused and replaced.
+
+Rejected: reading `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`
+`LongPathsEnabled` instead. It is per machine where the probe is per volume, and
+long path support is also gated by the executable's manifest, so a registry read
+alone can claim more than the volume gives. The probe measures what the process
+will actually get.
+
+Rejected: reversing `PATH_LENGTHS` so the cheap candidate is tried first. It is
+not an optimization, it is a different answer. `measure` returns the first
+candidate the volume accepts, so `[260, 32_767]` returns 260 on every volume
+including one that accepts 32,767, and long path support would stop being
+detected. Making it return the largest accepted candidate means trying both,
+which is the cost being removed. This is written down so it is not tried again.
+
+Measured on this machine, same binary, the only difference being whether the
+record was present. Warm `get` over one 4 MiB object, twelve runs each:
+
+| | min | median | max |
+| --- | --- | --- | --- |
+| record present | 105 | 131 | 187 |
+| record removed before each run | 499 | 652 | 991 |
+
+`cache status`, ten runs each: 77 to 109 ms against 442 to 622 ms. For scale,
+`fetchloom --version`, which opens no cache, is 92 to 174 ms on the same machine,
+so `cache status` now sits at process start rather than above it. The
+distributions do not overlap in either pair.
+
+Linux was measured too, because the finding was Windows shaped and the mechanism
+is not. `PATH_LENGTHS` there is `[4096, 255]` against a 255 byte component, so
+the chain is sixteen directories rather than 139, and 4096 is refused on ext4
+exactly as 32,767 is refused on NTFS. Reimplemented byte for byte and timed on
+ext4 under WSL2, five rounds: the whole probe is 3.0 to 3.7 ms, of which the
+refused 4096 attempt is 2.4 to 3.1 ms. Same shape, two orders of magnitude
+cheaper, and the same record serves it.
+
+Costs: two file operations on the first run of a boot against a cache, and none
+after. A cache is what holds the record, so a run with no cache still measures;
+there is no run with no cache that this matters to, because a run with no cache
+still opens a scratch store. The record can be stale within one boot if long path
+support is switched on or off while the machine is up, and the direction that
+matters is conservative: a record saying 260 makes a run refuse a path the volume
+would now take, and a record saying 32,767 makes a run try one the volume now
+refuses and report the platform's own error. Neither serves wrong bytes.
+
+Uncertain: whether the in process cache and the recorded answer should be one
+mechanism rather than two. They agree, because both are keyed by volume and the
+record is consulted first, but a memo read into the in process cache is no longer
+a measurement and a test that shares a process with another test can see that.
+`an_answer_another_boot_measured_is_measured_again` asserts the record is
+rewritten rather than asserting the length, for that reason and it says so.
+
+Sources: `crates/platform/src/lib.rs`, `crates/platform/tests/capability.rs`,
+`docs/perf-audit.md` F1.

@@ -266,7 +266,9 @@ Splitting may change timing. It may never change bytes or digests.
   staging/     extraction trees not yet published
   quarantine/  objects that failed verification, with a diagnosis beside each
   receipts/    one receipt per materialized destination
-  meta/        resolution metadata, per host measurements, witnesses
+  meta/        resolution metadata, per host measurements, witnesses, and the
+               longest path each volume accepted, recorded against the boot
+               that measured it
   locks/       advisory single writer locks
   pins/        pin records
   format       cache format fingerprint
@@ -636,6 +638,8 @@ Detected per destination and per cache volume, reported in plans and results: ca
 A volume's capability answer is decided once. The first detection decides it and every later question in the same run gets that answer, so two callers asking at the same time are never given different ones. Case folding and normalization are measured per directory, so an answer carries the pair measured for the directory asked about.
 
 A capability the platform reports is queried. One it does not report is probed inside Fetchloom's own staging directory, never by writing into the user's destination. A probe never uses a fixed name, because an already exists result is how a probe reads the filesystem's answer and another probe's file would be read as that answer.
+
+The longest path a volume accepts is measured by building one, which costs more than the run it precedes, so a cache records the answer against the volume that gave it and the boot that measured it. A run reaching a cache whose record names this boot and this volume reads that answer instead of measuring again; a record from any other boot is refused and replaced. The probe stays the authority, and nothing is assumed from the platform's name or from a machine wide setting, because what a volume accepts is a property of the volume and of the running executable rather than of Windows or Linux. A cache is what holds the record, so a run with no cache measures.
 
 An on access scanner is reported, never worked around.
 
