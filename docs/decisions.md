@@ -12418,8 +12418,9 @@ redacted.
 
 ## What closing the audit found in the product
 
-Four defects, each found by a test written to close a finding rather than by
-reading.
+Five defects, each found by a test written to close a finding rather than by
+reading. The fifth has its own record below, because the lane that found it is
+the argument for the rule this session was built on.
 
 **A candidate this run had never measured outranked one it had.** `candidate.rs`
 orders on throughput descending by swapping the arguments to a comparison that
@@ -12612,3 +12613,29 @@ this.
 What it would take: run `cargo xtask bench --save-baseline` on a host that can
 build the volumes the script asks for, and record the two components above beside
 the new number so the next reader knows which is deliberate.
+
+## A pack carried whatever umask the process had, and the shared cache quietly became single user
+
+The test written to close the audit's mode-bits finding declines on Windows and
+had never run anywhere until the Linux lane ran it. It failed on the first
+attempt: under a umask of 077, `packs/<boot>-<pid>.pack` is created 0600.
+
+contracts.md states that objects are readable by every user and writable only by
+their creator, and that a cache directory may be used by several users at once
+with one behaviour rather than two. An object published above the pack threshold
+is sealed 0444 the moment it lands. An object at or below it goes into a pack,
+and nothing set the pack's mode, so it inherited the umask of whichever process
+happened to create it. Every object small enough to be packed — which is every
+object under a mebibyte, so most of them — was unreadable by the other users the
+shared cache promises can read it. Nothing failed. The second user simply got a
+permission error from a cache it was told it could share.
+
+Chosen: a pack takes 0644 when it is created and when compaction or pruning
+rewrites it. Not the 0444 an object takes, because a pack is appended to; the
+immutability an object gets from never being written again is not a property a
+pack has.
+
+This is the clearest argument in the session for the rule the whole thing was
+about. The test could not run on the machine the work was done on, it declined by
+name rather than passing in silence, and the lane that could run it found a
+defect that had been there since packs were written.

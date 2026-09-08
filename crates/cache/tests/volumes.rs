@@ -237,7 +237,7 @@ fn an_object_is_readable_by_every_user_whatever_umask_wrote_it() {
             for entry in std::fs::read_dir(&directory).unwrap().flatten() {
                 let path = entry.path();
                 let held = path.extension().and_then(std::ffi::OsStr::to_str);
-                if !matches!(held, None | Some("z") | Some("pack")) {
+                if !matches!(held, None | Some("z" | "pack")) {
                     continue;
                 }
                 let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
