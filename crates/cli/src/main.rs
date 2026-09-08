@@ -34,7 +34,7 @@ use fetchloom_cli::surface::{Command, CommandLine};
 use fetchloom_cli::terminal::Streams;
 use fetchloom_cli::{Reporter, command, config, run, settings, surface, terminal};
 
-#[cfg(all(target_env = "musl", feature = "mimalloc"))]
+#[cfg(target_env = "musl")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

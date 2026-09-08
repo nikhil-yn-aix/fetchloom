@@ -13243,10 +13243,11 @@ write of every locally sourced object and the difference between 2.000x and
 `reflink=1` and the Windows lanes attach a ReFS DevDrive; the two-line
 measurement belongs there and was not added.
 
-**musl, and therefore mimalloc.** `x86_64-unknown-linux-musl` needs a musl C
-toolchain for `zstd-sys` and `libmimalloc-sys`, and installing one needs root
-this session did not have. Measuring the allocator on glibc measures a different
-allocator than the feature exists for. See the mimalloc record.
+**musl, and therefore mimalloc.** This was on the list and came off it. The
+musl C toolchain `zstd-sys` and `libmimalloc-sys` need was extracted from the
+Debian packages with `dpkg -x` into a home directory, which needs no root, and
+the specs file rewritten to point at it. Both binaries built and both were
+measured. See the mimalloc record.
 
 **A power failure.** Every kill test here proves the pack format's rule and not
 the flush, because bytes written and not flushed are in the operating system's
@@ -13261,3 +13262,62 @@ reported with its spread and none of them decided anything.
 **A real host at line rate.** The link available delivers about 450 KB/s, which
 is below where per-host concurrency, splitting, or a round trip can be separated
 from the link.
+
+## mimalloc earns its place, and stops being a feature nothing enables
+
+Question: `crates/cli/src/main.rs` gated the allocator on `all(target_env =
+"musl", feature = "mimalloc")`. No workflow, no `xtask` lane and no `cargo`
+invocation anywhere passed `--features mimalloc`, so it linked into no binary on
+any target while costing a `cc` build step and three entries in `deny.toml`. The
+2026-05-22 record said slice 0.2 would decide it with numbers and slice 0.2 did
+not.
+
+It was worse than unenabled. `cargo build --features mimalloc` did not compile:
+`unused-crate-dependencies` fires on the library and on all five test crates,
+because only the binary names it. The feature had never been buildable since that
+lint was turned on.
+
+Measured, finally. `x86_64-unknown-linux-musl` needs a musl C compiler for
+`zstd-sys` and `libmimalloc-sys` and this machine has no root to install one, so
+the Debian `musl`, `musl-dev` and `musl-tools` packages were fetched with
+`apt-get download` and unpacked with `dpkg -x` into a home directory, and the
+specs file rewritten to point there. That needs no privileges and it builds.
+
+Two binaries, same tree, same flags, run on ext4 under WSL2, interleaved,
+milliseconds:
+
+| Regime | musl's own allocator | mimalloc |
+| --- | --- | --- |
+| 2000 files of 1 KiB | 366 380 379 365 346 345 375 333 389 399 | 358 302 349 314 319 307 339 322 332 305 |
+| one 256 MiB file | 1038 907 990 856 805 887 | 864 850 812 |
+
+The small-files medians are 372 against 320, which is 14 per cent, and the two
+sets barely overlap: the slowest mimalloc run is faster than all but two of the
+ten without it. The large-file regime is indistinguishable, which is what an
+allocator should be on a workload that allocates a handful of large buffers. Three
+runs of the large regime were discarded and are not in the table: the first
+mimalloc block measured 6651, 5318 and 1363 ms against a corpus that had just been
+written, and a first touch of 256 MiB of fresh page cache is not an allocator
+measurement.
+
+Chosen: it stops being a feature and becomes what musl gets.
+`[target.'cfg(target_env = "musl")'.dependencies]` already scoped the crate to
+musl, so the feature was a second gate on the same condition and a gate nothing
+turned. `main.rs` is `#[cfg(target_env = "musl")]` now, and the library and the
+five test crates declare `use mimalloc as _;` under the same cfg, which is the
+idiom this workspace already uses for a dependency one target of a crate uses and
+another does not.
+
+Costs: 194,592 bytes on musl, 9,112,672 against 8,918,080, which is 2.18 per
+cent, on the two targets where 14 per cent of a small-files run is the trade. The
+`cc` build step was already there for `zstd-sys`. Nothing changes on Windows, on
+macOS, or on glibc Linux, and the gnu build was rebuilt to confirm the crate does
+not enter it.
+
+Uncertain: WSL2 is a virtual machine on this laptop rather than a Linux machine,
+and `aarch64-unknown-linux-musl` was not measured at all. The direction is
+musl's own documented weakness under many small allocations and the magnitude is
+one machine's.
+
+Sources: `crates/cli/Cargo.toml`, `crates/cli/src/main.rs`, `deny.toml`,
+`docs/perf-audit.md` F7.

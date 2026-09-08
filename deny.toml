@@ -102,7 +102,7 @@ allow = [
   { crate = "log", reason = "the logging facade ureq writes through, with no subscriber installed" },
   { crate = "lzma-rust2", reason = "the xz decoder, chosen in the formats record because it is pure Rust" },
   { crate = "memchr", reason = "substring search for serde_json" },
-  { crate = "mimalloc", reason = "the allocator on the two musl targets, chosen in the toolchain record" },
+  { crate = "mimalloc", reason = "the allocator on the two musl targets, where it is 13 percent on the many-small-files regime against musl's own and 194,592 bytes of binary" },
   { crate = "miniz_oxide", reason = "the pure-Rust inflate backend flate2 decodes with" },
   { crate = "nix", reason = "the Unix signal handling ctrlc installs its handler through" },
   { crate = "once_cell", reason = "the one-time detection cpufeatures caches and the one-time initialization rustls and ureq hold their state in" },

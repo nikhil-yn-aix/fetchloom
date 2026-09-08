@@ -12,6 +12,8 @@ use fetchloom_platform as _;
 use fetchloom_sources as _;
 use fetchloom_view as _;
 use flate2 as _;
+#[cfg(target_env = "musl")]
+use mimalloc as _;
 #[cfg(unix)]
 use rustix as _;
 use serde as _;

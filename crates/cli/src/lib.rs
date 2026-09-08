@@ -6,6 +6,8 @@ use ctrlc as _;
 use fetchloom_faults as _;
 #[cfg(test)]
 use flate2 as _;
+#[cfg(target_env = "musl")]
+use mimalloc as _;
 #[cfg(all(test, unix))]
 use rustix as _;
 #[cfg(test)]
