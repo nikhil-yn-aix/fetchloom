@@ -55,6 +55,7 @@ impl<P: Platform> Cache<P> {
             .create(true)
             .open(&path)
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
+        crate::share_pack(&path)?;
         let mut at = file
             .seek(SeekFrom::End(0))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
@@ -406,6 +407,7 @@ impl<P: Platform> Cache<P> {
         drop(writing);
         drop(source);
         self.platform().publish_file(&beside, pack, self.tier())?;
+        crate::share_pack(pack)?;
         drop(held);
         self.forget_pack(pack);
         for (digest, entry) in moved {
@@ -467,6 +469,7 @@ impl<P: Platform> Cache<P> {
         self.platform().flush(&writing, self.tier())?;
         drop(writing);
         self.platform().publish_file(&beside, pack, self.tier())?;
+        crate::share_pack(pack)?;
         drop(held);
         self.forget_pack(pack);
         for (digest, entry) in moved {

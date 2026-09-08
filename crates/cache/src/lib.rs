@@ -54,6 +54,12 @@ const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 #[cfg(unix)]
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
+/// A pack holds objects and is appended to, so it carries what contracts.md
+/// states an object carries, minus the immutability an object gets by never
+/// being written again: readable by every user, writable only by its creator.
+#[cfg(unix)]
+const PACK_MODE: u32 = 0o644;
+
 const LOCK_PROBE: &str = "fetchloom-lock-probe";
 
 /// What a cache was opened with, as opposed to what it holds.
@@ -391,6 +397,23 @@ fn share_directory(directory: &Path) -> Result<(), Error> {
     reason = "the Unix form of this call fails, and one signature keeps the caller written once"
 )]
 fn share_directory(_directory: &Path) -> Result<(), Error> {
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn share_pack(path: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(PACK_MODE))
+        .map_err(|reason| filesystem_failure(Surface::Cache, path, &reason))
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix form of this call fails, and one signature keeps the caller written once"
+)]
+pub(crate) fn share_pack(_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
