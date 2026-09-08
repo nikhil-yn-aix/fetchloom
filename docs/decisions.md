@@ -12872,3 +12872,98 @@ one. That is stated rather than papered over.
 
 Sources: `crates/cache/src/pack.rs`, `crates/cache/src/lib.rs::flush_packs`,
 `crates/cache/tests/interruption.rs`, `docs/perf-audit.md` F2.
+
+## A first cold fetch of one pinned source costs one request
+
+Question: a cold transfer issued a `HEAD` and then a `GET` on one connection.
+At 250 ms of latency the `HEAD` is a whole round trip. What does it answer that
+the `GET`'s own response headers do not.
+
+Chosen: nothing, on a first cold fetch of one source under a digest the manifest
+already states, so that fetch is one request now. Everywhere else the probe
+stays.
+
+The probe answers three questions the response cannot answer early enough. What
+the partial is keyed by, when the key is derived from the metadata rather than
+from a content digest. Where a resume starts, when a partial is already
+recorded. And how wide to split the object, which needs the length before the
+first byte. The skip is taken only where all three are already answered:
+`expected` is a content digest, so the key is known without asking; no partial is
+recorded under it; and no measurement of this host permits splitting. That last
+one is not a guess. `parts_for` refuses with `NoMeasuredGain` unless the recorded
+concurrency for the host is above one, and a first fetch of a host has no
+recorded concurrency, so splitting could never have applied to the request the
+probe was paying for.
+
+Measured: `cold-transfer requests` 2 before, 1 after, and
+`a_cold_fetch_of_one_pinned_source_costs_one_request_rather_than_two` asserts it
+against a local server. The `constrained-network` regime, which injects latency,
+is where the round trip shows.
+
+It found a defect first. Moving the `GET` earlier moved it ahead of the lease,
+and `two_artifacts_naming_the_same_digest_transfer_it_once` failed with two
+transfers where one is the contract. The lease is now claimed before any request
+whenever the digest is known, which is strictly better than what was there: two
+runs wanting one digest used to spend two probes before one of them waited. The
+lease is held across the revalidation round trip now, which is the same lock the
+transfer that follows holds anyway.
+
+Sources: `crates/engine/src/transfer/mod.rs::fetch_unprobed`,
+`crates/cli/tests/transfer/probe.rs`, `docs/perf-audit.md` F4.
+
+## The packed index gate was measuring a constant, and the constant is gone
+
+Question: `run_packed_index` compares `cache status` over 2000 packed objects
+against 4000 and failed above a ratio of 2.0. It measured 1.160 and 1.077, and
+about ninety per cent of both terms was the volume probe.
+
+With the probe recorded once per boot, the same measurement on this machine,
+medians of five: empty cache 92 ms, 2000 objects 135 ms, 4000 objects 190 ms. The
+ratio is 1.407, and the marginal cost has gone from invisible to most of what
+moves.
+
+Chosen: the ceiling is retired and the ratio is published. Not because it stopped
+meaning anything, but because it is a duration, and the decision this session
+made is that a duration is never gated anywhere. A ratio of two on a machine whose
+same-regime spread reaches 2.5x is a coin toss, and it was a coin toss that could
+not fail while the constant diluted it.
+
+What would replace it is a deterministic counter: `cache status` reports no
+`work` object, and one would make "a lookup is walking what it should index" an
+exact question rather than a timed one. That is a contract addition to the
+`cache status` result and it is written down here rather than done.
+
+Sources: `xtask/src/bench.rs::run_packed_index`, `docs/perf-audit.md` F8.
+
+## The benchmark lane runs in CI, gates counters, and never gates a clock
+
+Question: `benchmark` ran nowhere. A baseline recorded on one machine, no
+baseline for a fresh runner, and a run with no baseline records one and passes.
+
+Chosen: it runs on `ubuntu-24.04` and `windows-2025`, gates the deterministic
+counters, publishes the durations, and passes `--deterministic-io`. The baseline
+recorded on this laptop is deleted, and each runner records its own.
+
+The evidence is the audit's, and it is one sided. Twenty consecutive
+`cold-transfer` runs gave `file-operations` 45 every time; two full runs an hour
+apart were bit identical on every deterministic metric in every regime; and every
+number the previous baseline recorded reproduced to the byte a day later at the
+commit that recorded it, except one. Over the same runs wall time spread 1.57x on
+`cold-transfer`, 1.58x on `many-small-files` and 2.50x on startup. A five per cent
+band gates the first set and decorates the second, which is what
+`MetricKind::Timing` already says and a test already asserts.
+
+`--deterministic-io` is not optional for the lane. Without it a run records a per
+host measurement, that record is two file operations, and `file-operations`
+becomes a function of how the network behaved rather than of the code. It is
+documented as "disable adaptation, so two runs do identical work" and this is the
+case it was written for.
+
+The baseline is per target and recorded on the runner that gates it, because a
+counter can depend on what the volume underneath can do: `clone_or_copy` counts
+one operation either way and charges bytes only on the copy path, and no volume
+in this matrix clones. The Windows baseline recorded on this laptop stated counts
+for one volume shape and is deleted rather than carried.
+
+Sources: `.github/workflows/verify.yml`, `xtask/src/bench.rs`, `CONTRIBUTING.md`,
+`docs/perf-audit.md` Phase 0.

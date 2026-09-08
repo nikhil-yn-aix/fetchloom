@@ -127,6 +127,25 @@ fn a_run_with_one_source_spends_no_probe_on_it_and_still_says_what_it_took() {
 }
 
 #[test]
+fn a_cold_fetch_of_one_pinned_source_costs_one_request_rather_than_two() {
+    let workspace = Workspace::new();
+    let bytes = object(9);
+    let only = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    mirrored(&workspace, &[&only], &bytes);
+
+    let run = workspace.run(&["get", "dataset.yaml", "--output", "out", "--json"]);
+    succeeded(&run);
+    let result: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+
+    assert_eq!(
+        result["work"]["requests"].as_u64(),
+        Some(1),
+        "a first fetch of one source under a digest the manifest already states spent {:?} requests, where the response headers of the one that carries the body state everything a probe would have, a round trip earlier",
+        result["work"]["requests"]
+    );
+}
+
+#[test]
 fn a_source_that_serves_ranges_is_taken_over_one_that_does_not() {
     let workspace = Workspace::new();
     let bytes = object(1);

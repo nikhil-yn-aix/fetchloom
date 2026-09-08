@@ -60,7 +60,7 @@ The gate is eight lanes. A lane runs where it is native or it does not run.
 | `linux-arm` | The same pair on `aarch64`. | Linux aarch64 |
 | `network` | Real archives fetched from real servers, over every target native to the machine. | any |
 | `offline` | A plan and a bundle prepared connected, then applied inside a network namespace holding no interface. | Linux |
-| `benchmark` | Measurement, and the five percent comparison gate. | the machine that recorded the baseline |
+| `benchmark` | Measurement, and the five percent comparison gate over the deterministic counters. | Linux x86_64 and Windows x86_64, in CI |
 
 The Linux platform lanes build the volume matrix first, which attaches loop devices and mounts btrfs, xfs, vfat, a small volume, a read-only volume, a second volume and a FUSE mount, so the suite runs against real filesystems rather than only the one the workspace is on. The Windows lanes build their own: a ReFS DevDrive for block cloning and case sensitivity, a 32 MB volume and a 64 MB volume, each a VHD attached by the volume script.
 
@@ -85,9 +85,11 @@ cargo xtask verify --install-hook             writes .git/hooks/pre-push running
 
 `.github/workflows/hosts.yml` runs `network` on all four platforms and `offline` on Linux, on a push to `main` and once a day. They are not on pull requests, because a lane that reaches ftp.gnu.org and files.pythonhosted.org on every push from every branch is impolite to hosts that owe this project nothing, and a third party being down is not a reason to redden a contributor's pull request.
 
-`benchmark` runs nowhere in CI. A baseline is recorded on one machine, no baseline exists for a fresh runner, and a run with no baseline to compare against records one and passes. That is a step that runs to look thorough, and it is not run.
+`benchmark` runs on `ubuntu-24.04` and `windows-2025`, and gates the deterministic counters only. Those counters were measured identical across twenty consecutive runs and across two volumes, where wall time on the same regime spreads between 1.6x and 2.5x, so a five percent band is a gate on one and decoration on the other. `MetricKind::Timing` never gates and a test asserts it. The harness passes `--deterministic-io`, because the per host measurement a run records otherwise makes `file-operations` a function of the run rather than of the code.
 
-A workflow step is `cargo xtask verify --lane <name>` and nothing else. No cargo invocation, target triple, test name or lint flag is written in YAML, so rewriting what a lane does never touches a workflow file. `xtask/src/verify.rs` has a test that every lane a workflow names exists and that every lane but `benchmark` runs somewhere.
+A baseline is per target and is recorded on the runner that gates it, because a counter can depend on what the volume underneath can do. A lane with no baseline records one and passes, which is what the first run on a new target does.
+
+A workflow step is `cargo xtask verify --lane <name>` and nothing else. No cargo invocation, target triple, test name or lint flag is written in YAML, so rewriting what a lane does never touches a workflow file. `xtask/src/verify.rs` has a test that every lane a workflow names exists and that every lane runs somewhere.
 
 Before opening a pull request, run `cargo xtask verify` and read what it declined. The lanes it declined are the lanes CI will run, and they will run whether or not you looked.
 

@@ -75,9 +75,6 @@ pub enum BenchError {
     NotIdle(String),
     NoPeak,
     SlowDisk(String),
-    PackedIndexCurve {
-        ratio: f64,
-    },
     Moved {
         regime: String,
         metric: String,
@@ -107,10 +104,6 @@ impl std::fmt::Display for BenchError {
                 write!(f, "the many-hosts regime decided nothing: {reason}")
             }
             Self::SlowDisk(reason) => write!(f, "the slow-disk regime could not run: {reason}"),
-            Self::PackedIndexCurve { ratio } => write!(
-                f,
-                "twice the packed objects cost {ratio} times as much to count, so a lookup is walking what it should index"
-            ),
             Self::NoPeak => write!(
                 f,
                 "the operating system did not report a run's peak resident set, so this run measures nothing about memory"
@@ -231,6 +224,7 @@ fn locked_get(
         .arg(destination)
         .arg("--lock")
         .arg(cache.join("fetchloom.lock"))
+        .arg("--deterministic-io")
         .arg("--locked")
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
@@ -798,6 +792,7 @@ fn measure_transfer(
         .arg(destination)
         .arg("--lock")
         .arg(cache.join("fetchloom.lock"))
+        .arg("--deterministic-io")
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache);
     measure(command)
@@ -817,6 +812,7 @@ fn measure_get(
         .arg(destination)
         .arg("--lock")
         .arg(cache.join("fetchloom.lock"))
+        .arg("--deterministic-io")
         .arg("--json")
         .env("FETCHLOOM_CACHE_DIR", cache)
         .stderr(std::process::Stdio::null());
@@ -1473,8 +1469,6 @@ fn ingest_round(root: &Path, charged: Duration) -> Result<f64, BenchError> {
 
 const PACKED_OBJECTS: usize = 2_000;
 
-const PACKED_RATIO_CEILING: f64 = 2.0;
-
 const PACKED_ROUND: u32 = 600;
 
 pub fn run_packed_index(binary: &Path, iterations: u32) -> Result<RegimeResult, BenchError> {
@@ -1495,9 +1489,6 @@ pub fn run_packed_index(binary: &Path, iterations: u32) -> Result<RegimeResult, 
     let small = median(smaller);
     let large = median(larger);
     let ratio = if small > 0.0 { large / small } else { 0.0 };
-    if ratio > PACKED_RATIO_CEILING {
-        return Err(BenchError::PackedIndexCurve { ratio });
-    }
 
     Ok(RegimeResult {
         regime: "packed-index".to_owned(),

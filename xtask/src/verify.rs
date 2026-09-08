@@ -1531,12 +1531,9 @@ mod tests {
     }
 
     #[test]
-    fn every_lane_but_the_benchmark_runs_somewhere_in_ci() {
+    fn every_lane_runs_somewhere_in_ci() {
         let named = lanes_the_workflows_name();
         for lane in &LANES {
-            if lane.name == "benchmark" {
-                continue;
-            }
             assert!(
                 named.iter().any(|name| name == lane.name),
                 "{} is a lane no workflow runs",

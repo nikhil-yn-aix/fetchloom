@@ -279,6 +279,52 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
+    /// A first cold fetch of one source, where a `GET`'s own response headers
+    /// state everything a `HEAD` would have stated a round trip earlier. It is
+    /// taken only where the probe can decide nothing the response cannot: the
+    /// key is the content digest rather than something derived from the
+    /// metadata, no partial is recorded under it, and no measurement of this
+    /// host permits splitting the object across ranges. `None` means the probe
+    /// still has a question to answer and the caller asks it.
+    fn fetch_unprobed(
+        &self,
+        expected: Option<ContentDigest>,
+        location: &str,
+    ) -> Result<Option<(SourceMetadata, S::Body)>, Error> {
+        let Some(digest) = expected else {
+            return Ok(None);
+        };
+        if self
+            .store
+            .recorded_source(PartialKey::of_content(digest))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        if (self.measurement)(location).is_some_and(|found| found.concurrency > 1) {
+            return Ok(None);
+        }
+        let credential = self.credential_for(location)?;
+        let served = self
+            .source
+            .fetch(location, None, credential.as_ref(), None)?;
+        Ok(Some((served.metadata, served.body)))
+    }
+
+    fn announce(&self, metadata: &SourceMetadata, rung: ResumeRung, keep: u64) {
+        self.emit(EventPayload::TransferStart {
+            source: metadata.location.clone(),
+            host: metadata.host.clone(),
+            expected_bytes: metadata.size,
+        });
+        if keep > 0 {
+            self.emit(EventPayload::TransferResume {
+                rung,
+                bytes_kept: keep,
+            });
+        }
+    }
+
     fn probe(&self, location: &str) -> Result<SourceMetadata, Error> {
         let credential = self.credential_for(location)?;
         self.source.probe(location, credential.as_ref())
@@ -310,9 +356,21 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             return Ok(held(digest));
         }
 
+        let claimed = match expected {
+            Some(digest) => {
+                let lease = self.claim(PartialKey::of_content(digest))?;
+                if self.store.contains(digest)? {
+                    return Ok(held(digest));
+                }
+                Some(lease)
+            }
+            None => None,
+        };
+
         let arrived = match self.ask_whether_it_changed(expected, prior, location)? {
             Asked::Unchanged(digest) => return Ok(held(digest)),
             Asked::Changed(metadata, body) => Some((metadata, body)),
+            Asked::Silence if already.is_none() => self.fetch_unprobed(expected, location)?,
             Asked::Silence => None,
         };
 
@@ -329,23 +387,11 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         };
         let (rung, keep) = self.where_it_starts(key, expected, &metadata, arrived.is_some())?;
 
-        let lease = self.claim(key)?;
-        if let Some(digest) = expected
-            && self.store.contains(digest)?
-        {
-            return Ok(held(digest));
-        }
-        self.emit(EventPayload::TransferStart {
-            source: metadata.location.clone(),
-            host: metadata.host.clone(),
-            expected_bytes: metadata.size,
-        });
-        if keep > 0 {
-            self.emit(EventPayload::TransferResume {
-                rung,
-                bytes_kept: keep,
-            });
-        }
+        let lease = match claimed {
+            Some(lease) => lease,
+            None => self.claim(key)?,
+        };
+        self.announce(&metadata, rung, keep);
 
         let split = arrived
             .is_none()
