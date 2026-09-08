@@ -166,3 +166,14 @@ A secret in an output stream is a breach, not a bug.
 Deletion is a change and needs the same evidence as an addition.
 
 The same lock produces a byte identical tree on Windows and Linux, or the run fails and names the exact reason. It never produces a quietly different tree.
+
+### What a pack costs to make durable
+
+A pack is appended to by one process and one boot and by nothing else, so pushing
+it to the volume after every entry buys nothing that pushing it once buys. It was
+2000 `FlushFileBuffers` on one file for 2000 packed objects, and the run reports
+that as 6,021 file operations against 2,023 now. `strict` still pays it, at 6,024,
+because per-object durability is what `strict` is for. Disabling the batch is
+`--durability strict`, which pushes more rather than less, and no check moves in
+either direction: a pack states each entry's length ahead of its bytes, so an
+entry cut short by a crash is not one the cache holds whatever was flushed.

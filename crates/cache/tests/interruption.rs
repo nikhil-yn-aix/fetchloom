@@ -74,6 +74,7 @@ fn publish(held: &Cache<FaultyPlatform<NativePlatform>>, bytes: &[u8]) -> Result
         .write_all(bytes)
         .map_err(|reason| filesystem_failure(Surface::Cache, Path::new("the partial"), &reason))?;
     held.commit(lease, writer)?;
+    held.flush_packs()?;
     Ok(())
 }
 
@@ -225,4 +226,61 @@ fn a_failed_compaction_never_loses_an_object_the_pack_held() {
         refused > 0,
         "no injected failure reached compaction, so this proves nothing"
     );
+}
+
+const PACKED_ENTRIES: usize = 8;
+
+fn cache_at(root: &Path, tier: DurabilityTier) -> Cache<FaultyPlatform<NativePlatform>> {
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    Cache::open(
+        root,
+        FaultyPlatform::new(NativePlatform::new(std::sync::Arc::clone(&work))),
+        fetchloom_cache::CacheSettings {
+            tier,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: CompressionChoice::None,
+        },
+        work,
+        support::processor(),
+    )
+    .unwrap()
+}
+
+fn flushes_appending(root: &Path, tier: DurabilityTier) -> u64 {
+    let held = cache_at(&root.join("cache"), tier);
+    let beside = root.join("beside");
+    std::fs::create_dir_all(&beside).unwrap();
+    let before = held.platform().faults().calls(Operation::Flush);
+    for index in 0..PACKED_ENTRIES {
+        let bytes = support::incompressible(4096, 1001 + 2 * index as u64);
+        let path = beside.join(format!("entry-{index}.bin"));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut pair = fetchloom_engine::hashing::Pair::new();
+        pair.update(held.processor(), &bytes);
+        let digests = pair.finish();
+        held.adopt(&digests, bytes.len() as u64, &path).unwrap();
+    }
+    held.flush_packs().unwrap();
+    held.platform().faults().calls(Operation::Flush) - before
+}
+
+#[test]
+fn a_run_pushes_its_pack_once_where_strict_pushes_every_entry_it_appended() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let strict = flushes_appending(&scratch.path().join("strict"), DurabilityTier::Strict);
+    let normal = flushes_appending(&scratch.path().join("normal"), DurabilityTier::Normal);
+    let fast = flushes_appending(&scratch.path().join("fast"), DurabilityTier::Fast);
+
+    assert_eq!(
+        strict, PACKED_ENTRIES as u64,
+        "strict stopped pushing every entry as it landed, which is the whole of what it costs more \
+         for"
+    );
+    assert_eq!(
+        normal, 1,
+        "normal pushed the pack once per entry rather than once for the run, which is the cost \
+         this batch exists to remove"
+    );
+    assert_eq!(fast, 0, "fast pushed a pack it promises never to push");
 }

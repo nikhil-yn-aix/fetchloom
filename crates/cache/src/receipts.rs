@@ -15,6 +15,7 @@ impl<P: Platform> Cache<P> {
     /// when it cannot be written or renamed into place, and `resource.disk`
     /// when the volume is full.
     pub fn write_receipt(&self, receipt: &Receipt) -> Result<(), Error> {
+        self.flush_packs()?;
         let path = self.layout().receipt_of(Receipt::key(&receipt.destination));
         let rendered = receipt.render()?;
         let mut beside = path.as_os_str().to_owned();

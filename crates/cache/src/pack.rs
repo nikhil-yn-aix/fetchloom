@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use fetchloom_engine::compression::Stored;
 use fetchloom_engine::digest::{ContentDigest, InteropDigest};
+use fetchloom_engine::durability::DurabilityTier;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::seam::platform::Platform;
 
@@ -75,8 +76,14 @@ impl<P: Platform> Cache<P> {
         file.write_all(&header_of(digest, &entry))
             .and_then(|()| file.write_all(&body))
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
-        self.platform().flush(&file, self.tier())?;
-        self.work().touched_file();
+        match self.tier() {
+            DurabilityTier::Strict => {
+                self.platform().flush(&file, self.tier())?;
+                self.work().touched_file();
+            }
+            DurabilityTier::Normal => self.pack_awaits_flushing(),
+            DurabilityTier::Fast => {}
+        }
         self.work().wrote_bytes(body.len() as u64);
         Ok(entry)
     }

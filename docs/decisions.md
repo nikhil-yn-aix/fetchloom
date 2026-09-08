@@ -12814,3 +12814,61 @@ rewritten rather than asserting the length, for that reason and it says so.
 
 Sources: `crates/platform/src/lib.rs`, `crates/platform/tests/capability.rs`,
 `docs/perf-audit.md` F1.
+
+## The default tier stopped buying per-object durability it does not promise
+
+Question: `append_to_pack` pushed the pack to the volume after every entry, so
+2000 packed objects were 2000 `FlushFileBuffers` on one file. What does `normal`
+actually promise, and what does it need to pay for it.
+
+Chosen: `normal` is durable per run rather than per object, and the fix is
+ordering rather than removal. A pack is pushed once, for every entry appended to
+it, before anything durable names what it holds: `Cache::write_receipt` does it,
+and `promote` does it before writing the manifest. `strict` still pushes each
+entry as it lands. `fast` still pushes nothing. All three are written into
+contracts.md, because its silence is what made this a question.
+
+Not a removal of a check. Nothing is served from bytes that are not there under
+any tier: a pack states each entry's length ahead of its bytes, and an entry
+running past the end of the pack was cut short by a crash and is not one the
+cache holds. What moves is when an appended object becomes durable, which is a
+promise `normal` had never made in writing and pays for 2000 times.
+
+Measured, 2000 files of 1 KiB, one run each, the counter rather than the clock:
+
+| Tier | file operations | before |
+| --- | --- | --- |
+| strict | 6,024 | 6,021 |
+| normal | 2,023 | 6,021 |
+| fast | 2,023 | 6,021 |
+
+`normal` is now exactly `fast`, which is the definition of no longer paying for
+per-object durability, and `strict` is unchanged. `fast` moved because
+`Platform::flush` was called and counted under every tier and now is called only
+where it does something, which the contract already asks of the counter.
+
+Wall time did not resolve on this machine and is reported rather than claimed.
+Interleaved, four rounds, medians of four: `normal` 16,638 ms, `strict` 25,081,
+`fast` 16,469, `cp -r` 1,790 to 2,143. Six further rounds taken later the same
+day put `fast` between 17,788 and 47,357, so the machine's own spread on this
+regime is above 2.5x and a 1.5x effect does not survive it. The audit's 2.3x for
+`normal` against `fast` does not reproduce; what reproduces is that `strict`
+costs more than `normal` and that `normal` and `fast` are indistinguishable. The
+counter is the result and the clock is a report.
+
+Proved by: `a_run_pushes_its_pack_once_where_strict_pushes_every_entry_it_appended`
+asserts 8, 1 and 0 flushes for the three tiers over eight appended entries, using
+a call counter added to `fetchloom_faults::Faults`. The interruption sweep now
+runs `flush_packs` inside the publication it injects failures into, so a refused
+batch flush is one of the failures the store has to stay coherent through, and
+`a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery` already
+kills processes holding unflushed packed entries.
+
+Uncertain: a process kill cannot test this. Bytes written and not flushed are in
+the operating system's page cache and survive the death of the process that wrote
+them, so every kill test here proves the pack format's rule and not the flush.
+Only a power failure separates the tiers, and nothing in this matrix can stage
+one. That is stated rather than papered over.
+
+Sources: `crates/cache/src/pack.rs`, `crates/cache/src/lib.rs::flush_packs`,
+`crates/cache/tests/interruption.rs`, `docs/perf-audit.md` F2.

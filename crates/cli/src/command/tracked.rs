@@ -441,6 +441,9 @@ pub fn run_promote(
         release: None,
         tree: record.tree,
     });
+    if let Err(error) = cache.flush_packs() {
+        return reporter.report(&error);
+    }
     let rendered = match fetchloom_engine::document::render_model(&manifest) {
         Ok(rendered) => rendered,
         Err(error) => return reporter.report(&error),

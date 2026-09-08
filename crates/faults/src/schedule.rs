@@ -46,6 +46,7 @@ pub struct Faults {
     rules: Mutex<HashMap<Operation, Vec<Rule>>>,
     delays: Mutex<HashMap<Operation, std::time::Duration>>,
     kills: Mutex<HashMap<Operation, Kill>>,
+    calls: Mutex<HashMap<Operation, u64>>,
 }
 
 impl Faults {
@@ -55,6 +56,7 @@ impl Faults {
             rules: Mutex::new(HashMap::new()),
             delays: Mutex::new(HashMap::new()),
             kills: Mutex::new(HashMap::new()),
+            calls: Mutex::new(HashMap::new()),
         }
     }
 
@@ -85,8 +87,27 @@ impl Faults {
         });
     }
 
+    /// How many times the platform was asked for this operation, so a test can
+    /// assert that work an optimization batched happens once rather than once
+    /// per item.
+    #[must_use]
+    pub fn calls(&self, operation: Operation) -> u64 {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&operation)
+            .copied()
+            .unwrap_or(0)
+    }
+
     #[must_use]
     pub fn check(&self, operation: Operation) -> Option<Error> {
+        *self
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(operation)
+            .or_default() += 1;
         let waiting = self
             .delays
             .lock()

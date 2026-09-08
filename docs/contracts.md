@@ -296,7 +296,17 @@ Compression that was asked for and did not happen emits `degrade` naming the obj
 
 A pack belongs to the process and boot that writes it and is only appended to by that writer, so two writers never contend for one pack. Compaction is the one other writer, and it rewrites a pack whole under the same lock that removing a packed object already takes, never appending to one. An entry is committed by its bytes reaching the pack; an entry whose length runs past the end was cut short by a crash and is not one the cache holds. Removing a packed object rewrites its pack without it, under a lock, because a tombstone would be a second authority on what a pack holds.
 
-Publication is write to `partial/`, flush according to the durability tier, then atomic rename. Renames are same volume only; a cross volume rename is an error, never a copy. Under `fast` no flush is issued, so an object can be lost to power failure before it is durable, but a torn object still cannot appear.
+Publication is write to `partial/`, flush according to the durability tier, then atomic rename. Renames are same volume only; a cross volume rename is an error, never a copy.
+
+The three tiers promise three different things and none of them promises less than a torn object cannot appear, which is a property of the rename and of the pack format rather than of any flush.
+
+`strict` is durable per object. Every object is pushed to the volume before it is published, and a pack entry is pushed as it is appended. A caller that reads an object back and then loses power still has it.
+
+`normal`, the default, is durable per run. Every object of its own is pushed before it is published, exactly as under `strict`. A pack is pushed once, for every entry appended to it, before anything durable names what it holds: the receipt, or the manifest a promote writes. So an object that was appended to a pack and read back mid run can be lost to power failure before the run ends, and after the run ends it cannot. This is the one place the tiers differ in what they promise rather than only in what they cost.
+
+`fast` is not durable. No flush is issued at all, so an object can be lost to power failure whether or not the run finished.
+
+Under every tier a crash leaves a pack whose last entry may be short, and an entry whose length runs past the end of the pack is not one the cache holds. Nothing is ever served from bytes that are not there.
 
 One writer per digest, held by an advisory lock recording machine, process, boot and start time. Liveness is decided by those values, never by modification time. A second process wanting an object being written waits and reuses the result rather than starting a second transfer.
 

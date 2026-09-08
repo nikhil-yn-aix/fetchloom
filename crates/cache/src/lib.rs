@@ -86,6 +86,7 @@ pub struct Cache<P: Platform> {
     processor: Arc<Processor>,
     appending: std::sync::Mutex<()>,
     packed: std::sync::Mutex<Option<Arc<crate::pack::Index>>>,
+    unflushed_pack: std::sync::atomic::AtomicBool,
 }
 
 /// What a record naming the process behind every scratch file it wrote is
@@ -156,9 +157,48 @@ impl<P: Platform> Cache<P> {
             processor,
             appending: std::sync::Mutex::new(()),
             packed: std::sync::Mutex::new(None),
+            unflushed_pack: std::sync::atomic::AtomicBool::new(false),
         };
         cache.recover()?;
         Ok(cache)
+    }
+
+    pub(crate) fn pack_awaits_flushing(&self) {
+        self.unflushed_pack
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Pushes this run's own pack as far as its tier asks, once, for every
+    /// entry appended to it since the last time. `strict` has already pushed
+    /// each entry as it landed and `fast` pushes nothing, so this is `normal`'s
+    /// whole durability and it belongs before anything durable names what the
+    /// pack holds.
+    ///
+    /// # Errors
+    /// `cache.corrupt` when the pack cannot be opened or the flush is refused,
+    /// and `resource.disk` when the volume is full.
+    pub fn flush_packs(&self) -> Result<(), Error> {
+        if !self
+            .unflushed_pack
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let path = self.own_pack();
+        let file = match std::fs::File::options().append(true).open(&path) {
+            Ok(file) => file,
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {
+                self.unflushed_pack
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Ok(());
+            }
+            Err(reason) => return Err(filesystem_failure(Surface::Cache, &path, &reason)),
+        };
+        self.platform.flush(&file, self.tier)?;
+        self.work.touched_file();
+        self.unflushed_pack
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     #[must_use]
