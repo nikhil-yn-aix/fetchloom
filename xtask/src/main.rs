@@ -233,6 +233,11 @@ fn record_and_gate(
     }
     if compare {
         if !path.exists() {
+            current.regimes.iter_mut().for_each(|regime| {
+                regime
+                    .metrics
+                    .retain(|metric| metric.kind == bench::MetricKind::Deterministic);
+            });
             if let Err(error) = bench::save(current, path) {
                 eprintln!("{error}");
                 return ExitCode::from(1);

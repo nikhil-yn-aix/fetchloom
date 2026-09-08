@@ -1,0 +1,359 @@
+{
+  "target": "x86_64-pc-windows-msvc",
+  "regimes": [
+    {
+      "regime": "no-op",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "binary-size",
+          "value": 9667072,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 2048,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 1,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "cold-cache",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "cache-growth",
+          "value": 16782440,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 33554432,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 33554432,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 87,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "warm-cache",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "cache-growth",
+          "value": 0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 16777216,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 16777216,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 67,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "cold-transfer",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-materialized",
+          "value": 4194304,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 4194304,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 8388608,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 2,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 40,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "interrupted-transfer",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-materialized",
+          "value": 4194304,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-read",
+          "value": 8388608,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 8388608,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 6,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 58,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "many-small-files",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 2097152,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 2097152,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 1047,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "one-large-file",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 536870912,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 536887240,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 0,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 34,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "many-hosts-concurrency",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 6291456,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 32,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 295,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "many-hosts-backoff",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 0,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 6291456,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 40,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 295,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "constrained-network",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "bytes-read",
+          "value": 2097152,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "bytes-written",
+          "value": 4194304,
+          "unit": "bytes",
+          "kind": "deterministic"
+        },
+        {
+          "name": "requests",
+          "value": 2,
+          "unit": "requests",
+          "kind": "deterministic"
+        },
+        {
+          "name": "file-operations",
+          "value": 40,
+          "unit": "operations",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "packed-index",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "objects",
+          "value": 4000,
+          "unit": "objects",
+          "kind": "deterministic"
+        }
+      ]
+    },
+    {
+      "regime": "slow-disk",
+      "iterations": 9,
+      "metrics": [
+        {
+          "name": "objects",
+          "value": 24,
+          "unit": "objects",
+          "kind": "deterministic"
+        }
+      ]
+    }
+  ]
+}

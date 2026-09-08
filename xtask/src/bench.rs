@@ -1641,6 +1641,46 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a baseline that does not parse is the assertion"
+    )]
+    fn every_committed_baseline_parses_and_holds_only_what_gates() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks");
+        let mut found = 0;
+        for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|kind| kind != "json") {
+                continue;
+            }
+            found += 1;
+            let baseline = super::load(&path).unwrap();
+            assert_eq!(
+                baseline.target,
+                path.file_stem().unwrap().to_string_lossy(),
+                "{} states a target its name does not",
+                path.display()
+            );
+            for regime in &baseline.regimes {
+                for metric in &regime.metrics {
+                    assert_eq!(
+                        metric.kind,
+                        MetricKind::Deterministic,
+                        "{} records {} {}, which is a duration, and a duration recorded on the runner that gates is a number nobody may compare",
+                        path.display(),
+                        regime.regime,
+                        metric.name
+                    );
+                }
+            }
+        }
+        assert!(
+            found > 0,
+            "no baseline is committed, so the benchmark lane records one every run and gates nothing"
+        );
+    }
+
+    #[test]
     fn a_timing_metric_never_gates() {
         let timing = |value: f64| Metric {
             name: "wall".to_owned(),

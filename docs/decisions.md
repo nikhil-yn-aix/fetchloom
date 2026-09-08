@@ -13106,3 +13106,42 @@ the reason the comparison above is within-run rather than across days.
 
 Sources: `crates/engine/src/hashing.rs`, `xtask/src/profile.rs`,
 `docs/perf-audit.md` "What is already at or near its floor".
+
+## The counters are the same number on Linux and on Windows
+
+The first run of the benchmark lane recorded a baseline on `ubuntu-24.04` and on
+`windows-2025` at the same commit. Every deterministic metric is identical
+between them, in all twelve regimes: bytes read, bytes written, requests, file
+operations, cache growth, bytes materialized and objects. The two that differ are
+the binary, 8,815,488 bytes against 9,667,072, and peak memory, which is filed as
+a duration and is not compared.
+
+That was not assumed. The previous decision not to re-baseline was reasoned from
+"a counter can depend on what the volume underneath can do", which is true and is
+why each target still records its own. What the first pair of runs shows is that
+on these two targets it does not, so a counter that moves on one runner and not
+the other is a finding rather than a platform.
+
+The Windows runner also answered a question this machine cannot. `fltmc` needs
+elevation, so every local run reports `Scanner::Unknown` with a ratio between 20
+and 84 and a `degrade` saying the cause is unknown. The runner is elevated:
+`many-small-files measured with an on-access scanner enabled: WdFilter, small
+writes cost 61.59 times one large write`. The scanner has a name now, and it is
+the one the CONTRIBUTING note assumed.
+
+A baseline holds only what gates. `record_and_gate` filtered timing metrics out
+of a `--save-baseline` and not out of the record it writes when no baseline
+exists for a target, which is the path every fresh runner takes, so the first
+Linux baseline would have carried that runner's wall clock forever. It filters in
+both places now, and
+`every_committed_baseline_parses_and_holds_only_what_gates` fails on a committed
+baseline that carries a duration or that names a target its filename does not.
+
+The two committed baselines were built from those runs' own logs rather than
+measured again here, because the machine that would have measured them is the one
+whose baseline was just deleted for being one volume's answer. They carry no
+`alternative`, which is report metadata rather than gate data and which the next
+run supplies.
+
+Sources: the `verify` run at `413d3fb`, both `benchmark` jobs,
+`xtask/benchmarks/`.
