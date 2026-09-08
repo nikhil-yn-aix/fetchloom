@@ -19,6 +19,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use fetchloom_cache::storage::Placement;
+use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::PACK_THRESHOLD;
 
@@ -278,5 +279,54 @@ fn a_pack_that_is_not_there_holds_nothing_rather_than_failing() {
         held.packs().unwrap(),
         Vec::<std::path::PathBuf>::new(),
         "a cache with no packs directory listed packs"
+    );
+}
+
+fn unopenable_name() -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0x70, 0x00, 0x6b]).into()
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"p\0k").into()
+    }
+}
+
+#[test]
+fn a_pack_that_refuses_to_open_is_reported_rather_than_read_as_holding_nothing() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let held = support::cache_in(scratch.path());
+    let refused = held.layout().packs().join(unopenable_name());
+
+    assert_eq!(
+        held.entries_in(&refused).unwrap_err().kind(),
+        ErrorKind::CacheCorrupt,
+        "a pack that could not be opened was read as holding no entries"
+    );
+    assert_eq!(
+        fetchloom_cache::pack::preamble_span(&refused)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::CacheCorrupt,
+        "a pack that could not be opened was read as stating no preamble"
+    );
+    assert_eq!(
+        fetchloom_cache::pack::dictionary_in(&refused)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::CacheCorrupt,
+        "a pack that could not be opened was read as stating no dictionary"
+    );
+
+    let directory = held.layout().packs();
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::write(&directory, b"not a directory").unwrap();
+    assert_eq!(
+        held.packs().unwrap_err().kind(),
+        ErrorKind::CacheCorrupt,
+        "a packs directory that is not a directory listed no packs"
     );
 }
