@@ -511,46 +511,114 @@ fn a_bare_name_resolves_to_a_location(seen: &mut BTreeSet<String>) {
     seen.extend(names_in(&stream));
 }
 
+fn manifest_for(origin: &str, digest: &fetchloom_engine::digest::ContentDigest) -> String {
+    format!(
+        "name: contended\nartifacts:\n  - id: object\n    sources: [\"{origin}/object.bin\"]\n    digest:\n      blake3: \"{digest}\"\n"
+    )
+}
+
+fn names_until(reader: &mut impl std::io::BufRead, event: &str, seen: &mut BTreeSet<String>) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line).unwrap();
+        assert!(
+            read > 0,
+            "the holding run ended without ever saying {event}"
+        );
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&line)
+            && let Some(name) = payload["event"].as_str()
+        {
+            seen.insert(name.to_owned());
+            if name == event {
+                return;
+            }
+        }
+    }
+}
+
+fn rest_of(reader: &mut impl std::io::BufRead, seen: &mut BTreeSet<String>) {
+    let mut said = String::new();
+    reader.read_to_string(&mut said).unwrap();
+    for line in said.lines() {
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(name) = payload["event"].as_str()
+        {
+            seen.insert(name.to_owned());
+        }
+    }
+}
+
 fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
     let scratch = TempDir::new().unwrap();
     let bytes = object(1024 * 1024, 12);
-    let server = TestServer::start(
+    let digest = hash_bytes(&bytes);
+    let holding = TestServer::start(
         Script::serving(bytes.clone())
-            .delayed(Latency::default().every_request(std::time::Duration::from_secs(5))),
+            .delayed(Latency::default().every_request(std::time::Duration::from_secs(15))),
     )
     .unwrap();
-    let manifest = format!(
-        "name: contended\nartifacts:\n  - id: object\n    sources: [\"{}/object.bin\"]\n    digest:\n      blake3: \"{}\"\n",
-        server.origin(),
-        hash_bytes(&bytes)
+    let waiting = TestServer::start(Script::serving(bytes)).unwrap();
+    write(
+        scratch.path(),
+        "holding.yaml",
+        manifest_for(&holding.origin(), &digest).as_bytes(),
     );
-    write(scratch.path(), "dataset.yaml", manifest.as_bytes());
+    write(
+        scratch.path(),
+        "waiting.yaml",
+        manifest_for(&waiting.origin(), &digest).as_bytes(),
+    );
 
     let cache = scratch.path().join("cache");
-    let mut running = Vec::new();
-    for index in 0..2 {
-        let stream = scratch.path().join(format!("wait-{index}.ndjson"));
-        let child = support::fetchloom()
-            .current_dir(scratch.path())
-            .args(["get", "dataset.yaml", "--output"])
-            .arg(format!("out-{index}"))
-            .arg("--events")
-            .arg(&stream)
-            .env("FETCHLOOM_CACHE_DIR", &cache)
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        running.push((child, stream));
-    }
-    for (child, stream) in running {
-        let finished = child.wait_with_output().unwrap();
-        assert!(
-            finished.status.success(),
-            "a contending run failed: {}",
-            String::from_utf8_lossy(&finished.stderr)
-        );
-        seen.extend(names_in(&stream));
-    }
+    let mut first = support::fetchloom()
+        .current_dir(scratch.path())
+        .args([
+            "get",
+            "holding.yaml",
+            "--output",
+            "out-holding",
+            "--events",
+            "-",
+        ])
+        .env("FETCHLOOM_CACHE_DIR", &cache)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut events = std::io::BufReader::new(first.stdout.take().unwrap());
+    names_until(&mut events, "transfer.start", seen);
+
+    let stream = scratch.path().join("waiting.ndjson");
+    let second = support::fetchloom()
+        .current_dir(scratch.path())
+        .args(["get", "waiting.yaml", "--output", "out-waiting", "--events"])
+        .arg(&stream)
+        .env("FETCHLOOM_CACHE_DIR", &cache)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    rest_of(&mut events, seen);
+    let held = first.wait_with_output().unwrap();
+    assert!(
+        held.status.success(),
+        "the holding run failed: {}",
+        String::from_utf8_lossy(&held.stderr)
+    );
+
+    let waited = second.wait_with_output().unwrap();
+    assert!(
+        waited.status.success(),
+        "the waiting run failed: {}",
+        String::from_utf8_lossy(&waited.stderr)
+    );
+    let names = names_in(&stream);
+    assert!(
+        names.contains("cache.wait"),
+        "the second run took the lease without waiting for the first, so nothing here proves a reader ever sees cache.wait: {names:?}"
+    );
+    seen.extend(names);
 }
 
 fn a_damaged_object_is_repaired_by_range(seen: &mut BTreeSet<String>) {

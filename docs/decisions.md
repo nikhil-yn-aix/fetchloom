@@ -12640,27 +12640,32 @@ about. The test could not run on the machine the work was done on, it declined b
 name rather than passing in silence, and the lane that could run it found a
 defect that had been there since packs were written.
 
-## One flake this session found and did not fix, with the evidence that it is one
+## The one flake this session found was a test racing itself, and it is fixed
 
-`crates/cli/tests/transfer/events.rs:337` `one_run_waits_for_another` spawns two
-processes against one cache and one digest, with the fake server holding every
-request for five seconds so the second wanter is still waiting when the first
-takes the lease. It is the only run in that file that emits `cache.wait`, and
-`every_event_name_the_contract_lists_is_emitted_by_a_run` fails when nothing
-does.
+`crates/cli/tests/transfer/events.rs` `one_run_waits_for_another` is the only run
+in that file that emits `cache.wait`, so
+`every_event_name_the_contract_lists_is_emitted_by_a_run` fails when it does not.
+It failed on `linux` and on `windows-11-arm` and passed on the other three lanes,
+which is the signature of a race rather than of a defect.
 
-It failed once on `windows-11-arm` across four CI runs of the same branch, and
-passed on that runner in the other three and on every other runner every time.
-Nothing this session touched is on that path.
+It was one. Two children fetched one digest from one server that held every
+request for five seconds, and the second could only wait if it reached the lease
+while the first held it. Both children paid the same latency in the same order:
+the first probed, waited five seconds, took the lease and asked for the body; the
+second, started at the same moment, probed, waited the same five seconds and
+reached the lease exactly as the first was finishing. The overlap was a tie
+arranged by a duration, and a slow runner broke the tie the wrong way.
 
-Not fixed, and stated rather than left for someone to rediscover. What makes it
-a flake is that the overlap is arranged by a latency rather than by a gate: both
-children have to be in flight at once for either to wait, and on a slow runner
-one can fail or finish before the other arrives. The suite already knows how to
-do this properly — `crates/cache/tests/concurrency.rs:57` races eight processes
-for one digest and asserts exactly one transfer, by making each process arrive at
-a gate rather than by hoping. The same shape here would make `cache.wait` certain.
+Chosen: two servers and a gate. The holding run fetches from a server that holds
+every request fifteen seconds; the waiting run fetches the same digest from a
+server that holds nothing. The test reads the holding run's event stream and does
+not start the waiting run until it has seen `transfer.start`, which the transfer
+emits with the lease in hand. The waiting run then reaches the lease within its
+own startup while fifteen seconds of the holding run's body are still outstanding.
 
-Fixing it at the end of a session whose subject was tests that pass for the wrong
-reason would have meant changing an unrelated test under time pressure, which is
-how a real defect gets buried. It is one gate away and it is written down.
+Because: a lease is keyed by the content digest and not by where the bytes come
+from, so two sources for one digest is a legitimate thing to build and it removes
+the only reason the second run was ever slow. The gate is on the condition being
+waited for, which is what CONTRIBUTING asks of every wait, and the function now
+asserts `cache.wait` by name rather than leaving the aggregate to report a
+missing event with no clue which run should have emitted it.
