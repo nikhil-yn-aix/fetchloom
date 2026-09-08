@@ -29,6 +29,7 @@ pub mod store;
 pub mod verify;
 pub mod witness;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -84,6 +85,8 @@ pub struct Cache<P: Platform> {
 /// What a record naming the process behind every scratch file it wrote is
 /// called, so a sweep can tell which boot those files belong to.
 pub(crate) const SESSION_SUFFIX: &str = ".session";
+
+const SESSION_KIND: &str = "session";
 
 impl<P: Platform> Cache<P> {
     /// # Errors
@@ -259,63 +262,83 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
 }
 
 fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error> {
+    // The session records are read before anything is removed, because a
+    // directory hands its entries back in whatever order it likes and removing
+    // the record that says which boot a scratch file belongs to before reading
+    // it for that file leaves the file behind.
+    let sessions = sessions_in(directory)?;
     let entries = std::fs::read_dir(directory)
         .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
+    let mut swept = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path
             .extension()
-            .is_some_and(|kind| kind == "owner" || kind == "source")
+            .is_some_and(|kind| kind == "owner" || kind == "source" || kind == SESSION_KIND)
         {
             continue;
         }
-        if path.extension().is_some_and(|kind| kind == "session") {
-            if let Some(wrote_it) = record::read_owner(&path)?
-                && wrote_it.machine == token.machine
-                && wrote_it.boot != token.boot
-            {
-                remove(&path)?;
-            }
-            continue;
-        }
         let record = owner_record_of(&path);
-        let beside = record::read_owner(&record)?;
         // A scratch file states the process and start that wrote it in its own
         // name, and that process wrote one record stating the boot, so an
         // orphan with no record beside it is still this sweep's to reclaim.
-        let wrote_it = match beside {
+        let wrote_it = match record::read_owner(&record)? {
             Some(found) => found,
-            None => match session_of(directory, &path)? {
-                Some(found) => found,
+            None => match session_for(&sessions, &path) {
+                Some(found) => found.clone(),
                 None => continue,
             },
         };
         if wrote_it.machine != token.machine || wrote_it.boot == token.boot {
             continue;
         }
+        swept.push(path);
+    }
+    for path in swept {
         remove(&path)?;
-        remove(&record)?;
+        remove(&owner_record_of(&path))?;
         remove(&source_record_of(&path))?;
+    }
+    for (name, wrote_it) in sessions {
+        if wrote_it.machine == token.machine && wrote_it.boot != token.boot {
+            remove(&directory.join(format!("{name}{SESSION_SUFFIX}")))?;
+        }
     }
     Ok(())
 }
 
-/// The record a process wrote once, naming the boot behind every scratch file
-/// whose name carries that process and start.
-fn session_of(directory: &Path, entry: &Path) -> Result<Option<OwnerToken>, Error> {
-    let Some(name) = entry.file_name().and_then(std::ffi::OsStr::to_str) else {
-        return Ok(None);
-    };
-    let mut parts = name.splitn(3, '-');
-    let (Some(pid), Some(start)) = (parts.next(), parts.next()) else {
-        return Ok(None);
-    };
-    if parts.next().is_none() {
-        return Ok(None);
+fn sessions_in(directory: &Path) -> Result<BTreeMap<String, OwnerToken>, Error> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
+    let mut found = BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|kind| kind != SESSION_KIND) {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if let Some(wrote_it) = record::read_owner(&path)? {
+            found.insert(name.to_owned(), wrote_it);
+        }
     }
-    record::read_owner(&directory.join(format!("{pid}-{start}{SESSION_SUFFIX}")))
+    Ok(found)
 }
 
+fn session_for<'a>(
+    sessions: &'a BTreeMap<String, OwnerToken>,
+    entry: &Path,
+) -> Option<&'a OwnerToken> {
+    let name = entry.file_name().and_then(std::ffi::OsStr::to_str)?;
+    let mut parts = name.splitn(3, '-');
+    let (pid, start) = (parts.next()?, parts.next()?);
+    parts.next()?;
+    sessions.get(&format!("{pid}-{start}"))
+}
+
+/// The record a process wrote once, naming the boot behind every scratch file
+/// whose name carries that process and start.
 fn remove(path: &Path) -> Result<(), Error> {
     let outcome = if path.is_dir() {
         std::fs::remove_dir_all(path)

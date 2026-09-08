@@ -420,3 +420,11 @@ pub fn faulty_cache_at(
         processor(),
     )
 }
+
+pub fn entries_in_including_records(directory: &Path) -> Vec<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(directory)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    found.sort();
+    found
+}

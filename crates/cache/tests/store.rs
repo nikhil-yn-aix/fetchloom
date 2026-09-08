@@ -528,3 +528,51 @@ fn a_packed_write_counts_its_content_and_never_what_the_pack_states_about_it() {
         "a packed object is the content written twice, to the partial and into the pack, and {left_behind} bytes were left on disk"
     );
 }
+
+/// contracts.md:303 — every orphaned partial entry a previous boot left is
+/// removed at startup. A scratch file states its process in its name and the
+/// boot in one record beside every scratch that process wrote, so the sweep has
+/// to read that record before it removes anything: a directory hands its
+/// entries back in whatever order it likes, and removing the record first
+/// leaves the files it spoke for behind.
+#[test]
+fn a_scratch_file_a_previous_boot_left_is_removed_whatever_order_the_directory_lists() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let held = cache_in(scratch.path());
+    let partial = held.layout().partial();
+    support::publish(&held, &bytes_of(2 << 20, 31));
+
+    let session = support::entries_in_including_records(&partial)
+        .into_iter()
+        .find(|path| path.extension().is_some_and(|kind| kind == "session"))
+        .expect("publishing wrote no record naming the boot behind its scratch files");
+    let prefix = session.file_stem().unwrap().to_string_lossy().into_owned();
+
+    let left_behind: Vec<std::path::PathBuf> = ["compressing", "ingest", "outboard"]
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| partial.join(format!("{prefix}-{index}.{kind}")))
+        .collect();
+    for path in &left_behind {
+        std::fs::write(path, b"what a killed publication left").unwrap();
+    }
+    drop(held);
+
+    support::pretend_a_previous_boot(&fetchloom_cache::layout::Layout::new(
+        scratch.path().join("cache"),
+    ));
+    let recovered = cache_in(scratch.path());
+
+    for path in &left_behind {
+        assert!(
+            !path.exists(),
+            "recovery left {}, which a previous boot abandoned",
+            path.display()
+        );
+    }
+    assert!(
+        !session.exists(),
+        "recovery left the record naming a boot that is over"
+    );
+    let _ = recovered;
+}
