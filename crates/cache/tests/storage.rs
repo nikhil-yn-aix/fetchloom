@@ -246,3 +246,37 @@ fn removing_a_packed_object_leaves_the_others_readable() {
         assert_eq!(&read, &kept[index]);
     }
 }
+
+#[test]
+fn a_pack_that_is_not_there_holds_nothing_rather_than_failing() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let held = support::cache_in(scratch.path());
+    let absent = held.layout().packs().join("no-such-boot-0.pack");
+    assert!(
+        !absent.exists(),
+        "the test built a pack it meant to be absent"
+    );
+
+    assert_eq!(
+        held.entries_in(&absent).unwrap(),
+        Vec::new(),
+        "an absent pack was read as holding something"
+    );
+    assert_eq!(
+        fetchloom_cache::pack::preamble_span(&absent).unwrap(),
+        0,
+        "an absent pack states a preamble"
+    );
+    assert_eq!(
+        fetchloom_cache::pack::dictionary_in(&absent).unwrap(),
+        Vec::<u8>::new(),
+        "an absent pack states a dictionary"
+    );
+
+    std::fs::remove_dir_all(held.layout().packs()).unwrap();
+    assert_eq!(
+        held.packs().unwrap(),
+        Vec::<std::path::PathBuf>::new(),
+        "a cache with no packs directory listed packs"
+    );
+}

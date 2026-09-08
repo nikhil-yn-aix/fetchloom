@@ -504,9 +504,18 @@ fn a_packed_write_counts_its_content_and_never_what_the_pack_states_about_it() {
     let pack_length = std::fs::metadata(&packs[0]).unwrap().len();
 
     assert_eq!(
+        fetchloom_cache::pack::ENTRY_HEADER,
+        32 + 32 + 8 + 8 + 1,
+        "an entry states a content digest, an interop digest, two lengths and a flag before its bytes"
+    );
+    assert_eq!(
+        fetchloom_cache::pack::PREAMBLE,
+        4 + 4 + 32,
+        "a pack states a magic, a length and a dictionary digest before its first entry"
+    );
+    assert_eq!(
         pack_length,
-        (fetchloom_cache::pack::PREAMBLE + fetchloom_cache::pack::ENTRY_HEADER + bytes.len())
-            as u64,
+        (40 + 81 + bytes.len()) as u64,
         "a pack of one entry is not its preamble, its entry header and its bytes"
     );
 
