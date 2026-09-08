@@ -13376,3 +13376,39 @@ fraction of a small-files run. It is not, and `--compress none` proves it.
 So deriving from contracts found the shape of every real finding and got the
 ranking wrong, which is the argument for doing it first and for not stopping
 there.
+
+## Claiming the lease before the request moved transfer.start, and a test was gated on it
+
+The `windows` lane failed once at `106d646` on
+`every_event_name_the_contract_lists_is_emitted_by_a_run`, and passed on the
+commit before and the commit after. It is the same test the previous session
+fixed for racing itself, and this is a second, different reason it raced.
+
+The waiting run emitted `plan.ready`, `publish.commit`, `resolve.end`,
+`resolve.start`, `run.end`, `run.start` and `source.selected` and never
+`cache.wait`, which means it found the object already held rather than waiting
+for it.
+
+The cause is this session's own. The holding run's server delays every request
+fifteen seconds. The test starts the waiting run when the holding run says
+`transfer.start`. That used to be emitted after a `HEAD` answered, leaving the
+`GET`'s fifteen seconds as the window in which the waiting run could arrive and
+wait. There is one request now, and `transfer.start` is emitted after it answers,
+which is after the body has arrived: the window is gone.
+
+The gate is `source.selected` now, which the run emits before it claims the
+lease and therefore before its one request. The lease is claimed before any
+request whenever the digest is known, so the holding run holds it for the whole
+fifteen seconds, and the waiting run has to spawn a process, resolve and plan
+before it can reach the lease. That is a far larger margin than the one it
+replaces rather than a smaller one.
+
+`transfer.start` moving later is correct rather than incidental. It carries the
+expected length, which comes from the source's answer, and the source now answers
+once. An event that states a size cannot be emitted before the size is known.
+
+Ran three times in a row locally after the change, and the lane it failed on is
+where it will be checked again.
+
+Sources: `crates/cli/tests/transfer/events.rs`,
+`crates/engine/src/transfer/mod.rs`.

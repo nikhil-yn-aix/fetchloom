@@ -587,7 +587,7 @@ fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
         .spawn()
         .unwrap();
     let mut events = std::io::BufReader::new(first.stdout.take().unwrap());
-    names_until(&mut events, "transfer.start", seen);
+    names_until(&mut events, "source.selected", seen);
 
     let stream = scratch.path().join("waiting.ndjson");
     let second = support::fetchloom()
@@ -616,7 +616,7 @@ fn one_run_waits_for_another(seen: &mut BTreeSet<String>) {
     let names = names_in(&stream);
     assert!(
         names.contains("cache.wait"),
-        "the second run took the lease without waiting for the first, so nothing here proves a reader ever sees cache.wait: {names:?}"
+        "the second run took the lease without waiting for the first, so nothing here proves a reader ever sees cache.wait: {names:?}. The gate is source.selected because the lease is claimed before any request is made, so the holding run holds it for the whole fifteen seconds its one request is outstanding; transfer.start is emitted after that request answers and is therefore no window at all"
     );
     seen.extend(names);
 }
