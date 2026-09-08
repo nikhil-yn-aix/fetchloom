@@ -25,11 +25,6 @@ pub struct Decision {
 
 impl Decision {
     #[must_use]
-    pub fn best_ratio(&self) -> f64 {
-        self.ratios.iter().copied().fold(f64::MIN, f64::max)
-    }
-
-    #[must_use]
     pub fn measurements(&self) -> String {
         PROBE_STRIDES
             .iter()

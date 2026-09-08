@@ -5,6 +5,7 @@ mod ftp;
 mod http;
 mod observer;
 mod platform;
+mod precondition;
 mod schedule;
 
 pub use archives::{
@@ -17,4 +18,5 @@ pub use ftp::{FtpScript, FtpTestServer};
 pub use http::{Flight, InFlight, IndexFormat, Latency, Received, Reply, Script, TestServer};
 pub use observer::RecordingObserver;
 pub use platform::FaultyPlatform;
+pub use precondition::{Presence, declined, name_of};
 pub use schedule::{Faults, Operation};

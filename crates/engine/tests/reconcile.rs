@@ -99,26 +99,30 @@ fn outcomes_are_ordered_by_path_and_every_kind_can_appear_together() {
 }
 
 #[test]
-fn no_entries_at_all_produces_no_outcomes() {
-    let outcome = reconcile(&[], &[]);
-    assert!(outcome.is_empty());
-}
-
-#[test]
 fn reconciling_a_large_tree_costs_time_proportional_to_its_size() {
-    let count = 100_000;
-    let resolved: Vec<TreeEntry> = (0..count)
-        .map(|index| file(&format!("data/{index}.bin"), b"same"))
-        .collect();
-    let destination = resolved.clone();
-    let (report, answer) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = report.send(reconcile(&resolved, &destination).len());
-    });
-    let counted = answer.recv_timeout(std::time::Duration::from_secs(20)).ok();
-    assert_eq!(
-        counted,
-        Some(count),
-        "reconciling {count} entries against the same {count} did not finish in twenty seconds"
+    // Ten times the entries costs about ten times the work when reconciling is
+    // linear and about a hundred when it is not. Comparing the two against each
+    // other rather than against a fixed number of seconds is what keeps a
+    // loaded machine from deciding the answer.
+    let timed = |count: usize| {
+        let resolved: Vec<TreeEntry> = (0..count)
+            .map(|index| file(&format!("data/{index}.bin"), b"same"))
+            .collect();
+        let destination = resolved.clone();
+        let started = std::time::Instant::now();
+        let decided = reconcile(&resolved, &destination).len();
+        assert_eq!(
+            decided, count,
+            "reconciling {count} entries decided {decided}"
+        );
+        started.elapsed()
+    };
+
+    let small = timed(10_000).max(std::time::Duration::from_millis(1));
+    let large = timed(100_000);
+    let grew = large.as_nanos() / small.as_nanos().max(1);
+    assert!(
+        grew < 40,
+        "ten times the entries cost {grew} times the work, which is the growth of comparing every entry against every other rather than looking each one up"
     );
 }

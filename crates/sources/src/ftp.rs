@@ -807,6 +807,7 @@ impl Source for FtpSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        _resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         let started = Instant::now();
         let (mut control, at) = self.connected(location, credential)?;
@@ -853,7 +854,7 @@ impl Source for FtpSource {
     ) -> Result<Revalidated<Self::Body>, Error> {
         let _ = validator;
         Ok(Revalidated::Changed(Box::new(
-            self.fetch(location, None, credential)?,
+            self.fetch(location, None, credential, None)?,
         )))
     }
 

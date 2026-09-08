@@ -18,7 +18,7 @@ use fetchloom_engine::digest::{Algorithm, ContentDigest, Digest, InteropDigest, 
 use fetchloom_engine::error::{Error, ErrorKind, Layer};
 use fetchloom_engine::event::{EVENT_NAMES, Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
-use fetchloom_engine::redact::{REDACTED, SafeUrl, Secret, is_sensitive_header};
+use fetchloom_engine::redact::{REDACTED, SafeUrl, Secret};
 use fetchloom_engine::threads::{BudgetOrigin, ThreadBudget};
 use fetchloom_engine::timestamp::Timestamp;
 use fetchloom_engine::tree::{EntryPath, EntryPathError, Mode};
@@ -288,13 +288,6 @@ fn a_secret_is_written_as_the_fixed_text_and_never_as_itself() {
 }
 
 #[test]
-fn the_headers_that_are_never_written_are_named() {
-    assert!(is_sensitive_header("Authorization"));
-    assert!(is_sensitive_header("cookie"));
-    assert!(!is_sensitive_header("content-length"));
-}
-
-#[test]
 fn a_digest_is_written_as_its_algorithm_and_lowercase_hex() {
     let digest = Digest::new(Algorithm::Blake3, [0xabu8; 32]);
     let text = format!("blake3:{}", "ab".repeat(32));
@@ -385,9 +378,11 @@ fn a_timestamp_is_written_and_read_as_one_form() {
     let text = "2026-08-29T04:11:02Z";
     let timestamp: Timestamp = text.parse().unwrap();
     assert_eq!(timestamp.to_string(), text);
-    assert_eq!(timestamp.epoch_seconds(), 1_787_976_662);
     assert_eq!(
-        Timestamp::from_epoch_seconds(0).to_string(),
+        "1970-01-01T00:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .to_string(),
         "1970-01-01T00:00:00Z"
     );
     assert!("2026-08-29 04:11:02".parse::<Timestamp>().is_err());

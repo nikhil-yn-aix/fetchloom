@@ -66,7 +66,7 @@ fn the_same_observation_recorded_twice_is_stored_once() {
     let seen = witness("one", "https://a/x", "r1");
     held.record_witness(&key(), seen.clone()).unwrap();
     let mut later = seen.clone();
-    later.observed_at = Timestamp::from_epoch_seconds(seen.observed_at.epoch_seconds() + 3600);
+    later.observed_at = "2099-01-01T00:00:00Z".parse().unwrap();
     held.record_witness(&key(), later).unwrap();
 
     let found = held.witnesses(&key()).unwrap();

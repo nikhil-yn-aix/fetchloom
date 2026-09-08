@@ -17,19 +17,6 @@ pub enum Resolution {
     Conflict,
 }
 
-impl Resolution {
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Unchanged => "unchanged",
-            Self::TakeUpstream => "take upstream",
-            Self::KeepYours => "keep yours",
-            Self::StaysDeleted => "stays deleted",
-            Self::Conflict => "conflict",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Merged {
     pub path: EntryPath,

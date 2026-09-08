@@ -133,9 +133,7 @@ fn better(left: bool, right: bool) -> Ordering {
 fn measured(left: Option<u64>, right: Option<u64>) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => left.cmp(&right),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
+        _ => Ordering::Equal,
     }
 }
 

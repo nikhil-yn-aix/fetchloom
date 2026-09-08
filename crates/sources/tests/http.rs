@@ -101,7 +101,7 @@ fn fetching_the_whole_object_returns_every_byte() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let body = source
-        .fetch(&format!("{}/object", server.origin()), None, None)
+        .fetch(&format!("{}/object", server.origin()), None, None, None)
         .unwrap();
 
     assert_eq!(read(body.body), object());
@@ -121,6 +121,7 @@ fn fetching_a_range_asks_for_it_and_returns_only_that_span() {
                 start: 512,
                 end: 1024,
             }),
+            None,
             None,
         )
         .unwrap();
@@ -149,6 +150,7 @@ fn a_range_answered_with_the_whole_object_is_refused_as_unsupported() {
                 end: 1024,
             }),
             None,
+            None,
         )
         .unwrap_err();
 
@@ -174,6 +176,7 @@ fn a_range_the_server_cannot_satisfy_is_refused_as_unsupported() {
                 end: 8192,
             }),
             None,
+            None,
         )
         .unwrap_err();
 
@@ -194,7 +197,7 @@ fn a_terminal_status_is_not_retryable_and_a_transient_one_is() {
             std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
         );
         let failure = source
-            .fetch(&format!("{}/object", server.origin()), None, None)
+            .fetch(&format!("{}/object", server.origin()), None, None, None)
             .unwrap_err();
 
         assert_eq!(failure.kind(), ErrorKind::NetworkStatus, "on {code}");
@@ -214,7 +217,7 @@ fn a_rate_limited_source_reports_the_wait_it_asked_for() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let failure = source
-        .fetch(&format!("{}/object", server.origin()), None, None)
+        .fetch(&format!("{}/object", server.origin()), None, None, None)
         .unwrap_err();
 
     assert!(failure.retryable());
@@ -278,7 +281,7 @@ fn a_redirect_is_followed_and_the_bytes_arrive() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let body = source
-        .fetch(&format!("{}/object", server.origin()), None, None)
+        .fetch(&format!("{}/object", server.origin()), None, None, None)
         .unwrap();
     assert_eq!(read(body.body), object());
 }
@@ -297,7 +300,7 @@ fn a_redirect_loop_ends_rather_than_running_forever() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let failure = source
-        .fetch(&format!("{}/loop", looping.origin()), None, None)
+        .fetch(&format!("{}/loop", looping.origin()), None, None, None)
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::ResourceLimit);
@@ -332,6 +335,7 @@ fn a_span_that_is_not_the_one_asked_for_is_refused() {
                 end: 1024,
             }),
             None,
+            None,
         )
         .unwrap_err();
 
@@ -359,6 +363,7 @@ fn the_span_that_was_asked_for_is_accepted() {
                 end: 1024,
             }),
             None,
+            None,
         )
         .unwrap();
 
@@ -372,7 +377,7 @@ fn a_name_that_does_not_resolve_is_refused_once_and_never_retried() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let failure = source
-        .fetch("http://fetchloom.invalid/object", None, None)
+        .fetch("http://fetchloom.invalid/object", None, None, None)
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::NetworkRefused);
@@ -402,7 +407,7 @@ fn a_source_that_goes_quiet_mid_body_runs_out_of_time() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let body = source
-        .fetch(&format!("{}/object", server.origin()), None, None)
+        .fetch(&format!("{}/object", server.origin()), None, None, None)
         .unwrap();
     let mut sink = Vec::new();
     let mut body = body.body;
@@ -426,7 +431,7 @@ fn a_server_that_refuses_the_handshake_fails_on_the_connection() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let failure = source
-        .fetch(&format!("{secured}/object"), None, None)
+        .fetch(&format!("{secured}/object"), None, None, None)
         .unwrap_err();
 
     assert_eq!(
@@ -464,6 +469,7 @@ fn a_credential_the_source_rejects_is_reported_as_the_credential_and_not_the_sta
                 &format!("{}/object", server.origin()),
                 None,
                 Some(&credential),
+                None,
             )
             .unwrap_err();
 
@@ -492,7 +498,7 @@ fn a_status_a_run_carried_no_credential_for_is_a_missing_credential() {
         std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
     );
     let failure = source
-        .fetch(&format!("{}/object", server.origin()), None, None)
+        .fetch(&format!("{}/object", server.origin()), None, None, None)
         .unwrap_err();
 
     assert_eq!(failure.kind(), ErrorKind::PolicyCredentialMissing);
@@ -549,5 +555,89 @@ fn an_index_larger_than_the_bound_fails_rather_than_listing_what_fitted() {
         ErrorKind::ResourceLimit,
         "an index past the size bound was answered with {failure:?} rather than a resource limit, \
          so a listing can be silently clipped to whatever fitted"
+    );
+}
+
+#[test]
+fn a_resume_on_the_third_rung_asks_the_source_to_confirm_the_tag_it_stands_on() {
+    let server = TestServer::start(Script::serving(object())).unwrap();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+
+    let body = source
+        .fetch(
+            &format!("{}/object", server.origin()),
+            Some(ByteRange {
+                start: 512,
+                end: 1024,
+            }),
+            None,
+            Some("\"one\""),
+        )
+        .unwrap();
+    assert_eq!(read(body.body), object()[512..]);
+
+    let asked = server.received();
+    let last = asked.last().unwrap();
+    assert_eq!(
+        last.header("if-range"),
+        Some("\"one\""),
+        "a rung three resume appended to a partial without asking the source to confirm the tag"
+    );
+    assert_eq!(last.header("range"), Some("bytes=512-1023"));
+}
+
+#[test]
+fn a_whole_object_is_never_asked_for_conditionally_on_a_tag() {
+    let server = TestServer::start(Script::serving(object())).unwrap();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+
+    let body = source
+        .fetch(
+            &format!("{}/object", server.origin()),
+            None,
+            None,
+            Some("\"one\""),
+        )
+        .unwrap();
+    assert_eq!(read(body.body), object());
+
+    assert_eq!(
+        server.received().last().unwrap().header("if-range"),
+        None,
+        "If-Range was sent on a request that asked for no range, where it means nothing"
+    );
+}
+
+#[test]
+fn a_range_asked_for_with_no_tag_carries_no_conditional() {
+    let server = TestServer::start(Script::serving(object())).unwrap();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+
+    let body = source
+        .fetch(
+            &format!("{}/object", server.origin()),
+            Some(ByteRange {
+                start: 512,
+                end: 1024,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(read(body.body), object()[512..]);
+
+    assert_eq!(
+        server.received().last().unwrap().header("if-range"),
+        None,
+        "a resume on a rung that stands on no strong tag sent one anyway"
     );
 }

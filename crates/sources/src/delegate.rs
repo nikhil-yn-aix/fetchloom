@@ -42,10 +42,13 @@ macro_rules! delegating_source {
                 location: &str,
                 range: Option<ByteRange>,
                 credential: Option<&Credential>,
+                resuming: Option<&str>,
             ) -> Result<Served<Self::Body>, Error> {
                 let resolved = self.located(location, credential)?;
                 let started = Instant::now();
-                let (answer, served) = self.http.send(Method::Get, &resolved, range, credential)?;
+                let (answer, served) =
+                    self.http
+                        .resuming(Method::Get, &resolved, range, credential, resuming)?;
                 let elapsed = started.elapsed();
                 check_fetch_status(&resolved, range, &answer, credential)?;
                 let metadata = self.metadata(&served, &answer, elapsed, location);

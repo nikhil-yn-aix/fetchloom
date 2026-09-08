@@ -74,7 +74,11 @@ fn a_failing_get_gives_up_no_lock_entry_and_states_no_reason_for_one() {
     let broken = temporary.path().join("broken.tar.gz");
     std::fs::write(&broken, b"this is not gzip").unwrap();
     let (code, driver) = run(broken.to_str().unwrap(), &temporary, &[]);
-    assert_ne!(code, ExitCode::Success);
+    assert_eq!(
+        code,
+        ExitCode::Archive,
+        "an archive this build cannot read is what this run failed on"
+    );
 
     assert_eq!(
         driver

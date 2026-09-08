@@ -142,9 +142,12 @@ impl Source for ObjectStoreSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         let started = Instant::now();
-        let (answer, served) = self.http.send(Method::Get, location, range, credential)?;
+        let (answer, served) =
+            self.http
+                .resuming(Method::Get, location, range, credential, resuming)?;
         let time_to_first_byte = started.elapsed();
         check_fetch_status(location, range, &answer, credential)?;
         let metadata = metadata_of(&served, &answer, time_to_first_byte)?;

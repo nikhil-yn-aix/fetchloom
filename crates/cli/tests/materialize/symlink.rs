@@ -42,6 +42,7 @@ fn get(source: &Path, destination: &Path, cache: &Path) -> std::process::Output 
 fn a_symlink_in_the_source_is_created_in_the_destination() {
     let temporary = TempDir::new().unwrap();
     if !links_are_permitted(temporary.path()) {
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     let source = temporary.path().join("source");
@@ -83,6 +84,7 @@ fn a_symlink_in_the_source_is_created_in_the_destination() {
 fn a_materialized_tree_holding_a_symlink_verifies_to_the_tree_it_reported() {
     let temporary = TempDir::new().unwrap();
     if !links_are_permitted(temporary.path()) {
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     let source = temporary.path().join("source");

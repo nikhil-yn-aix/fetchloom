@@ -118,7 +118,7 @@ fn a_redirect_to_something_unfollowable_never_repeats_the_secret_it_points_at() 
     let location = format!("{}/object", server.origin());
 
     let refused = http()
-        .fetch(&location, None, None)
+        .fetch(&location, None, None, None)
         .expect_err("a redirect to a scheme no source reaches was followed");
 
     carries_no_secret(&everything(&refused), "an unfollowable redirect failure");

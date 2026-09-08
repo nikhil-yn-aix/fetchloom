@@ -93,16 +93,3 @@ fn a_bearer_credential_never_renders_its_value() {
         "the bearer value reached an output: {written}"
     );
 }
-
-#[test]
-fn the_two_shapes_are_distinguishable_without_reading_a_secret() {
-    let bearer = Credential {
-        host: Host::new("host.example"),
-        origin: CredentialOrigin::Environment,
-        secrets: Secrets::Bearer {
-            value: Secret::new("value".to_owned()),
-        },
-    };
-    assert!(matches!(bearer.secrets, Secrets::Bearer { .. }));
-    assert!(matches!(signing().secrets, Secrets::Signing { .. }));
-}

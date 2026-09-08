@@ -5,6 +5,38 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Tier {
+    Unit,
+    Integration,
+    System,
+}
+
+impl Tier {
+    fn named(name: &str) -> Option<Self> {
+        match name {
+            "unit" => Some(Self::Unit),
+            "integration" => Some(Self::Integration),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unit => "unit",
+            Self::Integration => "integration",
+            Self::System => "system",
+        }
+    }
+}
+
+struct Suite {
+    package: &'static str,
+    target: &'static str,
+    tier: Tier,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Machine {
     Anywhere,
@@ -20,6 +52,329 @@ struct Lane {
     tools: &'static [&'static str],
     msrv: bool,
 }
+
+const SUITES: [Suite; 64] = [
+    Suite {
+        package: "fetchloom-archive",
+        target: "bomb",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "corpus",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "extract",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "formats",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "fuzz",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "passes",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "resolve",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "separator",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "streamed_zip",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-archive",
+        target: "zip64",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "compaction",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "compression",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "concurrency",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "storage",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "store",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "volumes",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "interruption",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cache",
+        target: "witness",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "candidate",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "contracts",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "credential",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "damage",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "digest_track",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "document",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "filesystem_failure",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "flights",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "laws",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "merge",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "metadata",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "network",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "partial_key",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "reconcile",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "selection",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "split",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "transfer",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "tuning",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "witness",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "work",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-faults",
+        target: "archives",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-faults",
+        target: "http",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-faults",
+        target: "precondition",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-faults",
+        target: "schedule",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "capability",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "capability_race",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "counting",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "credentials",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "filesystem",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "locking",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-platform",
+        target: "publication",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "adapter_suite",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "credentials",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "ftp",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "help",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "http",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "object_store",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "provider",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "search",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "secrets",
+        tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-view",
+        target: "isolation",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-cli",
+        target: "command",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cli",
+        target: "materialize",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cli",
+        target: "policy",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cli",
+        target: "surface",
+        tier: Tier::System,
+    },
+    Suite {
+        package: "fetchloom-cli",
+        target: "transfer",
+        tier: Tier::System,
+    },
+];
 
 const VOLUME_PACKAGES: &[&str] = &[
     "bindfs",
@@ -181,6 +536,7 @@ struct Degrade {
 struct Report {
     steps: Vec<Step>,
     degrades: Vec<Degrade>,
+    declinations: Vec<String>,
 }
 
 impl Report {
@@ -188,6 +544,7 @@ impl Report {
         Self {
             steps: Vec::new(),
             degrades: Vec::new(),
+            declinations: Vec::new(),
         }
     }
 
@@ -284,6 +641,21 @@ pub fn run(workspace: &Path, arguments: &[String]) -> bool {
     if arguments.iter().any(|argument| argument == "--provision") {
         return provision(workspace, asked);
     }
+    if let Some(name) = crate::argument_value(arguments, "--tier") {
+        let Some(tier) = Tier::named(name) else {
+            eprintln!("no tier is named {name}. The tiers are unit, integration, system");
+            return false;
+        };
+        let mut report = Report::new();
+        let built = if tier == Tier::System {
+            volumes(workspace, &mut report)
+        } else {
+            BTreeMap::new()
+        };
+        tier_step(tier, workspace, &mut report, &built);
+        summary(&report);
+        return !report.failed();
+    }
 
     let mut report = Report::new();
     if let Some(lane) = asked {
@@ -298,6 +670,7 @@ pub fn run(workspace: &Path, arguments: &[String]) -> bool {
         work(lane, workspace, &mut report);
     } else if arguments.iter().any(|argument| argument == "--fast") {
         push_gate(workspace, &mut report);
+        tiers_up_to(Tier::Integration, workspace, &mut report);
     } else {
         for lane in &LANES {
             if lane.here() {
@@ -387,7 +760,13 @@ fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
         if !volumes.is_empty() {
             test.env("FETCHLOOM_VERIFY_VOLUMES", "1");
         }
+        let record = workspace
+            .join("target")
+            .join(format!("declined-{target}.txt"));
+        let _ = std::fs::remove_file(&record);
+        test.env("FETCHLOOM_TEST_DECLINED", &record);
         report.step(&format!("test {target}"), test);
+        report.declinations.extend(declinations(&record));
     }
     if lane.msrv {
         msrv(workspace, report);
@@ -619,6 +998,77 @@ fn privileged() -> Option<Command> {
     Some(command)
 }
 
+fn tiers_up_to(highest: Tier, workspace: &Path, report: &mut Report) -> bool {
+    let built = if highest == Tier::System {
+        volumes(workspace, report)
+    } else {
+        BTreeMap::new()
+    };
+    let mut passed = true;
+    for tier in [Tier::Unit, Tier::Integration, Tier::System] {
+        if tier > highest {
+            break;
+        }
+        passed &= tier_step(tier, workspace, report, &built);
+    }
+    passed
+}
+
+fn tier_step(
+    tier: Tier,
+    workspace: &Path,
+    report: &mut Report,
+    built: &BTreeMap<String, String>,
+) -> bool {
+    let mut packages: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for suite in SUITES.iter().filter(|suite| suite.tier == tier) {
+        packages
+            .entry(suite.package)
+            .or_default()
+            .push(suite.target);
+    }
+    let mut arguments: Vec<String> = vec!["test".to_owned()];
+    for (package, targets) in &packages {
+        arguments.push("-p".to_owned());
+        arguments.push((*package).to_owned());
+        for target in targets {
+            arguments.push("--test".to_owned());
+            arguments.push((*target).to_owned());
+        }
+    }
+    let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let mut command = cargo(workspace, &borrowed);
+    for (name, value) in built {
+        command.env(name, value);
+    }
+    if !built.is_empty() {
+        command.env("FETCHLOOM_VERIFY_VOLUMES", "1");
+    }
+    let record = workspace
+        .join("target")
+        .join(format!("declined-{}.txt", tier.label()));
+    let _ = std::fs::remove_file(&record);
+    command.env("FETCHLOOM_TEST_DECLINED", &record);
+    let passed = report.step(&format!("test {}", tier.label()), command);
+    report.declinations.extend(declinations(&record));
+    passed
+}
+
+fn declinations(record: &Path) -> Vec<String> {
+    let Ok(written) = std::fs::read_to_string(record) else {
+        return Vec::new();
+    };
+    let mut found: Vec<String> = written
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 fn volumes(workspace: &Path, report: &mut Report) -> BTreeMap<String, String> {
     let file = workspace.join("target").join("volumes.env");
     let script = |name: &str| {
@@ -785,16 +1235,20 @@ fn summary(report: &Report) {
         .filter(|step| !step.passed && !step.skipped)
         .count();
     println!(
-        "{} of {} steps passed, {skipped} skipped, {} degradations",
+        "{} of {} steps passed, {skipped} skipped, {} degradations, {} tests declined",
         report.steps.len() - failed - skipped,
         report.steps.len() - skipped,
-        report.degrades.len()
+        report.degrades.len(),
+        report.declinations.len()
     );
     for step in report.steps.iter().filter(|step| step.skipped) {
         println!(
             "NOT VERIFIED {}: {}. This run proves nothing about what that step covers, and it is \n             not counted above.",
             step.name, step.declined
         );
+    }
+    for declined in &report.declinations {
+        println!("{declined}, so it ran and proved nothing about what it covers.");
     }
 }
 
@@ -859,7 +1313,149 @@ mod tests {
         reason = "test setup, where a failure to build the input is the assertion"
     )]
 
-    use super::{HOOK, LANES, install_hook, lane};
+    use super::{HOOK, LANES, SUITES, declinations, install_hook, lane};
+
+    fn targets_on_disk() -> Vec<(String, String)> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("crates");
+        let mut found = Vec::new();
+        for package in std::fs::read_dir(&crates).unwrap() {
+            let package = package.unwrap().path();
+            let name = format!(
+                "fetchloom-{}",
+                package.file_name().unwrap().to_string_lossy()
+            );
+            let tests = package.join("tests");
+            let Ok(entries) = std::fs::read_dir(&tests) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if path.join("main.rs").is_file() {
+                        found.push((name.clone(), stem));
+                    }
+                    continue;
+                }
+                if path.extension().is_some_and(|kind| kind == "rs") {
+                    found.push((name.clone(), stem));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_test_target_this_workspace_builds_is_in_exactly_one_tier() {
+        let mut named: Vec<(String, String)> = SUITES
+            .iter()
+            .map(|suite| (suite.package.to_owned(), suite.target.to_owned()))
+            .collect();
+        let before = named.len();
+        named.sort();
+        named.dedup();
+        assert_eq!(before, named.len(), "a target is named by two tiers");
+
+        let mut found = targets_on_disk();
+        found.sort();
+        assert!(
+            found.len() > 40,
+            "the walk found {} test targets, so it proves nothing",
+            found.len()
+        );
+        assert_eq!(
+            found, named,
+            "a test target this workspace builds is in no tier, or a tier names one that is not there"
+        );
+    }
+
+    fn test_sources() -> Vec<std::path::PathBuf> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("crates");
+        let mut pending: Vec<std::path::PathBuf> = std::fs::read_dir(&crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path().join("tests"))
+            .filter(|path| path.is_dir())
+            .collect();
+        let mut found = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|kind| kind == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_volume_a_test_asks_for_is_declined_by_name_when_the_machine_has_none() {
+        let asking = ["scratch_on(", "volume_directories(", "volumes(Property::"];
+        let mut checked = 0usize;
+        let mut silent = Vec::new();
+        for path in test_sources() {
+            if path.components().any(|part| part.as_os_str() == "support") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            for (number, line) in lines.iter().enumerate() {
+                if !asking.iter().any(|call| line.contains(call)) {
+                    continue;
+                }
+                checked += 1;
+                let first = number.saturating_sub(3);
+                let last = (number + 4).min(lines.len());
+                let around = lines[first..last].join("\n");
+                if !around.contains("require!") && !around.contains("decline!") {
+                    silent.push(format!("{}:{}", path.display(), number + 1));
+                }
+            }
+        }
+        assert!(
+            checked > 10,
+            "the walk found {checked} volume requests, so it proves nothing"
+        );
+        assert!(
+            silent.is_empty(),
+            "a test asks for a volume and passes in silence when the machine has none: {silent:?}"
+        );
+    }
+
+    #[test]
+    fn a_declination_each_test_wrote_is_reported_once_and_in_order() {
+        let directory =
+            std::env::temp_dir().join(format!("fetchloom-xtask-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let record = directory.join("declined.txt");
+        std::fs::write(
+            &record,
+            "NOT VERIFIED second: needs a second volume\nNOT VERIFIED first: needs a second user\n\nNOT VERIFIED second: needs a second volume\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            declinations(&record),
+            vec![
+                "NOT VERIFIED first: needs a second user".to_owned(),
+                "NOT VERIFIED second: needs a second volume".to_owned(),
+            ]
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_run_where_no_test_declined_reports_nothing() {
+        assert!(declinations(std::path::Path::new("no-such-record.txt")).is_empty());
+    }
 
     fn lanes_the_workflows_name() -> Vec<String> {
         let workflows = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

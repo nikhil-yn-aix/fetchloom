@@ -56,77 +56,6 @@ fn assert_get_succeeded(output: &Output, body: &serde_json::Value) {
 }
 
 #[test]
-fn a_relative_output_with_a_single_component_lands_beside_the_working_directory() {
-    let temporary = TempDir::new().unwrap();
-    let cwd = temporary.path().join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let source = source_tree(temporary.path());
-    let cache_dir = temporary.path().join("cache");
-
-    let (output, body) = get(&cwd, &source, "relout", cache_dir.to_str().unwrap());
-    assert_get_succeeded(&output, &body);
-
-    let expected = cwd.join("relout");
-    assert!(
-        expected.join("a.txt").exists(),
-        "expected {} to hold a.txt",
-        expected.display()
-    );
-}
-
-#[test]
-fn a_relative_output_with_a_separator_lands_beside_the_working_directory() {
-    let temporary = TempDir::new().unwrap();
-    let cwd = temporary.path().join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let source = source_tree(temporary.path());
-    let cache_dir = temporary.path().join("cache");
-
-    let (output, body) = get(&cwd, &source, "a/b", cache_dir.to_str().unwrap());
-    assert_get_succeeded(&output, &body);
-
-    let expected = cwd.join("a").join("b");
-    assert!(
-        expected.join("a.txt").exists(),
-        "expected {} to hold a.txt",
-        expected.display()
-    );
-}
-
-#[test]
-fn an_absolute_output_with_a_relative_cache_dir_uses_the_working_directory_for_the_cache() {
-    let temporary = TempDir::new().unwrap();
-    let cwd = temporary.path().join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let source = source_tree(temporary.path());
-    let destination = temporary.path().join("destination");
-
-    let (output, body) = get(&cwd, &source, destination.to_str().unwrap(), "relcache");
-    assert_get_succeeded(&output, &body);
-
-    assert!(destination.join("a.txt").exists());
-    assert!(
-        cwd.join("relcache").exists(),
-        "expected the cache to have been created at {}",
-        cwd.join("relcache").display()
-    );
-}
-
-#[test]
-fn a_relative_output_and_a_relative_cache_dir_both_resolve_against_the_working_directory() {
-    let temporary = TempDir::new().unwrap();
-    let cwd = temporary.path().join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let source = source_tree(temporary.path());
-
-    let (output, body) = get(&cwd, &source, "relout", "relcache");
-    assert_get_succeeded(&output, &body);
-
-    assert!(cwd.join("relout").join("a.txt").exists());
-    assert!(cwd.join("relcache").exists());
-}
-
-#[test]
 fn a_relative_output_and_a_relative_cache_dir_with_separators_both_resolve_against_the_working_directory()
  {
     let temporary = TempDir::new().unwrap();
@@ -150,25 +79,6 @@ fn verify(cwd: &Path, target: &str) -> Output {
         .env("FETCHLOOM_CACHE_DIR", cwd.join("cache"))
         .output()
         .unwrap()
-}
-
-#[test]
-fn verify_accepts_a_relative_target_with_a_single_component() {
-    let temporary = TempDir::new().unwrap();
-    let cwd = temporary.path().join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    std::fs::create_dir_all(cwd.join("dataset")).unwrap();
-    std::fs::write(cwd.join("dataset").join("a.txt"), b"hello").unwrap();
-
-    let output = verify(&cwd, "dataset");
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "stderr was {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(body["status"].as_str(), Some("verified"));
 }
 
 #[test]

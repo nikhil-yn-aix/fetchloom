@@ -193,3 +193,32 @@ fn the_host_of_a_location_is_the_address_a_bracketed_literal_holds() {
     );
     assert_eq!(Host::of_location("./relative/path").as_str(), "");
 }
+
+#[test]
+fn a_candidate_this_run_never_measured_is_neither_preferred_nor_refused() {
+    let measure = |mut candidate: Probed| {
+        candidate.throughput = Some(1);
+        candidate.time_to_first_byte_ms = Some(9999);
+        candidate
+    };
+
+    let (taken, separator) = chosen(vec![
+        probed(0, "https://silent.example/object"),
+        measure(probed(1, "https://measured.example/object")),
+    ]);
+    assert_eq!(
+        taken, "https://silent.example/object",
+        "a candidate this run never measured was refused for its silence"
+    );
+    assert_eq!(separator, Separator::ManifestOrder);
+
+    let (taken, separator) = chosen(vec![
+        measure(probed(0, "https://measured.example/object")),
+        probed(1, "https://silent.example/object"),
+    ]);
+    assert_eq!(
+        taken, "https://measured.example/object",
+        "a candidate this run never measured was preferred over one it measured"
+    );
+    assert_eq!(separator, Separator::ManifestOrder);
+}

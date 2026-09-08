@@ -83,7 +83,26 @@ impl HttpSource {
         range: Option<ByteRange>,
         credential: Option<&Credential>,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
-        self.send_conditional(method, location, range, credential, &Validator::default())
+        self.resuming(method, location, range, credential, None)
+    }
+
+    pub(crate) fn resuming(
+        &self,
+        method: Method,
+        location: &str,
+        range: Option<ByteRange>,
+        credential: Option<&Credential>,
+        resuming: Option<&str>,
+    ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
+        self.sent(Sending {
+            method,
+            location,
+            range,
+            credential,
+            asking: &Validator::default(),
+            body: None,
+            resuming,
+        })
     }
 
     pub(crate) fn send_conditional(
@@ -94,7 +113,15 @@ impl HttpSource {
         credential: Option<&Credential>,
         asking: &Validator,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
-        self.sent(method, location, range, credential, asking, None)
+        self.sent(Sending {
+            method,
+            location,
+            range,
+            credential,
+            asking,
+            body: None,
+            resuming: None,
+        })
     }
 
     pub(crate) fn send_json(
@@ -103,25 +130,30 @@ impl HttpSource {
         body: &str,
         credential: Option<&Credential>,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
-        self.sent(
-            Method::Post,
+        self.sent(Sending {
+            method: Method::Post,
             location,
-            None,
+            range: None,
             credential,
-            &Validator::default(),
-            Some(body),
-        )
+            asking: &Validator::default(),
+            body: Some(body),
+            resuming: None,
+        })
     }
 
     fn sent(
         &self,
-        method: Method,
-        location: &str,
-        range: Option<ByteRange>,
-        credential: Option<&Credential>,
-        asking: &Validator,
-        body: Option<&str>,
+        sending: Sending<'_>,
     ) -> Result<(ureq::http::Response<ureq::Body>, String), Error> {
+        let Sending {
+            method,
+            location,
+            range,
+            credential,
+            asking,
+            body,
+            resuming,
+        } = sending;
         fetchloom_engine::network::allowed(location)?;
         let start = Origin::of(location)?;
         let mut current = location.to_owned();
@@ -148,6 +180,7 @@ impl HttpSource {
                 method,
                 range,
                 asking,
+                resuming,
             };
             self.work.issued_request();
             let answer = match method {
@@ -177,6 +210,17 @@ impl HttpSource {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Sending<'a> {
+    method: Method,
+    location: &'a str,
+    range: Option<ByteRange>,
+    credential: Option<&'a Credential>,
+    asking: &'a Validator,
+    body: Option<&'a str>,
+    resuming: Option<&'a str>,
+}
+
 struct Asked<'a> {
     credential: Option<&'a Credential>,
     location: &'a str,
@@ -184,6 +228,7 @@ struct Asked<'a> {
     method: Method,
     range: Option<ByteRange>,
     asking: &'a Validator,
+    resuming: Option<&'a str>,
 }
 
 fn decorated<Any>(
@@ -202,6 +247,11 @@ fn decorated<Any>(
             "Range",
             &format!("bytes={}-{}", range.start, range.end.saturating_sub(1)),
         );
+    }
+    if let Some(tag) = asked.resuming
+        && asked.range.is_some()
+    {
+        request = request.header("If-Range", tag);
     }
     if let Some(tag) = asked.asking.etag.as_deref() {
         request = request.header("If-None-Match", tag);
@@ -461,9 +511,10 @@ impl Source for HttpSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         let started = Instant::now();
-        let (answer, served) = self.send(Method::Get, location, range, credential)?;
+        let (answer, served) = self.resuming(Method::Get, location, range, credential, resuming)?;
         let time_to_first_byte = started.elapsed();
         check_fetch_status(location, range, &answer, credential)?;
 

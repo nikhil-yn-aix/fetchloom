@@ -112,9 +112,7 @@ fn preallocation_reserves_the_whole_length_before_anything_is_written() {
 #[test]
 fn a_cross_volume_publish_is_refused_and_never_becomes_a_copy() {
     let Some(other) = support::other_volume_scratch() else {
-        eprintln!(
-            "skipped: a cross-volume publish needs two writable volumes and this machine has one"
-        );
+        fetchloom_faults::decline!("a second writable volume");
         return;
     };
     let scratch = support::scratch();
@@ -144,7 +142,7 @@ fn a_cross_volume_publish_is_refused_and_never_becomes_a_copy() {
 #[test]
 fn two_volumes_report_different_identifiers() {
     let Some(other) = support::other_volume_scratch() else {
-        eprintln!("skipped: comparing volumes needs two writable volumes and this machine has one");
+        fetchloom_faults::decline!("a second writable volume");
         return;
     };
     let scratch = support::scratch();

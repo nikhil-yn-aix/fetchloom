@@ -104,3 +104,13 @@ fn validator_of(identity: &SourceIdentity) -> Option<String> {
         _ => None,
     }
 }
+
+/// The entity tag a rung three resume may send as `If-Range`. Rung three is the
+/// only rung that sends one, and only a strong tag qualifies, so every other
+/// identity answers nothing.
+pub(super) fn strong_tag(identity: &SourceIdentity, rung: ResumeRung) -> Option<&str> {
+    match (rung, identity) {
+        (ResumeRung::StrongValidator, SourceIdentity::StrongValidator(tag)) => Some(tag),
+        _ => None,
+    }
+}

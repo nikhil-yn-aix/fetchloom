@@ -116,6 +116,7 @@ fn a_store_advertising_ranges_reports_support_and_serves_a_span() {
                 end: 1024,
             }),
             None,
+            None,
         )
         .unwrap();
     assert_eq!(read(fetched.body), object()[512..]);

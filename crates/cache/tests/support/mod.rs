@@ -146,7 +146,10 @@ pub fn entries_in(directory: &Path) -> Vec<std::path::PathBuf> {
             entries
                 .flatten()
                 .map(|entry| entry.path())
-                .filter(|path| path.extension().is_none_or(|kind| kind != "owner"))
+                .filter(|path| {
+                    path.extension()
+                        .is_none_or(|kind| kind != "owner" && kind != "session")
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -162,7 +165,10 @@ pub fn pretend_a_previous_boot(layout: &fetchloom_cache::layout::Layout) {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_none_or(|kind| kind != "owner") {
+            if path
+                .extension()
+                .is_none_or(|kind| kind != "owner" && kind != "session")
+            {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {
@@ -393,4 +399,24 @@ pub fn incompressible(length: usize, seed: u64) -> Vec<u8> {
             }
         })
         .collect()
+}
+
+/// The tier the product defaults to, because the flush a kill has to land
+/// inside is only issued above `fast`.
+pub fn faulty_cache_at(
+    root: &Path,
+) -> Result<Cache<fetchloom_faults::FaultyPlatform<NativePlatform>>, Error> {
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    Cache::open(
+        root,
+        fetchloom_faults::FaultyPlatform::new(NativePlatform::new(std::sync::Arc::clone(&work))),
+        fetchloom_cache::CacheSettings {
+            tier: DurabilityTier::Normal,
+            policy: VerificationPolicy::Fingerprint,
+            io: IoMode::Buffered,
+            compression: CompressionChoice::Auto,
+        },
+        work,
+        processor(),
+    )
 }

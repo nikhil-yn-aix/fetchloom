@@ -76,14 +76,33 @@ fn the_size_the_lookup_reports_is_the_length_of_the_object() {
     assert_eq!(held.size_of(digest), Some(bytes.len() as u64));
 }
 
+/// contracts.md:278 — exactly one lookup answers where an object is, and a
+/// caller is given bytes rather than a path it opens itself. The names this
+/// forbids are read from `layout.rs` rather than written here, so renaming the
+/// accessor does not quietly retire the rule.
 #[test]
-fn nothing_outside_the_lookup_turns_a_digest_into_a_path() {
+fn nothing_outside_the_lookup_turns_a_digest_into_an_object_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap()
         .to_path_buf();
+
+    let layout = std::fs::read_to_string(root.join("crates/cache/src/layout.rs")).unwrap();
+    let forbidden: Vec<String> = layout
+        .lines()
+        .filter(|line| line.contains("digest: ContentDigest) -> PathBuf"))
+        .filter_map(|line| line.split_once("fn "))
+        .filter_map(|(_, rest)| rest.split('(').next())
+        .filter(|name| name.contains("object"))
+        .map(|name| format!(".{name}("))
+        .collect();
+    assert!(
+        !forbidden.is_empty(),
+        "layout.rs names no accessor that turns a digest into an object path, so this proves nothing"
+    );
+
     let mut offenders = Vec::new();
     for crate_name in ["cache", "cli"] {
         let directory = root.join("crates").join(crate_name).join("src");
@@ -97,8 +116,10 @@ fn nothing_outside_the_lookup_turns_a_digest_into_a_path() {
             }
             let text = std::fs::read_to_string(&file).unwrap();
             for (number, line) in text.lines().enumerate() {
-                if line.contains(".object(") && !line.contains("fn object(") {
-                    offenders.push(format!("{}:{}", file.display(), number + 1));
+                for named in &forbidden {
+                    if line.contains(named.as_str()) && !line.contains("fn ") {
+                        offenders.push(format!("{}:{} {named}", file.display(), number + 1));
+                    }
                 }
             }
         }

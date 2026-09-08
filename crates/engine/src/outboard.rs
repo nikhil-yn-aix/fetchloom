@@ -24,11 +24,6 @@ impl Outboard {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
-    #[must_use]
-    pub fn leaf_count(&self) -> u64 {
-        u64::try_from((self.bytes.len() - HEADER_LEN) / NODE_LEN).unwrap_or(u64::MAX) + 1
-    }
 }
 
 #[must_use]
@@ -139,16 +134,6 @@ fn corrupt(reason: impl Into<String>) -> Error {
     Error::new(ErrorKind::CacheCorrupt, reason)
 }
 
-fn range_mismatch(range: Range<u64>) -> Error {
-    Error::new(
-        ErrorKind::IntegrityRangeMismatch,
-        format!(
-            "bytes {}..{} do not match the outboard tree; refetch that range",
-            range.start, range.end
-        ),
-    )
-}
-
 fn read_exact_at(
     outboard: &mut (impl Read + Seek),
     offset: u64,
@@ -201,37 +186,6 @@ fn tree_corrupt(range: &Range<u64>) -> Error {
         "discard the tree and rebuild it, because the node covering bytes {}..{} does not check out against the digest, so it says nothing about the object",
         range.start, range.end
     ))
-}
-
-/// # Errors
-/// `integrity.range_mismatch` naming the first group whose bytes do not match
-/// the tree, and `cache.corrupt` when the outboard itself cannot be read.
-pub fn verify_range(
-    outboard: &mut (impl Read + Seek),
-    object_len: u64,
-    content: ContentDigest,
-    range: Range<u64>,
-    group_bytes: GroupBytes<'_>,
-) -> Result<(), Error> {
-    let mut damaged = Vec::new();
-    let mut buffer = Vec::with_capacity(usize_from_u64(GROUP_LEN));
-    match walk(
-        outboard,
-        object_len,
-        content,
-        &range,
-        group_bytes,
-        &mut buffer,
-        &mut damaged,
-    ) {
-        Ok(()) => {}
-        Err(Stopped::Unreadable(error)) => return Err(error),
-        Err(Stopped::TreeCorrupt(at)) => return Err(range_mismatch(at)),
-    }
-    match damaged.first() {
-        None => Ok(()),
-        Some(group) => Err(range_mismatch(group_range(*group, object_len))),
-    }
 }
 
 /// # Errors

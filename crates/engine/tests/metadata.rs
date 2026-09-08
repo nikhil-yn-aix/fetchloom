@@ -136,10 +136,21 @@ fn every_reader_refuses_a_document_past_the_size_bound() {
         ..Limits::default()
     };
     for (reader, good, _) in readers() {
-        assert!(
-            reader.read(good, &context(&limits)).is_err(),
-            "{} read a document past the size a run bounds one to",
-            reader.format().label()
+        let error = reader
+            .read(good, &context(&limits))
+            .err()
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} read a document past the size a run bounds one to",
+                    reader.format().label()
+                )
+            });
+        assert_eq!(
+            error.kind().label(),
+            "resource.limit",
+            "{} refused a document past the size bound as something else: {}",
+            reader.format().label(),
+            error.next_action()
         );
     }
 }
@@ -148,12 +159,21 @@ fn every_reader_refuses_a_document_past_the_size_bound() {
 fn every_reader_refuses_bytes_that_are_not_its_format() {
     let limits = Limits::default();
     for (reader, _, _) in readers() {
-        assert!(
-            reader
-                .read(b"\x00\x01\x02 not any metadata format", &context(&limits))
-                .is_err(),
-            "{} read arbitrary bytes as a manifest",
-            reader.format().label()
+        let error = reader
+            .read(b"\x00\x01\x02 not any metadata format", &context(&limits))
+            .err()
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} read arbitrary bytes as a manifest",
+                    reader.format().label()
+                )
+            });
+        assert_eq!(
+            error.kind().label(),
+            "manifest.invalid",
+            "{} refused arbitrary bytes as something other than a document it cannot read: {}",
+            reader.format().label(),
+            error.next_action()
         );
     }
 }

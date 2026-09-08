@@ -22,10 +22,9 @@ use fetchloom_engine::degrade::DegradeQueue;
 use fetchloom_engine::limits::{Bandwidth, Limits};
 use fetchloom_engine::seam::policy::IoMode;
 use fetchloom_engine::threads::ThreadBudget;
-use fetchloom_engine::timestamp::Timestamp;
 use fetchloom_engine::tuning::{
-    Answer, Ceilings, Controller, FIRST_PER_HOST, HostMeasurement, SUSTAINED_WINDOWS,
-    TRANSFERS_CEILING, WriteRate, debt, order_candidates, resolve_io_mode,
+    Answer, Ceilings, Controller, FIRST_PER_HOST, SUSTAINED_WINDOWS, TRANSFERS_CEILING, WriteRate,
+    debt, resolve_io_mode,
 };
 
 fn budget(threads: usize) -> ThreadBudget {
@@ -151,78 +150,6 @@ fn a_rate_is_read_in_one_form_and_no_other() {
             "{refused} was read as a rate"
         );
     }
-}
-
-fn measured(throughput: u64, time_to_first_byte_ms: u64) -> HostMeasurement {
-    HostMeasurement {
-        concurrency: 1,
-        throughput,
-        time_to_first_byte_ms,
-        observed_at: Timestamp::from_epoch_seconds(0),
-    }
-}
-
-fn locations(count: usize) -> Vec<String> {
-    (0..count)
-        .map(|index| format!("https://host-{index}/object"))
-        .collect()
-}
-
-#[test]
-fn with_no_measurements_at_all_the_order_is_exactly_the_input_order() {
-    let candidates = locations(4);
-    let ordered = order_candidates(&candidates, &|_location| None);
-    assert_eq!(ordered, candidates);
-}
-
-#[test]
-fn a_host_with_higher_recorded_throughput_sorts_before_one_with_lower() {
-    let candidates = locations(2);
-    let ordered = order_candidates(&candidates, &|location| {
-        if location == candidates[0] {
-            Some(measured(100, 50))
-        } else {
-            Some(measured(200, 50))
-        }
-    });
-    assert_eq!(ordered, vec![candidates[1].clone(), candidates[0].clone()]);
-}
-
-#[test]
-fn equal_throughput_sorts_by_lower_time_to_first_byte() {
-    let candidates = locations(2);
-    let ordered = order_candidates(&candidates, &|location| {
-        if location == candidates[0] {
-            Some(measured(100, 80))
-        } else {
-            Some(measured(100, 20))
-        }
-    });
-    assert_eq!(ordered, vec![candidates[1].clone(), candidates[0].clone()]);
-}
-
-#[test]
-fn fully_equal_measurements_keep_manifest_order() {
-    let candidates = locations(3);
-    let ordered = order_candidates(&candidates, &|_location| Some(measured(100, 50)));
-    assert_eq!(ordered, candidates);
-}
-
-#[test]
-fn an_unmeasured_candidate_never_jumps_ahead_of_a_measured_one() {
-    let candidates = locations(2);
-    let ordered = order_candidates(&candidates, &|location| {
-        if location == candidates[0] {
-            None
-        } else {
-            Some(measured(1, 999))
-        }
-    });
-    assert_eq!(
-        ordered,
-        vec![candidates[1].clone(), candidates[0].clone()],
-        "the unmeasured candidate outranked one with an actual measurement, however low"
-    );
 }
 
 fn capabilities(backing: Backing, scanner: Scanner) -> VolumeCapabilities {

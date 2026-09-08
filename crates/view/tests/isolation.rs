@@ -138,12 +138,31 @@ fn the_view_reaches_no_filesystem_no_network_and_no_process() {
 }
 
 #[test]
-fn the_view_takes_events_and_returns_text() {
+fn the_view_shows_what_the_stream_told_it_and_nothing_it_was_not_told() {
     let sequence = fetchloom_engine::event::Sequence::new();
     let mut view = fetchloom_view::LiveView::new();
-    view.observe(&fetchloom_engine::event::Event::new(
-        &sequence,
-        fetchloom_engine::event::EventPayload::RunStart,
-    ));
-    assert!(!view.render().is_empty());
+
+    let before = view.render();
+    assert!(
+        before.contains("dataset  ?"),
+        "a view told nothing claimed to know a dataset: {before}"
+    );
+
+    view.observe(
+        &fetchloom_engine::event::Event::new(
+            &sequence,
+            fetchloom_engine::event::EventPayload::RunStart,
+        )
+        .with_dataset("silesia"),
+    );
+
+    let after = view.render();
+    assert!(
+        after.contains("silesia"),
+        "the view was told the dataset and does not show it: {after}"
+    );
+    assert_ne!(
+        before, after,
+        "the view rendered the same text before and after it was told anything"
+    );
 }

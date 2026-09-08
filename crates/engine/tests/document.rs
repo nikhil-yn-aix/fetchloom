@@ -265,24 +265,41 @@ fn a_manifest_naming_no_artifact_is_refused() {
 }
 
 #[test]
-fn a_document_past_a_bound_is_refused_rather_than_read() {
+fn a_document_past_a_bound_is_refused_as_a_resource_limit_rather_than_as_bad_syntax() {
     let small = Limits {
         manifest_size: 8,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &small, Bound::Foreign).is_err());
-
     let few = Limits {
         manifest_nodes: 3,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &few, Bound::Foreign).is_err());
+    for (bound, limits) in [("size", small), ("nodes", few)] {
+        let error = parse(YAML.as_bytes(), Syntax::Yaml, &limits, Bound::Foreign)
+            .expect_err("a document past a bound must be refused");
+        assert_eq!(
+            error.kind().label(),
+            "resource.limit",
+            "the {bound} bound refused a document as something other than a resource limit: {}",
+            error.next_action()
+        );
+    }
+}
 
+#[test]
+fn a_document_nested_past_the_depth_bound_is_refused_as_a_malformed_document() {
     let shallow = Limits {
         nesting_depth: 1,
         ..Limits::default()
     };
-    assert!(parse(YAML.as_bytes(), Syntax::Yaml, &shallow, Bound::Foreign).is_err());
+    let error = parse(YAML.as_bytes(), Syntax::Yaml, &shallow, Bound::Foreign)
+        .expect_err("a document nested past the depth bound must be refused");
+    assert_eq!(error.kind().label(), "manifest.invalid");
+    assert!(
+        error.next_action().contains("nests too deeply"),
+        "the refusal did not say what was wrong with the document: {}",
+        error.next_action()
+    );
 }
 
 #[test]
@@ -311,7 +328,9 @@ fn a_receipt_renders_with_the_widest_fingerprint_any_platform_can_produce() {
         destination: std::path::PathBuf::from("/data/silesia"),
         accepted_terms: None,
         fetchloom: "0.1.0-dev".to_owned(),
-        completed_at: fetchloom_engine::timestamp::Timestamp::from_epoch_seconds(1_700_000_000),
+        completed_at: "2023-11-14T22:13:20Z"
+            .parse::<fetchloom_engine::timestamp::Timestamp>()
+            .unwrap(),
     };
 
     let rendered = receipt
@@ -366,7 +385,9 @@ fn a_receipt_for_a_large_tree_reads_back_after_it_is_written() {
         destination: std::path::PathBuf::from("large-destination"),
         accepted_terms: None,
         fetchloom: "0.1.0".to_owned(),
-        completed_at: fetchloom_engine::timestamp::Timestamp::from_epoch_seconds(1_788_612_484),
+        completed_at: "2026-09-05T13:28:04Z"
+            .parse::<fetchloom_engine::timestamp::Timestamp>()
+            .unwrap(),
     };
 
     let rendered = written.render().unwrap();

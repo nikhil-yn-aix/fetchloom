@@ -2,6 +2,7 @@
 
 use fetchloom_engine::digest::{ContentDigest, RESOLUTION_KEY_CONTEXT};
 use fetchloom_engine::error::Error;
+use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::seam::platform::Platform;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ pub struct Resolution {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Located {
-    location: String,
+    location: SafeUrl,
     resolution: Resolution,
 }
 
@@ -50,7 +51,7 @@ impl<P: Platform> Cache<P> {
             };
             if found.resolution.digest == digest {
                 return (
-                    Some(found.location),
+                    Some(found.location.as_str().to_owned()),
                     found.resolution.etag.or(found.resolution.last_modified),
                 );
             }
@@ -65,7 +66,7 @@ impl<P: Platform> Cache<P> {
         record::write(
             &self.layout().resolution_of(&key_of(location)),
             &Located {
-                location: location.to_owned(),
+                location: SafeUrl::new(location),
                 resolution: found.clone(),
             },
             self.work(),

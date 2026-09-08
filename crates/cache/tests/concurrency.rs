@@ -14,7 +14,7 @@
 )]
 
 use blake3 as _;
-use fetchloom_faults as _;
+use fetchloom_faults::Operation;
 use serde as _;
 use serde_json as _;
 use zstd as _;
@@ -39,6 +39,22 @@ const REPORT_PATH: &str = "FETCHLOOM_TEST_REPORT_PATH";
 const ABORT_AFTER: &str = "FETCHLOOM_TEST_ABORT_AFTER";
 
 const FIRST_OBJECT: &str = "FETCHLOOM_TEST_FIRST_OBJECT";
+
+/// Which platform operation of the store ends the child, and on which call, so
+/// the kill lands at a position in the store rather than a position in the test.
+const KILL_INSIDE: &str = "FETCHLOOM_TEST_KILL_INSIDE";
+
+const PUBLICATION: [(&str, Operation); 3] = [
+    ("flush", Operation::Flush),
+    ("publish", Operation::PublishFile),
+    ("create", Operation::CreateFileExclusive),
+];
+
+/// How many objects a child told to die inside the store may publish before its
+/// exit says the store never made that call.
+const PATIENCE: u32 = 32;
+
+const NEVER_CALLED: i32 = 3;
 
 const RACED_LENGTH: usize = 1 << 18;
 
@@ -141,24 +157,33 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
 
     let mut checked = support::Checked::default();
     let mut reached_publication = false;
+    let mut killed_inside = 0;
     let mut killed = 0;
     while killed < KILLS {
         let mut running = Vec::new();
         for index in 0..RACERS {
             let round = killed + u32::try_from(index).unwrap_or(0);
-            running.push(
-                child("publish_until_killed", &cache)
-                    .env(ABORT_AFTER, (round % 5).to_string())
-                    .env(FIRST_OBJECT, (round / 2).to_string())
-                    .spawn()
-                    .unwrap(),
-            );
+            let mut spawning = child("publish_until_killed", &cache);
+            spawning
+                .env(ABORT_AFTER, (round % 5).to_string())
+                .env(FIRST_OBJECT, (round / 2).to_string());
+            if index % 2 == 1 {
+                let (named, _) = PUBLICATION[(round as usize / 2) % PUBLICATION.len()];
+                spawning.env(KILL_INSIDE, format!("{named}:{}", round % 3));
+                killed_inside += 1;
+            }
+            running.push(spawning.spawn().unwrap());
         }
         for mut handle in running {
             let status = handle.wait().unwrap();
             assert!(
                 !status.success(),
                 "a writer that was told to abort exited normally after {killed} kills"
+            );
+            assert_ne!(
+                status.code(),
+                Some(NEVER_CALLED),
+                "a writer told to die inside the store published {PATIENCE} objects without the store ever making that call"
             );
         }
         killed += u32::try_from(RACERS).unwrap_or(1);
@@ -180,6 +205,10 @@ fn a_thousand_kills_leave_no_invalid_object_and_no_orphan_after_recovery() {
     assert!(
         reached_publication,
         "no round ever published anything, so nothing about publication was tested"
+    );
+    assert!(
+        killed_inside * 2 >= KILLS,
+        "only {killed_inside} of {KILLS} kills landed inside the store rather than between its calls"
     );
 
     support::pretend_a_previous_boot(&layout);
@@ -213,19 +242,40 @@ fn publish_until_killed() {
     };
     let after: u32 = after.parse().unwrap();
     let first: u32 = first.parse().unwrap();
-    let held = support::open_cache_at(Path::new(&cache)).unwrap();
+    let held = support::faulty_cache_at(Path::new(&cache)).unwrap();
+    if let Ok(inside) = std::env::var(KILL_INSIDE) {
+        let (named, ordinal) = inside.split_once(':').unwrap();
+        let operation = PUBLICATION
+            .iter()
+            .find(|(name, _)| *name == named)
+            .map(|(_, operation)| *operation)
+            .unwrap();
+        held.platform()
+            .faults()
+            .kill_at(operation, ordinal.parse().unwrap(), killed_now);
+    }
+
+    let inside = std::env::var(KILL_INSIDE).is_ok();
 
     let mut done = 0;
     loop {
-        if done == after {
+        if inside && done == PATIENCE {
+            std::process::exit(NEVER_CALLED);
+        }
+        if done == after && !inside {
             killed_now();
         }
-        let bytes = bytes_of(1 << 16, u8::try_from((first + done) % 251).unwrap_or(1));
+        let length = if inside {
+            usize::try_from(fetchloom_engine::limits::PACK_THRESHOLD).unwrap_or(1 << 20) + 1
+        } else {
+            1 << 16
+        };
+        let bytes = bytes_of(length, u8::try_from((first + done) % 251).unwrap_or(1));
         let digest = hash_bytes(&bytes);
         let lease = held.lease(PartialKey::of_content(digest)).unwrap();
         let mut writer = held.begin(&lease, bytes.len() as u64).unwrap();
         writer.write_all(&bytes).unwrap();
-        if done + 1 == after {
+        if done + 1 == after && !inside {
             killed_now();
         }
         held.commit(lease, writer).unwrap();

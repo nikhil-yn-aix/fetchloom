@@ -225,10 +225,18 @@ fn revert_with_the_object_pruned_names_what_is_missing_and_fetches_nothing() {
         out(&reverted),
         err(&reverted)
     );
+    let said = err(&reverted);
     assert!(
-        err(&reverted).contains("a.txt") || err(&reverted).contains("cache no longer holds"),
-        "stderr was {}",
-        err(&reverted)
+        said.contains("a.txt"),
+        "the failure did not name the entry it could not restore: {said}"
+    );
+    assert!(
+        said.contains("cache.corrupt"),
+        "the failure did not name the kind a missing object is: {said}"
+    );
+    assert!(
+        said.contains("blake3:"),
+        "the failure did not name the object it could not restore: {said}"
     );
     assert_eq!(
         std::fs::read(bench.at("a.txt")).unwrap(),
@@ -284,8 +292,8 @@ fn promote_writes_a_manifest_that_states_what_it_was_derived_from() {
     );
     let pinned = std::fs::read_to_string(&lock).unwrap();
     assert!(
-        pinned.contains("blake3") || pinned.contains("digest"),
-        "the lock pins nothing: {pinned}"
+        pinned.contains("blake3:"),
+        "the lock pins no content digest: {pinned}"
     );
 }
 
@@ -517,6 +525,7 @@ fn every_receipt(root: &Path, seen: &mut Vec<PathBuf>) {
 fn a_promote_of_a_tree_holding_a_link_fails_naming_what_cannot_be_kept() {
     let bench = bench();
     if !links_are_permitted(&bench.cache) {
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     assert_eq!(bench.get().status.code(), Some(0));
@@ -551,6 +560,7 @@ fn a_promote_of_a_tree_holding_a_link_fails_naming_what_cannot_be_kept() {
 fn a_conflict_on_a_symbolic_link_writes_upstreams_link_beside_yours() {
     let bench = bench();
     if !links_are_permitted(&bench.cache) {
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     linked(b"a.txt", &bench.source.join("link.txt"));
@@ -707,4 +717,63 @@ fn an_archive_upstream_changed_merges_against_the_member_you_edited() {
         b"one, moved\n"
     );
     assert_eq!(std::fs::read(bench.at("docs/two.txt")).unwrap(), b"mine\n");
+}
+
+#[test]
+fn revert_writes_no_record_and_leaves_the_one_the_run_wrote_byte_for_byte() {
+    let bench = bench();
+    assert_eq!(bench.get().status.code(), Some(0));
+    let mut before = Vec::new();
+    every_receipt(&bench.cache, &mut before);
+    assert_eq!(before.len(), 1, "found {} receipts", before.len());
+    let written = std::fs::read(&before[0]).unwrap();
+
+    std::fs::write(bench.at("a.txt"), b"mine").unwrap();
+    std::fs::remove_file(bench.at("nested/b.txt")).unwrap();
+    let reverted = bench.run(&["revert", bench.destination.to_str().unwrap()]);
+    assert_eq!(
+        reverted.status.code(),
+        Some(0),
+        "stderr was {}",
+        err(&reverted)
+    );
+
+    let mut after = Vec::new();
+    every_receipt(&bench.cache, &mut after);
+    assert_eq!(after, before, "revert wrote a record of its own");
+    assert_eq!(
+        std::fs::read(&before[0]).unwrap(),
+        written,
+        "revert rewrote the record the run left"
+    );
+}
+
+#[test]
+fn promote_of_a_destination_with_no_record_is_refused_and_writes_no_manifest() {
+    let bench = bench();
+    std::fs::create_dir_all(&bench.destination).unwrap();
+    std::fs::write(bench.at("a.txt"), b"hello").unwrap();
+    let manifest = bench.destination.with_file_name("promoted.yaml");
+
+    let promoted = bench.run(&[
+        "promote",
+        bench.destination.to_str().unwrap(),
+        "--output",
+        manifest.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        promoted.status.code(),
+        Some(10),
+        "stdout was {}",
+        out(&promoted)
+    );
+    assert!(
+        err(&promoted).contains("records what was written"),
+        "stderr was {}",
+        err(&promoted)
+    );
+    assert!(
+        !manifest.exists(),
+        "a promote of a directory nothing wrote left a manifest behind"
+    );
 }

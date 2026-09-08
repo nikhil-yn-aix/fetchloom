@@ -36,38 +36,6 @@ impl HostMeasurement {
     }
 }
 
-#[must_use]
-pub fn order_candidates(
-    locations: &[String],
-    measurement_for: &dyn Fn(&str) -> Option<HostMeasurement>,
-) -> Vec<String> {
-    let mut indexed: Vec<(usize, &String, Option<HostMeasurement>)> = locations
-        .iter()
-        .enumerate()
-        .map(|(index, location)| (index, location, measurement_for(location)))
-        .collect();
-    indexed.sort_by(|left, right| candidate_order(left.2, right.2).then(left.0.cmp(&right.0)));
-    indexed
-        .into_iter()
-        .map(|(_, location, _)| location.clone())
-        .collect()
-}
-
-fn candidate_order(
-    left: Option<HostMeasurement>,
-    right: Option<HostMeasurement>,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => right
-            .throughput
-            .cmp(&left.throughput)
-            .then(left.time_to_first_byte_ms.cmp(&right.time_to_first_byte_ms)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ceilings {
     pub global: NonZeroU32,

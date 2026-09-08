@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test setup, where a failure to build the input is the assertion"
 )]
 
@@ -27,22 +28,42 @@ use fetchloom_engine::verification::VerificationPolicy;
 
 use support::{bytes_of, cache, cache_in};
 
+fn directories_the_contract_names() -> Vec<String> {
+    let contracts = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("docs")
+            .join("contracts.md"),
+    )
+    .unwrap();
+    let layout = contracts
+        .split("<cache>/")
+        .nth(1)
+        .expect("contracts.md states no cache layout")
+        .split("```")
+        .next()
+        .unwrap();
+    layout
+        .lines()
+        .filter_map(|line| line.trim().split_once('/'))
+        .map(|(name, _)| name.to_owned())
+        .filter(|name| name.chars().all(|letter| letter.is_ascii_lowercase()))
+        .collect()
+}
+
 #[test]
 fn a_cache_writes_every_directory_the_contract_names() {
     let scratch = tempfile::TempDir::new().unwrap();
     let held = cache_in(scratch.path());
-    for name in [
-        "objects",
-        "outboard",
-        "partial",
-        "staging",
-        "quarantine",
-        "meta",
-        "locks",
-        "pins",
-    ] {
+    let named = directories_the_contract_names();
+    assert!(
+        named.len() >= 10,
+        "contracts.md parsed to {named:?}, so this proves nothing"
+    );
+    for name in named {
         assert!(
-            held.layout().root().join(name).is_dir(),
+            held.layout().root().join(&name).is_dir(),
             "the cache holds no {name} directory"
         );
     }
@@ -159,7 +180,7 @@ fn a_format_written_by_another_build_fails_every_operation() {
 }
 
 #[test]
-fn a_second_lease_on_one_digest_is_refused_while_the_first_is_held() {
+fn a_lease_holds_the_advisory_lock_the_layout_names_for_that_digest() {
     let (_scratch, held) = cache();
     let digest = hash_bytes(b"one digest");
 
@@ -170,9 +191,16 @@ fn a_second_lease_on_one_digest_is_refused_while_the_first_is_held() {
         .unwrap();
     assert!(
         taken.is_none(),
-        "a second writer took a digest another writer was holding"
+        "the lease does not hold the lock the layout names, so a second process would not wait for it"
     );
     drop(first);
+    assert!(
+        held.platform()
+            .try_lock(&held.layout().lock_of(digest))
+            .unwrap()
+            .is_some(),
+        "the lock outlived the lease that took it"
+    );
 }
 
 #[test]
@@ -322,22 +350,41 @@ fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
 }
 
 #[test]
-fn an_object_changed_within_one_tick_is_refused_only_by_rereading_it() {
+fn an_object_changed_under_an_identical_size_and_time_is_still_caught_by_rereading_it() {
     let (scratch, held) = support::raw_cache();
     let digest = support::publish(&held, &bytes_of(4096, 13));
+    let container = held.placement(digest).unwrap().container().to_path_buf();
+    let untouched = std::fs::metadata(&container).unwrap().modified().unwrap();
+
     support::damage(&held, digest, &bytes_of(4096, 14));
+    // The same length, and the clock put back to where it was, is the window
+    // contracts.md:213 admits a fingerprint cannot close: nothing the cache can
+    // see about the file has changed.
+    support::make_writable(&container);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&container)
+        .unwrap()
+        .set_modified(untouched)
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(&container).unwrap().modified().unwrap(),
+        untouched,
+        "the clock could not be put back, so this machine cannot build the window"
+    );
 
     let rereading = support::open_cache_with(scratch.path(), VerificationPolicy::Always).unwrap();
     let refused = rereading.open(digest).unwrap_err();
     assert_eq!(
         refused.kind(),
         ErrorKind::CacheCorrupt,
-        "rereading the object did not notice bytes that changed"
+        "rereading the object did not notice bytes that changed under an identical fingerprint"
     );
 
-    let trusting = support::open_cache_with(scratch.path(), VerificationPolicy::Never).unwrap();
+    let unconditional =
+        support::open_cache_with(scratch.path(), VerificationPolicy::Never).unwrap();
     assert!(
-        trusting.open(digest).is_ok(),
+        unconditional.open(digest).is_ok(),
         "an object was checked under a policy that trusts it unconditionally"
     );
 }
@@ -421,5 +468,63 @@ fn a_small_object_ingested_locally_costs_no_file_of_its_own() {
     assert!(
         cache.holds(ingested.digest),
         "the object the cache reported ingesting is not one it holds"
+    );
+}
+
+/// contracts.md:602 — bytes written counts content only, and the four counters
+/// are identical on identical inputs, which is what a benchmark gates on. A
+/// packed write states a preamble and an entry header around the bytes, and
+/// nothing asserted the number until mutation testing found the arithmetic
+/// unguarded.
+#[test]
+fn a_packed_write_counts_its_content_and_never_what_the_pack_states_about_it() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let work = std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new());
+    let held = fetchloom_cache::Cache::open(
+        scratch.path().join("cache"),
+        fetchloom_platform::NativePlatform::new(std::sync::Arc::clone(&work)),
+        fetchloom_cache::CacheSettings {
+            tier: fetchloom_engine::durability::DurabilityTier::Fast,
+            policy: fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+            io: fetchloom_engine::seam::policy::IoMode::Buffered,
+            compression: fetchloom_engine::compression::CompressionChoice::None,
+        },
+        std::sync::Arc::clone(&work),
+        support::processor(),
+    )
+    .unwrap();
+
+    let bytes = support::bytes_of(4096, 9);
+    let before = work.taken().bytes_written;
+    support::publish(&held, &bytes);
+    let wrote = work.taken().bytes_written - before;
+
+    let packs = held.packs().unwrap();
+    assert_eq!(packs.len(), 1, "the object did not land in a pack");
+    let pack_length = std::fs::metadata(&packs[0]).unwrap().len();
+
+    assert_eq!(
+        pack_length,
+        (fetchloom_cache::pack::PREAMBLE + fetchloom_cache::pack::ENTRY_HEADER + bytes.len())
+            as u64,
+        "a pack of one entry is not its preamble, its entry header and its bytes"
+    );
+
+    let mut left_behind = 0u64;
+    let mut pending = vec![scratch.path().to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                left_behind += std::fs::metadata(&path).unwrap().len();
+            }
+        }
+    }
+    assert_eq!(
+        wrote,
+        2 * bytes.len() as u64,
+        "a packed object is the content written twice, to the partial and into the pack, and {left_behind} bytes were left on disk"
     );
 }

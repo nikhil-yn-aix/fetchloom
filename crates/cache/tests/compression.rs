@@ -209,13 +209,13 @@ fn the_probe_decides_from_the_bytes_and_not_from_a_ratio_below_the_threshold() {
     assert_eq!(
         decided.stored,
         Stored::Raw,
-        "dense bytes measured at {:.3} were compressed anyway",
-        decided.best_ratio()
+        "dense bytes measured at {} were compressed anyway",
+        decided.measurements()
     );
     assert!(
-        decided.best_ratio() < PROBE_RATIO,
-        "the corpus assumption that dense bytes measure below {PROBE_RATIO} does not hold here: {:.3}",
-        decided.best_ratio()
+        decided.ratios.iter().all(|ratio| *ratio < PROBE_RATIO),
+        "the corpus assumption that dense bytes measure below {PROBE_RATIO} on every stride does not hold here: {}",
+        decided.measurements()
     );
     assert!(
         decided.reason().contains("by stride"),

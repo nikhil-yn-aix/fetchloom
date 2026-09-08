@@ -61,7 +61,7 @@ fn a_file_is_fetched_over_a_passive_data_connection_and_the_bytes_are_whole() {
     let bytes = b"the sequenced reads".to_vec();
     let server = FtpTestServer::start(FtpScript::serving("pub/reads.txt", bytes.clone())).unwrap();
     let taken = source()
-        .fetch(&located(&server, "pub/reads.txt"), None, None)
+        .fetch(&located(&server, "pub/reads.txt"), None, None, None)
         .expect("a file the server holds was not served");
     let mut read = Vec::new();
     let mut body = taken.body;
@@ -85,7 +85,7 @@ fn a_data_connection_the_server_points_at_another_host_is_refused_by_name() {
             .advertising_data_host([203, 0, 113, 7]),
     )
     .unwrap();
-    let Err(refused) = source().fetch(&located(&server, "pub/reads.txt"), None, None) else {
+    let Err(refused) = source().fetch(&located(&server, "pub/reads.txt"), None, None, None) else {
         unreachable!(
             "a server that pointed the data connection at another host was followed, which is the \
              bounce attack"
@@ -111,6 +111,7 @@ fn a_resume_asks_for_the_offset_with_rest_before_the_transfer() {
         .fetch(
             &located(&server, "pub/x.bin"),
             Some(ByteRange { start: 10, end: 16 }),
+            None,
             None,
         )
         .expect("a ranged fetch was refused");
@@ -265,7 +266,7 @@ fn a_secured_scheme_never_continues_in_the_clear_when_the_server_refuses_tls() {
     let server =
         FtpTestServer::start(FtpScript::serving("pub/x.bin", b"0123456789".to_vec())).unwrap();
     let secured = format!("{}/pub/x.bin", server.secured_origin());
-    let Err(refused) = source().fetch(&secured, None, None) else {
+    let Err(refused) = source().fetch(&secured, None, None, None) else {
         unreachable!("ftps:// continued over a control connection the server would not secure")
     };
     assert_eq!(refused.kind(), ErrorKind::NetworkTls);
@@ -307,8 +308,12 @@ fn a_credential_is_never_sent_over_a_control_connection_that_is_not_secured() {
             value: Secret::new("hunter2".to_owned()),
         },
     };
-    let Err(refused) = source().fetch(&located(&server, "pub/x.bin"), None, Some(&credential))
-    else {
+    let Err(refused) = source().fetch(
+        &located(&server, "pub/x.bin"),
+        None,
+        Some(&credential),
+        None,
+    ) else {
         unreachable!("a named credential was carried over a control connection in the clear")
     };
     assert_eq!(refused.kind(), ErrorKind::PolicyCredentialInvalid);
@@ -352,6 +357,7 @@ fn a_file_larger_than_four_gigabytes_is_resumed_at_an_offset_above_a_thirty_two_
             start,
             end: 5_000_000_004,
         }),
+        None,
         None,
     );
     let spoken = server.spoken();

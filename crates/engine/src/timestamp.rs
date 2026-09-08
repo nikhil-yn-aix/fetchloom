@@ -13,22 +13,12 @@ pub struct Timestamp {
 
 impl Timestamp {
     #[must_use]
-    pub fn from_epoch_seconds(seconds: i64) -> Self {
-        Self { seconds }
-    }
-
-    #[must_use]
     pub fn now() -> Self {
         let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(elapsed) => i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),
             Err(before) => i64::try_from(before.duration().as_secs()).map_or(i64::MIN, |s| -s),
         };
         Self { seconds }
-    }
-
-    #[must_use]
-    pub fn epoch_seconds(self) -> i64 {
-        self.seconds
     }
 }
 

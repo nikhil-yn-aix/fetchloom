@@ -546,11 +546,17 @@ fn verification_never_passes_on_damaged_content_under_any_policy() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        // contracts.md:211 gives the two policies different failure sites:
+        // `always` rereads and names the damaged range against the tree, and
+        // `fingerprint` finds the object changed since it was published.
+        let expected = if policy == "always" {
+            "integrity.range_mismatch"
+        } else {
+            "cache.corrupt"
+        };
         assert!(
-            said.contains("integrity.range_mismatch")
-                || said.contains("cache.corrupt")
-                || said.contains("integrity.mismatch"),
-            "under {policy} the failure was not an integrity or cache failure: {said}"
+            said.contains(expected),
+            "under {policy} the failure was not {expected}, which is where that policy checks: {said}"
         );
     }
 }

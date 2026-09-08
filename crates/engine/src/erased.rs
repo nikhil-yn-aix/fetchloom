@@ -28,6 +28,7 @@ trait ErasedSource: Send + Sync {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<AnyBody>, Error>;
 
     fn revalidate(
@@ -66,8 +67,9 @@ where
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<AnyBody>, Error> {
-        let served = Source::fetch(self, location, range, credential)?;
+        let served = Source::fetch(self, location, range, credential, resuming)?;
         Ok(Served {
             metadata: served.metadata,
             body: Box::new(served.body),
@@ -134,8 +136,9 @@ impl Source for AnySource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
-        self.held.fetch(location, range, credential)
+        self.held.fetch(location, range, credential, resuming)
     }
 
     fn revalidate(
@@ -212,8 +215,15 @@ impl Source for Adapters {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
-        Source::fetch(self.dispatch(location)?, location, range, credential)
+        Source::fetch(
+            self.dispatch(location)?,
+            location,
+            range,
+            credential,
+            resuming,
+        )
     }
 
     fn revalidate(

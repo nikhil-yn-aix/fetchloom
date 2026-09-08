@@ -17,7 +17,8 @@ const HEADER: usize = ENTRY_HEADER;
 
 const PACK_MAGIC: [u8; 4] = *b"FLP1";
 
-const PREAMBLE: usize = 4 + 4 + 32;
+/// What a pack states about itself before its first entry.
+pub const PREAMBLE: usize = 4 + 4 + 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -62,7 +63,6 @@ impl<P: Platform> Cache<P> {
             file.write_all(&preamble)
                 .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
             at = preamble.len() as u64;
-            self.work().wrote_bytes(at);
         }
         let entry = Entry {
             offset: at + HEADER as u64,
@@ -76,7 +76,7 @@ impl<P: Platform> Cache<P> {
             .map_err(|reason| filesystem_failure(Surface::Cache, &path, &reason))?;
         self.platform().flush(&file, self.tier())?;
         self.work().touched_file();
-        self.work().wrote_bytes((HEADER + body.len()) as u64);
+        self.work().wrote_bytes(body.len() as u64);
         Ok(entry)
     }
 

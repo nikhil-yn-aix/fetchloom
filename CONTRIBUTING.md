@@ -8,6 +8,21 @@ These are not preferences. A change that breaks one of these does not land.
 
 **Tests before implementation, and they must fail for the right reason first.** A test that cannot fail is worse than no test. Assert a stated contract, not an implementation detail.
 
+**A test states what it needs from the machine, and never passes quietly without it.** A test that depends on not being root, on a second volume, on a second user, on symbolic links being permitted, on mode bits being honored, or on more than one processor either gets it or declines by name with `fetchloom_faults::decline!("what it needed")`. The declination is printed and recorded, and `cargo xtask verify` reports it beside the lanes it declined, so a suite that proved less than it looks like says so. A lane that promised the environment fails instead, which is what `FETCHLOOM_VERIFY_VOLUMES` already does for the volume matrix.
+
+There is no third state. A test either proves something or says by name what it could not get; it never runs, proves nothing, and is counted as a pass. The shape that used to do exactly that was a loop over an environment-supplied list, which iterates zero times and passes in silence when the list is empty, so ask for the list with `fetchloom_faults::require!` rather than looping over it:
+
+```rust
+for volume in fetchloom_faults::require!(volumes(Property::Network), "a network-backed volume") {
+```
+
+`require!` yields the list when it holds something and otherwise declines by name and returns. It takes anything that can be absent: a `Vec`, an `Option`, a `bool`. `xtask`'s own test `every_volume_a_test_asks_for_is_declined_by_name_when_the_machine_has_none` walks the test tree and fails on a bare loop over one of those lists, so the silent shape cannot come back.
+
+The gate's summary counts declinations apart from steps, because how many tests proved something and how many merely ran are two numbers and conflating them is the failure this rule exists to prevent.
+
+
+**No test sleeps.** A wait is on the condition being waited for, with a bound, or it is not a wait: a test that sleeps and then asserts passes on an idle machine and fails on a loaded one, which is the same thing as not testing at all. A wait that cannot be written as a condition is a design problem in the code under test and belongs on the list rather than in a sleep.
+
 **No comments.** If code needs explaining, the names are wrong. The one exception is `// SAFETY:` on an unsafe block, which a lint requires and another lint refuses where it does not belong.
 
 **No version fields, no compatibility code, no second way of doing anything that already exists.**
@@ -75,6 +90,31 @@ cargo xtask verify --install-hook             writes .git/hooks/pre-push running
 A workflow step is `cargo xtask verify --lane <name>` and nothing else. No cargo invocation, target triple, test name or lint flag is written in YAML, so rewriting what a lane does never touches a workflow file. `xtask/src/verify.rs` has a test that every lane a workflow names exists and that every lane but `benchmark` runs somewhere.
 
 Before opening a pull request, run `cargo xtask verify` and read what it declined. The lanes it declined are the lanes CI will run, and they will run whether or not you looked.
+
+## The three tiers
+
+Every test target is in exactly one tier, and a test in `xtask/src/verify.rs` refuses a target that is in no tier.
+
+| Tier | Budget | Measured | What it may touch |
+|---|---|---|---|
+| `unit` | milliseconds per target | 8 to 17 s | Memory. No filesystem, no network, no process |
+| `integration` | seconds per target | 78 to 157 s | A temporary directory, a local server, a spawned binary |
+| `system` | minutes | 741 s and up | The whole pipeline: real archives, real volumes, a thousand kills |
+
+The measured column is two runs of this machine, which is the machine [What this
+machine costs](#what-this-machine-costs) describes, and the spread between them
+is that machine rather than the suite. The developer loop is the first two, so it
+is one to three minutes where the whole suite is fourteen or more.
+
+```
+cargo xtask verify --tier unit          milliseconds, and what a change to a rule breaks first
+cargo xtask verify --tier integration   seconds
+cargo xtask verify --tier system        minutes, and what CI runs on every platform
+```
+
+`cargo xtask verify --fast` runs unit and integration after format, dependencies, lint and build, and is what the pre-push hook installs. The platform lanes run the whole workspace, because a lane exists to prove a platform rather than to be quick.
+
+The tier is the cargo test target rather than the file, because a target is what cargo can be told to run. A cheap file inside an expensive target therefore inherits that target's tier.
 
 ```
 cargo xtask bench              measure

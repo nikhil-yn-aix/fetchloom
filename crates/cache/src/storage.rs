@@ -290,6 +290,7 @@ impl<P: Platform> Cache<P> {
             Stored::Zstd { level, stride, .. } => {
                 let beside = self.scratch_path().with_extension("compressing");
                 let _ = std::fs::remove_file(&beside);
+                self.claimed_scratch(&beside)?;
                 let mut reading = std::fs::File::open(from)
                     .map_err(|reason| filesystem_failure(Surface::Cache, from, &reason))?;
                 let mut writing = self.platform().create_file_exclusive(&beside)?;

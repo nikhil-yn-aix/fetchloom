@@ -166,7 +166,7 @@ fn a_volume_that_cannot_clone_falls_back_to_copy_and_reports_the_fallback() {
     ));
     let capabilities = platform.volume_capabilities(scratch.path()).unwrap();
     if capabilities.clone {
-        eprintln!("skipped: this volume supports cloning, so the copy fallback is not exercised");
+        fetchloom_faults::decline!("a volume that refuses a block clone");
         return;
     }
 
@@ -207,7 +207,7 @@ fn placing_bytes_onto_a_name_that_exists_fails() {
 fn a_symlink_carries_the_target_bytes_it_was_given() {
     let scratch = support::scratch();
     if !support::symlink_works(scratch.path()) {
-        eprintln!("skipped: this platform does not permit creating a symbolic link here");
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     let platform = NativePlatform::new(std::sync::Arc::new(

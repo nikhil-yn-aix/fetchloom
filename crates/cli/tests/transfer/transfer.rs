@@ -869,9 +869,10 @@ fn a_volume_that_collapses_mid_transfer_moves_the_same_bytes() {
         .unwrap();
 
     let collapsing = Harness::new();
+    let buffered = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let volume = CollapsingVolume {
         inner: &collapsing.cache,
-        buffers: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        buffers: std::sync::Arc::clone(&buffered),
     };
     let flights = Flights::new(
         fetchloom_engine::tuning::Ceilings {
@@ -905,6 +906,10 @@ fn a_volume_that_collapses_mid_transfer_moves_the_same_bytes() {
     assert_eq!(
         done.bytes_transferred, fast.bytes_transferred,
         "the collapsing volume changed how many bytes moved"
+    );
+    assert!(
+        buffered.load(std::sync::atomic::Ordering::Relaxed) > BEFORE_THE_COLLAPSE,
+        "the volume never reached the point where it collapses, so the run this compares against was not a slow one"
     );
 }
 

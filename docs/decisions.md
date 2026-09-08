@@ -11977,3 +11977,638 @@ Sources: `crates/engine/src/limits.rs`; `crates/cli/src/run/paths.rs`;
 `offer_a_hint`; `crates/cli/tests/surface/surface.rs`
 `a_reference_no_adapter_serves_says_that_and_never_that_the_build_serves_only_local_paths`,
 run against both wordings; the public surface record above.
+
+---
+
+## The suite measured against the contracts, and the four ways a test can pass without proving anything
+
+The suite was 33,383 lines over 1,037 tests in 108 targets against 47,766 lines
+of source, and the last two sessions found five tests that passed for reasons
+that had nothing to do with what they claimed. This session expected to end with
+a smaller suite and ends with a larger one: 33,888 lines over 1,034 tests in 111
+targets. Twenty-one tests were deleted and nineteen written, and the honest
+reading is that the ratio was never bloat. 1,037 tests against 322 stated
+behaviors is three per behavior, which is what adversarial cases -- failure,
+corruption, interruption, concurrency, hostile input, and both platforms -- cost.
+The bloat pass found nine tests in 1,037. What the suite was short of was not
+brevity but a way to say it had not run, and that is what most of the added lines
+buy. This is what the map found, what it deleted, and what it could not decide by
+reading alone.
+
+**The map.** contracts.md states 322 behaviors, counted as one per normative
+paragraph or table row, with a stable identifier per section. Every test file was
+mapped onto that list. Twenty-eight files, 383 tests, were classified by reading
+every test in them: engine, archive, cache, and the four cli files the mechanical
+sweep flagged. The remaining files were classified by name and assertion density
+against the same list, which is weaker and is stated as such: a wrong KEEP leaves
+a test standing, where a wrong DELETE loses one, so the classification that costs
+something is the one that was read.
+
+**The counts.** Defends a stated contract, 1,000. Defends something real but
+unwritten, 20, each now written into contracts.md. Defends an implementation
+detail, 4. Defends nothing, 2. Bloat, 9. Rewrite the form and keep the subject,
+7.
+
+**What the mechanical sweep found, and what it did not.** Every test was scanned
+for the four shapes that pass for the wrong reason: no assertion at all, an exit
+code asserted with nothing asserted about what the run said, a sleep, and a mode
+bit or a root assumption. Of 45 flagged, 33 were false positives -- an assertion
+through a helper, an ignored child harness, a two-sided volume check. One sleep
+remains in the whole suite and it is a fake server throttling its own writes,
+which is the thing being simulated rather than a wait. The previous session had
+already swept the other two shapes, which is why the count is low; the sweep is
+now a thing that can be re-run rather than a thing someone did once.
+
+**Twenty-seven early returns, eleven of them silent.** The shape the last two
+sessions were bitten by is a test that cannot run here and says nothing. Of the
+twenty-seven early returns in the suite, sixteen are helper functions or the
+ignored children of process tests. Eleven were tests declining in silence: a
+second volume, a second user, a symbolic link this volume permits, a machine with
+more than one processor, a volume small enough to fill, a read-only directory the
+mode bits of which apply to the user running. Four more announced themselves with
+an `eprintln!` nobody collects.
+
+All fifteen now decline by name, and a sixteenth found later does too.
+`fetchloom_faults::decline!("what it needed")` derives the test's own name from
+the function it is written in, says
+`NOT VERIFIED <test>: needs <precondition>` on stderr, and appends it to the file
+`FETCHLOOM_TEST_DECLINED` names. `cargo xtask verify` sets that variable, reads
+the file after each test step, and prints what it holds in the same place it
+prints the lanes it declined. A machine that promised the environment still
+fails: `volumes()` and `another_owner()` assert under `FETCHLOOM_VERIFY_VOLUMES`
+exactly as they did.
+
+The one that mattered is `a_lock_is_honored_across_users`, which passed inside a
+container as root for four phases while proving nothing, and `doctor_changes_nothing_when_the_cache_directory_is_read_only`,
+which now probes whether a read-only directory refuses this user before it
+believes the answer.
+
+**What was deleted, and why each one.** Twenty-one tests.
+
+Five in `materialize/relative.rs`: one rule -- a relative path resolves against
+the working directory -- was spawned seven times with different spellings of the
+same path. Two remain, one for `get` and one for `verify`, each with a separator,
+because a separator is the only variation that is a different code path.
+
+Four in `surface/contract.rs`: `a_usage_error_exits_two`,
+`a_reference_that_resolves_to_nothing_exits_ten`,
+`a_network_reference_while_offline_is_a_policy_failure_exiting_forty` and
+`a_run_with_nothing_to_do_exits_zero`. The first three are single rows of
+`every_exit_code_the_table_names_is_produced_by_a_run`, which asserts all eleven
+in one workspace. The fourth ran `explain` and called it a run with nothing to do,
+where the contract means a run whose destination is already what was resolved,
+which `reconcile.rs` asserts with the byte count to prove it.
+
+Two in `surface/surface.rs`: `a_local_directory_resolves_to_every_entry_under_it`
+asserted the entry count the test above it already asserts on the same tree, and
+`a_form_this_build_cannot_resolve_says_what_it_resolves` asserted an exit code and
+a kind for four reference forms while its name promised the message. Two of its
+four forms were bare names, which reach the registry search: it passes offline
+because every registry failed and passes online because no registry holds them,
+which is a test that cannot fail for the reason it was written. What survives is
+one narrower test naming the s3 form, and the message assertion the session's
+second commit added.
+
+One in `transfer/tune.rs`:
+`a_warm_measurement_cache_and_an_empty_one_produce_the_same_bytes` varied four
+concurrency ceilings and never made a measurement warm at all. What it actually
+asserted is a subset of `no_tuning_setting_changes_the_bytes_a_run_produces`,
+which varies ten settings including those; the warm-versus-empty case it is named
+for is `a_measurement_a_run_recorded_never_changes_what_the_next_run_produces`,
+which seeds a real measurement and checks the counters.
+
+One in `materialize/diagnose.rs`: `doctor_exits_zero_on_a_healthy_environment`
+built a cache and ran doctor to assert one exit code that
+`doctor_changes_nothing_in_a_healthy_cache` was discarding on the same setup. The
+first now asserts it.
+
+Eight in the engine: `a_fresh_counter_has_counted_nothing` and
+`reading_a_snapshot_does_not_reset_the_counter` (the first is one line of the test
+below it, the second is a fact about a counter and not about a run),
+`no_entries_at_all_produces_no_outcomes`, `a_third_witness_that_agrees_with_neither_pair_member_changes_nothing`,
+`a_member_the_layout_leaves_unnamed_is_never_dropped_silently` (a bare `is_err`
+duplicate of the test that reads the message),
+`selection_reports_which_member_each_selected_path_came_from` and
+`globs_order_and_hash_by_their_pattern` (both about the shape of a value rather
+than about a contract), and `the_two_shapes_are_distinguishable_without_reading_a_secret`,
+which asserts that a `match` on an enum matches.
+
+**What was written that was missing.** Twenty tests defended twelve statements
+that existed nowhere but in them, and those twelve are now in contracts.md: the
+one form a timestamp is written and read in; that no
+pattern at all selects every member and that exclusion is applied to what
+inclusion chose; that a glob is decided in bounded time rather than by exploring
+every alignment of its wildcards; that a fact a source did not state is not
+evidence about it; that the host of a location is the address a bracketed literal
+holds; that a partial is named by the location, host and identity when no digest
+is known; that an object of unstated length is not long enough to split; that a
+change of what an entry is is a change like any other, in both the three way and
+the reconcile tables; that witnesses are kept per artifact under a length-stated
+key; that a partial another machine wrote is not this machine's to recover; and
+that a document nested past the depth bound is `manifest.invalid` naming the
+depth rather than `resource.limit`.
+
+That last one is a finding rather than a decision. reference.md says
+`resource.limit` is what a document exceeding a bound reports, and the depth bound
+reports `manifest.invalid`. Both readings are defensible -- a document shaped to
+exhaust a reader is malformed, and it is also past a limit -- and changing which
+one a run reports is a behavior change that belongs to a session that changes
+behavior. It is written down as it is, with a test that fails if it moves.
+
+**Nine laws, and no dependency to check them.** `crates/engine/tests/laws.rs`
+generates its inputs rather than naming them: shuffle and unshuffle are inverse
+over four strides and fifteen lengths including every boundary around a stride;
+shuffle is a permutation of its input; every one of the sixty-four states three
+sides of a merge can be in is decided exactly once and identically twice;
+canonical comparison is reflexive, antisymmetric and transitive over thirty-four
+byte strings; one tree digests identically under all twenty-four arrangements of
+four entries, while eight trees differing by a name, a byte, a mode, a size or a
+kind digest eight ways; the canonical entry stream those digests cover frames
+what it encodes and differs wherever the tree does; and every resolution the
+merge table names says its own row.
+
+A property testing crate was considered and not taken. What it would buy over a
+loop is shrinking and a random search, and every law here has a small enough input
+space to enumerate exhaustively, which is stronger than sampling it: sixty-four
+merge states and twenty-four permutations are all of them, not some of them. The
+cost avoided is a crate, its transitive graph, a `deny.toml` entry, and a second
+way to write a test. If a law arrives whose inputs cannot be enumerated, the
+argument is made then and the crate is added then.
+
+**Tiers, and where the developer loop ends.** Every test target in the workspace
+is in exactly one tier, named in `xtask/src/verify.rs` and asserted by a test that
+walks `crates/*/tests` and refuses a target that is in no tier or a tier that
+names a target that is not there. `cargo xtask verify --tier <unit|integration|system>`
+runs one; `--fast` runs unit and integration after the format, dependency, lint
+and build steps it already ran; the platform lanes still run the whole workspace,
+because a lane exists to prove the platform rather than to be quick.
+
+Measured twice on this machine. First run: unit 17 seconds, integration 78,
+system 741. Second, after everything this session added: unit 8, integration 157,
+and a system tier run one target at a time under a thread cap that came to 1,077.
+The spread is the machine and not the suite -- the same target moved from 138
+seconds to 79 between runs -- so the table in CONTRIBUTING states a range. What
+holds across both is the shape: the developer loop is one to three minutes where
+the whole suite is fourteen or more, and nine targets that spawn the binary
+against real archives and real volumes are almost all of the difference.
+
+The system tier had to be run a target at a time to finish at all. This machine
+killed three runs of it for memory, which is the paragraph CONTRIBUTING already
+carries about running one crate's suite at a time, arriving as a measurement
+rather than as advice.
+
+The unit of a tier is the cargo test target, not the file, because that is what
+cargo can be told to run. `cli/tests/policy` therefore sits in system even though
+`policy.rs` inside it drives no binary at all: splitting a target is a
+restructuring, and this session does not restructure.
+
+**Mutation, measured once before a threshold was chosen.** `cargo-mutants`
+27.1.0, invoked as `cargo mutants -p fetchloom-archive --cap-lints true -j 6
+--timeout-multiplier 3 --minimum-test-timeout 60`, against the crate where hostile
+input lands. `--cap-lints` is needed because this workspace denies warnings and a
+mutant that leaves a variable unused would otherwise be unviable rather than
+tested. It is a tool rather than a crate in the graph, exactly like `cargo-deny`,
+so it adds no dependency.
+
+302 mutants in 54 minutes: 178 caught, 70 timeouts, 54 unviable, and no
+survivors. There is no hole in the archive suite to fill, which is what the
+corpus-driven design was for: every hostile entry is driven through the reader and
+asserted against its declared kind and the member it names.
+
+The threshold is therefore set at what was measured: zero survivors on every file
+that has been measured, and a survivor is either a missing test or a branch that
+changes nothing observable, which is a finding for the session that removes
+branches. It is not set as a percentage, because a percentage of a number nobody
+has measured on the other crates is a guess.
+
+The 70 timeouts are their own finding. Every one of them is a mutant the suite
+notices by never finishing rather than by failing: weakening `BombGuard`'s
+comparisons lets an expansion run unbounded, and mutating the arithmetic in
+`zip_reader`'s `directory_location` sends the reader looking through the whole
+file. The suite is right either way, and it costs 60 seconds a mutant to be right
+that way. A bomb test that bounded what it will let the extractor write before it
+fails would turn a timeout into a failure, and that is the shape of the work if
+this number is to come down.
+
+Engine and cache were counted and not run: 1,802 and 858 mutants, which at the
+rate measured here is roughly five and two and a half hours. They are a nightly
+run, next to the hosts workflow that already runs on a schedule, rather than
+something a session waits out.
+
+**The inverse: what is stated and nothing tests.** Every one of the 322
+identifiers was matched against the 1,037 test names by shared distinctive words,
+which is a screen rather than an answer: it produced 46 candidates, and reading
+them found that 41 were covered by a test the screen could not see. The screen
+missed two whole classes. Table rows are covered by one table-driven test naming
+every row at once, and 204 tests live in `#[cfg(test)]` modules inside `src`,
+which the count of 1,037 never included -- `PROBE-10`, a listing bounded by the
+listing limits rather than the archive limits, is asserted in
+`crates/cli/src/command/inspect.rs` and by nothing under `tests`.
+
+Four survived reading, and now have tests. `REVERT-04`, revert writes no record:
+`revert_writes_no_record_and_leaves_the_one_the_run_wrote_byte_for_byte` compares
+the receipt bytes across a revert of a modification and a deletion. `PROMOTE-05`,
+promote refuses a destination with no record:
+`promote_of_a_destination_with_no_record_is_refused_and_writes_no_manifest`,
+which also asserts no manifest was written, because the refusal is only worth
+something if it happens before the file. `RECON-08`, numbered directories are
+never created and a destination is never left holding a third tree:
+`a_run_that_stops_leaves_one_destination_and_never_a_numbered_one_beside_it`
+stops a run with a foreign entry while upstream has moved, then asserts the
+parent directory holds exactly the source and the destination and that the
+destination still holds the old bytes. `MANIFEST-09`, no key may express a
+command or a script, is enforced rather than tested: unknown keys are refused, so
+there is no key to express one, and `an_unknown_key_is_refused_rather_than_ignored`
+is what holds it.
+
+Both new destination tests were run against an inverted assertion first, and both
+failed with the value they were about.
+
+**Hostile input, generated rather than named.**
+`crates/archive/tests/fuzz.rs` takes each of the 46 corpus entries and damages it
+a hundred ways from a fixed seed -- one bit flipped, a truncation, a byte
+inserted, two bytes swapped -- and drives all 4,600 through `ArchiveReader`. A
+damaged archive must either read or be refused with one of six kinds an
+extraction is allowed to report. It measures 3,754 refused and 846 read, and the
+test asserts floors under both, so the day a change makes every damaged archive
+refuse, the suite says so rather than passing on a corpus it no longer exercises.
+
+No fuzzing crate was added. `cargo-fuzz` and `afl` want a nightly toolchain, a
+separate crate, a corpus directory in the repository and a runner nothing in the
+gate would call; libfuzzer-sys is a graph dependency and a `deny.toml` entry for
+a harness that a deterministic loop of 4,600 inputs replaces at 0.11 seconds
+inside the unit tier. A seeded loop cannot search the way a coverage-guided
+fuzzer does. What it can do is run on every push on both platforms, which the
+fuzzer would not have.
+
+**What nineteen written tests are.** Seven in existing targets: the two the
+opening commits carried, the two documents that name a resource limit and a
+malformed document, and the three the inverse gap list found. Nine in three new
+targets: nine laws, one that proves a declination says its own name on stderr and
+appends it where `verify` looks, the ignored child that test spawns to do the
+declining, and one that damages the corpus 4,600 ways. Three of the nine laws
+were written last, against the survivors the engine subset found.
+
+**Coverage is reported and never gated.** `cargo llvm-cov --workspace
+--summary-only` runs against the whole suite. The number is a description of what
+was executed, not of what was proved, and a line executed by a test that asserts
+nothing counts exactly the same as one a contract test drove. The gate is the
+mutation score, which cannot be satisfied by execution alone. No coverage step is
+in `verify` and none should be added: a threshold on this number rewards writing
+tests that touch code, which is the failure this session existed to find.
+
+**The precondition coverage found.** Instrumenting the workspace turned up a
+sixteenth silent environment dependency the sweep could not have seen, because
+nothing that had run before violated it.
+`the_reported_bytes_are_the_bytes_the_kernel_moved` asks Windows how many bytes
+the child process moved and asserts the run reported at least nineteen twentieths
+of them. Under `cargo llvm-cov` the child also writes a profile, so the kernel
+moved 17,938,683 bytes where the run reported 16,777,216 and the test failed on a
+run that was correct. It needs a child process that writes nothing but what the
+run asked for, it now says so, and it declines by name when `LLVM_PROFILE_FILE`
+is set. It fails as before everywhere else, which is the point: the rule is that
+an unmet precondition is loud, and a declination is the loud form when the
+machine cannot be fixed.
+
+The first system tier run proved the recorder wrong in the same way. Two
+declinations from two test processes arrived on one line, because `writeln!`
+writes the line and the newline separately and two appends interleaved between
+them. It writes one buffer now.
+
+**The number.** 85.53% of 28,389 lines, 84.10% of 42,418 regions, 80.70% of
+2,891 functions. Per crate, by line: faults 91.79, archive 89.98, cli 87.12,
+engine 86.48, sources 82.34, cache 82.03, platform 74.11, view 74.52. The two
+lowest are the two whose uncovered half is the other platform's: `platform/src`
+carries a Windows tree and a Unix tree and this machine compiles one, and `view`
+renders to a terminal that is not attached. `sources/src/tls.rs` is 0.00%, which
+is the network lane and not this one.
+
+`cargo llvm-cov --workspace` was killed twice for memory on this machine, which
+is the machine CONTRIBUTING warns about. The number above is eight
+`cargo llvm-cov --no-report -p <crate>` runs and one `cargo llvm-cov report`,
+which is the documented way to combine them and costs nothing but wall time.
+
+**The engine subset, and the mutant that a law did not kill.** 21 mutants over
+`merge.rs`, `reconcile.rs` and `canonical.rs`: 10 caught, 6 unviable, and 5
+missed, which is the first survivor this session has seen. Three of the five
+replace `encode_entries` with an empty vector, one byte, or one other byte, and
+the suite noticed none of them. The reason is exact and worth keeping: nothing in
+`src` calls `encode_entries`. `tree_digest` walks its own loop over
+`encode_entry`, so the canonical entry stream `MAT-01` states is public, is what
+a reader would read to learn the format, and was covered by one test that
+asserted `tree_digest` differs from `blake3` of that stream -- which stays true
+when the stream is empty. The law written this session
+(`two_trees_that_differ_anywhere_digest_differently`) did not kill them either,
+because it goes through `tree_digest`. What kills them is asserting the stream:
+that it is longer than the path it frames, that it is empty for no entries, that
+it grows with a second entry, and that six trees differing by name, content,
+mode and kind encode six ways. Re-run: 7 mutants over `canonical.rs`, 4 caught, 3
+unviable, none missed, and 14 over `merge.rs` and `reconcile.rs`, 11 caught, 3
+unviable, none missed. The subset is at zero.
+
+The other two replace `Resolution::label`'s return with `""` and with `"xyzzy"`.
+`Resolution::label` is called by nothing in the workspace either. The five words
+it returns are the five outcomes the merge table in contracts.md names, so they
+are pinned to that table rather than deleted, and the public function surviving
+with no caller is a finding for the session that takes the public surface as its
+subject.
+
+The lesson generalises past these five. A law over a derived value cannot catch a
+mutation in a function the derivation does not call, and this suite has more than
+one public helper that production code reimplements rather than calls. That is
+what the remaining 133 engine mutants are for, and they were not run: this
+machine killed a `-j 4` run and a `-j 2` run for memory, and a `-j 1` run costs
+about 25 seconds a mutant.
+
+## A test that cannot do its job now says so, and the shape that used to pass in silence cannot be written
+
+The audit that opened this session measured the thing every earlier session had
+missed: on this machine three tests declined by name and fourteen more ran, proved
+nothing, and were counted as passes. The mechanism for the first three had been
+built a session earlier and is good. What was missing was that nothing stopped a
+test bypassing it.
+
+The shape was always the same. `for volume in scratch_on(Property::Network)` over
+a list an environment variable fills executes zero times when the variable is
+unset, so the body never runs, the test passes with no assertion, and the summary
+prints nothing. Fifteen sites had it and one of them guarded it.
+
+Chosen: `fetchloom_faults::require!(subject, "what it needed")`, which yields the
+subject when it holds something and otherwise declines by name and returns. It
+takes a `Vec`, an `Option` or a `bool` through a `Presence` trait, so the same
+call covers a list of volumes, a second user, and a capability that either exists
+or does not. Fourteen sites now use it. One site keeps `decline!` without
+returning, because that test also asserts something about the default scratch
+directory and only half of it is unprovable here.
+
+Because: the mechanism already printed a declination beside the lanes. What it
+could not do was notice a test that never asked. A macro at the call site can,
+and it reads as the loop it replaces.
+
+The rule is enforced rather than remembered:
+`every_volume_a_test_asks_for_is_declined_by_name_when_the_machine_has_none` in
+`xtask/src/verify.rs` walks every test source, finds every call that asks for a
+volume list, and fails when one is not inside a `require!` or beside a
+`decline!`. Removing one guard was tried and the test failed for that reason
+before it was put back.
+
+Two smaller things went with it. `cargo xtask verify --tier system` set
+`FETCHLOOM_TEST_DECLINED` but no volume variable, so the tier path ran every
+volume test as an empty loop where the lane path did not; it now builds the same
+volumes the lane does. And the summary count line carries the number of
+declinations beside the number of steps, because how many tests proved something
+and how many merely ran are two numbers and one line that conflates them is the
+defect this whole record is about.
+
+## A surviving mutant in code with no caller means delete the code
+
+An earlier session found five survivors in `encode_entries` and
+`Resolution::label`, wrote laws against them, and recorded that the public
+function surviving with no caller was a finding for a later session. That is this
+one, and the rule is written down here so it is not answered the same way twice:
+a mutation that survives in a function nothing calls means the function goes. It
+never means a test arrives. A test written against uncalled code proves something
+about a parallel implementation and nothing about the shipped one, and it makes
+the score green while doing it.
+
+Thirteen public functions had no caller in any `src/`. Nine were deleted with the
+tests over them, and the tests that covered a real contract clause were pointed at
+the live path instead:
+
+- `canonical::encode_entries`, whose loop `tree_digest` reimplements. The
+  session that moved the encoding to per-entry updates left it behind and the
+  record above says so. Its law re-pointed at `tree_digest` turned out to
+  duplicate `two_trees_that_differ_anywhere_digest_differently` exactly, so it
+  was deleted rather than kept: two tests of one property, one of them against
+  dead code, is how the property looked covered twice and was covered once.
+- `outboard::verify_range`, which shares `walk` with the live `find_damage` and
+  maps a tree that does not check out to `integrity.range_mismatch` where the
+  live path maps it to `cache.corrupt`. Its four tests asserted an error kind the
+  product cannot produce. Re-pointed at `find_damage`, they now assert that a
+  damaged group is localized to that group and no other, and that a damaged
+  parent node discards the tree and says to rebuild it.
+- `tuning::order_candidates`, a second ordering on throughput and time to first
+  byte alone against the live seven-key `candidate::score`. Six tests asserted
+  the dead one. Five were duplicates of `candidate.rs` and went; the sixth found
+  a defect, recorded below.
+- `redact::is_sensitive_header`, the only named-header redaction in the codebase
+  and called by nothing. Its test proved that a constant array holds two strings.
+  The live protection is that no call site prints a header, and what now covers
+  contracts.md:527 is the whole-binary test recorded below.
+- `Resolution::label`, whose five strings are not the five an artifact carries:
+  `Resolution` serializes `#[serde(rename_all = "snake_case")]`, so a receipt
+  holds `take_upstream` where `label()` returned `take upstream`. The law now
+  pins the serialized forms, which are the ones a reader of an artifact sees.
+- `Outboard::leaf_count`, `Timestamp::from_epoch_seconds`,
+  `Timestamp::epoch_seconds` and `compress::Decision::best_ratio`, each an
+  accessor nothing reads. The timestamp pair was how seven tests built a fixture,
+  and they now build one by parsing the written form, which exercises the round
+  trip contracts.md states rather than a constructor the product never calls.
+
+Four were kept, and why is the other half of the rule. `conformance::portable_core`
+and `conformance::declared_failures` are fixture data, not a parallel
+implementation: the tests over them run the live `tree_digest`, and the pinned
+portable core digest is the strongest evidence the encoding has not moved.
+`adapter::judge` is the conformance harness a third-party adapter is driven
+through, and `sources/tests/adapter_suite.rs` drives real sources through it.
+`Error::source_location` reads a field `#[derive(Serialize)]` writes into every
+error a run reports, so the accessor has no caller while the field it reads is
+live output, and `sources/tests/secrets.rs` uses it to prove that field is
+redacted.
+
+## What closing the audit found in the product
+
+Four defects, each found by a test written to close a finding rather than by
+reading.
+
+**A candidate this run had never measured outranked one it had.** `candidate.rs`
+orders on throughput descending by swapping the arguments to a comparison that
+also decided what an absent measurement means, so a measured side against an
+unmeasured one read as the measured one losing. contracts.md states the rule the
+other way and states it generally: a fact a source did not state is not evidence
+about it, and the pair falls through to whatever separates them next. Egress cost
+implemented that correctly and had a test for it; throughput and time to first
+byte did not. Chosen: an unmeasured side compares equal, so the pair falls
+through to manifest order. A run that had measured a slow host would otherwise
+prefer the host it knows nothing about, and measurements accumulate, so selection
+could flip between runs.
+
+**A query signature was written to the cache in the clear.**
+`cache/src/resolution.rs` recorded what a reference resolved to and stored the
+location as a `String`. Everything else in the codebase carries a location as
+`SafeUrl`, which redacts at construction. A run with a signed URL left the
+signature in `meta/resolution/<key>` on disk, and from there into the quarantine
+record that reads it back. contracts.md says redaction applies identically
+everywhere; internals.md calls a secret in an output a breach rather than a bug.
+Chosen: the field is a `SafeUrl`. The lookup key is a digest of the whole
+location, so redacting the stored copy costs nothing, and the `From<String>`
+conversion redacts on read, so a record written by an older build is redacted
+when it is read back.
+
+**A kill inside publication left a partial no recovery removed.** Making the
+thousand-kill test kill inside the store rather than between its calls found this
+on the first run. `partial/<pid>-<start>-N.compressing` and its `.ingest` sibling
+are scratch files a publication writes and renames away. `sweep_previous_boot`
+reclaims an orphan by reading an owner record beside it, and a scratch file had
+none, so it was skipped and left there for every boot after. contracts.md removes
+orphaned partial entries from a previous boot without qualification. Chosen: one
+record per process rather than one per file. The scratch name already carries the
+process and start that made it; what it lacks is the boot, so a process writes
+`partial/<pid>-<start>.session` once and the sweep reads it for any entry whose
+name carries that prefix. The first fix wrote a record beside every scratch file
+and cost two file operations per ingest, which
+`ingesting_a_small_file_costs_fewer_file_operations_than_giving_it_one` caught
+immediately: that cost is the whole point of packing a small object, and a
+correctness fix that quietly spends it is not finished.
+
+**`bytes_written` counted what a pack states about content as content.** A packed
+write counted the entry header, and the first entry counted the pack preamble.
+contracts.md says the counters count content only and that the cache own records
+are bookkeeping rather than content. A pack preamble and its entry headers are
+the same kind of thing. Chosen: neither is counted. The contract now also states
+what it did not: a packed object, like a compressed one, is written twice, once
+to the partial and once into the pack, so the sentence about bytes written being
+exactly what the run left on disk holds for an object stored raw and unpacked and
+is stated that way rather than as a rule with an unmentioned exception.
+
+## If-Range is sent, because a contract that states a behaviour the binary lacks is worse than a missing feature
+
+contracts.md has stated since the resume design landed that `If-Range` is sent on
+rung three and carries only a strong entity tag. Nothing sent it. The only
+occurrence of the string in the tree was a fake server header recorder asserting
+its absence.
+
+Chosen: implement it. `Source::fetch` gains a `resuming: Option<&str>` parameter
+carrying the strong tag a rung three resume stands on, `http` attaches it as
+`If-Range` beside the range, and `transfer::body_from` supplies it only when the
+rung is `StrongValidator` and the identity is a strong validator. Every other
+adapter names the parameter and ignores it: FTP rung is four and a local file has
+no such thing, and saying so at each implementation is better than a default that
+silently sends nothing.
+
+Because: every session is told to implement contracts.md exactly, so a sentence
+with no code teaches the next reader that the document is approximate. Resume is
+also where this product is most exposed to a source changing underneath it, and
+the whole-object digest catches that only at completion, which is a refetch
+wearing the word resume.
+
+The second half of that clause was already implemented: a range answered `200`
+rather than `206` is `source.unsupported_range` and the partial is discarded.
+
+## The two volume rows CI can and cannot build
+
+Finding 5 real defect was that fourteen tests passed in silence, and that is
+fixed whether or not a volume ever exists. What each row needs is still worth
+settling.
+
+**Network.** The Linux script exports a directory over NFS to the same machine
+and mounts it back; the Windows script shares one to itself over SMB and maps a
+drive. Both are best effort: a runner whose kernel serves no NFS, or which has no
+SMB server, leaves the variable unset and the tests that need it decline by name,
+which is now a real mechanism rather than silence. `promised_here()` stays false
+for `Network` until a run proves the volume builds, because that assertion is
+what turns an unset variable into a failed lane and it should not be armed on a
+guess.
+
+**Normalizing.** Unprovable on the platforms this project ships, and contracts.md
+now says so beside the row. Neither NTFS nor any Linux filesystem the verify
+lanes can build stores a normalized form of the name it is given. The row stands
+because the code measures the volume rather than assuming an answer, and
+`archive/tests/extract.rs` asserts the branch the volume implies, so on a
+normalizing volume it would assert the rejection. Nothing here can build one.
+
+## Mutation runs nightly, sharded, on a runner rather than on this machine
+
+`cargo mutants --list` reports 6,341 mutants in this workspace: engine 1,802, cli
+1,136, cache 858, sources 685, platform 464, faults 460, archive 302, view 54.
+One file had ever been measured.
+
+Chosen: `.github/workflows/mutants.yml`, nightly, engine and cache, eight shards
+each, `--shard k/8 --baseline=skip --no-shuffle --timeout 300`, results uploaded
+per shard.
+
+Because: this machine killed five runs for memory and a single-job run costs
+about 25 seconds a mutant, which is days for one crate. The flags are the tool own
+CI recipe rather than a guess: shards partition the list only when it is not
+shuffled, every shard must run with the same arguments and the same denominator
+or the results mean nothing, and `--timeout-multiplier` computes from a baseline
+that `--baseline=skip` does not run, so the timeout is absolute
+([mutants.rs/shards.html](https://mutants.rs/shards.html)).
+
+Every survivor is classified as a missing test, a mutation with no observable
+effect, or a mutation in uncalled code. The third means deletion, per the rule
+above.
+
+## What the blind derivation found that the contract still does not say
+
+The audit derived what a suite must prove from contracts.md, reference.md and
+internals.md alone, before any test file was opened, and its list of decisions the
+code has made that no document states is the part worth keeping after the audit
+itself is deleted. Five were settled this session and written into contracts.md:
+a hard link to a member the archive holds materializes the target bytes as a
+second file; the host to environment variable mapping, including that it carries
+no port and that two hosts can collide into one variable; selection is a sequence
+rather than a set, so reordering invalidates a lock; `--color always` wins over
+`NO_COLOR`; and an unchanged run rewrites the lock with the bytes it already held.
+
+Nine were not, and are listed here rather than lost. Each is a real decision the
+code has already made, so each is answerable by reading one path and then writing
+the answer down. None is a defect on its own; each is a place where the code is
+the only specification, which is the condition that lets a later change be a
+silent behaviour change.
+
+- What `get` does when a reference resolves to a tree and `--no-extract` is given:
+  whether the tree digest, the lock entry and the `degrade` about resolving to a
+  tree all still apply.
+- Which rejection is reported when an archive holds two members that are
+  rejectable for different reasons. Every rejection stops the run, but the kind
+  the run reports is whichever the reader reaches first, which makes it a
+  function of member order rather than of the archive.
+- What happens when a tree holding a symbolic link is materialized on a volume
+  that refuses them. `destination.unrepresentable` is the obvious answer and is
+  not written anywhere.
+- Whether an empty directory a container declared, matching no pattern and
+  holding no selected member, survives a selection. It changes the tree digest
+  either way.
+- The default maximum path length. It is a detected capability and appears in the
+  rejection table, but no number is in the limits table, so the answer is
+  wherever the code says it is.
+- What two simultaneous runs into one destination do. One writer per digest is
+  stated for the cache and nothing is stated for the destination.
+- What happens to the first source's partial record when a transfer moves to
+  another candidate. Verified bytes are kept and the rung recomputed, and a
+  partial is named by the identity the source stated, so whether the record is
+  rewritten or a second partial is opened follows from a rule that is not stated.
+- The order registries are searched in, and what bounds the parallel search. Eight
+  registries are named with no concurrency bound and no timeout, so one slow
+  registry's effect on the search is undefined.
+- Whether `--adopt` writes a lock. It writes a record, and the lock rules do not
+  mention adoption.
+
+## The benchmark gate has been red since the baseline was recorded, and this session did not rewrite it
+
+The full verify this session ran is the first in several, and its one failing step
+is the benchmark: `cold-transfer file-operations moved from 41 to 45`. Three
+measurements, each on this machine:
+
+- the committed baseline states 41
+- `a4a7de7`, the commit that recorded that baseline, measures 43
+- this working tree measures 45, and 43 with the session record disabled
+
+So two of the four are this session and are explained: reclaiming an orphaned
+scratch file costs one record per cache per process, which is a write and a
+rename. The other two are older than every commit since the baseline was written,
+including the commit that wrote it, which means the stored number was never true
+on this machine rather than something having regressed into it.
+
+Chosen: do not re-baseline. A file operation count can depend on what the volume
+underneath can do, this machine could not build the ReFS volume the Windows
+script asks for, and a baseline recorded here may not hold on the runner that
+would have to honour it. Rewriting a gate on a machine that cannot reproduce the
+conditions it gates is how a gate stops meaning anything. The benchmark lane is
+deliberately the one lane no workflow runs, so nothing in CI is red because of
+this.
+
+What it would take: run `cargo xtask bench --save-baseline` on a host that can
+build the volumes the script asks for, and record the two components above beside
+the new number so the next reader knows which is deliberate.

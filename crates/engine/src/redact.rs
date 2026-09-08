@@ -6,15 +6,6 @@ use serde::{Deserialize, Serialize, Serializer};
 
 pub const REDACTED: &str = "[redacted]";
 
-const SENSITIVE_HEADERS: [&str; 2] = ["authorization", "cookie"];
-
-#[must_use]
-pub fn is_sensitive_header(name: &str) -> bool {
-    SENSITIVE_HEADERS
-        .iter()
-        .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Secret<T>(T);
 

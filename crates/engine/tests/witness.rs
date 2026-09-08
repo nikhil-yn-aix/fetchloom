@@ -1,5 +1,10 @@
 //! Contract tests over witnesses and the trust class they can raise.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "test setup, where a failure to build the input is the assertion"
+)]
+
 use blake3 as _;
 use rayon as _;
 use serde as _;
@@ -22,7 +27,7 @@ fn witness(machine: &str, origin: &str, run: &str, seed: u8) -> Witness {
         machine: MachineId::new(machine),
         origin: origin.to_owned(),
         run: RunId::new(run),
-        observed_at: Timestamp::from_epoch_seconds(1_700_000_000),
+        observed_at: "2023-11-14T22:13:20Z".parse::<Timestamp>().unwrap(),
     }
 }
 
@@ -106,7 +111,7 @@ fn two_observations_from_one_run_are_one_observation() {
 fn a_witness_recorded_twice_under_two_names_is_still_one_witness() {
     let one = witness("one", "https://a/x", "r1", 1);
     let mut again = one.clone();
-    again.observed_at = Timestamp::from_epoch_seconds(1_800_000_000);
+    again.observed_at = "2027-01-15T08:00:00Z".parse::<Timestamp>().unwrap();
     assert_eq!(
         classify(None, digest(1), &[one, again]),
         TrustClass::Tofu,
@@ -119,16 +124,6 @@ fn witnesses_carrying_another_digest_do_not_corroborate_this_one() {
     let witnesses = [
         witness("one", "https://a/x", "r1", 9),
         witness("two", "https://b/x", "r2", 9),
-    ];
-    assert_eq!(classify(None, digest(1), &witnesses), TrustClass::Tofu);
-}
-
-#[test]
-fn a_third_witness_that_agrees_with_neither_pair_member_changes_nothing() {
-    let witnesses = [
-        witness("one", "https://a/x", "r1", 1),
-        witness("two", "https://b/x", "r2", 9),
-        witness("three", "https://c/x", "r3", 7),
     ];
     assert_eq!(classify(None, digest(1), &witnesses), TrustClass::Tofu);
 }

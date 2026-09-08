@@ -141,7 +141,11 @@ fn applying_a_file_that_is_not_a_plan_fails_and_writes_no_destination() {
     let temporary = corpus();
     let not_a_plan = temporary.path().join("not.plan");
     std::fs::write(&not_a_plan, b"this is not a plan").unwrap();
-    assert_ne!(apply_of(&temporary, &not_a_plan), ExitCode::Success);
+    assert_eq!(
+        apply_of(&temporary, &not_a_plan),
+        ExitCode::Resolution,
+        "a file that is not a plan is a document that did not resolve"
+    );
     assert!(
         !temporary.path().join("destination").exists(),
         "a plan that could not be read materializes nothing"
@@ -152,5 +156,9 @@ fn applying_a_file_that_is_not_a_plan_fails_and_writes_no_destination() {
 fn applying_a_plan_that_is_not_there_fails() {
     let temporary = corpus();
     let missing = temporary.path().join("missing.plan");
-    assert_ne!(apply_of(&temporary, &missing), ExitCode::Success);
+    assert_eq!(
+        apply_of(&temporary, &missing),
+        ExitCode::Resolution,
+        "a plan that is not there is a reference that did not resolve"
+    );
 }

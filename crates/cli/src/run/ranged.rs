@@ -61,6 +61,7 @@ impl<S: Source> RangedReader<S> {
                 &self.location,
                 Some(ByteRange { start: at, end }),
                 self.credential.as_ref(),
+                None,
             )
             .map_err(std::io::Error::other)?;
         let mut taken = Vec::with_capacity(usize::try_from(end - at).unwrap_or_default());

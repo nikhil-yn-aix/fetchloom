@@ -134,14 +134,17 @@ fn every_record_has_at_least_three_numbered_steps_and_non_empty_fields() {
 
 #[test]
 fn the_placement_line_names_the_derived_environment_variable_for_a_generic_host() {
-    let record = help_for("minio.example.org:9000", Necessity::Optional);
-    assert!(
-        record
-            .placement
-            .contains("FETCHLOOM_TOKEN_MINIO_EXAMPLE_ORG_9000"),
-        "the placement line did not carry the derived environment variable: {}",
-        record.placement
-    );
+    for (host, named) in [
+        ("minio.example.org", "FETCHLOOM_TOKEN_MINIO_EXAMPLE_ORG"),
+        ("a-b.example", "FETCHLOOM_TOKEN_A_B_EXAMPLE"),
+    ] {
+        let record = help_for(host, Necessity::Optional);
+        assert!(
+            record.placement.contains(named),
+            "the placement line for {host} did not carry {named}: {}",
+            record.placement
+        );
+    }
 }
 
 #[test]

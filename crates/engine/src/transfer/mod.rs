@@ -34,7 +34,7 @@ pub use resume::{Prior, rung_for};
 pub use retry::{Retry, SleepingPause, backoff, body_failure, honors};
 
 use copy::{Asked, Backpressure, Either, copy};
-use resume::{held, record_of, validator_for};
+use resume::{held, record_of, strong_tag, validator_for};
 use retry::{ended_early, taking};
 
 const SPAN_BUFFERS: usize = 2;
@@ -365,7 +365,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
                 self.copy_split(location, &metadata, &covered, &mut writer, &mut moved),
             )
         } else {
-            let (from, body) = self.body_from(arrived, location, &metadata, keep)?;
+            let (from, body) = self.body_from(arrived, location, &metadata, keep, rung)?;
             (
                 from,
                 copy(
@@ -580,7 +580,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         let credential = self.credential_for(location)?;
         let answered = self
             .source
-            .fetch(location, Some(span), credential.as_ref())?;
+            .fetch(location, Some(span), credential.as_ref(), None)?;
         if answered.metadata.identity != metadata.identity {
             return Err(Error::new(
                 ErrorKind::SourceIdentityChanged,
@@ -628,6 +628,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         location: &str,
         metadata: &SourceMetadata,
         keep: u64,
+        rung: ResumeRung,
     ) -> Result<(SafeUrl, Either<S::Body>), Error> {
         if let Some((from, body)) = arrived {
             return Ok((from.location, Either::Revalidated(body)));
@@ -637,7 +638,13 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
             end: metadata.size.unwrap_or(u64::MAX),
         });
         let credential = self.credential_for(location)?;
-        let answered = self.source.fetch(location, range, credential.as_ref())?;
+        let resuming = range
+            .is_some()
+            .then(|| strong_tag(&metadata.identity, rung))
+            .flatten();
+        let answered = self
+            .source
+            .fetch(location, range, credential.as_ref(), resuming)?;
         Ok((answered.metadata.location, Either::Fetched(answered.body)))
     }
 

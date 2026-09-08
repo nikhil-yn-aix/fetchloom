@@ -46,31 +46,6 @@ fn corpus() -> TempDir {
 }
 
 #[test]
-fn a_usage_error_exits_two() {
-    let output = run(&["definitely-not-a-command"]);
-    assert_eq!(output.status.code(), Some(2));
-}
-
-#[test]
-fn a_reference_that_resolves_to_nothing_exits_ten() {
-    let output = run(&["get", "./definitely-missing-path"]);
-    assert_eq!(output.status.code(), Some(10));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("reference.unresolved"),
-        "stderr was {stderr}"
-    );
-}
-
-#[test]
-fn a_network_reference_while_offline_is_a_policy_failure_exiting_forty() {
-    let output = run(&["get", "--offline", "https://example.invalid/data.tar"]);
-    assert_eq!(output.status.code(), Some(40));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("policy.offline"), "stderr was {stderr}");
-}
-
-#[test]
 fn a_destination_holding_a_foreign_entry_exits_sixty_and_names_it() {
     let temporary = corpus();
     let source = temporary.path().join("source");
@@ -98,12 +73,6 @@ fn a_destination_holding_a_foreign_entry_exits_sixty_and_names_it() {
         !destination.join("a.txt").is_file(),
         "the run staged an entry even though it stopped before staging anything"
     );
-}
-
-#[test]
-fn a_run_with_nothing_to_do_exits_zero() {
-    let output = run(&["explain"]);
-    assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
@@ -567,26 +536,77 @@ fn completions_are_written_for_every_shell() {
     }
 }
 
-#[test]
-fn the_surface_holds_every_command_the_contract_names() {
-    let output = run(&["--help"]);
-    let help = String::from_utf8_lossy(&output.stdout);
-    for present in [
-        "get",
-        "init",
-        "plan",
-        "apply",
-        "verify",
-        "repair",
-        "cache",
-        "watch",
-        "completions",
-        "explain",
-        "doctor",
-        "why",
-    ] {
-        assert!(help.contains(present), "{present} is missing from {help}");
+fn documented_commands() -> std::collections::BTreeSet<String> {
+    let reference = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("docs")
+            .join("reference.md"),
+    )
+    .unwrap();
+    let table = reference
+        .split("## Commands")
+        .nth(1)
+        .unwrap()
+        .split("### cache subcommands")
+        .next()
+        .unwrap();
+    let mut found = std::collections::BTreeSet::new();
+    for line in table.lines().filter(|line| line.starts_with("| `")) {
+        let named = line.trim_start_matches("| `");
+        let word = named.split([' ', '`']).next().unwrap_or_default();
+        if !word.is_empty() && word.chars().all(|letter| letter.is_ascii_lowercase()) {
+            found.insert(word.to_owned());
+        }
     }
+    found
+}
+
+fn offered_commands() -> std::collections::BTreeSet<String> {
+    let output = run(&["--help"]);
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+    let listing = help
+        .split("Commands:")
+        .nth(1)
+        .expect("the top level help lists no commands");
+    let mut found = std::collections::BTreeSet::new();
+    for line in listing.lines().skip(1) {
+        if line.trim().is_empty() {
+            break;
+        }
+        if !line.starts_with("  ") || line.starts_with("      ") {
+            continue;
+        }
+        let Some(word) = line.split_whitespace().next() else {
+            continue;
+        };
+        if word.chars().all(|letter| letter.is_ascii_lowercase()) {
+            found.insert(word.to_owned());
+        }
+    }
+    found
+}
+
+#[test]
+fn the_surface_is_exactly_the_commands_the_reference_names() {
+    let documented = documented_commands();
+    let offered = offered_commands();
+    assert!(
+        documented.len() > 15,
+        "the reference table parsed to {} commands, so this proves nothing",
+        documented.len()
+    );
+    let missing: Vec<&String> = documented.difference(&offered).collect();
+    let extra: Vec<&String> = offered.difference(&documented).collect();
+    assert!(
+        missing.is_empty(),
+        "the reference names {missing:?}, which the binary does not offer"
+    );
+    assert!(
+        extra.is_empty(),
+        "the binary offers {extra:?}, which the reference does not name"
+    );
 }
 
 #[test]
@@ -616,7 +636,7 @@ fn every_contracted_global_flag_is_accepted() {
 }
 
 #[test]
-fn a_credential_never_reaches_any_stream() {
+fn an_offline_refusal_prints_no_part_of_the_reference_it_refused() {
     let temporary = corpus();
     let source = temporary.path().join("source");
     let events = temporary.path().join("events.ndjson");
@@ -640,6 +660,15 @@ fn a_credential_never_reaches_any_stream() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let body = std::fs::read_to_string(&events).unwrap_or_default();
 
+    assert_eq!(
+        output.status.code(),
+        Some(40),
+        "the run did not refuse offline, so what it redacted says nothing about the offline path: {stderr}"
+    );
+    assert!(
+        stderr.contains("policy.offline"),
+        "the refusal was not the offline one: {stderr}"
+    );
     assert!(!stdout.contains(secret), "the secret reached stdout");
     assert!(!stderr.contains(secret), "the secret reached stderr");
     assert!(

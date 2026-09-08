@@ -128,6 +128,12 @@ pub trait Source {
         credential: Option<&Credential>,
     ) -> Result<SourceMetadata, Error>;
 
+    /// `resuming` is the strong entity tag a rung three resume stands on. It is
+    /// sent as `If-Range` beside the range, so a source that no longer holds
+    /// those bytes answers the whole object rather than appending to a partial
+    /// of something else. It is `None` on every other rung and on a fresh
+    /// transfer.
+    ///
     /// # Errors
     /// The kinds `probe` gives, `source.unsupported_range` when a range was
     /// asked for and the whole object was served, and `resource.limit` when
@@ -137,6 +143,7 @@ pub trait Source {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error>;
 
     /// # Errors

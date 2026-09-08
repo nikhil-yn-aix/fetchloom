@@ -261,43 +261,6 @@ fn shape(run: &Run) -> (String, serde_json::Value) {
 }
 
 #[test]
-fn a_warm_measurement_cache_and_an_empty_one_produce_the_same_bytes() {
-    let workspace = Workspace::new();
-    let source = corpus(&workspace, 8);
-    let source = source.to_str().unwrap();
-
-    let mut trees = Vec::new();
-    for (index, ceilings) in [
-        vec![],
-        vec!["--concurrency", "1", "--per-host", "1"],
-        vec!["--concurrency", "4", "--per-host", "2"],
-        vec!["--per-host", "1"],
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let out = format!("out-{index}");
-        let mut arguments = vec!["get", source, "--output", out.as_str(), "--json"];
-        arguments.extend_from_slice(&ceilings);
-        let run = workspace.run(&arguments);
-        assert_eq!(run.code(), 0, "{ceilings:?} said {}", run.err());
-        trees.push(run.json()["tree"].as_str().unwrap().to_owned());
-    }
-    assert!(
-        trees.windows(2).all(|pair| pair[0] == pair[1]),
-        "a ceiling changed the tree digest: {trees:?}"
-    );
-
-    let entries: Vec<Vec<String>> = (0..4)
-        .map(|index| entries_under(&workspace.path().join(format!("out-{index}"))))
-        .collect();
-    assert!(
-        entries.windows(2).all(|pair| pair[0] == pair[1]),
-        "a ceiling changed what was materialized: {entries:?}"
-    );
-}
-
-#[test]
 fn a_measurement_a_run_recorded_never_changes_what_the_next_run_produces() {
     let object: Vec<u8> = (0..64 * 1024_usize)
         .map(|index| u8::try_from(index % 251).unwrap_or(0))

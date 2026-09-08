@@ -1,0 +1,43 @@
+name: mutants
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  shard:
+    name: ${{ matrix.crate }} ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [fetchloom-engine, fetchloom-cache]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mutants-${{ matrix.crate }}
+      - run: cargo install cargo-mutants --version 27.1.0 --locked
+      - run: >
+          cargo mutants
+          --package ${{ matrix.crate }}
+          --shard ${{ matrix.shard }}/8
+          --baseline=skip
+          --no-shuffle
+          --timeout 300
+          --output mutants-${{ matrix.crate }}-${{ matrix.shard }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutants-${{ matrix.crate }}-${{ matrix.shard }}
+          path: mutants-${{ matrix.crate }}-${{ matrix.shard }}

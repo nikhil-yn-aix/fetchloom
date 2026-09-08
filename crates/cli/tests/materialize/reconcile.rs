@@ -425,3 +425,53 @@ fn scratch() -> &'static std::path::Path {
     static SCRATCH: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     SCRATCH.get_or_init(|| TempDir::new().unwrap()).path()
 }
+
+#[test]
+fn a_run_that_stops_leaves_one_destination_and_never_a_numbered_one_beside_it() {
+    let temporary = TempDir::new().unwrap();
+    let source = corpus(temporary.path());
+    let destination = temporary.path().join("destination");
+
+    assert_eq!(
+        run(&[
+            "get",
+            source.to_str().unwrap(),
+            "--output",
+            destination.to_str().unwrap(),
+        ])
+        .status
+        .code(),
+        Some(0)
+    );
+    std::fs::write(destination.join("stray.txt"), b"nobody asked for this").unwrap();
+    std::fs::write(source.join("a.txt"), b"upstream moved").unwrap();
+
+    let stopped = run(&[
+        "get",
+        source.to_str().unwrap(),
+        "--output",
+        destination.to_str().unwrap(),
+    ]);
+    assert_eq!(stopped.status.code(), Some(60));
+
+    let mut beside: Vec<String> = std::fs::read_dir(temporary.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    beside.sort();
+    assert_eq!(
+        beside,
+        vec!["destination".to_owned(), "source".to_owned()],
+        "a stopped run left something beside the destination"
+    );
+    assert_eq!(
+        std::fs::read(destination.join("a.txt")).unwrap(),
+        b"hello",
+        "a stopped run left the destination holding neither tree"
+    );
+    assert_eq!(
+        std::fs::read(destination.join("stray.txt")).unwrap(),
+        b"nobody asked for this"
+    );
+}

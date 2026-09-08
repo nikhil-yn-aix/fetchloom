@@ -114,7 +114,7 @@ impl Repair<'_> {
                 end: span.end,
             });
             let range = (spans.len() > 1 || span.start > 0).then_some(*span);
-            let body = source.fetch(self.location, range, None)?.body;
+            let body = source.fetch(self.location, range, None, None)?.body;
             moved += self.cache.patch(&mut writer, span.start..span.end, body)?;
         }
 

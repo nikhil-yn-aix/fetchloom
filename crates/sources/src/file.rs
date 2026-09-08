@@ -100,6 +100,7 @@ impl Source for FileSource {
         location: &str,
         range: Option<ByteRange>,
         _credential: Option<&Credential>,
+        _resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         let (mut handle, size) = self.open(location)?;
         let span = range.unwrap_or(ByteRange {
@@ -124,7 +125,7 @@ impl Source for FileSource {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error> {
         Ok(Revalidated::Changed(Box::new(
-            self.fetch(location, None, credential)?,
+            self.fetch(location, None, credential, None)?,
         )))
     }
 

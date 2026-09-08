@@ -19,14 +19,14 @@ use toml as _;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
 
-use fetchloom_engine::canonical::{encode_entries, tree_digest};
+use fetchloom_engine::canonical::{manifest_digest, tree_digest};
 use fetchloom_engine::conformance::{declared_failures, portable_core};
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::Digester;
 use fetchloom_engine::hashing::{Digests, Pair};
 use fetchloom_engine::limits::{OUTBOARD_CHUNK_GROUP, OUTBOARD_THRESHOLD};
-use fetchloom_engine::outboard::{tree_of, verify_range};
+use fetchloom_engine::outboard::{find_damage, tree_of};
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
@@ -104,12 +104,10 @@ fn walked_root(object: &[u8]) -> [u8; 32] {
     let content = output.content;
     if let Some(outboard) = &output.outboard {
         let mut cursor = Cursor::new(outboard.as_bytes().to_vec());
-        let range = 0..object.len() as u64;
-        verify_range(
+        let damaged = find_damage(
             &mut cursor,
             object.len() as u64,
             content,
-            range,
             &mut |group, into| {
                 let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
                 let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
@@ -119,6 +117,10 @@ fn walked_root(object: &[u8]) -> [u8; 32] {
             },
         )
         .unwrap();
+        assert!(
+            damaged.is_empty(),
+            "the tree of an undamaged object reported damage"
+        );
     }
     *content.bytes()
 }
@@ -173,7 +175,6 @@ fn outboard_file_size_is_exactly_the_header_plus_the_parent_nodes() {
     let outboard = output.outboard.unwrap();
     let leaf_count = len.div_ceil(OUTBOARD_CHUNK_GROUP as usize) as u64;
     assert_eq!(outboard.as_bytes().len() as u64, 8 + 64 * (leaf_count - 1));
-    assert_eq!(outboard.leaf_count(), leaf_count);
 }
 
 #[test]
@@ -192,7 +193,7 @@ fn build_large_object(extra_groups: u64) -> (Vec<u8>, Digests) {
 }
 
 #[test]
-fn flipping_a_byte_inside_a_group_is_reported_as_a_range_mismatch_naming_that_group() {
+fn flipping_a_byte_inside_a_group_is_localized_to_that_group_and_no_other() {
     let (mut object, output) = build_large_object(4);
     let outboard = output.outboard.unwrap();
     let flip_index = (OUTBOARD_CHUNK_GROUP as usize) * 2 + 17;
@@ -200,11 +201,10 @@ fn flipping_a_byte_inside_a_group_is_reported_as_a_range_mismatch_naming_that_gr
 
     let mut cursor = Cursor::new(outboard.as_bytes().to_vec());
     let object_len = object.len() as u64;
-    let error = verify_range(
+    let damaged = find_damage(
         &mut cursor,
         object_len,
         output.content,
-        0..object_len,
         &mut |group, into| {
             let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
             let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
@@ -213,19 +213,17 @@ fn flipping_a_byte_inside_a_group_is_reported_as_a_range_mismatch_naming_that_gr
             Ok(())
         },
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert_eq!(error.kind(), ErrorKind::IntegrityRangeMismatch);
-    let expected_start = 2 * OUTBOARD_CHUNK_GROUP;
-    assert!(
-        error.next_action().contains(&expected_start.to_string()),
-        "{}",
-        error.next_action()
+    assert_eq!(
+        damaged,
+        vec![2 * OUTBOARD_CHUNK_GROUP..3 * OUTBOARD_CHUNK_GROUP],
+        "the damaged span is not the group the flipped byte is in"
     );
 }
 
 #[test]
-fn flipping_a_byte_inside_a_parent_node_is_reported_at_that_node_not_at_a_leaf() {
+fn flipping_a_byte_inside_a_parent_node_discards_the_tree_rather_than_naming_a_leaf() {
     let (object, output) = build_large_object(4);
     let outboard = output.outboard.unwrap();
     let mut corrupted = outboard.as_bytes().to_vec();
@@ -234,11 +232,10 @@ fn flipping_a_byte_inside_a_parent_node_is_reported_at_that_node_not_at_a_leaf()
 
     let mut cursor = Cursor::new(corrupted);
     let object_len = object.len() as u64;
-    let error = verify_range(
+    let error = find_damage(
         &mut cursor,
         object_len,
         output.content,
-        0..object_len,
         &mut |group, into| {
             let start = (group * OUTBOARD_CHUNK_GROUP) as usize;
             let end = (start + OUTBOARD_CHUNK_GROUP as usize).min(object.len());
@@ -249,7 +246,16 @@ fn flipping_a_byte_inside_a_parent_node_is_reported_at_that_node_not_at_a_leaf()
     )
     .unwrap_err();
 
-    assert_eq!(error.kind(), ErrorKind::IntegrityRangeMismatch);
+    assert_eq!(
+        error.kind(),
+        ErrorKind::CacheCorrupt,
+        "a tree that does not check out was answered with a claim about which bytes are wrong"
+    );
+    assert!(
+        error.next_action().contains("rebuild"),
+        "a tree that says nothing about the object must be discarded and rebuilt: {}",
+        error.next_action()
+    );
     assert!(
         error.next_action().contains(&format!("0..{object_len}")),
         "expected the whole-object range to be named at the root node: {}",
@@ -266,11 +272,10 @@ fn truncating_the_outboard_is_cache_corrupt() {
 
     let mut cursor = Cursor::new(truncated);
     let object_len = object.len() as u64;
-    let error = verify_range(
+    let error = find_damage(
         &mut cursor,
         object_len,
         output.content,
-        0..object_len,
         &mut |_group, into| {
             into.clear();
             Ok(())
@@ -287,11 +292,10 @@ fn a_length_that_disagrees_with_the_object_is_cache_corrupt_not_an_integrity_err
     let outboard = output.outboard.unwrap();
     let mut cursor = Cursor::new(outboard.as_bytes().to_vec());
     let wrong_len = object.len() as u64 + 1;
-    let error = verify_range(
+    let error = find_damage(
         &mut cursor,
         wrong_len,
         output.content,
-        0..wrong_len,
         &mut |_group, into| {
             into.clear();
             Ok(())
@@ -364,12 +368,25 @@ fn an_empty_directory_and_a_zero_byte_file_at_the_same_path_differ() {
 }
 
 #[test]
-fn tree_digest_is_not_a_plain_blake3_hash_of_the_same_stream() {
-    let entries = [file_entry("a.txt", Mode::ReadWrite, b"one")];
-    let stream = encode_entries(&entries);
-    let plain = blake3::hash(&stream);
-    let derived = tree_digest(&entries);
-    assert_ne!(*derived.bytes(), *plain.as_bytes());
+fn the_three_digest_domains_never_agree_on_one_input() {
+    let empty: &[u8] = b"";
+    let tree = *tree_digest(&[]).bytes();
+    let manifest = *manifest_digest(empty).bytes();
+    let content = *hash_stream(&processor(), empty).content.bytes();
+    let plain = *blake3::hash(empty).as_bytes();
+
+    for (left, right, what) in [
+        (tree, manifest, "a tree digest and a manifest digest"),
+        (tree, content, "a tree digest and a content digest"),
+        (manifest, content, "a manifest digest and a content digest"),
+        (tree, plain, "a tree digest and a plain hash"),
+        (manifest, plain, "a manifest digest and a plain hash"),
+    ] {
+        assert_ne!(
+            left, right,
+            "{what} of the same input are one value, so the domains are not separated"
+        );
+    }
 }
 
 #[test]

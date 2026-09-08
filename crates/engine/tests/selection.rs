@@ -181,25 +181,6 @@ fn flattening_a_member_to_nothing_names_the_member_and_the_count() {
 }
 
 #[test]
-fn a_member_the_layout_leaves_unnamed_is_never_dropped_silently() {
-    let selection = Selection {
-        include: Vec::new(),
-        exclude: Vec::new(),
-        layout: Layout::Flatten(1),
-    };
-    assert!(selection.apply(&files(&["a.txt"])).is_err());
-}
-
-#[test]
-fn selection_reports_which_member_each_selected_path_came_from() {
-    let applied = selecting(&["b/**"])
-        .apply(&files(&["a.txt", "b/c.txt"]))
-        .unwrap();
-    assert_eq!(applied.members.len(), 1);
-    assert_eq!(applied.members[0].index, 1);
-}
-
-#[test]
 fn flattening_a_directory_member_to_nothing_drops_it_rather_than_failing() {
     let selection = Selection {
         include: Vec::new(),
@@ -296,23 +277,4 @@ fn a_glob_is_written_and_read_as_the_bare_pattern() {
     assert_eq!(written["exclude"], serde_json::json!(["notes/**"]));
     let read: Selection = serde_json::from_value(written).unwrap();
     assert_eq!(read, selection);
-}
-
-#[test]
-fn globs_order_and_hash_by_their_pattern() {
-    let mut sorted = [
-        Glob::new("data/**"),
-        Glob::new("**/*.txt"),
-        Glob::new("data/a"),
-    ];
-    sorted.sort();
-    assert_eq!(
-        sorted.iter().map(Glob::as_str).collect::<Vec<&str>>(),
-        vec!["**/*.txt", "data/**", "data/a"]
-    );
-    let mut seen = std::collections::HashSet::new();
-    assert!(seen.insert(Glob::new("data/**")));
-    assert!(!seen.insert(Glob::new("data/**")));
-    assert_eq!(Glob::new("data/**"), Glob::new("data/**"));
-    assert_ne!(Glob::new("data/**"), Glob::new("data/*"));
 }

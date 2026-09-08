@@ -234,7 +234,7 @@ fn read_document(
             &fetchloom_engine::reference::Host::new(crate::run::host_of(location)),
             fetchloom_engine::credential::Necessity::Optional,
         )?;
-        let served = source.fetch(location, None, credential.as_ref())?;
+        let served = source.fetch(location, None, credential.as_ref(), None)?;
         served
             .body
             .take(limits.manifest_size + 1)

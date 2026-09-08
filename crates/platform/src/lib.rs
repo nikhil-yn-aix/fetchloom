@@ -15,6 +15,8 @@ use fetchloom_engine::seam::platform::{Liveness, OwnerToken, Platform};
 use fetchloom_engine::threads::ThreadBudget;
 
 #[cfg(test)]
+use fetchloom_faults as _;
+#[cfg(test)]
 use tempfile as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

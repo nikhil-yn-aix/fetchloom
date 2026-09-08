@@ -81,6 +81,10 @@ pub struct Cache<P: Platform> {
     packed: std::sync::Mutex<Option<Arc<crate::pack::Index>>>,
 }
 
+/// What a record naming the process behind every scratch file it wrote is
+/// called, so a sweep can tell which boot those files belong to.
+pub(crate) const SESSION_SUFFIX: &str = ".session";
+
 impl<P: Platform> Cache<P> {
     /// # Errors
     /// `cache.format_mismatch` when the directory was written by a build with
@@ -265,9 +269,26 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
         {
             continue;
         }
-        let record = owner_record_of(&path);
-        let Some(wrote_it) = record::read_owner(&record)? else {
+        if path.extension().is_some_and(|kind| kind == "session") {
+            if let Some(wrote_it) = record::read_owner(&path)?
+                && wrote_it.machine == token.machine
+                && wrote_it.boot != token.boot
+            {
+                remove(&path)?;
+            }
             continue;
+        }
+        let record = owner_record_of(&path);
+        let beside = record::read_owner(&record)?;
+        // A scratch file states the process and start that wrote it in its own
+        // name, and that process wrote one record stating the boot, so an
+        // orphan with no record beside it is still this sweep's to reclaim.
+        let wrote_it = match beside {
+            Some(found) => found,
+            None => match session_of(directory, &path)? {
+                Some(found) => found,
+                None => continue,
+            },
         };
         if wrote_it.machine != token.machine || wrote_it.boot == token.boot {
             continue;
@@ -277,6 +298,22 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
         remove(&source_record_of(&path))?;
     }
     Ok(())
+}
+
+/// The record a process wrote once, naming the boot behind every scratch file
+/// whose name carries that process and start.
+fn session_of(directory: &Path, entry: &Path) -> Result<Option<OwnerToken>, Error> {
+    let Some(name) = entry.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return Ok(None);
+    };
+    let mut parts = name.splitn(3, '-');
+    let (Some(pid), Some(start)) = (parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    if parts.next().is_none() {
+        return Ok(None);
+    }
+    record::read_owner(&directory.join(format!("{pid}-{start}{SESSION_SUFFIX}")))
 }
 
 fn remove(path: &Path) -> Result<(), Error> {

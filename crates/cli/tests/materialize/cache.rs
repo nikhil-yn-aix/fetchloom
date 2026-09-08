@@ -384,6 +384,7 @@ fn a_cache_that_fills_part_way_through_degrades_and_the_run_completes() {
         "FETCHLOOM_TEST_SMALL_VOLUMES is unset in a verification run that builds this filesystem"
     );
     let Some(small) = named.and_then(|named| std::env::split_paths(&named).next()) else {
+        fetchloom_faults::decline!("a volume small enough to fill");
         return;
     };
     let scratch = TempDir::new_in(&small).unwrap();

@@ -31,7 +31,9 @@ use support::{Property, bytes_of, scratch_on, volumes};
 
 #[test]
 fn a_cache_on_a_network_volume_is_refused_as_unable_to_lock() {
-    for scratch in scratch_on(Property::Network) {
+    for scratch in
+        fetchloom_faults::require!(scratch_on(Property::Network), "a network-backed volume")
+    {
         let refused = support::open_cache(scratch.path()).unwrap_err();
         assert_eq!(
             refused.kind(),
@@ -44,7 +46,7 @@ fn a_cache_on_a_network_volume_is_refused_as_unable_to_lock() {
 
 #[test]
 fn a_cache_that_cannot_be_written_is_refused_rather_than_half_opened() {
-    for volume in volumes(Property::ReadOnly) {
+    for volume in fetchloom_faults::require!(volumes(Property::ReadOnly), "a read-only volume") {
         let refused = support::open_cache(&volume).unwrap_err();
         assert_eq!(
             refused.kind(),
@@ -57,7 +59,9 @@ fn a_cache_that_cannot_be_written_is_refused_rather_than_half_opened() {
 
 #[test]
 fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
-    for scratch in scratch_on(Property::Small) {
+    for scratch in
+        fetchloom_faults::require!(scratch_on(Property::Small), "a volume small enough to fill")
+    {
         let held = support::cache_in(scratch.path());
         let bytes = support::incompressible(1 << 20, 17);
         let mut wrote = 0u32;
@@ -102,6 +106,7 @@ fn a_volume_with_no_room_left_fails_the_transfer_rather_than_the_cache() {
 #[test]
 fn a_cache_split_across_volumes_is_refused_when_it_is_opened() {
     let Some(second) = volumes(Property::Second).into_iter().next() else {
+        fetchloom_faults::decline!("a second writable volume");
         return;
     };
     let scratch = tempfile::TempDir::new().unwrap();
@@ -111,6 +116,7 @@ fn a_cache_split_across_volumes_is_refused_when_it_is_opened() {
     let elsewhere = tempfile::TempDir::new_in(&second).unwrap();
     std::fs::remove_dir_all(root.join("staging")).unwrap();
     if !support::link_directory(elsewhere.path(), &root.join("staging")) {
+        fetchloom_faults::decline!("permission to link one directory at another");
         return;
     }
 
@@ -125,6 +131,7 @@ fn a_cache_split_across_volumes_is_refused_when_it_is_opened() {
 #[test]
 fn prune_skips_a_pack_another_user_wrote_and_reports_it() {
     let Some(other) = support::another_owner() else {
+        fetchloom_faults::decline!("a second user this machine may give a file to");
         return;
     };
     let (_scratch, held) = support::cache();
@@ -193,3 +200,77 @@ const ENOLCK: i32 = 37;
 
 #[cfg(windows)]
 const ENOLCK: i32 = 1;
+
+const UMASK_CACHE: &str = "FETCHLOOM_TEST_UMASK_CACHE";
+
+/// contracts.md:311 — objects are readable by every user and writable only by
+/// their creator. A umask of 077 is the setting that would otherwise make the
+/// shared cache single-user without anything saying so.
+#[test]
+fn an_object_is_readable_by_every_user_whatever_umask_wrote_it() {
+    #[cfg(not(unix))]
+    {
+        fetchloom_faults::decline!("a platform whose files carry mode bits");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::TempDir::new().unwrap();
+        let cache = scratch.path().join("cache");
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "umask 077; exec {} --exact publish_under_a_hostile_umask --ignored --nocapture",
+                std::env::current_exe().unwrap().display()
+            ))
+            .env(UMASK_CACHE, &cache)
+            .status()
+            .unwrap();
+        assert!(
+            child.success(),
+            "the child could not publish under umask 077"
+        );
+
+        let mut checked = 0;
+        for directory in [cache.join("objects"), cache.join("packs")] {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|kind| kind == "owner") {
+                    continue;
+                }
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(
+                    mode & 0o444,
+                    0o444,
+                    "{} is not readable by every user, so the shared cache is single user under this umask",
+                    path.display()
+                );
+                assert_eq!(
+                    mode & 0o022,
+                    0,
+                    "{} is writable by somebody other than the user who created it",
+                    path.display()
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 2,
+            "the child published {checked} files, so this proves nothing"
+        );
+    }
+}
+
+#[test]
+#[ignore = "run only as the child of the umask test, which needs its own process"]
+fn publish_under_a_hostile_umask() {
+    let Ok(cache) = std::env::var(UMASK_CACHE) else {
+        return;
+    };
+    let scratch = std::path::PathBuf::from(&cache);
+    std::fs::create_dir_all(&scratch).unwrap();
+    let held = support::open_cache_at(&scratch).unwrap();
+    support::publish(&held, &support::bytes_of(4096, 3));
+    support::publish(&held, &support::incompressible(2 << 20, 5));
+}

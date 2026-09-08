@@ -243,6 +243,13 @@ Available on every command.
 | `XDG_CACHE_HOME` | Cache root on Linux |
 | `NO_COLOR` | Disable color |
 
+`<HOST>` in those names is the host of the location with every character that is
+not a letter or a digit replaced by an underscore, uppercased. The host is the
+name or address the location carries and never its port, so one variable serves
+every port on a host, and two hosts differing only in a character that maps to an
+underscore share one variable, so a host written with a hyphen where another
+writes a dot resolves to the same name. Name the host you mean.
+
 ## Provider credentials
 
 What each provider needs, and what it states about the bytes it serves.

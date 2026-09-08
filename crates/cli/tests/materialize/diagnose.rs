@@ -109,7 +109,13 @@ fn doctor_changes_nothing_in_a_healthy_cache() {
 
     let after = snapshot(&cache);
     assert_unchanged(before.as_ref(), after.as_ref(), "healthy cache");
-    let _ = output;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -154,6 +160,14 @@ fn doctor_changes_nothing_when_the_cache_directory_is_read_only() {
     let mut permissions = std::fs::metadata(&cache).unwrap().permissions();
     permissions.set_mode(0o555);
     std::fs::set_permissions(&cache, permissions).unwrap();
+    if std::fs::write(cache.join("probe-whether-the-mode-is-honored"), b"").is_ok() {
+        let _ = std::fs::remove_file(cache.join("probe-whether-the-mode-is-honored"));
+        let mut restored = std::fs::metadata(&cache).unwrap().permissions();
+        restored.set_mode(0o755);
+        std::fs::set_permissions(&cache, restored).unwrap();
+        fetchloom_faults::decline!("a user the mode bits of a read-only directory apply to");
+        return;
+    }
 
     let output = run_in(temporary.path(), &cache, &[], &["doctor"]);
 
@@ -180,22 +194,6 @@ fn doctor_leaves_no_config_file_behind() {
     run_in(temporary.path(), &cache, &[], &["doctor"]);
 
     assert!(!temporary.path().join("fetchloom.toml").exists());
-}
-
-#[test]
-fn doctor_exits_zero_on_a_healthy_environment() {
-    let temporary = TempDir::new().unwrap();
-    let cache = healthy_cache(temporary.path());
-
-    let output = run_in(temporary.path(), &cache, &[], &["doctor"]);
-
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[cfg(unix)]

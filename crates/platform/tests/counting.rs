@@ -90,6 +90,7 @@ fn a_symlink_that_can_be_created_counts_one_operation() {
         .create_symlink(b"target", &root.path().join("link"))
         .is_err()
     {
+        fetchloom_faults::decline!("a volume that permits creating a symbolic link");
         return;
     }
     assert_eq!(work.taken().file_operations, 1);

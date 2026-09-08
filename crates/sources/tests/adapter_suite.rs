@@ -194,6 +194,7 @@ impl Source for LyingSource {
         location: &str,
         _range: Option<ByteRange>,
         credential: Option<&Credential>,
+        _resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         Ok(Served {
             metadata: self.probe(location, credential)?,
@@ -208,7 +209,7 @@ impl Source for LyingSource {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error> {
         Ok(Revalidated::Changed(Box::new(
-            self.fetch(location, None, credential)?,
+            self.fetch(location, None, credential, None)?,
         )))
     }
 
@@ -274,7 +275,7 @@ fn the_suite_is_generic_over_the_source_it_judges() {
     let findings = generic_judge(&source, &fixture);
     assert_conforms(&findings);
 
-    let whole = source.fetch(&location, None, None).unwrap();
+    let whole = source.fetch(&location, None, None, None).unwrap();
     assert_eq!(read(whole.body), bytes);
 }
 
@@ -318,6 +319,7 @@ impl Source for InventingSource {
         location: &str,
         range: Option<ByteRange>,
         credential: Option<&Credential>,
+        _resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         if range.is_some() {
             return Err(Error::new(
@@ -338,7 +340,7 @@ impl Source for InventingSource {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error> {
         Ok(Revalidated::Changed(Box::new(
-            self.fetch(location, None, credential)?,
+            self.fetch(location, None, credential, None)?,
         )))
     }
 

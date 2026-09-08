@@ -34,6 +34,8 @@ An object at or below the outboard threshold stores no tree, because its content
 
 Every portable artifact has one canonical form, and every digest covers that form rather than the text anyone typed.
 
+A timestamp is written and read in one form: the date, `T`, the time to the second, and `Z`. Nothing else is written and nothing else is read as one.
+
 A manifest is accepted as YAML, TOML or JSON. A lock, receipt and plan are written in the YAML subset and read back from any of the three.
 
 The YAML subset is block mappings, block sequences, flow sequences, flow mappings, and plain, single quoted and double quoted scalars. Anchors, aliases, merge keys, tags, directives, block scalars, document separators, and tabs as indentation are each refused by name. `true`, `false` and `null` are the only words read as anything but text, and a run of digits with an optional sign is the only text read as a number, so `yes` is a word.
@@ -114,11 +116,15 @@ Nothing is removed from the library on its own, and no run prunes it. `library r
 
 ## Selection
 
-Selection is part of identity. Changing it changes the lock entry, not the dataset name.
+Selection is part of identity. Changing it changes the lock entry, not the dataset name. Selection is a sequence rather than a set: a locked run compares the patterns in the order they were written, so reordering a list is a change, and a lock made before the reorder no longer describes the run.
 
 Globs match the canonical `/` separated member path, on raw bytes, case sensitive, with no normalization. Four rules and nothing else. `*` matches any run of bytes within one component, including none. `**` as a whole component matches any number of components, including none. `?` matches exactly one byte within one component. Every other byte is literal, including the bracket, the brace and the backslash.
 
 A pattern matches member paths, not subtrees. Every ancestor directory of a selected member is included whether or not a pattern matched it.
+
+No pattern at all selects every member. Exclusion is applied to what inclusion chose, so a member an exclude names is gone however many includes matched it.
+
+A pattern is decided in time bounded by the pattern and the path, never by the number of ways its wildcards could line up, so a pattern of many recursive wildcards answers rather than running.
 
 An empty selection is an error, not a no-op. It fails with `reference.unresolved` naming how many members were considered and which patterns matched none.
 
@@ -151,6 +157,8 @@ A witness is written only by a run that transferred the bytes in full and verifi
 
 Two witnesses are independent only when they differ in all three of machine, origin and run. Two observations from one machine are one observation.
 
+Witnesses are kept per artifact of a manifest, under a key derived from the manifest digest and the artifact identifier with each length stated, so no two names can fold into one key and no artifact reads another's witnesses.
+
 `corroborated` is in the taxonomy and nothing in this build produces it. Every witness is written under this machine, and the one channel a foreign witness could arrive by is a shared cache directory, which is reached over a network and refused with `cache.locking_unsupported` before it is opened. A build that makes it reachable changes this paragraph in the same change.
 
 ## Locked runs
@@ -172,7 +180,7 @@ A locked run never accepts `tofu`. A dataset the lock does not pin would be a fi
 
 A locked run hands the transfer the digest the lock pins, so a cache already holding those bytes issues no request at all, and a source serving other bytes fails on integrity without falling back. It writes no lock, because a run that may not differ from the lock has nothing to add to it.
 
-An unlocked run records what it resolved. A run that resolved no object writes no lock entry and emits `degrade` naming which of two reasons it was: the reference resolved to a tree, which is what a directory and a container image do, or no interop digest is recorded for the object. A run that failed writes no lock entry and emits no `degrade`, because it gave nothing up that the failure it already reports does not say.
+An unlocked run records what it resolved, including a run that changed nothing: the lock is rewritten with the bytes it already held, so what it says never depends on whether the destination needed touching. A run that resolved no object writes no lock entry and emits `degrade` naming which of two reasons it was: the reference resolved to a tree, which is what a directory and a container image do, or no interop digest is recorded for the object. A run that failed writes no lock entry and emits no `degrade`, because it gave nothing up that the failure it already reports does not say.
 
 ## Resume
 
@@ -188,7 +196,7 @@ The rung used is always reported.
 
 A recorded identity differing from the current response is answered by the rung the partial stood on. On rungs three, four and five the partial is discarded, the transfer restarts, and a `degrade` names the rung it stood on and the rung it fell to. On rung two the source declared an immutable identity and has since served a different one for the same location, which contradicts the promise that rung stands on, so the transfer fails with `source.identity_changed`, is not retried, and exits 20. A source that merely stopped stating an immutable identity has broken no promise and restarts like any other rung.
 
-A partial carries a record beside it holding the redacted location, host, stated length, stated identity, entity tag and last modified as received, whether ranges were accepted, how many bytes are known to have arrived, and the rung. It is written when the partial is opened and removed with it.
+A partial is named by what it is a transfer of. Where the digest is known it is named by that, and where it is not it is named by the location, the host and the identity the source stated, so a transfer whose identity moved appends to nothing the earlier one wrote. A partial carries a record beside it holding the redacted location, host, stated length, stated identity, entity tag and last modified as received, whether ranges were accepted, how many bytes are known to have arrived, and the rung. It is written when the partial is opened and removed with it.
 
 A partial is preallocated to its full length, so its size on disk says nothing about how much arrived. The recorded byte count is the only offset a resume may append at, and anything past it is discarded first. A count behind what arrived costs a refetch; one ahead would be corruption, so it is only written after the bytes are.
 
@@ -216,6 +224,8 @@ A reference no digest pins names bytes that may change, so a warm run asks with 
 
 ## Retry and politeness
 
+Politeness is measured per host, and the host of a location is the name or address it carries: a bracketed literal is the address inside the brackets, a userinfo component belongs to no host, and a location naming none has no host to be polite to.
+
 A transient failure is retried with exponential backoff and full jitter, up to the attempt limit and never past the retry ceiling.
 
 `Retry-After` is a floor on the wait, never a replacement. The wait is the longer of the run's own backoff and what the source asked for, because politeness is never lowered by what a measurement says. A `Retry-After` longer than the ceiling is not waited out: the source is left for the next candidate, and a run with none left fails with `network.status` reporting the wait asked for.
@@ -223,6 +233,8 @@ A transient failure is retried with exponential backoff and full jitter, up to t
 Sources are ordered in the manifest, and order expresses preference, not a race. The same object is never transferred from more than one source at a time. Candidates are probed in parallel up to the probe limit, a probe being a bounded metadata request costing kilobytes.
 
 Scored in fixed priority: reachable, supports ranges, exposes immutable identity, recorded throughput, time to first byte, egress cost, remaining politeness headroom. Ties break by manifest order, so selection is deterministic when measurements are equal. A losing candidate is never asked for bytes.
+
+A fact a source did not state is not evidence about it. A candidate silent about egress cost is neither preferred over one that stated a charge nor refused for its silence, and the pair falls through to whatever separates them next.
 
 A transfer moves to the next candidate when it stalls past the idle timeout, exhausts retries, returns a terminal error, or sustains throughput far below what was measured. Verified bytes are kept and the resume rung is recomputed. A switch emits `source.failover` and a `degrade` naming the source left, the source taken, and the failure that ended the first.
 
@@ -234,7 +246,7 @@ Choosing costs nothing when there is nothing to choose. A single source is taken
 
 ## Splitting
 
-One object is fetched as several ranges at once only when four conditions hold together: the source states an immutable identity, it serves ranges, the object is longer than the split threshold, and this run has recorded a per host concurrency above one for that host. The width is that count, bounded by what politeness permits at the moment.
+One object is fetched as several ranges at once only when four conditions hold together: the source states an immutable identity, it serves ranges, the object is longer than the split threshold, and this run has recorded a per host concurrency above one for that host. An object whose length the source did not state is not longer than the threshold, because a length nobody stated is not a length. The width is that count, bounded by what politeness permits at the moment.
 
 Spans cover the missing bytes once, in order, with no gap and no overlap, and are written in the order they cover, so the digests taken as bytes arrive are the digests of the object. A source serving one span under a different identity than another fails with `source.identity_changed`.
 
@@ -288,7 +300,7 @@ One writer per digest, held by an advisory lock recording machine, process, boot
 
 The lock exists to deduplicate transfer, so it is taken when there is a transfer to deduplicate and not otherwise. Bytes already local, whether from a `file:` source, an archive being extracted, or a bundle member, are written to a name of this process's own and published with no lock and no partial. A content addressed write is idempotent and a rename already makes a torn object impossible, so coordinating two processes writing identical bytes costs more than it saves. This is a rule about whether bytes cross a network, never about how many of them there are, and it never becomes a size threshold.
 
-Orphaned staging and partial entries from a previous boot are removed at startup.
+Orphaned staging and partial entries from a previous boot are removed at startup. An entry another machine created is not this machine's to recover and is left where it is.
 
 Prune marks, waits out a grace period, then sweeps. Pinned objects, objects leased by a running process, and objects referenced by a lock in the working directory always survive. The grace period is a race window, not a retention policy: it exists so an object claimed between mark and sweep is not removed under the process claiming it. It is not configurable, because shorter is a corruption and longer is a wait with no benefit. Retention, meaning a rule about how long an unused object is kept, does not exist.
 
@@ -375,6 +387,20 @@ Every rejection stops the whole run, emits `extract.reject`, and publishes nothi
 | More members, expanded bytes, or ratio than allowed | `archive.bomb` |
 | A name the target volume refuses | `destination.unrepresentable` |
 
+A hard link to a member the archive does hold materializes the target's bytes as
+a second file. The tree entry types are file, directory and symbolic link, so a
+hard link has no entry of its own, and two names sharing an inode is a fact about
+one filesystem rather than about the bytes a run delivered. Two entries, one
+digest, and a tree digest that says the same thing on a filesystem that has no
+hard links at all.
+
+The normalization half of that collision row is unprovable on the platforms this
+project ships. It needs a volume that stores a normalized form of the name it is
+given, and neither NTFS nor any Linux filesystem the verify lanes can build does
+that, so no lane observes the rejection and the suite says so by name rather than
+passing in silence. The row stands because a normalizing volume exists elsewhere,
+and the code measures the volume rather than assuming an answer.
+
 A backslash is a legal byte in a member name and is never a separator, with one exception decided from the archive itself. When no member path in a zip holds a forward slash and at least one holds a backslash, that zip states its structure with backslashes and nothing else, so every backslash becomes a forward slash before any rejection is applied, and `..\..\x` is refused as `../../x` rather than accepted as a name. The run emits `degrade`. A zip holding both is ambiguous and refused. A tar is never translated.
 
 A zip states how many members it holds in sixteen bits and where its central directory starts in thirty-two. Where a true value does not fit, the format writes a sentinel into that field and the real one into a zip64 end of central directory record, found through a locator sitting immediately before the classic record. Fetchloom reads that record whenever either field states its sentinel and a locator is there, so the count and the location every later decision is made from are the archive's own rather than a truncation of them. An archive holding exactly 65,535 members states the same sixteen bits and carries no locator, which is not zip64 and is read as it stands. A locator pointing at bytes that are not a zip64 end of central directory record, or at one shorter than the format's smallest, is refused naming zip64. A member stating its own sizes in zip64 form is still refused, because reading those is a different thing from finding the directory.
@@ -395,6 +421,8 @@ Running a request against an existing destination produces one outcome per entry
 | `restored` | Entry missing | Materialize from cache |
 | `modified` | Entry differs from the resolved entry | Stop, name every path, require `--force` or `--adopt` |
 | `foreign` | Present, not in the resolved tree | Stop and name it, require `--force` or `--adopt` |
+
+An entry the destination holds as another kind of thing than the one that was resolved is `modified`, because what an entry is belongs to the entry.
 
 Which answer `unchanged` is decided by comes from `--verify`, so one policy governs a destination entry and a cache hit rather than two. A destination with no receipt has no recorded fingerprint, so every file is hashed. A fingerprint answers only what the record it was written with states about that path, so it stands for that record's entry and never for the tree this run resolved. That is what keeps `--adopt` from letting the next run report a tree the destination does not hold.
 
@@ -454,6 +482,8 @@ A fingerprint is recorded only for a file whose modification and change times ar
 | absent | added | added, differently | Conflict |
 | absent | added | added, identically | Unchanged |
 
+An entry is one value, so a change of what it is is a change like any other: a path that is a file on one side and a directory on the other has moved on that side, and a mode upstream changed is upstream changing that entry.
+
 A conflict writes upstream's version beside yours as `<name>.upstream`, leaves yours exactly as it is, names every conflicting path, and exits 60 with `destination.conflict`. Nothing merges the contents of a file, nothing prompts, and nothing chooses for you. A run whose `<name>.upstream` would land on a name either side already holds fails with `destination.conflict` before anything is written, because there is no second name and a numbered one would be a guess.
 
 A conflicted run still writes its record, so the next run compares against what this one left rather than conflicting again on the same entry.
@@ -498,7 +528,7 @@ A document is bounded by what wrote it, not by which parser reads it.
 
 A manifest, listing, lock, plan and metadata document are written by strangers, so they are bounded to refuse hostile input by the manifest size and node limits. A receipt is written by this machine about work it already did, and its length is a function of how many files the run materialized rather than of anything a stranger controls, so it is bounded by the record limits, set to hold a tree of the largest size the archive entry limit permits.
 
-A document past either bound is refused with `resource.limit` and is never read in part, wherever it came from. Bounding a receipt by the manifest limits would let this build materialize a tree it cannot verify, which is the one thing a receipt exists to prevent.
+A document past either bound is refused with `resource.limit` and is never read in part, wherever it came from. A document nested deeper than the nesting depth allows is refused as `manifest.invalid` naming the depth, because a document shaped to exhaust a reader is malformed rather than large. Bounding a receipt by the manifest limits would let this build materialize a tree it cannot verify, which is the one thing a receipt exists to prevent.
 
 ## Credentials
 
@@ -569,7 +599,7 @@ An operation with nothing to do exits 0 with status `unchanged`.
 
 The result's `status` is one of exactly four values and no other is ever written: `materialized`, `unchanged`, `restored`, `adopted`.
 
-The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests` and `file_operations`. Bytes read and written count content only, so on a run into an empty destination and empty cache that stored every object raw, bytes written is exactly what the run left on disk. A run that compressed an object wrote it twice, once to the partial as it arrived and once compressed as it was published, and both are counted, because compressing an object is moving content rather than bookkeeping about it. Neither counts the cache's own records, its fingerprint, its locks, or the receipt: those are bookkeeping about a run rather than the content it moved. Requests counts every request including retries and probes. File operations counts every file or directory created, every rename, and every flush, bookkeeping included. All four are identical on identical inputs, which is what a benchmark gates on. None is a duration.
+The JSON result carries a `work` object holding `bytes_read`, `bytes_written`, `requests` and `file_operations`. Bytes read and written count content only, so on a run into an empty destination and empty cache that stored every object raw, bytes written is exactly what the run left on disk. A run that compressed an object wrote it twice, once to the partial as it arrived and once compressed as it was published, and both are counted, because compressing an object is moving content rather than bookkeeping about it. A packed object is written twice for the same reason, once to the partial and once into the pack. What a pack states about itself, its preamble and the header before each entry, is bookkeeping about content rather than content, and is not counted. An object stored raw and unpacked is counted once and is exactly what it left. Neither counts the cache's own records, its fingerprint, its locks, or the receipt: those are bookkeeping about a run rather than the content it moved. Requests counts every request including retries and probes. File operations counts every file or directory created, every rename, and every flush, bookkeeping included. All four are identical on identical inputs, which is what a benchmark gates on. None is a duration.
 
 ### The JSON a command prints
 
@@ -593,7 +623,7 @@ Other tools parse this, so the field names are a contract rather than a convenie
 
 A run that failed prints the error object instead, on stdout, and the process exit code is what the kind says it is.
 
-Terminal output is dense, aligned and quiet. It is not a user interface. One accent color, and beyond it color carries meaning only. Color is never the only way a fact is conveyed. `NO_COLOR` and `--color` are honored and all styling is stripped when the stream is not a terminal. One progress renderer for the whole run, aggregated, redrawn at a fixed rate, never one indicator per file. A value the source did not supply is shown as `?` and never estimated to make a line look complete. No emoji, no box drawing, no full screen mode.
+Terminal output is dense, aligned and quiet. It is not a user interface. One accent color, and beyond it color carries meaning only. Color is never the only way a fact is conveyed. `NO_COLOR` and `--color` are honored and all styling is stripped when the stream is not a terminal. An explicit `--color always` wins over `NO_COLOR`, because a flag on this invocation is a narrower instruction than an environment the shell was started with. One progress renderer for the whole run, aggregated, redrawn at a fixed rate, never one indicator per file. A value the source did not supply is shown as `?` and never estimated to make a line look complete. No emoji, no box drawing, no full screen mode.
 
 A hint is one line about the run that just happened, naming something the user could do differently. It qualifies only if it could have changed this run. At most one per run, printed after the result, never during transfer, never repeated to the same user, and suppressed rather than repeated when nothing can record that it was said. Hints go to stderr only and never appear in the JSON result or the event stream.
 

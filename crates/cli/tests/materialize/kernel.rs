@@ -126,6 +126,10 @@ fn run_observed(source: &Path, destination: &Path, cache: &Path) -> Observed {
 #[cfg(windows)]
 #[test]
 fn the_reported_bytes_are_the_bytes_the_kernel_moved() {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        fetchloom_faults::decline!("a child process writing nothing but what the run asked for");
+        return;
+    }
     for shape in ["file", "directory"] {
         let temporary = TempDir::new().unwrap();
         let source = temporary.path().join("source");

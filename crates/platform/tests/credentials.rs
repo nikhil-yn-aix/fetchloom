@@ -7,6 +7,7 @@
 )]
 
 use fetchloom_engine as _;
+use fetchloom_faults as _;
 #[cfg(windows)]
 use windows_sys as _;
 

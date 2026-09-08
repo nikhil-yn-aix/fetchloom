@@ -447,3 +447,44 @@ fn one_member_tar() -> Vec<u8> {
     writer.push(&header, &body);
     writer.finish()
 }
+
+/// contracts.md is explicit that an unchanged run writes nothing to the
+/// destination and says nothing about the lock, which is what a build tool
+/// watches. This states the answer rather than leaving it to whatever the code
+/// happens to do.
+#[test]
+fn a_run_that_changed_nothing_still_writes_the_lock_it_would_have_written() {
+    let bytes = object(4096);
+    let server = TestServer::start(Script::serving(bytes.clone())).unwrap();
+    let scene = scene();
+    let location = format!("{}/object.bin", server.origin());
+
+    let first = get(
+        &location,
+        &scene.destination,
+        &scene.cache,
+        &scene.lock,
+        &[],
+    );
+    assert_eq!(first.code(), 0, "{}", first.stderr());
+    let written = std::fs::read(&scene.lock).unwrap();
+
+    let again = get(
+        &location,
+        &scene.destination,
+        &scene.cache,
+        &scene.lock,
+        &[],
+    );
+    assert_eq!(again.code(), 0, "{}", again.stderr());
+    assert_eq!(
+        again.body()["status"],
+        "unchanged",
+        "the second run was not the unchanged one this is about"
+    );
+    assert_eq!(
+        std::fs::read(&scene.lock).unwrap(),
+        written,
+        "an unchanged run wrote a lock that differs from the one it already agreed with"
+    );
+}

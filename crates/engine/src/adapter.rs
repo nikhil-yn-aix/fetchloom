@@ -105,7 +105,7 @@ fn fetch_or_report<S: Source>(
     credential: Option<&Credential>,
     findings: &mut Vec<Finding>,
 ) -> Option<Served<S::Body>> {
-    match source.fetch(fixture.location, None, credential) {
+    match source.fetch(fixture.location, None, credential, None) {
         Ok(served) => Some(served),
         Err(error) => {
             findings.push(finding(
@@ -205,7 +205,7 @@ fn check_range_support_present<S: Source>(
     }
 
     let range = middle_span(fixture.bytes.len());
-    match source.fetch(fixture.location, Some(range), credential) {
+    match source.fetch(fixture.location, Some(range), credential, None) {
         Ok(served) => {
             let mut body = served.body;
             let mut bytes = Vec::new();
@@ -257,7 +257,7 @@ fn check_range_support_absent<S: Source>(
     }
 
     let range = middle_span(fixture.bytes.len());
-    match source.fetch(fixture.location, Some(range), credential) {
+    match source.fetch(fixture.location, Some(range), credential, None) {
         Ok(served) => {
             let mut body = served.body;
             let mut bytes = Vec::new();

@@ -94,6 +94,7 @@ impl<P: Platform> Cache<P> {
         }
         let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
+        self.claimed_scratch(&scratch)?;
         self.platform().clone_or_copy(source, &scratch)?;
         let written = std::fs::OpenOptions::new()
             .write(true)
@@ -116,6 +117,34 @@ impl<P: Platform> Cache<P> {
             self.token().pid,
             self.token().start,
             SCRATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+    }
+
+    /// A scratch file is an orphan the moment the process holding it is killed,
+    /// and contracts.md:303 has startup remove every orphan a previous boot
+    /// left. Its name carries the process and start that made it but not the
+    /// boot, so one record per process states the boot for every scratch that
+    /// process writes. One record rather than one per file, because the whole
+    /// point of packing a small object is that it costs few file operations.
+    pub(crate) fn claimed_scratch(&self, _path: &std::path::Path) -> Result<(), Error> {
+        let record = self.session_record();
+        if !CLAIMED
+            .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(record.clone())
+        {
+            return Ok(());
+        }
+        record::write(&record, self.token(), self.work())
+    }
+
+    pub(crate) fn session_record(&self) -> std::path::PathBuf {
+        self.layout().partial().join(format!(
+            "{}-{}{}",
+            self.token().pid,
+            self.token().start,
+            crate::SESSION_SUFFIX
         ))
     }
 
@@ -144,6 +173,7 @@ impl<P: Platform> Cache<P> {
         let mut reading = reading;
         let scratch = self.scratch_path();
         let _ = std::fs::remove_file(&scratch);
+        self.claimed_scratch(&scratch)?;
         let mut writing = self.platform().create_file_exclusive(&scratch)?;
         self.platform().preallocate(&writing, length)?;
 
@@ -220,3 +250,10 @@ impl<P: Platform> Cache<P> {
 }
 
 static SCRATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Which caches this process has already told which boot its scratch files
+/// belong to. One record per cache rather than one per handle, because a run
+/// opens the same cache more than once and the record it writes is the same.
+static CLAIMED: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>>,
+> = std::sync::OnceLock::new();

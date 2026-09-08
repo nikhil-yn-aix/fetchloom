@@ -110,6 +110,9 @@ fn a_volume_that_refuses_the_probe_name_reports_normalization_as_unknown() {
     let scratch = support::scratch();
     let mut directories = vec![scratch.path().to_path_buf()];
     let held = support::scratch_on(support::Property::NoSparse);
+    if held.is_empty() {
+        fetchloom_faults::decline!("a volume that refuses the probe name");
+    }
     directories.extend(held.iter().map(|scratch| scratch.path().to_path_buf()));
 
     for directory in directories {
@@ -309,6 +312,7 @@ fn a_thread_ceiling_below_the_detected_count_is_honored() {
     ));
     let detected = platform.processor_capabilities(None).budget.detected();
     if detected.get() < 2 {
+        fetchloom_faults::decline!("a machine whose thread budget is more than one");
         return;
     }
     let found = platform.processor_capabilities(NonZeroUsize::new(1));
@@ -337,7 +341,10 @@ fn cloning_shares_blocks_on_a_volume_that_supports_it() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::Clone) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::Clone),
+        "a volume that shares blocks"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert!(
             reported.clone,
@@ -370,7 +377,10 @@ fn case_folding_is_reported_on_a_case_sensitive_volume() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for directory in support::volume_directories(support::Property::CaseSensitive) {
+    for directory in fetchloom_faults::require!(
+        support::volume_directories(support::Property::CaseSensitive),
+        "a case-sensitive volume"
+    ) {
         let reported = platform.volume_capabilities(&directory).unwrap();
         let upper = directory.join("FetchloomCaseCheck");
         let lower = directory.join("fetchloomcasecheck");
@@ -394,7 +404,10 @@ fn case_folding_is_reported_on_a_case_insensitive_volume() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for directory in support::volume_directories(support::Property::CaseInsensitive) {
+    for directory in fetchloom_faults::require!(
+        support::volume_directories(support::Property::CaseInsensitive),
+        "a case-insensitive volume"
+    ) {
         let scratch = tempfile::TempDir::new_in(&directory).unwrap();
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         platform
@@ -415,7 +428,10 @@ fn normalization_is_reported_on_a_volume_that_normalizes() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::Normalizing) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::Normalizing),
+        "a volume that stores a normalized name"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
             reported.normalization,
@@ -431,7 +447,10 @@ fn a_network_volume_is_reported_as_network_backed() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::Network) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::Network),
+        "a network-backed volume"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
             reported.backing,
@@ -447,7 +466,10 @@ fn a_memory_volume_is_reported_as_local() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::Memory) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::Memory),
+        "a memory-backed volume"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
             reported.backing,
@@ -463,7 +485,10 @@ fn sparse_support_is_reported_where_it_is_absent() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::NoSparse) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::NoSparse),
+        "a volume that stores no holes"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert!(
             !reported.sparse,
@@ -478,7 +503,10 @@ fn a_fuse_mount_is_reported_as_unknown_backing_rather_than_network() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::Fuse) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::Fuse),
+        "a filesystem in user space"
+    ) {
         let reported = platform.volume_capabilities(scratch.path()).unwrap();
         assert_eq!(
             reported.backing,
@@ -494,7 +522,10 @@ fn two_directories_on_one_volume_are_reported_separately() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for directory in support::volume_directories(support::Property::CaseSensitive) {
+    for directory in fetchloom_faults::require!(
+        support::volume_directories(support::Property::CaseSensitive),
+        "a case-sensitive volume"
+    ) {
         let elsewhere = support::scratch();
         let first = platform.volume_capabilities(elsewhere.path()).unwrap();
         let second = platform.volume_capabilities(&directory).unwrap();

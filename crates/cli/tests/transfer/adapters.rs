@@ -86,6 +86,7 @@ impl Source for InventedSource {
         location: &str,
         range: Option<ByteRange>,
         _credential: Option<&Credential>,
+        _resuming: Option<&str>,
     ) -> Result<Served<Self::Body>, Error> {
         let span = range.unwrap_or(ByteRange {
             start: 0,
@@ -106,7 +107,7 @@ impl Source for InventedSource {
         credential: Option<&Credential>,
     ) -> Result<Revalidated<Self::Body>, Error> {
         Ok(Revalidated::Changed(Box::new(
-            self.fetch(location, None, credential)?,
+            self.fetch(location, None, credential, None)?,
         )))
     }
 

@@ -61,6 +61,7 @@ fn a_credential_is_sent_on_the_first_request() {
             &format!("{}/object", server.origin()),
             None,
             Some(&credential),
+            None,
         )
         .unwrap();
     assert_eq!(read(body.body), object());
@@ -89,6 +90,7 @@ fn a_credential_is_dropped_across_a_redirect_to_a_different_port() {
             &format!("{}/object", server.origin()),
             None,
             Some(&credential),
+            None,
         )
         .unwrap();
     assert_eq!(read(body.body), object());
@@ -119,6 +121,7 @@ fn a_credential_survives_a_same_origin_redirect() {
             &format!("{}/object", server.origin()),
             None,
             Some(&credential),
+            None,
         )
         .unwrap();
     assert_eq!(read(body.body), object());
@@ -146,7 +149,7 @@ fn the_drop_across_a_cross_origin_redirect_is_reported_as_a_degradation() {
     let requested_location = format!("{}/object", server.origin());
 
     source
-        .fetch(&requested_location, None, Some(&credential))
+        .fetch(&requested_location, None, Some(&credential), None)
         .unwrap();
 
     let degradations = source.take_degradations();
@@ -193,6 +196,7 @@ fn the_secret_never_appears_in_an_error_produced_after_a_cross_origin_redirect()
             &format!("{}/object", server.origin()),
             None,
             Some(&credential),
+            None,
         )
         .unwrap_err();
 

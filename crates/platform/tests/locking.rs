@@ -12,6 +12,8 @@ use windows_sys as _;
 #[cfg(unix)]
 use rustix as _;
 
+use fetchloom_faults as _;
+
 mod support;
 
 use std::process::Command;
@@ -254,6 +256,7 @@ fn hold_lock_until_removed() {
 #[cfg(unix)]
 fn a_lock_is_honored_across_users() {
     let Some(user) = support::another_user() else {
+        fetchloom_faults::decline!("a second user this machine may run a process as");
         return;
     };
     let shared = support::scratch();
@@ -405,7 +408,10 @@ fn a_volume_without_ownership_does_not_report_this_process_as_the_owner() {
     let platform = NativePlatform::new(std::sync::Arc::new(
         fetchloom_engine::work::WorkCounter::new(),
     ));
-    for scratch in support::scratch_on(support::Property::NoOwnership) {
+    for scratch in fetchloom_faults::require!(
+        support::scratch_on(support::Property::NoOwnership),
+        "a volume with no ownership"
+    ) {
         let path = scratch.path().join("object");
         support::write_file(&path, b"bytes");
         assert!(

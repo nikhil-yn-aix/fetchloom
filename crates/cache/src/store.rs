@@ -405,6 +405,7 @@ impl<P: Platform> Store for Cache<P> {
         let path = self.layout.outboard_of(digest);
         let beside = self.scratch_path().with_extension("outboard");
         let _ = std::fs::remove_file(&beside);
+        self.claimed_scratch(&beside)?;
         let mut writing = self.platform.create_file_exclusive(&beside)?;
         writing
             .write_all(tree)

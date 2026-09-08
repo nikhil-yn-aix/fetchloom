@@ -11,6 +11,8 @@ use windows_sys as _;
 #[cfg(unix)]
 use rustix as _;
 
+use fetchloom_faults as _;
+
 mod support;
 
 use std::sync::{Arc, Barrier};
