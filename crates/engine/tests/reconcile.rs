@@ -98,12 +98,12 @@ fn outcomes_are_ordered_by_path_and_every_kind_can_appear_together() {
     assert_eq!(outcome[3].outcome, ReconcileOutcome::Foreign);
 }
 
+/// Ten times the entries costs about ten times the work when reconciling is
+/// linear and about a hundred when it is not, so the two sizes are compared
+/// against each other rather than against a fixed number of seconds, which is
+/// what keeps a loaded machine from deciding the answer.
 #[test]
 fn reconciling_a_large_tree_costs_time_proportional_to_its_size() {
-    // Ten times the entries costs about ten times the work when reconciling is
-    // linear and about a hundred when it is not. Comparing the two against each
-    // other rather than against a fixed number of seconds is what keeps a
-    // loaded machine from deciding the answer.
     let timed = |count: usize| {
         let resolved: Vec<TreeEntry> = (0..count)
             .map(|index| file(&format!("data/{index}.bin"), b"same"))

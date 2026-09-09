@@ -800,6 +800,9 @@ fn force_overwrites_a_modified_entry_that_a_plain_run_refuses() {
     );
 }
 
+/// An adopted record states what the destination holds, so the entry it
+/// adopted still differs from the tree the next run resolves, and that run
+/// stops on it. One outcome, never either of two.
 #[test]
 fn a_run_after_an_adopt_never_reports_a_tree_the_destination_does_not_hold() {
     let workspace = Workspace::new();
@@ -819,10 +822,6 @@ fn a_run_after_an_adopt_never_reports_a_tree_the_destination_does_not_hold() {
     assert_eq!(adopted.json()["status"], "adopted");
     let held = adopted.json()["tree"].as_str().unwrap().to_owned();
 
-    // contracts.md:422 and :427 — the adopted record states what the
-    // destination holds, and that entry still differs from the tree this run
-    // resolves, so the run stops rather than reporting a tree that is not
-    // there. One outcome, not either of two.
     let next = workspace.run(&["get", source.to_str().unwrap(), "--output", "out", "--json"]);
     assert!(
         !held.is_empty(),
@@ -1004,12 +1003,14 @@ fn every_exit_code_the_table_names_is_accounted_for() {
         "the exit code table parsed to {named:?}, so this proves nothing"
     );
 
-    // Three of the codes are produced by runs that need a different fixture,
-    // and each is named here so no code in the table is unaccounted for.
-    let elsewhere: std::collections::BTreeSet<i32> = [30, 50, 130].into_iter().collect();
-    let here: std::collections::BTreeSet<i32> =
+    let produced_by_a_fixture_elsewhere: std::collections::BTreeSet<i32> =
+        [30, 50, 130].into_iter().collect();
+    let produced_here: std::collections::BTreeSet<i32> =
         [0, 2, 10, 20, 40, 60, 70, 80].into_iter().collect();
-    let covered: std::collections::BTreeSet<i32> = here.union(&elsewhere).copied().collect();
+    let covered: std::collections::BTreeSet<i32> = produced_here
+        .union(&produced_by_a_fixture_elsewhere)
+        .copied()
+        .collect();
     assert_eq!(
         covered, named,
         "a code the table names is produced by no run, or a run produces one the table does not name"

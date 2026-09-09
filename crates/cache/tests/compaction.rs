@@ -26,7 +26,6 @@ use zstd as _;
 
 mod support;
 
-use fetchloom_engine::seam::store::Store;
 use support::{open_cache_compressed, publish, scratch};
 
 /// Records of the shape a pack holds: small, alike, and individually too short
@@ -210,10 +209,8 @@ fn a_damaged_dictionary_is_refused_by_its_own_digest_and_names_its_pack() {
     );
     drop(held);
 
-    // One byte, three quarters of the way into the dictionary's own content,
-    // so the zstd magic and the dictionary identifier it is chosen by both
-    // survive. What refuses this is the recorded digest and nothing else.
-    let at = 40 + (dictionary.len() as u64) * 3 / 4;
+    let past_the_magic_and_the_identifier = 40;
+    let at = past_the_magic_and_the_identifier + (dictionary.len() as u64) * 3 / 4;
     let mut file = std::fs::OpenOptions::new().write(true).open(&pack).unwrap();
     file.seek(SeekFrom::Start(at)).unwrap();
     file.write_all(&[dictionary[dictionary.len() * 3 / 4] ^ 0x01])
@@ -326,7 +323,7 @@ fn a_pack_cut_short_holds_the_entries_before_the_cut_and_never_the_cut_one() {
         );
         for (digest, _) in &readable {
             let mut bytes = Vec::new();
-            if let Ok(mut reader) = cache.open(*digest) {
+            if let Ok(mut reader) = cache.open_object(*digest) {
                 std::io::copy(&mut reader, &mut bytes).unwrap();
                 assert_eq!(
                     hash_bytes(&bytes),

@@ -500,6 +500,9 @@ fn cache_repair_leaves_an_object_whose_own_bytes_fail_in_quarantine_and_names_th
     );
 }
 
+/// The two policies catch damaged cached bytes at different sites: `always`
+/// rereads the object against its outboard tree and names the damaged range,
+/// and `fingerprint` finds the object changed since it was published.
 #[test]
 fn verification_never_passes_on_damaged_content_under_any_policy() {
     for policy in ["always", "fingerprint", "never"] {
@@ -546,9 +549,6 @@ fn verification_never_passes_on_damaged_content_under_any_policy() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        // contracts.md:211 gives the two policies different failure sites:
-        // `always` rereads and names the damaged range against the tree, and
-        // `fingerprint` finds the object changed since it was published.
         let expected = if policy == "always" {
             "integrity.range_mismatch"
         } else {

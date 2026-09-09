@@ -168,11 +168,10 @@ impl<P: Platform> Cache<P> {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Pushes this run's own pack as far as its tier asks, once, for every
-    /// entry appended to it since the last time. `strict` has already pushed
-    /// each entry as it landed and `fast` pushes nothing, so this is `normal`'s
-    /// whole durability and it belongs before anything durable names what the
-    /// pack holds.
+    /// Pushes this run.s pack once for every entry appended since the last
+    /// push. `strict` already pushed each entry and `fast` pushes nothing, so
+    /// this is `normal`.s whole durability and belongs before anything durable
+    /// names what the pack holds.
     ///
     /// # Errors
     /// `cache.corrupt` when the pack cannot be opened or the flush is refused,
@@ -308,11 +307,13 @@ fn already_recovered(layout: &Layout, boot: &BootId) -> Result<bool, Error> {
     }
 }
 
+/// Removes what a previous boot on this machine left in `directory`.
+///
+/// Session records are read before anything is removed: a directory yields
+/// entries in any order, and removing a record before the file it names leaves
+/// that file behind. An entry with no owner record is reclaimed through the
+/// session record instead.
 fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error> {
-    // The session records are read before anything is removed, because a
-    // directory hands its entries back in whatever order it likes and removing
-    // the record that says which boot a scratch file belongs to before reading
-    // it for that file leaves the file behind.
     let sessions = sessions_in(directory)?;
     let entries = std::fs::read_dir(directory)
         .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))?;
@@ -326,9 +327,6 @@ fn sweep_previous_boot(directory: &Path, token: &OwnerToken) -> Result<(), Error
             continue;
         }
         let record = owner_record_of(&path);
-        // A scratch file states the process and start that wrote it in its own
-        // name, and that process wrote one record stating the boot, so an
-        // orphan with no record beside it is still this sweep's to reclaim.
         let wrote_it = match record::read_owner(&record)? {
             Some(found) => found,
             None => match session_for(&sessions, &path) {

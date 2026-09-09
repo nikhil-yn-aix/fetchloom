@@ -23,7 +23,6 @@ use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 
 use support::{bytes_of, cache, cache_in};
@@ -116,7 +115,10 @@ fn a_committed_object_reads_back_the_bytes_that_were_written() {
     held.commit(lease, writer).unwrap();
 
     let mut found = Vec::new();
-    held.open(digest).unwrap().read_to_end(&mut found).unwrap();
+    held.open_object(digest)
+        .unwrap()
+        .read_to_end(&mut found)
+        .unwrap();
     assert_eq!(found, bytes, "the object read back different bytes");
 }
 
@@ -226,7 +228,7 @@ fn a_leased_object_survives_a_prune() {
     let (_scratch, held) = cache();
     let digest = support::publish(&held, &bytes_of(1024, 9));
 
-    let reader = held.open(digest).unwrap();
+    let reader = held.open_object(digest).unwrap();
     held.prune(Duration::ZERO).unwrap();
     held.prune(Duration::ZERO).unwrap();
     assert!(
@@ -345,10 +347,14 @@ fn an_object_whose_fingerprint_moved_is_refused_by_the_default_policy() {
     support::damage(&held, digest, &bytes_of(2048, 14));
 
     let reopened = support::open_cache(scratch.path()).unwrap();
-    let refused = reopened.open(digest).unwrap_err();
+    let refused = reopened.open_object(digest).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::CacheCorrupt);
 }
 
+/// The same length with the modification time put back to where it stood is
+/// the one window contracts.md admits a fingerprint cannot close: nothing the
+/// cache can see about the file has changed, so only rereading the bytes
+/// catches it.
 #[test]
 fn an_object_changed_under_an_identical_size_and_time_is_still_caught_by_rereading_it() {
     let (scratch, held) = support::raw_cache();
@@ -357,9 +363,6 @@ fn an_object_changed_under_an_identical_size_and_time_is_still_caught_by_rereadi
     let untouched = std::fs::metadata(&container).unwrap().modified().unwrap();
 
     support::damage(&held, digest, &bytes_of(4096, 14));
-    // The same length, and the clock put back to where it was, is the window
-    // contracts.md:213 admits a fingerprint cannot close: nothing the cache can
-    // see about the file has changed.
     support::make_writable(&container);
     std::fs::OpenOptions::new()
         .write(true)
@@ -374,7 +377,7 @@ fn an_object_changed_under_an_identical_size_and_time_is_still_caught_by_rereadi
     );
 
     let rereading = support::open_cache_with(scratch.path(), VerificationPolicy::Always).unwrap();
-    let refused = rereading.open(digest).unwrap_err();
+    let refused = rereading.open_object(digest).unwrap_err();
     assert_eq!(
         refused.kind(),
         ErrorKind::CacheCorrupt,
@@ -384,7 +387,7 @@ fn an_object_changed_under_an_identical_size_and_time_is_still_caught_by_rereadi
     let unconditional =
         support::open_cache_with(scratch.path(), VerificationPolicy::Never).unwrap();
     assert!(
-        unconditional.open(digest).is_ok(),
+        unconditional.open_object(digest).is_ok(),
         "an object was checked under a policy that trusts it unconditionally"
     );
 }
@@ -538,12 +541,9 @@ fn a_packed_write_counts_its_content_and_never_what_the_pack_states_about_it() {
     );
 }
 
-/// contracts.md:303 — every orphaned partial entry a previous boot left is
-/// removed at startup. A scratch file states its process in its name and the
-/// boot in one record beside every scratch that process wrote, so the sweep has
-/// to read that record before it removes anything: a directory hands its
-/// entries back in whatever order it likes, and removing the record first
-/// leaves the files it spoke for behind.
+/// Every orphan a previous boot left is removed at startup. The sweep reads
+/// the record naming the boot before it removes anything, because a directory
+/// lists in any order and removing that record first strands the files.
 #[test]
 fn a_scratch_file_a_previous_boot_left_is_removed_whatever_order_the_directory_lists() {
     let scratch = tempfile::TempDir::new().unwrap();
