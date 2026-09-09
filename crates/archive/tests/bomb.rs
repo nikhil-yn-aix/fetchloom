@@ -100,3 +100,63 @@ fn a_symlink_declaring_a_ratio_past_the_limit_is_refused_before_its_body_is_read
         error.next_action()
     );
 }
+
+fn deflated(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+
+    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn file_understating_its_size(real: usize, declared: u32) -> Vec<u8> {
+    let compressed = deflated(&vec![0_u8; real]);
+    let mut writer = ZipWriter::new();
+    let offset = writer.offset();
+    let local = ZipLocalHeader {
+        version_needed: 20,
+        flags: 0,
+        method: METHOD_DEFLATE,
+        mod_time: 0,
+        mod_date: 0,
+        crc32: 0,
+        compressed_size: u32::try_from(compressed.len()).unwrap(),
+        uncompressed_size: declared,
+        name: b"quiet".to_vec(),
+        extra: Vec::new(),
+    };
+    let central = ZipCentralHeader::from_local(&local, offset);
+    writer.push(ZipMember {
+        local,
+        central,
+        data: compressed,
+    });
+    writer.finish()
+}
+
+#[test]
+fn a_member_that_expands_past_the_size_it_declares_stops_rather_than_producing_the_bytes() {
+    let real = 4 << 20;
+    let bytes = file_understating_its_size(real, 64);
+    let mut reader = ArchiveReader::new(
+        Cursor::new(bytes),
+        ArchiveFormat::Zip,
+        "understated.zip",
+        Limits::default(),
+    )
+    .unwrap();
+    let members = reader.members().unwrap();
+    let mut body = reader.open(&members[0]).unwrap();
+    let mut drained = Vec::new();
+    let outcome = std::io::Read::read_to_end(&mut body, &mut drained);
+    assert!(
+        outcome.is_err(),
+        "the member produced {} bytes where it declared 64",
+        drained.len()
+    );
+    assert!(
+        drained.len() <= 64,
+        "the member produced {} bytes before it was stopped",
+        drained.len()
+    );
+}

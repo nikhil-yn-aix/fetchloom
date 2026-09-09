@@ -42,6 +42,7 @@ const MAXIMUM_END_RECORD_SEARCH: u64 = 22 + 0xFFFF;
 pub(crate) struct ZipOffset {
     pub(crate) data_start: u64,
     compressed_size: u64,
+    size: u64,
     pub(crate) stored: bool,
 }
 
@@ -393,7 +394,39 @@ fn open_body(
     if offset.stored {
         Ok(Box::new(bounded))
     } else {
-        Ok(Box::new(DeflateDecoder::new(bounded)))
+        Ok(Box::new(Expanded {
+            inner: DeflateDecoder::new(bounded),
+            allowed: offset.size,
+            produced: 0,
+        }))
+    }
+}
+
+struct Expanded<R> {
+    inner: R,
+    allowed: u64,
+    produced: u64,
+}
+
+impl<R: Read> Read for Expanded<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let room = self.allowed.saturating_sub(self.produced);
+        if room == 0 {
+            let mut past = [0_u8; 1];
+            return match self.inner.read(&mut past)? {
+                0 => Ok(0),
+                _ => Err(std::io::Error::other(format!(
+                    "the member expands past the {} bytes it declares",
+                    self.allowed
+                ))),
+            };
+        }
+        let take = buffer
+            .len()
+            .min(usize::try_from(room).unwrap_or(usize::MAX));
+        let read = self.inner.read(&mut buffer[..take])?;
+        self.produced += read as u64;
+        Ok(read)
     }
 }
 
@@ -468,6 +501,7 @@ pub(crate) fn list_members<R: Read + Seek + 'static>(
         let offset = ZipOffset {
             data_start: local.data_start,
             compressed_size,
+            size,
             stored,
         };
         let kind = if is_dir {
