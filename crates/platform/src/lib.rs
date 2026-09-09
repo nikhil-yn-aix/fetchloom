@@ -70,6 +70,7 @@ pub struct NativePlatform {
     refused_cloning: std::sync::Mutex<std::collections::BTreeSet<std::ffi::OsString>>,
     work: std::sync::Arc<fetchloom_engine::work::WorkCounter>,
     probes_in: std::sync::Mutex<Option<PathBuf>>,
+    decided: std::sync::Mutex<std::collections::BTreeMap<PathBuf, VolumeCapabilities>>,
 }
 
 impl NativePlatform {
@@ -80,6 +81,7 @@ impl NativePlatform {
             refused_cloning: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             work,
             probes_in: std::sync::Mutex::new(None),
+            decided: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -237,6 +239,13 @@ impl Platform for NativePlatform {
     }
 
     fn volume_capabilities(&self, probe_directory: &Path) -> Result<VolumeCapabilities, Error> {
+        let mut decided = self
+            .decided
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(found) = decided.get(probe_directory) {
+            return Ok(found.clone());
+        }
         let remembered = self.recalled_path_length(probe_directory);
         let mut measured =
             imp::volume_capabilities(probe_directory, &self.degradations, remembered)?;
@@ -244,7 +253,10 @@ impl Platform for NativePlatform {
             Some(length) => measured.max_path_length = length,
             None => self.remember_path_length(probe_directory, measured.max_path_length),
         }
-        Ok(measured)
+        Ok(decided
+            .entry(probe_directory.to_path_buf())
+            .or_insert(measured)
+            .clone())
     }
 
     fn processor_capabilities(&self, requested: Option<NonZeroUsize>) -> ProcessorCapabilities {

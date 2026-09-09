@@ -14098,3 +14098,107 @@ Sources: `crates/platform/src/lib.rs:241`; contracts.md, platform capabilities;
 `crates/cli/src/command/tracked.rs:438`; `crates/cli/src/run/threeway.rs:302`;
 `crates/cli/src/main.rs:47`; `crates/engine/src/document.rs:22`;
 `crates/cache/src/bundle.rs:193`.
+
+## The capability answer, decided once, and the count that was not wrong the way the last record said
+
+Question: whether `Platform::volume_capabilities` keeps the promise contracts.md
+makes for it, and what the previous record about it got wrong.
+
+The promise is that a volume's capability answer is decided once, that the first
+detection decides it, and that two callers asking at the same time are never given
+different ones, while case folding and normalization are measured per directory.
+
+The record above says the whole probe re-runs on every call. That is not what the
+code did. Both platform probes already held a per-volume memo of the volume-wide
+answers, `windows/probe.rs:28` and `linux/probe.rs:22`, so clone, sparse, symlink,
+hard link, the length limits, backing, scanner and compression were measured once
+per volume per process. What re-ran on every call was `fold_probe`, which the
+contract asks to be per directory, and nothing memoized the assembled answer at
+all. So the gap was narrower than recorded and still real: two callers asking
+about the same directory each paid for a fold probe, and two callers racing each
+measured independently, which is the sentence in the contract that was not kept.
+
+Decision: memoize the assembled answer on `NativePlatform`, keyed by the probe
+directory, and hold that lock across the detection rather than around the lookup
+alone. The key is the directory because the contract makes case folding and
+normalization per-directory facts, and a per-volume key could not carry them. The
+lock is held across the detection because releasing it first is what let every
+racing caller miss the memo together and measure in parallel, which is the cost
+this was supposed to remove and the guarantee it was supposed to give. A detection
+happens once per directory per run, so a coarse lock costs a wait that only the
+first caller pays for.
+
+Alternatives: keying per volume and measuring folding separately, which splits the
+seam into two calls and two memos to save a lookup; and reusing F1's on-disk memo
+in `meta/volume-<id>`, which is per boot rather than per run and cannot hold the
+per-directory pair. Both are more machinery for a smaller answer.
+
+Measured on this machine: `capability_race`, which spawns four times the detected
+parallelism at one barrier, took 54.34 s before and 1.69 s after. Every caller but
+the first now waits on the memo rather than probing beside it.
+
+The proof is `a_second_question_about_one_volume_is_answered_without_detecting_again`
+in `crates/platform/tests/capability.rs`, which asks once, deletes the directory,
+and asks again. A second detection fails, because the directory it would probe is
+gone. Before the memo the test fails with `cache.corrupt` naming the missing path.
+
+Sources: `crates/platform/src/lib.rs:241`; `crates/platform/src/windows/probe.rs:28`;
+`crates/platform/src/linux/probe.rs:22`; `crates/platform/tests/capability_race.rs`.
+
+## A test run that stops early is not a test run
+
+Question: what `cargo xtask verify` actually invoked, after two claims in the
+audit session that everything but one suite was green turned out to be reading a
+run that had stopped.
+
+`cargo test` stops after the first failing test binary. It does not run the
+remaining ones. Neither of the workspace's two invocations passed
+`--no-fail-fast`: the per-target run in `platform` and the per-tier run in
+`tier_step`. So a run with one failure said nothing about the targets after it,
+and the summary printed the failure without saying that it had also stopped
+looking.
+
+The reassuring half of this is worth stating precisely, because it bounds how far
+back the doubt goes. Early stopping only happens on a failure. A run that passed
+ran every target it was asked for, so a green claim from a green run was a whole
+run. What was unsound was a claim of the form "that one suite failed and
+everything else passed", made from a run in which the failure had ended the
+search. Two such claims were made in the audit session and both were corrected
+there.
+
+Decision: pass `--no-fail-fast` at both invocations, and stop trusting the exit
+code to describe coverage. `Report::census` runs the command with its standard
+error teed rather than inherited, counts the `Running` lines cargo prints, and
+prints how many test binaries ran against how many were asked for. A count that
+does not match fails the step with the reason, whatever the exit code said,
+because a run that is not the whole suite is not a result. The expected count for
+a tier is the number of registered suites in it, and for the whole workspace it is
+read from `cargo metadata --no-deps`: every target with `test` set, across lib,
+bin, test and proc-macro kinds.
+
+Doc tests are counted in neither. Cargo runs them for the host target only, so an
+expectation that includes them is wrong on every cross-target lane, and the
+protection that matters, that one failure cannot hide another, comes from
+`--no-fail-fast` rather than from the count.
+
+Alternatives: parsing `--message-format=json`, which describes what was built
+rather than what was run; and asserting on the harness's own per-binary summary
+lines, which are the thing a stopped run does not print.
+
+Sources: `xtask/src/verify.rs`, `census`, `test_targets`, `watched`.
+
+## The decisions file stays one file
+
+Question: whether to split `docs/decisions.md` into one file per record.
+
+Decision: no, and not later either. Two attempts ended on rate limits with the
+source untouched, which is the whole cost of the idea paid twice for nothing. The
+file reads in order, the header the documentation session gave it says how to read
+it, and grep across one file is what every session has actually used. Splitting it
+would trade that for a directory listing and a link graph nobody asked for.
+
+Nothing in the repository recorded the split as pending, so nothing had to be
+withdrawn. This record exists so a later session finds the answer rather than the
+idea.
+
+Sources: `docs/decisions.md`.

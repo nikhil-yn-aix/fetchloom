@@ -657,3 +657,24 @@ fn an_answer_another_boot_measured_is_measured_again() {
         "the stale answer was left where the next run will read it again"
     );
 }
+
+#[test]
+fn a_second_question_about_one_volume_is_answered_without_detecting_again() {
+    let scratch = support::scratch();
+    let directory = scratch.path().join("asked-twice");
+    std::fs::create_dir(&directory).unwrap();
+    let platform = NativePlatform::new(std::sync::Arc::new(
+        fetchloom_engine::work::WorkCounter::new(),
+    ));
+    let first = platform.volume_capabilities(&directory).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    let second = platform.volume_capabilities(&directory).expect(
+        "the second question was answered by detecting again, in a directory that is now gone",
+    );
+
+    assert_eq!(
+        first, second,
+        "the same volume was asked twice and answered twice"
+    );
+}
