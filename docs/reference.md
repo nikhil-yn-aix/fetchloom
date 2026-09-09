@@ -1,8 +1,10 @@
-# Reference
+# reference
 
-Everything the binary accepts. For what each one promises, see [contracts.md](contracts.md).
+Everything the binary accepts. For what each one promises, see
+[contracts.md](contracts.md). For how to do a thing, see [guide.md](guide.md).
 
-Anything marked **not built** is written down and not in the binary. There is no state where a flag exists and cannot act.
+Anything marked **not built** is written down and not in the binary. There is no
+state where a flag exists and cannot act.
 
 ## Commands
 
@@ -55,7 +57,10 @@ Anything marked **not built** is written down and not in the binary. There is no
 
 ## The datasets a project file names
 
-`fetchloom.toml` takes a `datasets` table, and `get` with no reference fetches every entry in it. An entry is a reference, or a table stating `ref` and any of `output`, `select`, `exclude` and `layout`. A string is never a table and a table always states `ref`, so one shape never means the other.
+`fetchloom.toml` takes a `datasets` table, and `get` with no reference fetches
+every entry in it. An entry is a reference, or a table stating `ref` and any of
+`output`, `select`, `exclude` and `layout`. A string is never a table and a
+table always states `ref`, so one shape never means the other.
 
 ```toml
 [datasets]
@@ -64,29 +69,66 @@ eeg = { ref = "https://lab.edu/eeg.yaml", output = "data/eeg" }
 corpus = { ref = "https://lab.edu/corpus.zip", select = ["train/*"] }
 ```
 
-Every path in that file resolves against the directory holding it, not against the directory you are standing in, and the lock is written beside it. A run from four directories down writes what a run from the top writes.
+Every path in that file resolves against the directory holding it, not against
+the directory you are standing in, and the lock is written beside it. A run from
+four directories down writes what a run from the top writes.
 
-`get --locked` with no reference is the reproducible install: every dataset in the table, pinned exactly, refusing if resolution differs.
+`get --locked` with no reference is the reproducible install: every dataset in
+the table, pinned exactly, refusing if resolution differs.
 
-The whole table is read and checked before the first dataset is fetched. Two entries that would write to one destination fail naming both, an unknown key inside an entry is an error as everywhere else, and a `layout` no run can take fails with nothing fetched rather than after the entries before it landed. A dataset the source fails to give does not stop the ones after it, and the run exits with the first failure's code. `--output`, `--select`, `--exclude`, `--layout` and `--library` on a project run are refused, because one destination and one selection cannot describe several datasets; the table states each.
+The whole table is read and checked before the first dataset is fetched. Two
+entries that would write to one destination fail naming both, an unknown key
+inside an entry is an error as everywhere else, and a `layout` no run can take
+fails with nothing fetched rather than after the entries before it landed. A
+dataset the source fails to give does not stop the ones after it, and the run
+exits with the first failure's code. `--output`, `--select`, `--exclude`,
+`--layout` and `--library` on a project run are refused, because one destination
+and one selection cannot describe several datasets. The table states each.
 
 ## The library
 
-One directory holding materialized datasets, separate from the cache, so a script does not carry a path and two projects do not fetch the same bytes twice. It sits at the platform's data location by default: `%LOCALAPPDATA%\Fetchloom\Library` on Windows, `$XDG_DATA_HOME/fetchloom/library` or `~/.local/share/fetchloom/library` on Linux. `--library-dir`, `FETCHLOOM_LIBRARY_DIR` and `library = { dir = "..." }` move it, in that order of precedence.
+One directory holding materialized datasets, separate from the cache, so a
+script does not carry a path and two projects do not fetch the same bytes twice.
+It sits at the platform's data location by default:
+`%LOCALAPPDATA%\Fetchloom\Library` on Windows, `$XDG_DATA_HOME/fetchloom/library`
+or `~/.local/share/fetchloom/library` on Linux. `--library-dir`,
+`FETCHLOOM_LIBRARY_DIR` and `library = { dir = "..." }` move it, in that order of
+precedence.
 
-An entry's path is `<library>/<name>/<identity>`, decided by what the reference resolves to and by nothing else, so `where` answers without an index to consult and two versions of one dataset sit beside each other. The name component is a convenience and the identity component is the truth. A name is sanitized deterministically: every character that is not an ASCII letter, a digit, a hyphen, an underscore or a dot becomes one underscore, trailing dots and spaces are dropped, and a name that would be a Windows device — `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through `LPT9`, with or without an extension — is prefixed with `_`.
+An entry's path is `<library>/<name>/<identity>`, decided by what the reference
+resolves to and by nothing else, so `where` answers without an index to consult
+and two versions of one dataset sit beside each other. The name component is a
+convenience and the identity component is the truth.
 
-A library file is never a hard link to a cache object. It is a copy-on-write clone where the filesystem offers one and a plain copy everywhere else, with a `degrade` when the clone is refused, because one in-place edit through a hard link would corrupt the content addressed store for every dataset sharing that object.
+A name is sanitized deterministically. Every character that is not an ASCII
+letter, a digit, a hyphen, an underscore or a dot becomes one underscore,
+trailing dots and spaces are dropped, and a name that would be a Windows device
+is prefixed with `_`. The device names are `CON`, `PRN`, `AUX`, `NUL`, `COM1`
+through `COM9` and `LPT1` through `LPT9`, with or without an extension.
 
-Nothing is ever removed from the library on its own. It grows until `library rm` removes an entry, which removes the tree and the record of the run that wrote it. `library ls` states what it holds and what that takes.
+A library file is never a hard link to a cache object. It is a copy-on-write
+clone where the filesystem offers one and a plain copy everywhere else, with a
+`degrade` when the clone is refused, because one in-place edit through a hard
+link would corrupt the content addressed store for every dataset sharing that
+object.
+
+Nothing is ever removed from the library on its own. It grows until `library rm`
+removes an entry, which removes the tree and the record of the run that wrote
+it. `library ls` states what it holds and what that takes.
 
 `--library` and `--output` together are an error. Two destinations is not a run.
 
 ## What probe and list report
 
-`probe <ref>` resolves, asks the source, and moves no payload bytes: the resolved location, the size, every digest the source states with its algorithm, the trust class a fetch would land in, whether the source serves ranges, and whether the cache already holds it. Anything unstated is unknown, and unknown is an answer that exits 0. Under `--offline` it answers from the cache, or fails with `policy.offline`.
+`probe <ref>` resolves, asks the source, and moves no payload bytes: the
+resolved location, the size, every digest the source states with its algorithm,
+the trust class a fetch would land in, whether the source serves ranges, and
+whether the cache already holds it. Anything unstated is unknown, and unknown is
+an answer that exits 0. Under `--offline` it answers from the cache, or fails
+with `policy.offline`.
 
-`list <ref>` enumerates what a container holds, moving as few bytes as the format allows.
+`list <ref>` enumerates what a container holds, moving as few bytes as the
+format allows.
 
 | What is being listed | What it costs |
 |---|---|
@@ -96,11 +138,15 @@ Nothing is ever removed from the library on its own. It grows until `library rm`
 | A zip over a source that refuses them | The whole object, with a `degrade` first |
 | A tar under any compression | The whole object, with a `degrade` first, because a tar states no index |
 
-Where the cheap path is gone, the run says so before spending the bandwidth and keeps what it read in the cache, so asking twice costs once. It proceeds rather than refusing, because the question was what is inside and no flag exists to answer it a second way.
+Where the cheap path is gone, the run says so before spending the bandwidth and
+keeps what it read in the cache, so asking twice costs once. It proceeds rather
+than refusing, because the question was what is inside and no flag exists to
+answer it a second way.
 
 ## What status and diff report
 
-One state per entry, decided against the record. An unchanged entry is not printed, so a directory that is exactly what the run left prints nothing at all.
+One state per entry, decided against the record. An unchanged entry is not
+printed, so a directory that is exactly what the run left prints nothing at all.
 
 | State | Meaning |
 |---|---|
@@ -109,7 +155,9 @@ One state per entry, decided against the record. An unchanged entry is not print
 | `deleted` | The record states it and the destination does not hold it |
 | `added` | The destination holds it and the record does not state it |
 
-There is no fifth state. `diff` prints the same states and adds the digest and the length the record states and the destination holds. Neither ever compares the inside of a file.
+There is no fifth state. `diff` prints the same states and adds the digest and
+the length the record states and the destination holds. Neither ever compares
+the inside of a file.
 
 ## Reference forms
 
@@ -135,9 +183,14 @@ There is no fifth state. `diff` prints the same states and adds the digest and t
 | Metadata document | `croissant:https://host/metadata.json` |
 | Content address | `blake3:<hex>` |
 
-Resolution order: explicit scheme, then a local path if it exists, then each entry in `sources` in order. A name matching none of the configured sources fails. It is never guessed at.
+Resolution order: explicit scheme, then a local path if it exists, then each
+entry in `sources` in order. A name matching none of the configured sources
+fails. It is never guessed at.
 
-A name with no `sources` configured is searched for instead, across every registry that offers search, in parallel: Hugging Face, Kaggle, OpenML, Zenodo, Figshare, CKAN at data.humdata.org, Dataverse at dataverse.harvard.edu and DataCite. Three outcomes and no fourth.
+A name with no `sources` configured is searched for instead, across every
+registry that offers search, in parallel: Hugging Face, Kaggle, OpenML, Zenodo,
+Figshare, CKAN at data.humdata.org, Dataverse at dataverse.harvard.edu and
+DataCite. Three outcomes and no fourth.
 
 | Outcome | What happens |
 |---|---|
@@ -145,9 +198,13 @@ A name with no `sources` configured is searched for instead, across every regist
 | Several records carry it | Every one is printed with its size, where it came from and what it states about its bytes, the run refuses, and the exact command for each is given |
 | None carries it | The run fails, naming the nearest names it did find and the command for each |
 
-A name never enters a lock. What it resolved to does, so the first run searches and every run after is exact.
+A name never enters a lock. What it resolved to does, so the first run searches
+and every run after is exact.
 
-Matching folds case and drops anything that is not a letter or a digit, so `HAM-10000` and `ham10000` are the same name. A record whose name is within three edits of the term is near enough to suggest and never near enough to resolve to.
+Matching folds case and drops anything that is not a letter or a digit, so
+`HAM-10000` and `ham10000` are the same name. A record whose name is within
+three edits of the term is near enough to suggest and never near enough to
+resolve to.
 
 ## Global flags
 
@@ -170,7 +227,7 @@ Available on every command.
 | `--no-hints` | off | Never print a hint |
 | `--yes` | off | Answer every confirmation with yes |
 | `--threads <n>` | detected | Ceiling on threads for processor work |
-| `--compress <auto|none|zstd:1..19>` | auto | How cached objects are stored |
+| `--compress <auto\|none\|zstd:1..19>` | auto | How cached objects are stored |
 
 ## Flags for get, plan and apply
 
@@ -198,7 +255,13 @@ Available on every command.
 | `--aggressive` | off | Raise politeness ceilings, prints a warning |
 | `--deterministic-io` | off | Disable adaptation, for benchmarking |
 
-`repair` takes the transfer half of this list and refuses the rest, because it restores bytes in the cache and materializes nothing. `plan` refuses `--force` and `--adopt`, because it writes to no destination.
+`repair` takes the transfer half of this list and refuses the rest, because it
+restores bytes in the cache and materializes nothing. `plan` refuses `--force`
+and `--adopt`, because it writes to no destination.
+
+`status`, `diff` and `revert` take the global flags and `--verify
+<always|fingerprint|never>`, which decides whether an entry is answered by its
+recorded fingerprint or by reading its bytes. Nothing else.
 
 ### Flags for promote
 
@@ -207,8 +270,6 @@ Available on every command.
 | `--output <path>` | stdout | Write the manifest to a file |
 | `--force` | off | Overwrite the file `--output` names |
 | `--lock <path>` | `./fetchloom.lock` | Where the lock is written |
-
-`status`, `diff` and `revert` take the global flags and `--verify <always|fingerprint|never>`, which decides whether an entry is answered by its recorded fingerprint or by reading its bytes. Nothing else.
 
 ### Flags for init
 
@@ -246,7 +307,7 @@ Available on every command.
 `<HOST>` in those names is the host of the location with every character that is
 not a letter or a digit replaced by an underscore, uppercased. The host is the
 name or address the location carries and never its port, so one variable serves
-every port on a host, and two hosts differing only in a character that maps to an
+every port on a host. Two hosts differing only in a character that maps to an
 underscore share one variable, so a host written with a hyphen where another
 writes a dot resolves to the same name. Name the host you mean.
 
@@ -266,13 +327,21 @@ What each provider needs, and what it states about the bytes it serves.
 | Dataverse | Not built. Dataverse authenticates with an `X-Dataverse-key` header rather than `Authorization`, and the credential seam has no per-adapter header name | | The `checksum` the install records, carried only when its `type` is SHA-256 |
 | FTP, FTPS | Anonymous by default. A bearer credential written `user:password` logs in as that user, and is refused unless the control connection is secured | `FETCHLOOM_TOKEN_<HOST>` | None. FTP states no checksum, so a first fetch is `tofu` |
 
-A variable named for the host is read before the provider's own, and holds the whole `Authorization` header rather than a bare token, which is how a header other than `Bearer` is sent. The provider's own variable holds the bare token the provider prints, and is sent as `Bearer` followed by it.
+A variable named for the host is read before the provider's own, and holds the
+whole `Authorization` header rather than a bare token, which is how a header
+other than `Bearer` is sent. The provider's own variable holds the bare token
+the provider prints, and is sent as `Bearer` followed by it.
 
-An MD5 is never carried as a digest claim. It is not a digest this build computes, and a run that cannot recompute it cannot verify against it, so a provider that states only an MD5 leaves the trust class at `tofu` rather than implying more evidence than exists.
+An MD5 is never carried as a digest claim. It is not a digest this build
+computes, and a run that cannot recompute it cannot verify against it, so a
+provider that states only an MD5 leaves the trust class at `tofu` rather than
+implying more evidence than exists.
 
 ## Configuration keys
 
-TOML. Manifests take three syntaxes because strangers write them. Configuration takes one because you write it, and one format means one parser and one set of error messages.
+TOML. Manifests take three syntaxes because strangers write them. Configuration
+takes one because you write it, and one format means one parser and one set of
+error messages.
 
 | Key | Meaning |
 |---|---|
@@ -294,7 +363,9 @@ Unknown keys are an error. The `x-` prefix is reserved and refused.
 
 ## Log levels
 
-A level decides which of the events the run already emits reach stderr, each as one JSON object. It never decides which events exist, and the stream `--events` writes is identical at every level.
+A level decides which of the events the run already emits reach stderr, each as
+one JSON object. It never decides which events exist, and the stream `--events`
+writes is identical at every level.
 
 | Level | Rendered |
 |---|---|
@@ -359,7 +430,8 @@ A level decides which of the events the run already emits reach stderr, each as 
 
 ## Events
 
-Newline delimited JSON. Every event carries a sequence number, a timestamp, the dataset, and where it applies the artifact.
+Newline delimited JSON. Every event carries a sequence number, a timestamp, the
+dataset, and where it applies the artifact.
 
 ```
 run.start run.end
@@ -379,7 +451,9 @@ degrade
 error
 ```
 
-`degrade` fires whenever any capability, optimization or trust level came out lower than what was asked for, and names what was requested, what was used, and why.
+`degrade` fires whenever any capability, optimization or trust level came out
+lower than what was asked for, and names what was requested, what was used, and
+why.
 
 ## Archive formats
 
@@ -390,17 +464,23 @@ error
 | `zip` | A zip container, store and deflate only |
 | `gzip`, `zstd`, `xz`, `bzip2` | One compressed object, materialized as one file |
 
-The name and the bytes must agree. A file whose name ends in `tar` and whose header says otherwise fails with `archive.unsupported` naming both.
+The name and the bytes must agree. A file whose name ends in `tar` and whose
+header says otherwise fails with `archive.unsupported` naming both.
 
 ## Metadata formats init can absorb
 
-Checksum sidecars, Croissant, Frictionless data packages, pooch registries, BagIt.
+Checksum sidecars, Croissant, Frictionless data packages, pooch registries,
+BagIt.
 
-Torrent and DVC are refused by name. A torrent states SHA-1 over pieces that span file boundaries and names a swarm rather than a location. A DVC file states MD5 or an ETag, and an ETag is supporting evidence, never content identity.
+Torrent and DVC are refused by name. A torrent states SHA-1 over pieces that
+span file boundaries and names a swarm rather than a location. A DVC file states
+MD5 or an ETag, and an ETag is supporting evidence, never content identity.
 
 ## Limits
 
-`retries` and `timeout` are the two this build lets you move, by the flags and configuration keys above. Every other limit is fixed at the default it states, because a flag that exists is a flag that acts and none of the rest has one.
+`retries` and `timeout` are the two this build lets you move, by the flags and
+configuration keys above. Every other limit is fixed at the default it states,
+because a flag that exists is a flag that acts and none of the rest has one.
 
 | Limit | Default |
 |---|---|
@@ -441,9 +521,10 @@ Torrent and DVC are refused by name. A torrent states SHA-1 over pieces that spa
 
 ## Not built
 
-Written down, not in the binary. Each is refused as an unknown flag or command today rather than accepted and ignored.
+Written down, not in the binary. Each is refused as an unknown flag or command
+today rather than accepted and ignored.
 
 | Thing | What it would do |
 |---|---|
-| `sftp://` | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own SECURITY.md section |
+| `sftp://` | Deliberately not. An SSH stack, a host key policy, agent forwarding, four key formats and rekeying are a security surface the size of the rest of the tool, and belong to their own change with their own security policy section |
 | Installer, signed releases | Distribution |

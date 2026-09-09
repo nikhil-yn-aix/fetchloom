@@ -1,12 +1,20 @@
-# Decisions
+# decisions
 
-An append only log of why things are the way they are. It is history, not documentation.
+an append only log of why things are the way they are. it is history, not
+documentation, and nobody is meant to read it start to finish. it is long
+because the project is old enough to have changed its mind, and that is the
+point of keeping it.
 
-Nothing here is authoritative over the code. Where this log and the code disagree, the code is what runs and this log is what someone believed at the time. Entries are not edited to stay true; a decision that was later reversed gets a new entry rather than a correction to the old one.
+nothing here is authoritative over the code. where this log and the code
+disagree, the code is what runs and this log is what someone believed at the
+time. entries are not edited to stay true. a decision that was later reversed
+gets a new entry rather than a correction to the old one.
 
-For what is promised, read [contracts.md](contracts.md). For how it works, read [internals.md](internals.md).
+for what is promised, read [contracts.md](contracts.md). for how it works, read
+[internals.md](internals.md).
 
-Entries citing `audit.md` or `audit2.md` refer to scratch analysis deleted in the documentation rewrite. The reasoning they carried is in the entry itself.
+entries citing `audit.md` or `audit2.md` refer to scratch analysis deleted in
+the documentation rewrite. the reasoning they carried is in the entry itself.
 
 ---
 

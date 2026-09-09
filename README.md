@@ -1,83 +1,96 @@
-# Fetchloom
+```
+  __       _         _      _
+ / _| ___ | |_  ___ | |__  | |  ___    ___   _ __ ___
+| |_ / _ \| __|/ __|| '_ \ | | / _ \  / _ \ | '_ ` _ \
+|  _|  __/| |_| (__ | | | || || (_) || (_) || | | | | |
+|_|  \___| \__|\___||_| |_||_| \___/  \___/ |_| |_| |_|
+```
+
+point it at a dataset. get back the exact files, and a record that proves what you got.
 
 [![verify](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/verify.yml/badge.svg)](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/verify.yml)
 [![hosts](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/hosts.yml/badge.svg)](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/hosts.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Point it at a dataset. It gives you the exact files and a record proving what it gave you.
-
-```
-fetchloom get https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz
-```
-
-That resolves the reference, reuses anything it already has, downloads the rest, checks every byte against a digest, unpacks it, and writes a lock file. Run it again and it does nothing, because everything is already correct and it can prove it.
-
-No account, no daemon, no config to write first, no Python.
-
-## Install
-
-No installer yet. Build it:
+## what a run looks like
 
 ```
+$ fetchloom get https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz -o hello
+blake3:516b098d76cd000fe6001281327f1752d89d3cf9d5bbe39bc74ece250f22bbec  462 entries  C:\work\hello
+```
+
+that resolved the URL, downloaded 1,017,723 bytes, hashed every one of them with
+BLAKE3 and SHA-256 in the same pass, unpacked 462 entries, and wrote
+`fetchloom.lock` beside the directory. the line it printed is the digest of the
+whole tree, so two machines that print the same line hold the same bytes.
+
+run it again and it prints the same line and writes nothing. it does not trust a
+timestamp to know that: it can hash the directory and compare.
+
+no account, no daemon, no configuration to write first, no Python.
+
+## install
+
+there is no release build and no installer yet. build it:
+
+```
+git clone https://github.com/nikhil-yn-aix/fetchloom
+cd fetchloom
 cargo build --release
 ```
 
-The binary lands in `target/release/`. It needs nothing else at runtime.
+`rust-toolchain.toml` pins Rust 1.98.0, and rustup installs it on the first build.
+the binary lands in `target/release/` and needs nothing else at runtime. Windows
+and Linux, x86_64 and aarch64.
 
-## What a run looks like
+## what people use it for
 
-Fetch and unpack an archive:
+| | |
+|---|---|
+| `fetchloom get https://host/x.tar.zst` | one file, verified, unpacked, recorded |
+| `fetchloom get ham10000` | a bare name, searched across eight registries at once |
+| `fetchloom get hf:datasets/org/name@rev` | a provider record, by its own identifier |
+| `fetchloom get --locked` | every dataset the project file names, pinned to the lock |
+| `fetchloom probe <ref>` | size, digests, ranges and trust, moving no payload bytes |
+| `fetchloom status <dir>` | which entries you changed since the run that wrote them |
 
-```
-$ fetchloom get https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz
-hello-2.12  materialized  1.0 MB  tofu
-```
+fetch a directory, edit part of it, and run again when upstream moves: it merges
+per entry, keeps your edits, and writes upstream's version beside yours where
+both changed. [the guide](docs/guide.md) starts there.
 
-See what would happen without moving bytes:
+## why it exists
 
-```
-$ fetchloom plan https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz
-dataset: hello-2.12
-network: {hosts: [ftp.gnu.org], required: true}
-disk: {cache: {volume: C, bytes: 1017723}}
-trust: tofu
-```
+most public datasets publish no checksum. the reference truth is your own first
+successful fetch, and nothing records it. fetchloom records it in a lock and
+checks every later run against it, the way `Cargo.lock` does for code.
 
-Check that a directory still holds what was written into it:
+what it refuses to do is the interesting half.
 
-```
-$ fetchloom verify ./hello-2.12
-hello-2.12  unchanged  blake3:516b098d76cd000fe6001281327f1752d89d3cf9d5bbe39b
-```
+nothing enters the cache unverified. an object is hashed whole before it is
+named, and there is no other way for one to appear.
 
-## What it promises
+a digest is checked before anything is published. a mismatch fails the run and
+leaves the destination as it was.
 
-Same lock, same bytes, on Windows and Linux, or it fails and names the exact entries that differ. It never quietly hands you something else.
+a credential never reaches a host it was not resolved for. it is dropped on any
+redirect to a different host, and a password is never sent over a control
+connection that could not be encrypted.
 
-Nothing appears half written. Kill it mid run and your directory holds the old tree or the new one, never a mixture.
+a source that says come back later is left alone. `Retry-After` is a floor on
+the wait, never a ceiling, and a wait longer than the limit hands the object to
+the next candidate rather than hammering the host.
 
-Nothing degrades in silence. Every time it wanted to do something and could not, it says what it wanted, what it did instead, and why.
+nothing degrades in silence. every time it wanted one thing and did another it
+says what it wanted, what it did, and why.
 
-Every result carries a trust class with a mechanical definition. Sizes, timestamps and ETags are never treated as proof of content.
+## where to go next
 
-## What it does not do
+[guide](docs/guide.md), the tasks, in the order you hit them.
+[reference](docs/reference.md), every command, flag, variable and key.
+[contracts](docs/contracts.md), exactly what is promised and what each failure means.
+[internals](docs/internals.md), how it works, and the measurements behind it.
+[contributing](.github/CONTRIBUTING.md), how code is written here.
 
-It does not clean, convert, or run anything on your data. No manifest key can express a command.
+## license
 
-It does not scrape. It lists what you point it at and never wanders outside that prefix.
-
-It is slower than `cp` and `curl`, on every workload, on purpose. It hashes every byte twice, builds a tree so damage can be located later, publishes through staging, and writes a record. Those tools do none of that and cannot tell you whether they succeeded. Numbers are in [docs/internals.md](docs/internals.md).
-
-## Not built yet
-
-There is no installer, no signed release, and no package manager entry. You build from source.
-
-It speaks HTTP/1.1, FTP and FTPS. No SFTP, and that one is deliberate.
-
-## Docs
-
-[Guide](docs/guide.md), start here.
-[Reference](docs/reference.md), every command, flag, variable and key.
-[Contracts](docs/contracts.md), exactly what is promised and what each failure means.
-[Internals](docs/internals.md), how it works and why it is built this way.
-
-Apache-2.0.
+MIT. see [LICENSE](LICENSE).
