@@ -192,6 +192,7 @@ struct Control {
 
 impl Control {
     fn open(at: &Where, limits: &Limits, location: &str) -> Result<Self, Error> {
+        fetchloom_engine::network::allowed(location)?;
         let first = (at.host.as_str(), at.port)
             .to_socket_addrs()
             .map_err(|reason| {

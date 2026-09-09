@@ -53,7 +53,7 @@ struct Lane {
     msrv: bool,
 }
 
-const SUITES: [Suite; 64] = [
+const SUITES: [Suite; 65] = [
     Suite {
         package: "fetchloom-archive",
         target: "bomb",
@@ -328,6 +328,11 @@ const SUITES: [Suite; 64] = [
         package: "fetchloom-sources",
         target: "object_store",
         tier: Tier::Integration,
+    },
+    Suite {
+        package: "fetchloom-sources",
+        target: "offline",
+        tier: Tier::Unit,
     },
     Suite {
         package: "fetchloom-sources",
@@ -733,6 +738,7 @@ fn work(lane: &Lane, workspace: &Path, report: &mut Report) {
     match lane.name {
         "checks" => {
             format(workspace, report);
+            comments(workspace, report);
             dependencies(workspace, report);
         }
         "network" => network(workspace, lane, report),
@@ -771,6 +777,10 @@ fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
     if lane.msrv {
         msrv(workspace, report);
     }
+}
+
+fn comments(workspace: &Path, report: &mut Report) {
+    report.step_here("comments", || crate::comment::run(workspace));
 }
 
 fn format(workspace: &Path, report: &mut Report) {
