@@ -374,6 +374,23 @@ fn a_retry_after_longer_than_the_backoff_raises_the_wait_to_it() {
     }
 }
 
+#[test]
+fn a_source_asking_to_be_left_alone_past_the_ceiling_is_left_rather_than_asked_again() {
+    let limits = Limits::default();
+    let asked = limits.retry_ceiling + Duration::from_secs(1);
+    let waited = waits_when_a_source_asks_for(Some(asked));
+
+    assert!(
+        waited.is_empty(),
+        "a source that asked for {asked:?}, past the {:?} ceiling, was asked again after waiting {waited:?}",
+        limits.retry_ceiling
+    );
+    assert!(
+        !waits_when_a_source_asks_for(Some(limits.retry_ceiling)).is_empty(),
+        "a wait at the ceiling was refused, so the ceiling is exclusive where the contract states it is not"
+    );
+}
+
 #[derive(Debug)]
 struct SilentObserver;
 

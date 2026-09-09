@@ -59,7 +59,13 @@ impl<P: Pause> Retry<'_, P> {
             } else {
                 Answer::Faltered
             });
-            if !failure.retryable() || attempt >= self.limits.retry_attempts {
+            let asked_past_the_ceiling = failure
+                .retry_after()
+                .is_some_and(|wait| !honors(self.limits, wait));
+            if !failure.retryable()
+                || asked_past_the_ceiling
+                || attempt >= self.limits.retry_attempts
+            {
                 return Err(failure.with_attempts(attempt));
             }
             self.observer.emit(&Event::new(
@@ -71,10 +77,8 @@ impl<P: Pause> Retry<'_, P> {
                 },
             ));
             let backing_off = backoff(self.limits, attempt, self.pause.fraction());
-            let asked = failure
-                .retry_after()
-                .filter(|wait| honors(self.limits, *wait));
-            self.pause.sleep(backing_off.max(asked.unwrap_or_default()));
+            let asked = failure.retry_after().unwrap_or_default();
+            self.pause.sleep(backing_off.max(asked));
         }
     }
 
