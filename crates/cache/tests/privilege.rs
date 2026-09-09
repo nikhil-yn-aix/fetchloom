@@ -169,15 +169,17 @@ fn an_object_another_user_wrote_is_hashed_rather_than_trusted_on_its_fingerprint
         let digest = publish(&held, &bytes);
         let object = held.placement(digest).unwrap().container().to_path_buf();
 
-        support::give_away(&object, &other);
         let mut wrong = bytes.clone();
         wrong[0] ^= 0xff;
-        std::fs::write(&object, &wrong).ok();
+        std::fs::write(&object, &wrong).unwrap();
+        support::give_away(&object, &other);
 
-        let refused = held.check_hit(digest);
+        let refused = held.check_hit(digest).expect_err(
+            "a cache hit on an object another user wrote was taken on its fingerprint alone",
+        );
         assert!(
-            refused.is_err(),
-            "a cache hit on an object another user wrote was taken on its fingerprint alone"
+            !format!("{refused}").contains("changed since it was published"),
+            "the object was refused on its fingerprint rather than on its bytes, so a rewrite that kept the fingerprint would have been served: {refused}"
         );
     }
 }

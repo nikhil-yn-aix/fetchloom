@@ -1377,6 +1377,10 @@ fn make_executable(path: &Path) {
     let _ = path;
 }
 
+const TEST_KIND: [&str; 1] = ["test"];
+
+const TESTED_KINDS: [&str; 4] = ["lib", "bin", "test", "proc-macro"];
+
 fn test_targets(
     workspace: &Path,
     packages: &[&str],
@@ -1406,9 +1410,9 @@ fn test_targets(
                 .unwrap_or(false);
             let kinds = target.get("kind").and_then(serde_json::Value::as_array);
             let wanted: &[&str] = if named.is_some() {
-                &["test"]
+                &TEST_KIND
             } else {
-                &["lib", "bin", "test", "proc-macro"]
+                &TESTED_KINDS
             };
             let counted = kinds.is_some_and(|kinds| {
                 kinds
@@ -1720,7 +1724,8 @@ mod tests {
         let mut invocations = 0;
         for line in source.lines() {
             let trimmed = line.trim_start();
-            if !trimmed.starts_with("&[\"test\"") && !trimmed.contains("vec![\"test\".to_owned()") {
+            if !trimmed.starts_with("&[\"test\",") && !trimmed.contains("vec![\"test\".to_owned()")
+            {
                 continue;
             }
             invocations += 1;
