@@ -53,7 +53,7 @@ struct Lane {
     msrv: bool,
 }
 
-const SUITES: [Suite; 65] = [
+const SUITES: [Suite; 67] = [
     Suite {
         package: "fetchloom-archive",
         target: "bomb",
@@ -145,6 +145,11 @@ const SUITES: [Suite; 65] = [
         tier: Tier::Integration,
     },
     Suite {
+        package: "fetchloom-cache",
+        target: "privilege",
+        tier: Tier::System,
+    },
+    Suite {
         package: "fetchloom-engine",
         target: "candidate",
         tier: Tier::Unit,
@@ -202,6 +207,11 @@ const SUITES: [Suite; 65] = [
     Suite {
         package: "fetchloom-engine",
         target: "network",
+        tier: Tier::Unit,
+    },
+    Suite {
+        package: "fetchloom-engine",
+        target: "address",
         tier: Tier::Unit,
     },
     Suite {
@@ -705,6 +715,7 @@ fn push_gate(workspace: &Path, report: &mut Report) {
     format(workspace, report);
     comments(workspace, report);
     dependencies(workspace, report);
+    notices(workspace, report);
     if let Some(lane) = native {
         for target in lane.targets() {
             lint(workspace, report, &target);
@@ -740,6 +751,7 @@ fn work(lane: &Lane, workspace: &Path, report: &mut Report) {
         "checks" => {
             format(workspace, report);
             comments(workspace, report);
+            notices(workspace, report);
             dependencies(workspace, report);
         }
         "network" => network(workspace, lane, report),
@@ -932,6 +944,13 @@ fn dependencies(workspace: &Path, report: &mut Report) {
         return;
     }
     report.step("dependencies", cargo(workspace, &["deny", "check"]));
+}
+
+fn notices(workspace: &Path, report: &mut Report) {
+    report.step(
+        "notices",
+        cargo(workspace, &["xtask", "notices", "--check"]),
+    );
 }
 
 fn msrv(workspace: &Path, report: &mut Report) {

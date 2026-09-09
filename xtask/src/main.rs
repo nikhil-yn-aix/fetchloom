@@ -4,6 +4,7 @@
 mod bench;
 mod comment;
 mod network;
+mod notices;
 mod profile;
 mod surface;
 mod verify;
@@ -24,6 +25,7 @@ fn main() -> ExitCode {
         "bench" => run_bench(&workspace, &rest, verification_run()),
         "completions" => generate_completions(&workspace, &rest),
         "network" => run_network(&workspace, &rest),
+        "notices" => notices::run(&workspace, &rest),
         "profile" => profile::run(&rest),
         "surface" => surface::run(&workspace, &rest),
         "verify" => {
@@ -45,6 +47,7 @@ usage:
   cargo xtask bench [--save-baseline] [--compare] [--publish] [--iterations <n>] [--regime <name>]
   cargo xtask completions <shell> <directory>
   cargo xtask network [path to a built fetchloom]
+  cargo xtask notices [--check]
   cargo xtask profile [--rounds <n>]
   cargo xtask surface [--list] [--crate <name>]
   cargo xtask verify [--fast] [--lane <name>] [--provision] [--install-hook]";
