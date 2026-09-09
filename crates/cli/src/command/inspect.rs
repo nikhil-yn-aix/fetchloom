@@ -4,8 +4,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::limits::Limits;
@@ -16,7 +16,6 @@ use fetchloom_engine::seam::archive::{Archive, ArchiveMember, MemberKind};
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::policy::Policy;
 use fetchloom_engine::seam::source::{Serves, Source};
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;

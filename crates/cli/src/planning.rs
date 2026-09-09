@@ -9,7 +9,6 @@ use fetchloom_engine::lock::LockedDataset;
 use fetchloom_engine::plan::{Plan, PlanArtifact, PlanDisk, PlanNetwork, VolumeRequirement};
 use fetchloom_engine::redact::SafeUrl;
 use fetchloom_engine::reference::Host;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_platform::NativePlatform;
 

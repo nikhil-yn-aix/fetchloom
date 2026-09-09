@@ -24,7 +24,6 @@ use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::seam::policy::IoMode;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_faults::{FaultyPlatform, Operation};
 use fetchloom_platform::NativePlatform;
@@ -172,7 +171,7 @@ fn an_object_a_failed_publish_left_behind_is_not_served_as_that_digest() {
         let reopened = support::open_cache_at(&scratch.path().join("cache")).unwrap();
         if reopened.contains(digest).unwrap() {
             let mut read = Vec::new();
-            std::io::copy(&mut reopened.open(digest).unwrap(), &mut read).unwrap();
+            std::io::copy(&mut reopened.open_object(digest).unwrap(), &mut read).unwrap();
             assert_eq!(
                 hash_bytes(&read),
                 digest,

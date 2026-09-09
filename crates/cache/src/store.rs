@@ -14,7 +14,7 @@ use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::platform::{OwnerToken, Platform};
 use fetchloom_engine::seam::policy::IoMode;
-use fetchloom_engine::seam::store::{CacheStatus, PruneReport, Store};
+use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::source_record::SourceRecord;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
@@ -207,27 +207,31 @@ impl<P: Platform> Cache<P> {
     }
 }
 
-impl<P: Platform> Store for Cache<P> {
-    type Reader = ObjectReader<P::Lock>;
-    type Writer = PartialWriter;
-    type Lease = WriteLease<P::Lock>;
-
-    fn format_fingerprint(&self) -> Result<CacheFormatFingerprint, Error> {
+impl<P: Platform> Cache<P> {
+    /// # Errors
+    /// `cache.corrupt` when the recorded fingerprint cannot be read.
+    pub fn format_fingerprint(&self) -> Result<CacheFormatFingerprint, Error> {
         Ok(crate::format::fingerprint())
     }
 
-    fn contains(&self, digest: ContentDigest) -> Result<bool, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the store cannot be asked. An object that is not held is `false` rather than an error.
+    pub fn contains(&self, digest: ContentDigest) -> Result<bool, Error> {
         Ok(self.present(digest))
     }
 
-    fn open(&self, digest: ContentDigest) -> Result<Self::Reader, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the object is missing or unreadable, and `cache.locking_unsupported` when the read lease cannot be taken.
+    pub fn open_object(&self, digest: ContentDigest) -> Result<ObjectReader<P::Lock>, Error> {
         let lease = self.read_lease(digest)?;
         self.check(digest)?;
         let bytes = self.read(digest)?;
         Ok(ObjectReader { bytes, lease })
     }
 
-    fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error> {
+    /// # Errors
+    /// `cache.locked` when the lock file is replaced under every attempt, `cache.locking_unsupported` when the volume cannot express a lock, and `cache.corrupt` when the partial directory cannot be written.
+    pub fn lease(&self, key: PartialKey) -> Result<WriteLease<P::Lock>, Error> {
         let path = self.layout.lock_of(key.name());
         let (lock, waited_for) = if let Some(held) = self.platform.try_lock(&path)? {
             (held, None)
@@ -247,11 +251,13 @@ impl<P: Platform> Store for Cache<P> {
         })
     }
 
-    fn waited(&self, lease: &Self::Lease) -> bool {
+    pub fn waited(&self, lease: &WriteLease<P::Lock>) -> bool {
         lease.waited_for().is_some()
     }
 
-    fn begin(&self, lease: &Self::Lease, length: u64) -> Result<Self::Writer, Error> {
+    /// # Errors
+    /// `resource.disk` when the length asked for does not fit, and `cache.corrupt` when the partial cannot be created.
+    pub fn begin(&self, lease: &WriteLease<P::Lock>, length: u64) -> Result<PartialWriter, Error> {
         let path = self.layout.partial_of(lease.key.name());
         if path.exists() {
             std::fs::remove_file(&path)
@@ -270,7 +276,14 @@ impl<P: Platform> Store for Cache<P> {
         })
     }
 
-    fn resume(&self, lease: &Self::Lease, length: u64, valid: u64) -> Result<Self::Writer, Error> {
+    /// # Errors
+    /// The kinds `begin` gives, and `cache.corrupt` when the bytes already on disk cannot be read back to rebuild the hasher.
+    pub fn resume(
+        &self,
+        lease: &WriteLease<P::Lock>,
+        length: u64,
+        valid: u64,
+    ) -> Result<PartialWriter, Error> {
         let path = self.layout.partial_of(lease.key.name());
         if !path.exists() || valid == 0 {
             return self.begin(lease, length);
@@ -317,7 +330,9 @@ impl<P: Platform> Store for Cache<P> {
         })
     }
 
-    fn record_source(&self, key: PartialKey, record: &SourceRecord) -> Result<(), Error> {
+    /// # Errors
+    /// `cache.corrupt` when the record cannot be written, and `resource.disk` when the volume is full.
+    pub fn record_source(&self, key: PartialKey, record: &SourceRecord) -> Result<(), Error> {
         record::write(
             &source_record_of(&self.layout.partial_of(key.name())),
             record,
@@ -325,7 +340,9 @@ impl<P: Platform> Store for Cache<P> {
         )
     }
 
-    fn recorded_source(&self, key: PartialKey) -> Result<Option<SourceRecord>, Error> {
+    /// # Errors
+    /// `cache.corrupt` when a record exists and does not parse. No record is `None` rather than an error.
+    pub fn recorded_source(&self, key: PartialKey) -> Result<Option<SourceRecord>, Error> {
         let partial = self.layout.partial_of(key.name());
         if !partial.exists() {
             return Ok(None);
@@ -333,7 +350,9 @@ impl<P: Platform> Store for Cache<P> {
         record::read(&source_record_of(&partial))
     }
 
-    fn discard_partial(&self, key: PartialKey) -> Result<(), Error> {
+    /// # Errors
+    /// `cache.corrupt` when the partial exists and cannot be removed. A partial that is already gone is not an error.
+    pub fn discard_partial(&self, key: PartialKey) -> Result<(), Error> {
         let partial = self.layout.partial_of(key.name());
         let _ = std::fs::remove_file(source_record_of(&partial));
         let _ = std::fs::remove_file(owner_record_of(&partial));
@@ -348,7 +367,13 @@ impl<P: Platform> Store for Cache<P> {
         }
     }
 
-    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<hashing::Digests, Error> {
+    /// # Errors
+    /// `cache.cross_volume` when the partial and the object directory are on different volumes, `integrity.mismatch` when the bytes written do not hash to what the lease expected, `resource.disk` when the volume is full, and `cache.corrupt` when the publication cannot be completed.
+    pub fn commit(
+        &self,
+        lease: WriteLease<P::Lock>,
+        writer: PartialWriter,
+    ) -> Result<hashing::Digests, Error> {
         let digests = writer.pair.finish();
         let found = digests.content;
         if let Some(expected) = lease.key.expected()
@@ -379,11 +404,15 @@ impl<P: Platform> Store for Cache<P> {
         Ok(digests)
     }
 
-    fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the store cannot be asked.
+    pub fn has_outboard(&self, digest: ContentDigest) -> Result<bool, Error> {
         Ok(self.layout.outboard_of(digest).is_file())
     }
 
-    fn open_outboard(&self, digest: ContentDigest) -> Result<Self::Reader, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the outboard is missing or unreadable.
+    pub fn open_outboard(&self, digest: ContentDigest) -> Result<ObjectReader<P::Lock>, Error> {
         let lease = self.read_lease(digest)?;
         let path = self.layout.outboard_of(digest);
         let file = std::fs::File::open(&path)
@@ -392,7 +421,9 @@ impl<P: Platform> Store for Cache<P> {
         Ok(ObjectReader { bytes, lease })
     }
 
-    fn verified_prefix(
+    /// # Errors
+    /// `cache.corrupt` when the partial or the outboard cannot be read. A prefix that does not check out is a shorter answer, not an error.
+    pub fn verified_prefix(
         &self,
         key: PartialKey,
         digest: ContentDigest,
@@ -401,7 +432,9 @@ impl<P: Platform> Store for Cache<P> {
         crate::repair::verified_prefix(self, key, digest, on_disk)
     }
 
-    fn write_outboard(&self, digest: ContentDigest, tree: &[u8]) -> Result<(), Error> {
+    /// # Errors
+    /// `resource.disk` when the volume is full, and `cache.corrupt` when the outboard cannot be written.
+    pub fn write_outboard(&self, digest: ContentDigest, tree: &[u8]) -> Result<(), Error> {
         let path = self.layout.outboard_of(digest);
         let beside = self.scratch_path().with_extension("outboard");
         let _ = std::fs::remove_file(&beside);
@@ -416,7 +449,9 @@ impl<P: Platform> Store for Cache<P> {
         self.platform.publish_file(&beside, &path, self.tier)
     }
 
-    fn stage(&self, destination_volume: &std::path::Path) -> Result<PathBuf, Error> {
+    /// # Errors
+    /// `destination.cross_volume` when the destination is not on the volume the staging directory is on, and `cache.corrupt` when the staging directory cannot be created.
+    pub fn stage(&self, destination_volume: &std::path::Path) -> Result<PathBuf, Error> {
         let volume = self.platform.volume_id(destination_volume)?;
         let here = self.platform.volume_id(&self.layout.staging())?;
         if volume != here {
@@ -435,7 +470,9 @@ impl<P: Platform> Store for Cache<P> {
         Ok(path)
     }
 
-    fn pin(&self, digest: ContentDigest) -> Result<(), Error> {
+    /// # Errors
+    /// `cache.corrupt` when the object is not held or the pin cannot be written, and `resource.disk` when the volume is full.
+    pub fn pin(&self, digest: ContentDigest) -> Result<(), Error> {
         let held = self.read_lease(digest)?;
         if !self.present(digest) {
             return Err(Error::new(
@@ -453,7 +490,9 @@ impl<P: Platform> Store for Cache<P> {
         written
     }
 
-    fn unpin(&self, digest: ContentDigest) -> Result<(), Error> {
+    /// # Errors
+    /// `cache.corrupt` when nothing pins the object, or the pin cannot be removed.
+    pub fn unpin(&self, digest: ContentDigest) -> Result<(), Error> {
         let path = self.layout.pin_of(digest);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -465,7 +504,9 @@ impl<P: Platform> Store for Cache<P> {
         }
     }
 
-    fn list(&self) -> Result<Vec<ContentDigest>, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the object directory cannot be walked.
+    pub fn list(&self) -> Result<Vec<ContentDigest>, Error> {
         let mut found = Self::digests_in(&self.layout.objects())?;
         found.extend(self.packed_index().keys().copied());
         found.sort_unstable();
@@ -473,11 +514,15 @@ impl<P: Platform> Store for Cache<P> {
         Ok(found)
     }
 
-    fn prune(&self, grace: Duration) -> Result<PruneReport, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the store cannot be walked. An object another user owns is skipped and counted, not an error.
+    pub fn prune(&self, grace: Duration) -> Result<PruneReport, Error> {
         crate::prune::run(self, grace)
     }
 
-    fn status(&self) -> Result<CacheStatus, Error> {
+    /// # Errors
+    /// `cache.corrupt` when the store cannot be walked.
+    pub fn status(&self) -> Result<CacheStatus, Error> {
         let objects = self.list()?;
         let mut bytes = 0;
         for digest in &objects {
@@ -492,4 +537,69 @@ impl<P: Platform> Store for Cache<P> {
             quarantined: Self::digests_in(&self.layout.quarantine())?.len() as u64,
         })
     }
+}
+
+impl<P: Platform> Store for Cache<P> {
+    type Writer = PartialWriter;
+    type Lease = WriteLease<P::Lock>;
+
+    fn contains(&self, digest: ContentDigest) -> Result<bool, Error> {
+        Cache::contains(self, digest)
+    }
+
+    fn lease(&self, key: PartialKey) -> Result<Self::Lease, Error> {
+        Cache::lease(self, key)
+    }
+
+    fn waited(&self, lease: &Self::Lease) -> bool {
+        Cache::waited(self, lease)
+    }
+
+    fn resume(&self, lease: &Self::Lease, length: u64, valid: u64) -> Result<Self::Writer, Error> {
+        Cache::resume(self, lease, length, valid)
+    }
+
+    fn record_source(&self, key: PartialKey, record: &SourceRecord) -> Result<(), Error> {
+        Cache::record_source(self, key, record)
+    }
+
+    fn recorded_source(&self, key: PartialKey) -> Result<Option<SourceRecord>, Error> {
+        Cache::recorded_source(self, key)
+    }
+
+    fn discard_partial(&self, key: PartialKey) -> Result<(), Error> {
+        Cache::discard_partial(self, key)
+    }
+
+    fn commit(&self, lease: Self::Lease, writer: Self::Writer) -> Result<hashing::Digests, Error> {
+        Cache::commit(self, lease, writer)
+    }
+
+    fn verified_prefix(
+        &self,
+        key: PartialKey,
+        digest: ContentDigest,
+        on_disk: u64,
+    ) -> Result<u64, Error> {
+        Cache::verified_prefix(self, key, digest, on_disk)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PruneReport {
+    pub removed: u64,
+    pub bytes_removed: u64,
+    pub kept: u64,
+    pub skipped_other_owner: u64,
+    pub quarantined_removed: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct CacheStatus {
+    pub root: PathBuf,
+    pub objects: u64,
+    pub bytes: u64,
+    pub partials: u64,
+    pub pins: u64,
+    pub quarantined: u64,
 }

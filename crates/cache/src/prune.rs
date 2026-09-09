@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::store::PruneReport;
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::{PruneReport, Store};
 
 use crate::Cache;
 use crate::record::{self, Mark};

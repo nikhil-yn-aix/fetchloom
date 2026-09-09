@@ -22,7 +22,6 @@ use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::partial_key::PartialKey;
 use fetchloom_engine::resume::ResumeRung;
 use fetchloom_engine::seam::policy::IoMode;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::transfer::{Pause, Transfer};
 use fetchloom_engine::tuning::Controller;
 use fetchloom_engine::verification::VerificationPolicy;

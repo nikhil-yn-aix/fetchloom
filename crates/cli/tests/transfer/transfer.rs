@@ -482,7 +482,7 @@ fn materialization<'a>(
     digester: &'a std::sync::Mutex<fetchloom_engine::hashing::Digester>,
     tuning: &'a fetchloom_cli::run::Tuning,
     policy: &'a NoCredentialPolicy,
-    adapters: &'a fetchloom_engine::erased::Adapters,
+    adapters: &'a fetchloom_engine::adapters::Adapters,
 ) -> Materialization<'a> {
     Materialization {
         processor,
@@ -712,23 +712,11 @@ impl std::io::Write for SlowWriter {
 }
 
 impl Store for CollapsingVolume<'_> {
-    type Reader = <Cache<NativePlatform> as Store>::Reader;
     type Writer = SlowWriter;
     type Lease = <Cache<NativePlatform> as Store>::Lease;
 
-    fn format_fingerprint(
-        &self,
-    ) -> Result<fetchloom_engine::identity::CacheFormatFingerprint, fetchloom_engine::error::Error>
-    {
-        self.inner.format_fingerprint()
-    }
-
     fn contains(&self, digest: ContentDigest) -> Result<bool, fetchloom_engine::error::Error> {
         self.inner.contains(digest)
-    }
-
-    fn open(&self, digest: ContentDigest) -> Result<Self::Reader, fetchloom_engine::error::Error> {
-        self.inner.open(digest)
     }
 
     fn lease(
@@ -740,17 +728,6 @@ impl Store for CollapsingVolume<'_> {
 
     fn waited(&self, lease: &Self::Lease) -> bool {
         self.inner.waited(lease)
-    }
-
-    fn begin(
-        &self,
-        lease: &Self::Lease,
-        length: u64,
-    ) -> Result<Self::Writer, fetchloom_engine::error::Error> {
-        Ok(SlowWriter {
-            inner: self.inner.begin(lease, length)?,
-            buffers: std::sync::Arc::clone(&self.buffers),
-        })
     }
 
     fn resume(
@@ -796,17 +773,6 @@ impl Store for CollapsingVolume<'_> {
         self.inner.commit(lease, writer.inner)
     }
 
-    fn has_outboard(&self, digest: ContentDigest) -> Result<bool, fetchloom_engine::error::Error> {
-        self.inner.has_outboard(digest)
-    }
-
-    fn open_outboard(
-        &self,
-        digest: ContentDigest,
-    ) -> Result<Self::Reader, fetchloom_engine::error::Error> {
-        self.inner.open_outboard(digest)
-    }
-
     fn verified_prefix(
         &self,
         key: fetchloom_engine::partial_key::PartialKey,
@@ -814,46 +780,6 @@ impl Store for CollapsingVolume<'_> {
         on_disk: u64,
     ) -> Result<u64, fetchloom_engine::error::Error> {
         self.inner.verified_prefix(key, digest, on_disk)
-    }
-
-    fn write_outboard(
-        &self,
-        digest: ContentDigest,
-        tree: &[u8],
-    ) -> Result<(), fetchloom_engine::error::Error> {
-        self.inner.write_outboard(digest, tree)
-    }
-
-    fn stage(
-        &self,
-        destination_volume: &std::path::Path,
-    ) -> Result<std::path::PathBuf, fetchloom_engine::error::Error> {
-        self.inner.stage(destination_volume)
-    }
-
-    fn pin(&self, digest: ContentDigest) -> Result<(), fetchloom_engine::error::Error> {
-        self.inner.pin(digest)
-    }
-
-    fn unpin(&self, digest: ContentDigest) -> Result<(), fetchloom_engine::error::Error> {
-        self.inner.unpin(digest)
-    }
-
-    fn list(&self) -> Result<Vec<ContentDigest>, fetchloom_engine::error::Error> {
-        self.inner.list()
-    }
-
-    fn prune(
-        &self,
-        grace: Duration,
-    ) -> Result<fetchloom_engine::seam::store::PruneReport, fetchloom_engine::error::Error> {
-        self.inner.prune(grace)
-    }
-
-    fn status(
-        &self,
-    ) -> Result<fetchloom_engine::seam::store::CacheStatus, fetchloom_engine::error::Error> {
-        self.inner.status()
     }
 }
 

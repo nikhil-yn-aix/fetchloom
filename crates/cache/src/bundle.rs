@@ -8,7 +8,6 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::Store;
 
 use crate::Cache;
 use crate::layout::{digest_of, name_of};
@@ -220,10 +219,8 @@ pub struct BundleReader {
 }
 
 impl BundleReader {
-    /// A bundle is read compressed or uncompressed as its own first bytes say.
-    /// A tar header opens with a member name, which here is the hexadecimal of
-    /// a digest, so it can never open with the frame magic and the two are told
-    /// apart by the bytes rather than by a name or a flag.
+    /// Compressed or not is decided from the first bytes: a tar opens with a
+    /// member name, here a digest in hexadecimal, never with a frame magic.
     ///
     /// # Errors
     /// `cache.corrupt` when the file cannot be opened or is not a container

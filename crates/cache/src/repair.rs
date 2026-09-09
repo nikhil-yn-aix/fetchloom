@@ -9,7 +9,6 @@ use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::outboard::{GROUP_LEN, find_damage};
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::timestamp::Timestamp;
 
 use crate::Cache;

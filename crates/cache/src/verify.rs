@@ -3,7 +3,6 @@
 
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
 use crate::Cache;

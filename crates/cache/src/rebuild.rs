@@ -6,7 +6,6 @@ use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::hashing;
 use fetchloom_engine::limits::OUTBOARD_THRESHOLD;
 use fetchloom_engine::seam::platform::{Liveness, Platform};
-use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
 use crate::record::{self, ObjectRecord};

@@ -28,7 +28,6 @@ use std::process::Command;
 use fetchloom_cache::layout::Layout;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::partial_key::PartialKey;
-use fetchloom_engine::seam::store::Store;
 
 use support::{bytes_of, cache_in};
 
@@ -389,7 +388,7 @@ fn objects_published_at_once_by_one_process_each_read_back_as_themselves() {
 
     for bytes in &wanted {
         let digest = hash_bytes(bytes);
-        let mut reader = cache.open(digest).unwrap();
+        let mut reader = cache.open_object(digest).unwrap();
         let mut found = Vec::new();
         std::io::Read::read_to_end(&mut reader, &mut found).unwrap();
         assert_eq!(

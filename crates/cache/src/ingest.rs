@@ -7,7 +7,6 @@ use fetchloom_engine::digest::{ContentDigest, InteropDigest};
 use fetchloom_engine::error::{Error, Surface, filesystem_failure};
 use fetchloom_engine::hashing::{self, Digests};
 use fetchloom_engine::seam::platform::Platform;
-use fetchloom_engine::seam::store::Store;
 use serde::Serialize;
 
 use crate::Cache;
@@ -120,12 +119,9 @@ impl<P: Platform> Cache<P> {
         ))
     }
 
-    /// A scratch file is an orphan the moment the process holding it is killed,
-    /// and contracts.md:303 has startup remove every orphan a previous boot
-    /// left. Its name carries the process and start that made it but not the
-    /// boot, so one record per process states the boot for every scratch that
-    /// process writes. One record rather than one per file, because the whole
-    /// point of packing a small object is that it costs few file operations.
+    /// A scratch file names the process that made it but not the boot, so one
+    /// record per process states the boot for every scratch it writes. One
+    /// record rather than one per file: packing exists to cost few operations.
     pub(crate) fn claimed_scratch(&self, _path: &std::path::Path) -> Result<(), Error> {
         let record = self.session_record();
         if !CLAIMED

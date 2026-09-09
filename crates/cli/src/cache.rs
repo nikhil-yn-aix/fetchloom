@@ -13,7 +13,6 @@ use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::policy::IoMode;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 use fetchloom_engine::work::WorkCounter;
 use fetchloom_platform::NativePlatform;
@@ -315,7 +314,7 @@ fn report_prune(held: &Cache<NativePlatform>, reporter: &crate::Reporter<'_>) ->
 
 fn clear(
     root: &Path,
-    found: Option<&fetchloom_engine::seam::store::CacheStatus>,
+    found: Option<&fetchloom_cache::store::CacheStatus>,
     reporter: &crate::Reporter<'_>,
     yes: bool,
 ) -> ExitCode {

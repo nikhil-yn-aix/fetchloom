@@ -12,7 +12,6 @@ use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::seam::observer::Observer;
 use fetchloom_engine::seam::policy::Policy;
-use fetchloom_engine::seam::store::Store as _;
 use fetchloom_engine::work::WorkCounter;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

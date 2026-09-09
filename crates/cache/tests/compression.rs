@@ -15,7 +15,6 @@ use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::hashing::hash_bytes;
 use fetchloom_engine::limits::{COMPRESSION_FRAME_BYTES, OUTBOARD_CHUNK_GROUP, PACK_THRESHOLD};
 use fetchloom_engine::seam::policy::IoMode;
-use fetchloom_engine::seam::store::Store;
 use fetchloom_engine::verification::VerificationPolicy;
 
 use fetchloom_cache::layout::COMPRESSED_SUFFIX;
