@@ -703,6 +703,7 @@ fn native() -> Option<&'static Lane> {
 fn push_gate(workspace: &Path, report: &mut Report) {
     let native = native();
     format(workspace, report);
+    comments(workspace, report);
     dependencies(workspace, report);
     if let Some(lane) = native {
         for target in lane.targets() {
