@@ -40,7 +40,7 @@ fn witness(machine: &str, origin: &str, run: &str) -> Witness {
     Witness {
         digest: digest(1),
         machine: MachineId::new(machine),
-        origin: origin.to_owned(),
+        origin: fetchloom_engine::redact::SafeUrl::new(origin),
         run: RunId::new(run),
         observed_at: Timestamp::now(),
     }
@@ -155,7 +155,7 @@ fn every_witness_a_run_can_write_carries_its_own_machine_so_none_of_them_corrobo
             Witness {
                 digest: digest(1),
                 machine: mine.clone(),
-                origin: origin.to_owned(),
+                origin: fetchloom_engine::redact::SafeUrl::new(origin),
                 run: RunId::new(run),
                 observed_at: Timestamp::now(),
             },
@@ -184,7 +184,7 @@ fn corroborating_needs_a_witness_from_a_machine_that_no_channel_in_this_build_de
         Witness {
             digest: digest(1),
             machine: mine.clone(),
-            origin: "https://a/x".to_owned(),
+            origin: fetchloom_engine::redact::SafeUrl::new("https://a/x"),
             run: RunId::new("r1"),
             observed_at: Timestamp::now(),
         },

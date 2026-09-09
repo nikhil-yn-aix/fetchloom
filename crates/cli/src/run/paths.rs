@@ -145,11 +145,33 @@ pub(crate) fn remote_name(location: &str) -> String {
     object_name(location)
 }
 
-pub(crate) fn resolve_source_path(base: &Path, source: &str) -> PathBuf {
+/// # Errors
+/// `manifest.invalid` when the path is absolute or climbs out of the directory
+/// holding the manifest.
+pub(crate) fn resolve_source_path(base: &Path, source: &str) -> Result<PathBuf, Error> {
     let stated = PathBuf::from(source.strip_prefix("file://").unwrap_or(source));
-    if stated.is_absolute() {
-        stated
-    } else {
-        base.join(stated)
+    let refuse = || {
+        Err(Error::new(
+            ErrorKind::ManifestInvalid,
+            format!(
+                "state a path under {}, because a manifest names \"{source}\", which is outside the directory holding it and a manifest reads no other file on this machine",
+                base.display()
+            ),
+        ))
+    };
+    if stated.is_absolute() || stated.has_root() {
+        return refuse();
     }
+    let mut depth = 0_i64;
+    for part in stated.components() {
+        match part {
+            std::path::Component::ParentDir => depth -= 1,
+            std::path::Component::CurDir => {}
+            _ => depth += 1,
+        }
+        if depth < 0 {
+            return refuse();
+        }
+    }
+    Ok(base.join(stated))
 }

@@ -85,7 +85,7 @@ pub(crate) fn write_receipt(
                 Witness {
                     digest: artifact.digest,
                     machine: cache.token().machine.clone(),
-                    origin: origin.to_owned(),
+                    origin: fetchloom_engine::redact::SafeUrl::new(origin),
                     run: run.clone(),
                     observed_at: fetchloom_engine::timestamp::Timestamp::now(),
                 },
@@ -415,7 +415,7 @@ pub(super) fn resolve_artifact(
         interop: ingested.interop,
         interop_prior: stated,
         size: ingested.size,
-        source: SafeUrl::new(&resolve_source_path(base, first).to_string_lossy()),
+        source: SafeUrl::new(&resolve_source_path(base, first)?.to_string_lossy()),
         name,
         selection,
         declared,
@@ -457,7 +457,7 @@ pub(super) fn ingest_artifact(
     sequence: &Sequence,
 ) -> Result<Ingested, Error> {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
-    let path = resolve_source_path(base, first);
+    let path = resolve_source_path(base, first)?;
     let Some(cache) = with.cache else {
         return Err(Error::new(
             ErrorKind::CacheCorrupt,

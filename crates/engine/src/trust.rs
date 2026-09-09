@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::digest::{ContentDigest, ManifestDigest, WITNESS_KEY_CONTEXT};
 use crate::identity::MachineId;
+use crate::redact::SafeUrl;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +57,7 @@ impl ArtifactKey {
 pub struct Witness {
     pub digest: ContentDigest,
     pub machine: MachineId,
-    pub origin: String,
+    pub origin: SafeUrl,
     pub run: RunId,
     pub observed_at: crate::timestamp::Timestamp,
 }

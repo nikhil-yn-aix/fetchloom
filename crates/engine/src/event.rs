@@ -59,7 +59,10 @@ pub enum EventPayload {
     #[serde(rename = "resolve.start")]
     ResolveStart,
     #[serde(rename = "resolve.alias")]
-    ResolveAlias { from: String, to: String },
+    ResolveAlias {
+        from: crate::redact::SafeUrl,
+        to: crate::redact::SafeUrl,
+    },
     #[serde(rename = "resolve.end")]
     ResolveEnd { duration_ms: u64 },
     #[serde(rename = "plan.ready")]

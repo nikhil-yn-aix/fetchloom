@@ -25,7 +25,7 @@ fn witness(machine: &str, origin: &str, run: &str, seed: u8) -> Witness {
     Witness {
         digest: digest(seed),
         machine: MachineId::new(machine),
-        origin: origin.to_owned(),
+        origin: fetchloom_engine::redact::SafeUrl::new(origin),
         run: RunId::new(run),
         observed_at: "2023-11-14T22:13:20Z".parse::<Timestamp>().unwrap(),
     }

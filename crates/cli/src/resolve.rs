@@ -116,8 +116,8 @@ pub(crate) fn resolve_reference(
         observer.emit(&Event::new(
             sequence,
             EventPayload::ResolveAlias {
-                from: reference.to_owned(),
-                to: fetchloom_engine::redact::SafeUrl::new(&provider).to_string(),
+                from: fetchloom_engine::redact::SafeUrl::new(reference),
+                to: fetchloom_engine::redact::SafeUrl::new(&provider),
             },
         ));
         return Ok(provider);
@@ -143,8 +143,8 @@ pub(crate) fn resolve_reference(
             observer.emit(&Event::new(
                 sequence,
                 EventPayload::ResolveAlias {
-                    from: reference.to_owned(),
-                    to: fetchloom_engine::redact::SafeUrl::new(candidate).to_string(),
+                    from: fetchloom_engine::redact::SafeUrl::new(reference),
+                    to: fetchloom_engine::redact::SafeUrl::new(candidate),
                 },
             ));
             return Ok(candidate.clone());
@@ -157,8 +157,8 @@ pub(crate) fn resolve_reference(
     observer.emit(&Event::new(
         sequence,
         EventPayload::ResolveAlias {
-            from: reference.to_owned(),
-            to: fetchloom_engine::redact::SafeUrl::new(&found).to_string(),
+            from: fetchloom_engine::redact::SafeUrl::new(reference),
+            to: fetchloom_engine::redact::SafeUrl::new(&found),
         },
     ));
     Ok(found)

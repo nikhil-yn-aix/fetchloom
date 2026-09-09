@@ -83,9 +83,10 @@ fn location_of(artifact: &Artifact, reference: &str, base: &Path, adapters: &Ada
     if run::is_served(adapters, first) {
         return first.clone();
     }
-    run::resolve_source_path(base, first)
-        .to_string_lossy()
-        .into_owned()
+    run::resolve_source_path(base, first).map_or_else(
+        |_| first.clone(),
+        |path| path.to_string_lossy().into_owned(),
+    )
 }
 
 fn stated_digests(artifact: &Artifact) -> Vec<StatedDigest> {
