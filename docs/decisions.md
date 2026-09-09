@@ -14253,3 +14253,37 @@ days after a security audit is not. It is the first rough edge a new person meet
 so it is a decision to take deliberately at release rather than by omission.
 
 Sources: `xtask/src/notices.rs`; `crates/cli/src/command/library.rs`.
+
+## What it takes to actually test the shared cache guard
+
+Question: why the first three attempts at the finding four test passed without
+proving anything.
+
+The guard is one line: on a shared cache, an object this run does not own is
+hashed rather than accepted on its recorded fingerprint. Testing it turned out to
+need three conditions at once, and each of the first three attempts met two.
+
+The object has to be **loose**. `publish_object` packs anything at or under
+`PACK_THRESHOLD`, which is one mebibyte, and `check_fingerprint` hashes a packed
+object before it ever asks whether the cache is shared. A four kibibyte object
+took the packed branch and passed a test that believed it had taken the shared
+one. The test now publishes one byte over the threshold and asserts the placement
+is not packed, so it cannot drift back.
+
+The bytes have to be wrong **before** the object is given away. After a chown the
+test is no longer the owner and cannot write the file, and the first version
+discarded that error with `.ok()`, so the cache hashed an object that was still
+correct and correctly said it was fine.
+
+The assertion has to name **which** refusal it got. A chown moves ctime, so the
+recorded fingerprint would refuse this object too, and a test that only asks
+whether an error came back cannot tell the guard from the thing the guard
+replaces. The byte check says what the object holds; the record check says it
+changed since it was published. The test refuses the second, which is the whole
+point: a rewrite that kept the fingerprint would be served by the record path.
+
+The cache is opened with compression off, so the bytes on disk are the bytes
+hashed and a refusal cannot be a decompression failure wearing the right shape.
+
+Sources: `crates/cache/tests/privilege.rs`; `crates/cache/src/store.rs:123`;
+`crates/cache/src/storage.rs:275`; `crates/engine/src/limits.rs:115`.

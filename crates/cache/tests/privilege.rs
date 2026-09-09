@@ -164,13 +164,28 @@ fn an_object_another_user_wrote_is_hashed_rather_than_trusted_on_its_fingerprint
 
         let scratch = tempfile::TempDir::new().unwrap();
         std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
-        let held = support::cache_in(scratch.path());
-        let bytes = bytes_of(4096, 13);
+        let held = support::open_cache_compressed(
+            scratch.path(),
+            fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+            fetchloom_engine::seam::policy::IoMode::Buffered,
+            fetchloom_engine::compression::CompressionChoice::None,
+        )
+        .unwrap();
+        let bytes = bytes_of(
+            usize::try_from(fetchloom_engine::limits::PACK_THRESHOLD).unwrap() + 1,
+            13,
+        );
         let digest = publish(&held, &bytes);
-        let object = held.placement(digest).unwrap().container().to_path_buf();
+        let placed = held.placement(digest).unwrap();
+        assert!(
+            !placed.is_packed(),
+            "a packed object is hashed whatever the cache is shared with, so this proves nothing about a shared one"
+        );
+        let object = placed.container().to_path_buf();
 
         let mut wrong = bytes.clone();
         wrong[0] ^= 0xff;
+        support::make_writable(&object);
         std::fs::write(&object, &wrong).unwrap();
         support::give_away(&object, &other);
 
