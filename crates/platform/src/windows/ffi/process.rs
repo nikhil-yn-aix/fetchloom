@@ -1,3 +1,6 @@
+//! What a process states about itself: when it started, and how many
+//! processors it may actually use.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

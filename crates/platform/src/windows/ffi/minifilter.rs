@@ -1,3 +1,5 @@
+//! Which filesystem minifilters are loaded, which is how a scanner is named.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

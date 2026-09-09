@@ -1,3 +1,6 @@
+//! What a volume states about itself: its name and flags, whether it is
+//! remote, what it has free, and how large a cluster is.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

@@ -1,3 +1,6 @@
+//! File operations Windows exposes only through Win32: rename, preallocate,
+//! symbolic links, and whether a file is stored compressed.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

@@ -1,3 +1,5 @@
+//! Reading one value out of the registry, and nothing else.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

@@ -1,3 +1,5 @@
+//! Block cloning: the duplicate-extents call and the spans it is asked for.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

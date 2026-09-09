@@ -1,3 +1,5 @@
+//! Paths as Windows wants them: wide, NUL terminated, and long-path aware.
+
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 

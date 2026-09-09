@@ -1,3 +1,5 @@
+//! Reading one secret out of the Windows credential manager.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"

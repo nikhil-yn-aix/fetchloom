@@ -1,3 +1,5 @@
+//! Who owns a file, and who owns the processes running on this machine.
+
 #![expect(
     unsafe_code,
     reason = "the platform seam is where Windows calls are made, and each block states its invariant"
