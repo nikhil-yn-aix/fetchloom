@@ -21,10 +21,17 @@ use serde::{Deserialize, Serialize};
 
 pub const REGRESSION_GATE: f64 = 0.05;
 
+/// How far a bounded metric may rise above its own target.s baseline. Peak
+/// memory holds within 2.8 percent across runs on one runner and differs 44
+/// percent between targets, and a fall is never a regression, so the band is
+/// wider than a counter.s and one sided.
+pub const BOUND_GATE: f64 = 0.10;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
     Deterministic,
+    Bounded,
     Timing,
 }
 
@@ -283,7 +290,13 @@ pub fn compare(baseline: &Baseline, current: &Baseline) -> Result<(), BenchError
                 });
                 continue;
             };
-            if (metric.value - previous.value).abs() > previous.value.abs() * REGRESSION_GATE {
+            let moved = match metric.kind {
+                MetricKind::Bounded => {
+                    metric.value - previous.value > previous.value.abs() * BOUND_GATE
+                }
+                _ => (metric.value - previous.value).abs() > previous.value.abs() * REGRESSION_GATE,
+            };
+            if moved {
                 found.push(BenchError::Moved {
                     regime: regime.regime.clone(),
                     metric: metric.name.clone(),
@@ -1313,7 +1326,7 @@ fn peak_metric(peak_bytes: u64) -> Metric {
         )]
         value: peak_bytes as f64,
         unit: "bytes".to_owned(),
-        kind: MetricKind::Timing,
+        kind: MetricKind::Bounded,
     }
 }
 
@@ -1684,9 +1697,9 @@ mod tests {
             );
             for regime in &baseline.regimes {
                 for metric in &regime.metrics {
-                    assert_eq!(
+                    assert_ne!(
                         metric.kind,
-                        MetricKind::Deterministic,
+                        MetricKind::Timing,
                         "{} records {} {}, which is a duration, and a duration recorded on the runner that gates is a number nobody may compare",
                         path.display(),
                         regime.regime,
@@ -1694,6 +1707,23 @@ mod tests {
                     );
                 }
             }
+            let unbounded: Vec<&str> = baseline
+                .regimes
+                .iter()
+                .filter(|regime| {
+                    !regime
+                        .metrics
+                        .iter()
+                        .any(|metric| metric.name == "peak-memory")
+                })
+                .map(|regime| regime.regime.as_str())
+                .collect();
+            assert_eq!(
+                unbounded,
+                ["packed-index", "slow-disk"],
+                "{} states a peak-memory bound for a different set of regimes than the two that measure a store operation rather than a whole run and so report no process peak",
+                path.display()
+            );
         }
         assert!(
             found > 0,
@@ -1723,6 +1753,38 @@ mod tests {
                 "the gate found three metrics moved and named fewer, so a red step reads as one failure: {complaint}"
             );
         }
+    }
+
+    fn bounded(value: f64) -> Metric {
+        Metric {
+            name: "peak-memory".to_owned(),
+            value,
+            unit: "bytes".to_owned(),
+            kind: MetricKind::Bounded,
+        }
+    }
+
+    #[test]
+    fn a_bound_that_rose_past_its_band_fails() {
+        let recorded = baseline_of(vec![bounded(10_000_000.0)]);
+        let current = baseline_of(vec![bounded(11_500_000.0)]);
+        assert!(
+            compare(&recorded, &current).is_err(),
+            "peak memory rose 15 percent above the runner's own baseline and the gate passed"
+        );
+    }
+
+    #[test]
+    fn a_bound_that_moved_inside_its_band_passes_and_one_that_fell_always_does() {
+        let recorded = baseline_of(vec![bounded(10_000_000.0)]);
+        assert!(
+            compare(&recorded, &baseline_of(vec![bounded(10_800_000.0)])).is_ok(),
+            "a rise of eight percent failed, which is the spread a runner shows between runs"
+        );
+        assert!(
+            compare(&recorded, &baseline_of(vec![bounded(4_000_000.0)])).is_ok(),
+            "holding less memory failed the gate, and holding less is never a regression"
+        );
     }
 
     #[test]

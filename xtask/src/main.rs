@@ -2,6 +2,7 @@
 //! platforms.
 
 mod bench;
+mod comment;
 mod network;
 mod profile;
 mod surface;
@@ -219,7 +220,7 @@ fn record_and_gate(
             current.regimes.iter_mut().for_each(|regime| {
                 regime
                     .metrics
-                    .retain(|metric| metric.kind == bench::MetricKind::Deterministic);
+                    .retain(|metric| metric.kind != bench::MetricKind::Timing);
             });
             println!(
                 "timing metrics were not recorded, because a timing baseline is only valid from the machine it was measured on, under cargo xtask verify"
@@ -236,7 +237,7 @@ fn record_and_gate(
             current.regimes.iter_mut().for_each(|regime| {
                 regime
                     .metrics
-                    .retain(|metric| metric.kind == bench::MetricKind::Deterministic);
+                    .retain(|metric| metric.kind != bench::MetricKind::Timing);
             });
             if let Err(error) = bench::save(current, path) {
                 eprintln!("{error}");
