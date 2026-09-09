@@ -1,6 +1,6 @@
 //! The verification matrix, and everything it cannot reach.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -821,7 +821,7 @@ fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
         report.census(
             &format!("test {target}"),
             test,
-            test_targets(workspace, &[]),
+            test_targets(workspace, &[], None),
         );
         report.declinations.extend(declinations(&record));
     }
@@ -1096,7 +1096,9 @@ fn tier_step(
             .push(suite.target);
     }
     let mut arguments: Vec<String> = vec!["test".to_owned(), "--no-fail-fast".to_owned()];
-    let expected = packages.values().map(Vec::len).sum();
+    let selected: Vec<&str> = packages.keys().copied().collect();
+    let named: BTreeSet<&str> = packages.values().flatten().copied().collect();
+    let expected = test_targets(workspace, &selected, Some(&named));
     for (package, targets) in &packages {
         arguments.push("-p".to_owned());
         arguments.push((*package).to_owned());
@@ -1118,7 +1120,7 @@ fn tier_step(
         .join(format!("declined-{}.txt", tier.label()));
     let _ = std::fs::remove_file(&record);
     command.env("FETCHLOOM_TEST_DECLINED", &record);
-    let passed = report.census(&format!("test {}", tier.label()), command, Some(expected));
+    let passed = report.census(&format!("test {}", tier.label()), command, expected);
     report.declinations.extend(declinations(&record));
     passed
 }
@@ -1375,7 +1377,11 @@ fn make_executable(path: &Path) {
     let _ = path;
 }
 
-fn test_targets(workspace: &Path, packages: &[&str]) -> Option<usize> {
+fn test_targets(
+    workspace: &Path,
+    packages: &[&str],
+    named: Option<&BTreeSet<&str>>,
+) -> Option<usize> {
     let output = Command::new(cargo_program())
         .current_dir(workspace)
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -1399,12 +1405,23 @@ fn test_targets(workspace: &Path, packages: &[&str]) -> Option<usize> {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let kinds = target.get("kind").and_then(serde_json::Value::as_array);
+            let wanted: &[&str] = if named.is_some() {
+                &["test"]
+            } else {
+                &["lib", "bin", "test", "proc-macro"]
+            };
             let counted = kinds.is_some_and(|kinds| {
-                kinds.iter().any(|kind| {
-                    matches!(kind.as_str(), Some("lib" | "bin" | "test" | "proc-macro"))
-                })
+                kinds
+                    .iter()
+                    .any(|kind| kind.as_str().is_some_and(|kind| wanted.contains(&kind)))
             });
-            if tested && counted {
+            let asked = named.is_none_or(|named| {
+                target
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| named.contains(name))
+            });
+            if tested && counted && asked {
                 found += 1;
             }
         }
