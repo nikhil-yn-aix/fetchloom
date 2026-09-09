@@ -117,7 +117,9 @@ impl NativePlatform {
         if fetchloom_engine::atomic::replace(&path, rendered.as_bytes()).is_err() {
             return;
         }
-        self.work.touched_file();
+        for _ in 0..fetchloom_engine::atomic::OPERATIONS {
+            self.work.touched_file();
+        }
     }
 
     #[must_use]

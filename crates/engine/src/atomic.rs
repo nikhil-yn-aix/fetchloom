@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static WRITES: AtomicU64 = AtomicU64::new(0);
 
+pub const OPERATIONS: u32 = 2;
+
 const ATTEMPTS: u32 = 16;
 
 pub enum Site {

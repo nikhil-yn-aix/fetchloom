@@ -18,8 +18,6 @@ use zstd as _;
 
 mod support;
 
-use fetchloom_faults::decline;
-
 use support::{bytes_of, cache_in, publish};
 
 #[cfg(unix)]
@@ -37,7 +35,7 @@ fn mode_of(path: &std::path::Path) -> u32 {
 fn a_cache_under_a_private_directory_is_not_writable_by_another_user() {
     #[cfg(not(unix))]
     {
-        decline!("a platform whose directories carry mode bits");
+        fetchloom_faults::decline!("a platform whose directories carry mode bits");
     }
     #[cfg(unix)]
     {
@@ -46,7 +44,7 @@ fn a_cache_under_a_private_directory_is_not_writable_by_another_user() {
         let scratch = tempfile::TempDir::new().unwrap();
         std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let root = scratch.path().join("cache");
-        let held = cache_in(&root);
+        let held = cache_in(scratch.path());
         drop(held);
 
         for directory in [root.clone(), root.join("objects"), root.join("meta")] {
@@ -65,7 +63,7 @@ fn a_cache_under_a_private_directory_is_not_writable_by_another_user() {
 fn a_cache_under_a_directory_every_user_can_write_stays_shared() {
     #[cfg(not(unix))]
     {
-        decline!("a platform whose directories carry mode bits");
+        fetchloom_faults::decline!("a platform whose directories carry mode bits");
     }
     #[cfg(unix)]
     {
@@ -74,7 +72,7 @@ fn a_cache_under_a_directory_every_user_can_write_stays_shared() {
         let scratch = tempfile::TempDir::new().unwrap();
         std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
         let root = scratch.path().join("cache");
-        let held = cache_in(&root);
+        let held = cache_in(scratch.path());
         drop(held);
 
         let mode = mode_of(&root);
@@ -91,7 +89,7 @@ fn a_cache_under_a_directory_every_user_can_write_stays_shared() {
 fn a_record_write_refuses_a_symlink_left_at_the_name_rather_than_writing_through_it() {
     #[cfg(not(unix))]
     {
-        decline!("a platform whose links a write follows");
+        fetchloom_faults::decline!("a platform whose links a write follows");
     }
     #[cfg(unix)]
     {
@@ -119,7 +117,7 @@ fn a_record_write_refuses_a_symlink_left_at_the_name_rather_than_writing_through
 fn a_pin_refuses_a_symlink_left_at_its_name() {
     #[cfg(not(unix))]
     {
-        decline!("a platform whose links a write follows");
+        fetchloom_faults::decline!("a platform whose links a write follows");
     }
     #[cfg(unix)]
     {
@@ -142,8 +140,7 @@ fn a_pin_refuses_a_symlink_left_at_its_name() {
 #[test]
 fn a_cache_hit_on_a_shared_cache_is_not_taken_on_a_fingerprint_alone() {
     let scratch = tempfile::TempDir::new().unwrap();
-    let root = scratch.path().join("cache");
-    let held = cache_in(&root);
+    let held = cache_in(scratch.path());
     let bytes = bytes_of(4096, 7);
     let digest = publish(&held, &bytes);
     held.check_hit(digest)
@@ -159,7 +156,7 @@ fn an_object_another_user_wrote_is_hashed_rather_than_trusted_on_its_fingerprint
     #[cfg(not(unix))]
     {
         let _ = other;
-        decline!("a platform whose directories carry mode bits");
+        fetchloom_faults::decline!("a platform whose directories carry mode bits");
     }
     #[cfg(unix)]
     {
@@ -167,8 +164,7 @@ fn an_object_another_user_wrote_is_hashed_rather_than_trusted_on_its_fingerprint
 
         let scratch = tempfile::TempDir::new().unwrap();
         std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
-        let root = scratch.path().join("cache");
-        let held = support::cache_in(&root);
+        let held = support::cache_in(scratch.path());
         let bytes = bytes_of(4096, 13);
         let digest = publish(&held, &bytes);
         let object = held.placement(digest).unwrap().container().to_path_buf();

@@ -28,7 +28,9 @@ impl<P: Platform> Cache<P> {
                 }
             },
         )?;
-        self.work().touched_file();
+        for _ in 0..fetchloom_engine::atomic::OPERATIONS {
+            self.work().touched_file();
+        }
         Ok(())
     }
 

@@ -70,7 +70,9 @@ pub fn write<T: Serialize>(
         }
         fetchloom_engine::atomic::Site::Final => filesystem_failure(Surface::Cache, path, &reason),
     })?;
-    work.touched_file();
+    for _ in 0..fetchloom_engine::atomic::OPERATIONS {
+        work.touched_file();
+    }
     Ok(())
 }
 

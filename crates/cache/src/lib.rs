@@ -441,9 +441,7 @@ pub(crate) fn sharing_of(root: &Path) -> Sharing {
     use std::os::unix::fs::PermissionsExt;
 
     fn writable_by_others(path: &Path) -> bool {
-        std::fs::symlink_metadata(path)
-            .map(|found| found.permissions().mode() & 0o022 != 0)
-            .unwrap_or(false)
+        std::fs::symlink_metadata(path).is_ok_and(|found| found.permissions().mode() & 0o022 != 0)
     }
 
     if root.is_dir() {
