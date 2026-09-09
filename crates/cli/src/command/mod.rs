@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::pool::Processor;

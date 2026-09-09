@@ -1,11 +1,8 @@
 //! The lane that fetches real archives from real servers.
 //!
-//! This is the one input to `cargo xtask verify` that the repository cannot
-//! reproduce on its own, and it is kept because nothing served by the fault
-//! library proves what a real server, a real certificate chain, and a real
-//! published archive prove. When it cannot reach a host it declines rather than
-//! fails, the summary names it as not verified, and the tally counts neither a
-//! pass nor a failure for it.
+//! The one input the repository cannot reproduce: a real server, a real
+//! certificate chain, a real published archive. A host it cannot reach is a
+//! declination named in the summary, never a pass and never a failure.
 
 use std::path::Path;
 use std::process::Command;

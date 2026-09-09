@@ -18,7 +18,7 @@ use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fetchloom_engine::adapter::{Finding, Fixture, judge};
+use fetchloom_engine::adapter_suite::{Finding, Fixture, judge};
 use fetchloom_engine::credential::Credential;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::limits::Limits;

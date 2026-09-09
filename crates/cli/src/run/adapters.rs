@@ -2,8 +2,8 @@
 
 use super::context::Materialization;
 use fetchloom_cache::Cache;
+use fetchloom_engine::adapters::{Adapters, AnySource};
 use fetchloom_engine::credential::{Credential, Necessity};
-use fetchloom_engine::erased::{Adapters, AnySource};
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::flights::Flights;
 use fetchloom_engine::limits::Limits;

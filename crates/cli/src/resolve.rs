@@ -1,6 +1,6 @@
 //! Turning a reference the user wrote into one this build can fetch.
 
-use fetchloom_engine::erased::Adapters;
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence};
 use fetchloom_engine::redact::SafeUrl;

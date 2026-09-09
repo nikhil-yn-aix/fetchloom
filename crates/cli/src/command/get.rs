@@ -8,7 +8,7 @@ use crate::command::{
 use crate::settings::ProcessEnvironment;
 use crate::surface::CommandLine;
 use crate::{Reporter, locked, run, settings, surface};
-use fetchloom_engine::erased::Adapters;
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::outcome::ExitCode;
 use fetchloom_engine::seam::observer::Observer;

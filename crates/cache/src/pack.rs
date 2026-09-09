@@ -211,15 +211,8 @@ fn body_of(
     }
 }
 
-/// The dictionary a pack states every framed entry in it was compressed
-/// against, empty when the pack states none.
-///
-/// # Errors
-/// `cache.corrupt` when the pack does not open with a preamble this build
-/// reads, or states a dictionary longer than the file holds.
 /// How many bytes the preamble occupies, without checking the dictionary it
-/// holds. Scanning a pack needs to know where its entries start, and an entry
-/// header is readable whether or not the dictionary beside it still is.
+/// holds, because an entry header reads whether or not that dictionary does.
 ///
 /// # Errors
 /// `cache.corrupt` when the pack does not open with a preamble this build

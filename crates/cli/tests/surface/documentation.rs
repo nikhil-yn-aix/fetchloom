@@ -2,8 +2,7 @@
 //! above its Not built section is one this binary actually has, and that no flag
 //! below that section is one it offers.
 //!
-//! Three audits found false sentences in the documentation by hand and each
-//! recorded that nothing enforced the convention. This is the enforcement.
+//! Three audits found false sentences here by hand. This is the enforcement.
 
 #![expect(
     clippy::unwrap_used,

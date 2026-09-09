@@ -279,13 +279,10 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
-    /// A first cold fetch of one source, where a `GET`'s own response headers
-    /// state everything a `HEAD` would have stated a round trip earlier. It is
-    /// taken only where the probe can decide nothing the response cannot: the
-    /// key is the content digest rather than something derived from the
-    /// metadata, no partial is recorded under it, and no measurement of this
-    /// host permits splitting the object across ranges. `None` means the probe
-    /// still has a question to answer and the caller asks it.
+    /// A first cold fetch where the `GET`.s own headers state everything a
+    /// `HEAD` would have. Taken only when the probe can decide nothing the
+    /// response cannot: the key is the digest, no partial is recorded, and no
+    /// measurement permits splitting. `None` means probe first.
     fn fetch_unprobed(
         &self,
         expected: Option<ContentDigest>,

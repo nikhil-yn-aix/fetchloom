@@ -111,12 +111,9 @@ pub fn dictionary_label(dictionary: u32) -> String {
     }
 }
 
-/// Rearranges bytes so that the byte at each position of a stride-sized word
-/// sits beside the same position of every other word. The exponent bytes of a
-/// float array repeat and its mantissa bytes do not, so grouping like
-/// positions is what makes dense numeric data compressible at all.
-///
-/// A stride below two is a copy, because one byte words are already grouped.
+/// Groups the byte at each position of a stride-sized word with the same
+/// position of every other word, which is what makes dense numeric data
+/// compressible. A stride below two is a copy.
 #[must_use]
 pub fn shuffle(bytes: &[u8], stride: u8) -> Vec<u8> {
     let stride = usize::from(stride);

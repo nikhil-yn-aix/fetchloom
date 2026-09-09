@@ -15,7 +15,7 @@ use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::bomb::BombGuard;
 use crate::path::{claim_member_path, validate_link_target, validate_member_path};
-use crate::shared::SharedSource;
+use crate::shared_source::SharedSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TarCompression {

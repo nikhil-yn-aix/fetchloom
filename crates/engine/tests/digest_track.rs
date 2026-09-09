@@ -20,7 +20,6 @@ use std::io::Cursor;
 use std::num::NonZeroUsize;
 
 use fetchloom_engine::canonical::{manifest_digest, tree_digest};
-use fetchloom_engine::conformance::{declared_failures, portable_core};
 use fetchloom_engine::digest::ContentDigest;
 use fetchloom_engine::error::ErrorKind;
 use fetchloom_engine::hashing::Digester;
@@ -30,6 +29,7 @@ use fetchloom_engine::outboard::{find_damage, tree_of};
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::threads::ThreadBudget;
 use fetchloom_engine::tree::{EntryPath, Mode, TreeEntry};
+use fetchloom_engine::tree_corpus::{declared_failures, portable_core};
 
 fn processor() -> Processor {
     let budget = ThreadBudget::resolve(NonZeroUsize::new(4).unwrap(), None);

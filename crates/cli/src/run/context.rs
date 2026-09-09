@@ -2,9 +2,9 @@
 
 use super::adapters::Tuning;
 use fetchloom_cache::Cache;
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::digest::{ContentDigest, TreeDigest};
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::outcome::RunStatus;
 use fetchloom_engine::pool::Processor;
 use fetchloom_engine::redact::SafeUrl;

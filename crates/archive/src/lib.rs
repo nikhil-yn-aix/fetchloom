@@ -14,7 +14,7 @@ mod path;
 mod reader;
 mod recognize;
 mod resolve;
-mod shared;
+mod shared_source;
 mod tar_reader;
 mod zip_reader;
 

@@ -12,7 +12,7 @@ use zip::CompressionMethod;
 
 use crate::bomb::BombGuard;
 use crate::path::{claim_member_path, validate_link_target, validate_member_path};
-use crate::shared::SharedSource;
+use crate::shared_source::SharedSource;
 
 const METHOD_STORE: u16 = 0;
 const METHOD_DEFLATE: u16 = 8;

@@ -11,10 +11,10 @@
 use fetchloom_cache::Cache;
 use fetchloom_cli::cache as cache_cli;
 use fetchloom_cli::run::{self, Materialization};
+use fetchloom_engine::adapters::{Adapters, AnySource};
 use fetchloom_engine::credential::Credential;
 use fetchloom_engine::degrade::Degradation;
 use fetchloom_engine::durability::DurabilityTier;
-use fetchloom_engine::erased::{Adapters, AnySource};
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::Sequence;
 use fetchloom_engine::hashing::hash_bytes;

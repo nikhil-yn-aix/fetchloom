@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use fetchloom_cache::Cache;
-use fetchloom_engine::erased::Adapters;
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::error::Error;
 use fetchloom_engine::trust::{ArtifactKey, TrustClass};
 use fetchloom_platform::NativePlatform;

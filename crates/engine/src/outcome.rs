@@ -1,4 +1,5 @@
-//! Process exit codes and the layer each one reports.
+//! What a run ended as: the four statuses a result may state, the exit codes
+//! the process may return, and the layer each code reports.
 
 use crate::error::Layer;
 

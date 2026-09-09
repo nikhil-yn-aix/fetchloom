@@ -1,10 +1,8 @@
 //! The live view, which is a consumer of the event stream and has no other
 //! input.
 //!
-//! This crate depends on the engine's event types and on nothing else, which is
-//! what makes the contract mechanical rather than a claim: it cannot reach a
-//! filesystem, a network, a cache, or a run, because none of them is reachable
-//! from here.
+//! It depends on the engine.s event types and nothing else, so the contract is
+//! mechanical: no filesystem, network, cache or run is reachable from here.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

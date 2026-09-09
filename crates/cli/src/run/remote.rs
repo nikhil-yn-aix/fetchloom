@@ -242,7 +242,7 @@ pub(crate) fn fetch_into_cache(
 
 pub(super) fn transfer_object(
     with: &Materialization<'_>,
-    source: &fetchloom_engine::erased::Adapters,
+    source: &fetchloom_engine::adapters::Adapters,
     flights: &Flights<'_>,
     locations: &[String],
     expected: Option<ContentDigest>,

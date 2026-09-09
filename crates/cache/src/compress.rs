@@ -154,14 +154,10 @@ fn malformed(at: &Path, what: &str) -> Error {
     )
 }
 
-/// Reads an object from `source` and writes it to `into` as frames of exactly
-/// [`COMPRESSION_FRAME_BYTES`] of input each, followed by the table of their
-/// compressed lengths, so a later read decompresses only the frames covering
-/// the range it asked for.
-///
-/// `dictionary` is the trained dictionary every frame is compressed against, or
-/// `None`. Its identifier is the one zstd wrote into its header, which zstd
-/// also writes into every frame and checks on the way back.
+/// Writes `source` as frames of exactly [`COMPRESSION_FRAME_BYTES`] of input
+/// each, then the table of their compressed lengths, so a read decompresses
+/// only the frames covering its range. `dictionary` is what every frame is
+/// compressed against, or `None`.
 ///
 /// # Errors
 /// `cache.corrupt` when the bytes cannot be read or written, and

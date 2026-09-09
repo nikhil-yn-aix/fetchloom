@@ -13,7 +13,7 @@ use lzma_rust2::XzReader;
 use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::bomb::BombGuard;
-use crate::shared::SharedSource;
+use crate::shared_source::SharedSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BareCompression {

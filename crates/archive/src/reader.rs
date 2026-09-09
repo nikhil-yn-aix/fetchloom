@@ -10,7 +10,7 @@ use fetchloom_engine::manifest::ArchiveFormat;
 use fetchloom_engine::seam::archive::{Archive, ArchiveMember};
 
 use crate::bare::{self, BareCompression};
-use crate::shared::SharedSource;
+use crate::shared_source::SharedSource;
 use crate::tar_reader::{self, TarCompression, TarOffset, TarStream};
 use crate::zip_reader::{self, ZipOffset};
 

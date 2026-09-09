@@ -23,7 +23,7 @@ use crate::{Reporter, run, settings, surface};
 pub(crate) struct Held<'a> {
     pub(crate) opened: Opened,
     pub(crate) work: Arc<WorkCounter>,
-    pub(crate) adapters: fetchloom_engine::erased::Adapters,
+    pub(crate) adapters: fetchloom_engine::adapters::Adapters,
     pub(crate) policy: crate::policy::CommandLinePolicy<'a>,
     pub(crate) destination: PathBuf,
 }
