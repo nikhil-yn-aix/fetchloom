@@ -7,13 +7,9 @@ use crate::plan::PlanDisk;
 
 /// Every volume a run needs room on, with what it needs there.
 ///
-/// Requirements that land on one volume are summed, because the volume answers
-/// once for all of them. The partial and the object it becomes are the
-/// exception: publication is a rename rather than a copy, so on one volume they
-/// are the same bytes twice and the larger of the two is what has to fit.
-///
-/// A requirement no one stated a size for is not a requirement, because a
-/// length nobody stated is not a length.
+/// Requirements sharing a volume are summed. The exception is the partial and
+/// the object it becomes: publication is a rename, so the larger of the two has
+/// to fit rather than their sum. A requirement no one sized is not one.
 #[must_use]
 pub fn needed_per_volume(disk: &PlanDisk) -> BTreeMap<String, u64> {
     let mut needed: BTreeMap<String, u64> = BTreeMap::new();
@@ -45,9 +41,8 @@ pub fn needed_per_volume(disk: &PlanDisk) -> BTreeMap<String, u64> {
 }
 
 /// Refuses a run whose volumes cannot hold what it needs, before it begins.
-///
-/// `available` answers with the free bytes of a volume, or `None` where this
-/// build cannot ask, which is not a refusal.
+/// `available` gives the free bytes of a volume, or `None` where this build cannot
+/// ask, which is not a refusal.
 ///
 /// # Errors
 /// `resource.disk` naming the volume, what the run needs there, and what it

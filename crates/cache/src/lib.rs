@@ -168,9 +168,9 @@ impl<P: Platform> Cache<P> {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Pushes this run.s pack once for every entry appended since the last
+    /// Pushes this run's pack once for every entry appended since the last
     /// push. `strict` already pushed each entry and `fast` pushes nothing, so
-    /// this is `normal`.s whole durability and belongs before anything durable
+    /// this is `normal`'s whole durability and belongs before anything durable
     /// names what the pack holds.
     ///
     /// # Errors

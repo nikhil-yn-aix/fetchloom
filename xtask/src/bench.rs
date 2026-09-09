@@ -21,10 +21,10 @@ use serde::{Deserialize, Serialize};
 
 pub const REGRESSION_GATE: f64 = 0.05;
 
-/// How far a bounded metric may rise above its own target.s baseline. Peak
+/// How far a bounded metric may rise above the baseline of its own target. Peak
 /// memory holds within 2.8 percent across runs on one runner and differs 44
 /// percent between targets, and a fall is never a regression, so the band is
-/// wider than a counter.s and one sided.
+/// wider than a counter's and one sided.
 pub const BOUND_GATE: f64 = 0.10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

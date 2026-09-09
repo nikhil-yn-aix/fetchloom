@@ -279,7 +279,7 @@ impl<S: Source + Sync, T: Store + Sync, P: Pause> Transfer<'_, S, T, P> {
         })
     }
 
-    /// A first cold fetch where the `GET`.s own headers state everything a
+    /// A first cold fetch where the `GET`'s own headers state everything a
     /// `HEAD` would have. Taken only when the probe can decide nothing the
     /// response cannot: the key is the digest, no partial is recorded, and no
     /// measurement permits splitting. `None` means probe first.

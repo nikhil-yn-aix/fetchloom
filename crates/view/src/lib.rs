@@ -1,7 +1,7 @@
 //! The live view, which is a consumer of the event stream and has no other
 //! input.
 //!
-//! It depends on the engine.s event types and nothing else, so the contract is
+//! It depends on the engine's event types and nothing else, so the contract is
 //! mechanical: no filesystem, network, cache or run is reachable from here.
 
 use std::collections::BTreeMap;

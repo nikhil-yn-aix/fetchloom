@@ -21,9 +21,8 @@ fn volume_of(path: &Path) -> String {
     }
 }
 
-/// What the manifest states this run will bring down, counting only the
-/// artifacts it states a size for and only those the cache does not already
-/// hold. An artifact nobody sized is not counted, and a cache hit moves nothing.
+/// What this run will bring down: the artifacts the manifest sizes, minus the
+/// ones the cache already holds.
 fn bytes_to_fetch(manifest: &Manifest, cache: Option<&Cache<NativePlatform>>) -> u64 {
     manifest
         .artifacts
@@ -40,8 +39,7 @@ fn bytes_to_fetch(manifest: &Manifest, cache: Option<&Cache<NativePlatform>>) ->
         .sum()
 }
 
-/// Refuses a run whose volumes cannot hold what it is about to fetch, before it
-/// fetches any of it.
+/// Refuses a run whose volumes cannot hold what it is about to fetch.
 ///
 /// # Errors
 /// `resource.disk` naming the volume, what the run needs there, and what it
