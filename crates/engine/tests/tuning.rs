@@ -392,7 +392,7 @@ fn writes_shorter_than_one_window_are_gathered_rather_than_judged_one_at_a_time(
     );
 }
 
-const A_WINDOW: u64 = fetchloom_engine::tuning::WINDOW_BYTES;
+const A_WINDOW: u64 = fetchloom_engine::tuning::RATE_WINDOW_BYTES;
 
 #[test]
 fn a_count_that_did_not_deliver_more_is_given_up_and_never_reached_again() {

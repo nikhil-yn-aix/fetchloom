@@ -75,48 +75,80 @@ pub(crate) fn limits_for(settings: &Settings) -> Limits {
     }
 }
 
-#[must_use]
-pub fn default_cache_dir(environment: &dyn Environment) -> PathBuf {
+/// # Errors
+/// `Refused` naming what to set when no per-user directory can be found.
+pub fn default_cache_dir(environment: &dyn Environment) -> Result<PathBuf, Refused> {
     #[cfg(windows)]
     {
-        if let Some(local) = environment.get("LOCALAPPDATA") {
-            return PathBuf::from(local).join("Fetchloom").join("Cache");
+        if let Some(local) = absolute_from(environment, "LOCALAPPDATA") {
+            return Ok(local.join("Fetchloom").join("Cache"));
         }
     }
     #[cfg(unix)]
     {
-        if let Some(base) = environment.get("XDG_CACHE_HOME") {
-            return PathBuf::from(base).join("fetchloom");
+        if let Some(base) = absolute_from(environment, "XDG_CACHE_HOME") {
+            return Ok(base.join("fetchloom"));
         }
-        if let Some(home) = environment.get("HOME") {
-            return PathBuf::from(home).join(".cache").join("fetchloom");
+        if let Some(home) = absolute_from(environment, "HOME") {
+            return Ok(home.join(".cache").join("fetchloom"));
         }
     }
-    PathBuf::from(".fetchloom-cache")
+    Err(no_home("cache", CACHE_VARIABLES))
 }
 
-#[must_use]
-pub fn default_library_dir(environment: &dyn Environment) -> PathBuf {
+/// # Errors
+/// `Refused` naming what to set when no per-user directory can be found.
+pub fn default_library_dir(environment: &dyn Environment) -> Result<PathBuf, Refused> {
     #[cfg(windows)]
     {
-        if let Some(local) = environment.get("LOCALAPPDATA") {
-            return PathBuf::from(local).join("Fetchloom").join("Library");
+        if let Some(local) = absolute_from(environment, "LOCALAPPDATA") {
+            return Ok(local.join("Fetchloom").join("Library"));
         }
     }
     #[cfg(unix)]
     {
-        if let Some(base) = environment.get("XDG_DATA_HOME") {
-            return PathBuf::from(base).join("fetchloom").join("library");
+        if let Some(base) = absolute_from(environment, "XDG_DATA_HOME") {
+            return Ok(base.join("fetchloom").join("library"));
         }
-        if let Some(home) = environment.get("HOME") {
-            return PathBuf::from(home)
+        if let Some(home) = absolute_from(environment, "HOME") {
+            return Ok(home
                 .join(".local")
                 .join("share")
                 .join("fetchloom")
-                .join("library");
+                .join("library"));
         }
     }
-    PathBuf::from(".fetchloom-library")
+    Err(no_home("library", LIBRARY_VARIABLES))
+}
+
+#[cfg(windows)]
+const CACHE_VARIABLES: &str = "LOCALAPPDATA";
+
+#[cfg(unix)]
+const CACHE_VARIABLES: &str = "HOME or XDG_CACHE_HOME";
+
+#[cfg(windows)]
+const LIBRARY_VARIABLES: &str = "LOCALAPPDATA";
+
+#[cfg(unix)]
+const LIBRARY_VARIABLES: &str = "HOME or XDG_DATA_HOME";
+
+/// The base directory specification says a relative value is invalid and must
+/// be ignored, and a cache in whatever directory the person was standing in is
+/// what honoring one would produce.
+fn absolute_from(environment: &dyn Environment, name: &str) -> Option<PathBuf> {
+    let stated = PathBuf::from(environment.get(name)?);
+    stated.is_absolute().then_some(stated)
+}
+
+fn no_home(what: &str, variables: &str) -> Refused {
+    Refused {
+        key: format!("{what} directory"),
+        origin: Origin::Default,
+        next_action: format!(
+            "set {variables} to an absolute path, or name the {what} directory with a flag, because neither is set to one and a run does not put a {what} in whatever directory it was started from"
+        ),
+    }
 }
 
 fn project_cache_dir(loaded: &crate::config::LoadedConfig) -> Option<PathBuf> {
@@ -313,10 +345,10 @@ pub fn resolve_all(
     {
         Sourced::new(named, Origin::UserConfig)
     } else {
-        Sourced::new(default_cache_dir(environment), Origin::Default)
+        Sourced::new(default_cache_dir(environment)?, Origin::Default)
     };
 
-    let library_dir = resolve_library_dir(flags, discovered, environment);
+    let library_dir = resolve_library_dir(flags, discovered, environment)?;
 
     let (log, log_clamped) = resolve_log(flags, &levels, environment)?;
     let defaults = Limits::default();
@@ -553,22 +585,25 @@ fn resolve_library_dir(
     flags: &GlobalFlags,
     discovered: &Discovered,
     environment: &dyn Environment,
-) -> Sourced<PathBuf> {
+) -> Result<Sourced<PathBuf>, Refused> {
     if let Some(named) = flags.library_dir.clone() {
-        return Sourced::new(named, Origin::CommandLine);
+        return Ok(Sourced::new(named, Origin::CommandLine));
     }
     if let Some(named) = environment.get("FETCHLOOM_LIBRARY_DIR") {
-        return Sourced::new(PathBuf::from(named), Origin::Environment);
+        return Ok(Sourced::new(PathBuf::from(named), Origin::Environment));
     }
     if let Some(named) = discovered.project.as_ref().and_then(project_library_dir) {
-        return Sourced::new(named, Origin::ProjectConfig);
+        return Ok(Sourced::new(named, Origin::ProjectConfig));
     }
     if let Some(named) = discovered
         .user
         .as_ref()
         .and_then(|loaded| loaded.values.library.as_ref()?.dir.clone())
     {
-        return Sourced::new(named, Origin::UserConfig);
+        return Ok(Sourced::new(named, Origin::UserConfig));
     }
-    Sourced::new(default_library_dir(environment), Origin::Default)
+    Ok(Sourced::new(
+        default_library_dir(environment)?,
+        Origin::Default,
+    ))
 }

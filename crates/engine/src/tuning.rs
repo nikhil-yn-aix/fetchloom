@@ -153,7 +153,7 @@ impl Controller {
     }
 
     fn rate(&self) -> Option<u64> {
-        (self.bytes >= WINDOW_BYTES && self.nanos > 0)
+        (self.bytes >= RATE_WINDOW_BYTES && self.nanos > 0)
             .then(|| self.bytes.saturating_mul(1_000_000_000) / self.nanos)
     }
 
@@ -205,7 +205,7 @@ const COLLAPSE_FRACTION: u64 = 4;
 
 pub const SUSTAINED_WINDOWS: usize = 8;
 
-pub const WINDOW_BYTES: u64 = 1 << 20;
+pub const RATE_WINDOW_BYTES: u64 = 1 << 20;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WriteRate {
@@ -222,7 +222,7 @@ impl WriteRate {
         self.pending_nanos = self
             .pending_nanos
             .saturating_add(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX));
-        if self.pending_bytes < WINDOW_BYTES || self.pending_nanos == 0 {
+        if self.pending_bytes < RATE_WINDOW_BYTES || self.pending_nanos == 0 {
             return false;
         }
         let rate = self.pending_bytes.saturating_mul(1_000_000_000) / self.pending_nanos;

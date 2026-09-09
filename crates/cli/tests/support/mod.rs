@@ -20,11 +20,35 @@ use fetchloom_engine::seam::policy::{IoMode, Policy};
 use fetchloom_engine::trust::TrustClass;
 use fetchloom_engine::verification::VerificationPolicy;
 
-#[derive(Default)]
 pub struct FakeEnvironment(HashMap<String, String>);
 
+impl Default for FakeEnvironment {
+    fn default() -> Self {
+        Self(
+            [
+                ("HOME", "/home/person"),
+                ("LOCALAPPDATA", r"C:\Users\person\AppData\Local"),
+                ("APPDATA", r"C:\Users\person\AppData\Roaming"),
+            ]
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        )
+    }
+}
+
 impl FakeEnvironment {
+    /// What every machine has, plus what this test names. A machine with no
+    /// home directory at all is `only`.
     pub fn with(pairs: &[(&str, &str)]) -> Self {
+        let mut held = Self::default();
+        for (name, value) in pairs {
+            held.0.insert((*name).to_owned(), (*value).to_owned());
+        }
+        held
+    }
+
+    pub fn only(pairs: &[(&str, &str)]) -> Self {
         Self(
             pairs
                 .iter()

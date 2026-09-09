@@ -6,7 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use fetchloom_engine::credential::Credential;
 use fetchloom_engine::seam::source::{ByteRange, Source};
 
-pub(crate) const WINDOW_BYTES: u64 = 1 << 16;
+pub(crate) const RANGE_WINDOW_BYTES: u64 = 1 << 16;
 
 pub(crate) struct RangedReader<S: Source> {
     source: S,
@@ -47,8 +47,8 @@ impl<S: Source> RangedReader<S> {
 
     fn fill(&mut self, at: u64, wanted: usize) -> std::io::Result<()> {
         let span = u64::try_from(wanted)
-            .unwrap_or(WINDOW_BYTES)
-            .max(WINDOW_BYTES);
+            .unwrap_or(RANGE_WINDOW_BYTES)
+            .max(RANGE_WINDOW_BYTES);
         let end = at.saturating_add(span).min(self.length);
         if end <= at {
             self.window.clear();

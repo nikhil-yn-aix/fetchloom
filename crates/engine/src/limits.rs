@@ -9,6 +9,8 @@ pub const OUTBOARD_CHUNK_GROUP: u64 = 1_048_576;
 
 pub const OUTBOARD_THRESHOLD: u64 = 67_108_864;
 
+pub const CREDENTIAL_OFFER_THRESHOLD: Duration = Duration::from_secs(120);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     pub archive_entries: u64,
@@ -53,7 +55,7 @@ impl Default for Limits {
             listing_entries: 500_000,
             listing_bytes: 16_777_216,
             probed_candidates: 4,
-            credential_offer_threshold: Duration::from_secs(120),
+            credential_offer_threshold: CREDENTIAL_OFFER_THRESHOLD,
             connections_per_host: 4,
             connect_timeout: Duration::from_secs(10),
             response_timeout: Duration::from_secs(30),

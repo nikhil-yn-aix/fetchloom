@@ -303,7 +303,7 @@ fn the_configuration_location_is_not_the_cache_location() {
         ("APPDATA", "C:\\Users\\person\\AppData\\Roaming"),
         ("LOCALAPPDATA", "C:\\Users\\person\\AppData\\Local"),
     ]);
-    let cache = fetchloom_cli::settings::default_cache_dir(&environment);
+    let cache = fetchloom_cli::settings::default_cache_dir(&environment).unwrap();
     let configuration = config::user_config_directory().unwrap_or_else(|| PathBuf::from("unset"));
     assert_ne!(cache, configuration);
 }
@@ -433,4 +433,37 @@ fn explain_reports_compress_and_the_level_that_supplied_it() {
         .expect("explain does not report compress at all");
     assert_eq!(row.value, "zstd:3");
     assert_eq!(row.origin, Origin::UserConfig.to_string());
+}
+
+#[test]
+fn a_machine_with_no_home_directory_is_refused_by_name_rather_than_given_the_working_directory() {
+    let environment = crate::support::FakeEnvironment::only(&[]);
+    let refused = fetchloom_cli::settings::default_cache_dir(&environment).unwrap_err();
+    assert_eq!(refused.key, "cache directory");
+    assert!(
+        refused.next_action.contains("absolute"),
+        "the refusal does not say what to set: {}",
+        refused.next_action
+    );
+    let refused = fetchloom_cli::settings::default_library_dir(&environment).unwrap_err();
+    assert_eq!(refused.key, "library directory");
+}
+
+#[test]
+fn a_relative_base_directory_variable_is_ignored_rather_than_honored() {
+    let environment = crate::support::FakeEnvironment::with(&[
+        ("XDG_CACHE_HOME", "relative/cache"),
+        ("HOME", "/home/person"),
+    ]);
+    let cache = fetchloom_cli::settings::default_cache_dir(&environment).unwrap();
+    assert!(
+        cache.is_absolute(),
+        "a relative XDG_CACHE_HOME was honored: {}",
+        cache.display()
+    );
+    assert!(
+        !cache.starts_with("relative"),
+        "a relative XDG_CACHE_HOME was honored: {}",
+        cache.display()
+    );
 }
