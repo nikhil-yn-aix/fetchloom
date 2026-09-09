@@ -229,6 +229,15 @@ the tier is the cargo test target rather than the file, because a target is what
 cargo can be told to run. a cheap file inside an expensive target inherits that
 target's tier.
 
+every test run passes `--no-fail-fast`, because cargo otherwise stops after the
+first failing binary and says nothing about the ones after it. the runner also
+prints how many test binaries ran against how many it asked for, and fails the
+step when the two differ whatever the exit code said, because a run that is not
+the whole suite is not a result. the count comes from `cargo metadata`, and cargo
+applies a `--test` filter to every package it has selected rather than to the
+`-p` before it, so a target name two packages share runs in both and is counted
+in both.
+
 ```
 cargo xtask bench              measure
 cargo xtask bench --compare    fail on a regression outside the band

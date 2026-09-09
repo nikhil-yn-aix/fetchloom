@@ -14202,3 +14202,54 @@ withdrawn. This record exists so a later session finds the answer rather than th
 idea.
 
 Sources: `docs/decisions.md`.
+
+## What the census found on its first run
+
+Question: what a count of test binaries revealed once the runner started printing
+one.
+
+The integration tier ran twenty four binaries where the registry named twenty
+three, and the extra one was not an accident of parsing. `cargo` applies a
+`--test` filter to every package it has selected rather than to the `-p` that
+precedes it on the command line. The tier runner writes one `-p` per package
+followed by that package's targets, so a target name two packages share is run in
+both. Three names are shared across this workspace, `witness`, `http` and
+`credentials`, and the second copy of each has been running in whichever tier
+asked for the first, uncounted, for as long as the tier runner has existed.
+
+Nothing was missing, which is the direction that is safe: a tier ran more than it
+claimed rather than less. The registry test that every target is in exactly one
+tier still holds, because it reads the registry rather than the invocation, and a
+target running in a tier it was not registered for costs time rather than
+coverage.
+
+Decision: derive the expected count the way cargo picks targets, from
+`cargo metadata`: the test targets of the selected packages whose names are among
+those asked for. The alternative, giving each package its own `cargo test`
+invocation so the filters cannot leak, turns one process per tier into one per
+package and makes the tier's wall time the sum of eight cold starts. The count is
+the cheaper fix and the leak is now written down.
+
+Sources: `xtask/src/verify.rs`, `test_targets`, `tier_step`.
+
+## Two things the release session inherits, written here so they are not rediscovered
+
+Question: what this session found that belongs to the release and must not be lost
+between them.
+
+The notice file has to travel with the binary. `THIRD-PARTY-NOTICES.md` is
+generated and checked, but the attribution obligation attaches to distributing the
+binary, not to publishing the repository. A release archive holding only
+`fetchloom.exe` is the breach the file was written to prevent, so the archive must
+carry `THIRD-PARTY-NOTICES.md` and `LICENSE` beside the binary, and the release
+workflow is where that is enforced rather than here.
+
+There is no `fetchloom rm` for a fetched directory. Files land read-only, so
+deleting one by hand means clearing the read-only bit across the tree first, which
+on Windows is `attrib -R /S` and then `Remove-Item -Force`. `library rm` exists and
+covers library entries only. The judgment recorded here is to ship without it:
+adding a command after 0.1.0 is cheap, and adding unaudited command surface three
+days after a security audit is not. It is the first rough edge a new person meets,
+so it is a decision to take deliberately at release rather than by omission.
+
+Sources: `xtask/src/notices.rs`; `crates/cli/src/command/library.rs`.
