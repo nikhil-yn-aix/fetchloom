@@ -124,6 +124,9 @@ impl<P: Platform> Cache<P> {
         if self.is_packed(digest) {
             return self.check_bytes(digest);
         }
+        if self.is_shared() && !self.owns_object(digest)? {
+            return self.check_bytes(digest);
+        }
         let recorded: ObjectRecord =
             record::read(&self.object_record(digest))?.ok_or_else(|| {
                 Error::new(
@@ -481,7 +484,7 @@ impl<P: Platform> Cache<P> {
             ));
         }
         let path = self.layout.pin_of(digest);
-        let written = std::fs::write(&path, [])
+        let written = fetchloom_engine::atomic::touch(&path)
             .map_err(|reason| filesystem_failure(Surface::Cache, path.as_path(), &reason));
         if written.is_ok() {
             self.work.touched_file();

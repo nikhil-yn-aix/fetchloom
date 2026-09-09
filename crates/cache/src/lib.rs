@@ -52,6 +52,9 @@ use crate::layout::{DIRECTORIES, Layout};
 const SHARED_DIRECTORY_MODE: u32 = 0o1777;
 
 #[cfg(unix)]
+const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+
+#[cfg(unix)]
 const PUBLISHED_OBJECT_MODE: u32 = 0o444;
 
 /// A pack holds objects and is appended to, so it carries what contracts.md
@@ -87,6 +90,7 @@ pub struct Cache<P: Platform> {
     appending: std::sync::Mutex<()>,
     packed: std::sync::Mutex<Option<Arc<crate::pack::Index>>>,
     unflushed_pack: std::sync::atomic::AtomicBool,
+    sharing: Sharing,
 }
 
 /// What a record naming the process behind every scratch file it wrote is
@@ -116,6 +120,7 @@ impl<P: Platform> Cache<P> {
             compression,
         } = settings;
         let layout = Layout::new(root.as_ref());
+        let layout_root = layout.root().to_path_buf();
         create_directories(&layout, &work)?;
         check_format(&layout, &work)?;
         check_one_volume(&platform, &layout)?;
@@ -158,6 +163,7 @@ impl<P: Platform> Cache<P> {
             appending: std::sync::Mutex::new(()),
             packed: std::sync::Mutex::new(None),
             unflushed_pack: std::sync::atomic::AtomicBool::new(false),
+            sharing: sharing_of(layout_root.as_path()),
         };
         cache.recover()?;
         Ok(cache)
@@ -264,9 +270,13 @@ impl<P: Platform> Cache<P> {
         }
         sweep_previous_boot(&self.layout.partial(), &self.token)?;
         sweep_previous_boot(&self.layout.staging(), &self.token)?;
-        std::fs::write(self.layout.recovered(), self.token.boot.as_str().as_bytes()).map_err(
-            |reason| filesystem_failure(Surface::Cache, &self.layout.recovered(), &reason),
-        )?;
+        fetchloom_engine::atomic::replace(
+            &self.layout.recovered(),
+            self.token.boot.as_str().as_bytes(),
+        )
+        .map_err(|(_, reason)| {
+            filesystem_failure(Surface::Cache, &self.layout.recovered(), &reason)
+        })?;
         self.work.touched_file();
         Ok(())
     }
@@ -398,6 +408,7 @@ fn remove(path: &Path) -> Result<(), Error> {
 }
 
 fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
+    let sharing = sharing_of(layout.root());
     let mut wanted = vec![layout.root().to_path_buf()];
     for name in DIRECTORIES {
         wanted.push(layout.root().join(name));
@@ -414,20 +425,54 @@ fn create_directories(layout: &Layout, work: &WorkCounter) -> Result<(), Error> 
         if absent {
             work.touched_file();
         }
-        share_directory(&directory)?;
+        share_directory(&directory, sharing)?;
     }
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sharing {
+    Shared,
+    Private,
+}
+
 #[cfg(unix)]
-fn share_directory(directory: &Path) -> Result<(), Error> {
+pub(crate) fn sharing_of(root: &Path) -> Sharing {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(
-        directory,
-        std::fs::Permissions::from_mode(SHARED_DIRECTORY_MODE),
-    )
-    .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))
+    fn writable_by_others(path: &Path) -> bool {
+        std::fs::symlink_metadata(path)
+            .map(|found| found.permissions().mode() & 0o022 != 0)
+            .unwrap_or(false)
+    }
+
+    if root.is_dir() {
+        if writable_by_others(root) {
+            return Sharing::Shared;
+        }
+        return Sharing::Private;
+    }
+    match root.parent() {
+        Some(parent) if writable_by_others(parent) => Sharing::Shared,
+        _ => Sharing::Private,
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn sharing_of(_root: &Path) -> Sharing {
+    Sharing::Private
+}
+
+#[cfg(unix)]
+fn share_directory(directory: &Path, sharing: Sharing) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = match sharing {
+        Sharing::Shared => SHARED_DIRECTORY_MODE,
+        Sharing::Private => PRIVATE_DIRECTORY_MODE,
+    };
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode))
+        .map_err(|reason| filesystem_failure(Surface::Cache, directory, &reason))
 }
 
 #[cfg(windows)]
@@ -435,7 +480,7 @@ fn share_directory(directory: &Path) -> Result<(), Error> {
     clippy::unnecessary_wraps,
     reason = "the Unix form of this call fails, and one signature keeps the caller written once"
 )]
-fn share_directory(_directory: &Path) -> Result<(), Error> {
+fn share_directory(_directory: &Path, _sharing: Sharing) -> Result<(), Error> {
     Ok(())
 }
 
@@ -485,13 +530,16 @@ fn check_format(layout: &Layout, work: &WorkCounter) -> Result<(), Error> {
             ),
         )),
         Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {
-            let beside = layout
-                .format()
-                .with_extension(std::process::id().to_string());
-            std::fs::write(&beside, ours)
-                .map_err(|why| filesystem_failure(Surface::Cache, &beside, &why))?;
-            std::fs::rename(&beside, layout.format())
-                .map_err(|why| filesystem_failure(Surface::Cache, &layout.format(), &why))?;
+            fetchloom_engine::atomic::replace(&layout.format(), ours.as_bytes()).map_err(
+                |(site, why)| match site {
+                    fetchloom_engine::atomic::Site::Scratch(beside) => {
+                        filesystem_failure(Surface::Cache, &beside, &why)
+                    }
+                    fetchloom_engine::atomic::Site::Final => {
+                        filesystem_failure(Surface::Cache, &layout.format(), &why)
+                    }
+                },
+            )?;
             work.touched_file();
             Ok(())
         }
@@ -537,4 +585,10 @@ fn check_locking<P: Platform>(platform: &P, layout: &Layout) -> Result<(), Error
     drop(held);
     let _ = std::fs::remove_file(&probe);
     Ok(())
+}
+
+impl<P: Platform> Cache<P> {
+    pub(crate) fn is_shared(&self) -> bool {
+        self.sharing == Sharing::Shared
+    }
 }
