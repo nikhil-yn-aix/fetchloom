@@ -104,7 +104,7 @@ The library is one directory holding materialized datasets, separate from the ca
 
 An entry's path is `<library>/<sanitized name>/<identity>`. The identity is derived from what the reference resolved to and from nothing about this machine: the manifest digest, the release, and the selection, folded under a key of their own so a value from one domain can never be mistaken for another. `where <ref>` therefore answers without an index to consult, two versions of one dataset coexist, and two runs of one reference land in one place.
 
-A name is a convenience component and is sanitized deterministically: every byte outside letters, digits, `-`, `_` and `.` becomes `_`, trailing dots and spaces are dropped, an empty result becomes `dataset`, and a name whose stem is a Windows device is prefixed with `_`. Two names that sanitize identically stay separate, because the identity component differs.
+A name is a convenience component and is sanitized deterministically: every character outside ASCII letters, digits, `-`, `_` and `.` becomes one `_`, trailing dots and spaces are dropped, an empty result becomes `dataset`, and a name whose stem is a Windows device is prefixed with `_`. Two names that sanitize identically stay separate, because the identity component differs.
 
 A library file is never a hard link to a cache object. It is a copy-on-write clone where the volume offers one and a plain copy where it does not, with a `degrade` naming the refusal. One in-place edit through a hard link would corrupt the content addressed store for every dataset sharing that object.
 
@@ -282,7 +282,7 @@ An object lives in one of two placements decided by its size alone, and exactly 
 
 Compression is a storage decision. It changes what is on disk and never what anything hashes to, so no digest, lock, receipt, plan or bundle manifest differs because of it.
 
-`--compress` decides what is written. `none` stores every object raw. `zstd:n` stores every object at that level. `auto`, the default, decides per object by compressing its first 1 MiB at level 1, both as it stands and byte shuffled at stride 4, and storing the object raw when neither measurement reaches 1.10. The decision comes from the bytes and never from a file name, an extension or a media type, and the shuffle is taken only when it measured better than not shuffling on that object's own head.
+`--compress` decides what is written. `none` stores every object raw. `zstd:n` stores every object at that level. `auto`, the default, decides per object by compressing its first 1 MiB at level 1 once as it stands and once byte shuffled at each of the strides the limits name, and storing the object raw when the best of those measurements does not reach 1.10. The decision comes from the bytes and never from a file name, an extension or a media type, and the shuffle is taken only when it measured better than not shuffling on that object's own head.
 
 A compressed object is written as zstd frames of exactly one outboard chunk group of input each, the last one short, followed by the table of their compressed lengths. A range is read by decompressing only the frames covering it, which is why the frame size is the chunk group rather than a number of its own: a ranged verify or a localized repair pays for the bytes it asked for and no others.
 
@@ -736,7 +736,9 @@ Both digests a manifest states are compared to the bytes, `blake3` to the conten
 
 ## Disk accounting
 
-Four requirements computed separately: partial transfer bytes, cache object bytes, extraction staging bytes, destination bytes. Each attributed to its volume, requirements on a shared volume summed and checked against that volume. Insufficient space fails before transfer begins.
+Four requirements computed separately: partial transfer bytes, cache object bytes, extraction staging bytes, destination bytes. Each attributed to its volume, requirements on a shared volume summed and checked against that volume. Insufficient space fails with `resource.disk` before transfer begins, naming the volume, what the run needs there and what is left.
+
+The partial and the object it becomes are one requirement where they share a volume, because publication is a rename rather than a copy, so the larger of the two is what has to fit rather than their sum. A requirement no one stated a size for is not counted, because a length nobody stated is not a length, and a volume this build cannot ask about is not a refusal. An artifact the cache already holds is not fetched and is not counted.
 
 ## The surface is not a placeholder
 

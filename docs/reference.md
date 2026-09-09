@@ -74,7 +74,7 @@ The whole table is read and checked before the first dataset is fetched. Two ent
 
 One directory holding materialized datasets, separate from the cache, so a script does not carry a path and two projects do not fetch the same bytes twice. It sits at the platform's data location by default: `%LOCALAPPDATA%\Fetchloom\Library` on Windows, `$XDG_DATA_HOME/fetchloom/library` or `~/.local/share/fetchloom/library` on Linux. `--library-dir`, `FETCHLOOM_LIBRARY_DIR` and `library = { dir = "..." }` move it, in that order of precedence.
 
-An entry's path is `<library>/<name>/<identity>`, decided by what the reference resolves to and by nothing else, so `where` answers without an index to consult and two versions of one dataset sit beside each other. The name component is a convenience and the identity component is the truth. A name is sanitized deterministically: every byte that is not a letter, a digit, a hyphen, an underscore or a dot becomes an underscore, trailing dots and spaces are dropped, and a name that would be a Windows device — `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through `LPT9`, with or without an extension — is prefixed with `_`.
+An entry's path is `<library>/<name>/<identity>`, decided by what the reference resolves to and by nothing else, so `where` answers without an index to consult and two versions of one dataset sit beside each other. The name component is a convenience and the identity component is the truth. A name is sanitized deterministically: every character that is not an ASCII letter, a digit, a hyphen, an underscore or a dot becomes one underscore, trailing dots and spaces are dropped, and a name that would be a Windows device — `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through `LPT9`, with or without an extension — is prefixed with `_`.
 
 A library file is never a hard link to a cache object. It is a copy-on-write clone where the filesystem offers one and a plain copy everywhere else, with a `degrade` when the clone is refused, because one in-place edit through a hard link would corrupt the content addressed store for every dataset sharing that object.
 
@@ -400,7 +400,7 @@ Torrent and DVC are refused by name. A torrent states SHA-1 over pieces that spa
 
 ## Limits
 
-All configurable. None may be raised past a ceiling that would allow unbounded memory or disk use.
+`retries` and `timeout` are the two this build lets you move, by the flags and configuration keys above. Every other limit is fixed at the default it states, because a flag that exists is a flag that acts and none of the rest has one.
 
 | Limit | Default |
 |---|---|
@@ -436,6 +436,8 @@ All configurable. None may be raised past a ceiling that would allow unbounded m
 | Response header timeout | 30 s |
 | Idle timeout inside a body | 30 s |
 | Probed candidates | 4 |
+| Credential offer threshold | 120 s |
+| Idle connection age | 60 s |
 
 ## Not built
 

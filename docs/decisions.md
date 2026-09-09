@@ -13412,3 +13412,136 @@ where it will be checked again.
 
 Sources: `crates/cli/tests/transfer/events.rs`,
 `crates/engine/src/transfer/mod.rs`.
+
+## A source asking to be left alone for an hour was asked five more times
+
+contracts.md states that a `Retry-After` longer than the retry ceiling is not
+waited out, that the source is left for the next candidate, and that a run with
+none left fails with `network.status` reporting the wait asked for.
+
+What the code did was drop the request and keep going. `until_spent` filtered the
+asked-for wait through `honors`, and a wait past the ceiling became `None`, which
+means the loop waited its own backoff and asked again — five attempts inside the
+sixty seconds the host had asked to be left alone for, before failing over. The
+only test on it asserted that `honors` returns false for an hour, which is a
+predicate holding rather than a behavior happening, and that is why it stood.
+
+The kind and the message were already right: `status_failure` builds
+`network.status` naming the wait. So the fix is one condition. A failure carrying
+a wait past the ceiling is terminal for that candidate, the transfer fails over
+immediately, and a run with no candidate left reports the wait the source asked
+for.
+
+Nothing else moves. The benchmark's rate limited regime answers `Retry-After: 0`,
+which is inside the ceiling, so `many-hosts-backoff requests` is still 40.
+
+Sources: `crates/engine/src/transfer/retry.rs`,
+`crates/engine/tests/transfer.rs`.
+
+## The offline latch was enforced at one adapter and not at the other
+
+contracts.md says the refusal is decided once before a reference is resolved and
+enforced again where a request would be issued, so no adapter can reach the
+network by resolving to a location the first decision never saw. The HTTP adapter
+called `network::allowed` before its request. The FTP adapter called nothing: it
+resolved the host and opened a control connection.
+
+Reachable rather than theoretical. The first decision sees the reference the user
+typed. A manifest, a listing, or a DOI can name an `ftp://` location the first
+decision never saw, and the second enforcement is the whole reason the contract
+asks for two.
+
+The guard is one line in `Control::open`, and the test in
+`crates/sources/tests/offline.rs` fails without it with a DNS lookup for
+`ftp.example.invalid`, which is the contract violation stated as an error
+message. It is its own test target for the same reason `engine`'s is: the latch
+has no unset, so a target that holds it holds one test.
+
+Sources: `crates/sources/src/ftp.rs`, `crates/sources/tests/offline.rs`,
+`xtask/src/verify.rs`.
+
+## Twelve of the Store seam's twenty-one methods were not a seam
+
+Two sessions deferred this and named three of them. The whole count is twelve.
+
+`Transfer` is the only code generic over `Store`, and it reaches nine methods:
+`contains`, `lease`, `waited`, `resume`, `record_source`, `recorded_source`,
+`discard_partial`, `commit` and `verified_prefix`. The other twelve —
+`format_fingerprint`, `open`, `begin`, `has_outboard`, `open_outboard`,
+`write_outboard`, `stage`, `pin`, `unpin`, `list`, `prune` and `status` — are
+called on the concrete `Cache` by `cli` and by the cache's own modules, and the
+only thing that ever called them through the trait was a test double forwarding
+them so it could compile.
+
+They are inherent to `Cache` now and the trait states the nine. The bodies did
+not move a line; the block they sit in changed from a trait impl to an inherent
+impl and a thin trait impl forwards. `type Reader` left the trait with `open` and
+`open_outboard`, because nothing generic returns one.
+
+Three things fell out of it, and each is the narrowing paying for itself.
+
+`Cache::open` was two different words. It constructed a cache from a directory
+and, through the trait, it opened one object. The object one is `open_object`
+now, which pairs with the `open_outboard` beside it.
+
+`PruneReport` and `CacheStatus` were in `engine`'s seam file, describing a thing
+only the cache produces. They are in `crates/cache/src/store.rs`.
+
+Sixteen files imported `Store` for method resolution and stopped needing it,
+which is the measurement of how little the seam was carrying.
+
+Nothing about behavior moved: no signature, no error kind, no message, no order.
+
+Sources: `crates/engine/src/seam/store.rs`, `crates/cache/src/store.rs`,
+`crates/cache/src/prune.rs`, `crates/cli/tests/transfer/transfer.rs`.
+
+## Peak memory gates, per target, at ten percent and upward only
+
+The blocked decision was a band. The measurement decides its width.
+
+Between the two runners on the same regime, many hosts concurrency is 21,078,016
+bytes on Linux and 14,585,856 on Windows, which is the 44 percent that makes one
+number unable to gate both. Per target baselines already separate that, and the
+values recorded here are the ones the runners printed on `bb6a9f2`.
+
+Across runs on one runner, taken from two consecutive green runs: Linux moved
+0.84 to 2.8 percent by regime, Windows 0.15 to 0.68. On a loaded developer
+machine the same regime measured 9,932,800 bytes three times and 17,858,560 once,
+with a build running beside it, which is 1.8x and is why the band is not five
+percent and why this stays a CI lane.
+
+Ten percent, one sided. A rise past it is a red step; a fall never is, because
+holding less memory is not a regression and a fall that matters shows up in the
+counters. `MetricKind::Bounded` is the third kind beside `Deterministic` and
+`Timing`, and a baseline now carries a bound for every regime that measures a
+whole run. `packed-index` and `slow-disk` measure a store operation rather than a
+run and report no process peak, and a test names exactly those two so a regime
+losing its bound is caught rather than tolerated.
+
+Sources: `xtask/src/bench.rs`, `xtask/src/main.rs`, `xtask/benchmarks/`.
+
+## The comment rule is a check now, not a habit
+
+Twenty-seven plain comments where the last session left one. Seven in production
+in `crates/cache/src/lib.rs`, the rest in tests. Both sessions were told zero and
+both wrote some, which is the evidence that the rule needed a machine.
+
+Every one of the twenty-six said something worth saying, so none of them was
+deleted as a thought: each went into a doc comment on the function or the test it
+sat above, into the name of a binding — `past_the_magic_and_the_identifier`,
+`produced_by_a_fixture_elsewhere` — or into an assertion message that was already
+carrying half of it.
+
+`xtask/src/comment.rs` scans every `.rs` file in the workspace with a small Rust
+lexer rather than a regular expression, because `"https://host"`, `r#"//x"#` and
+`br#"..."#` are not comments and a line-based check says they are. It finds a
+comment after code, inside a test, inside a macro body, and written as a block,
+and it allows a `// SAFETY:` line and the lines it wraps onto and nothing else.
+Sixteen unit tests cover those shapes, the walk refuses to report clean if it
+read fewer than a hundred files, and adding one comment to `engine/src/work.rs`
+was confirmed to fail it before it was reverted.
+
+It runs in the `checks` lane, which is the lane that runs on every push on any
+machine.
+
+Sources: `xtask/src/comment.rs`, `xtask/src/verify.rs`, `CONTRIBUTING.md`.

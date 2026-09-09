@@ -30,7 +30,26 @@ Pinning is the product. Verification is the mechanism.
 
 **Observer.** Events, errors, progress, redaction. Redaction happens at construction, not at output, so a secret cannot reach a stream by way of a call site nobody remembered.
 
-Six seams, fixed early. Widening one takes the same justification as changing a contract.
+Six seams, fixed early. Widening one takes the same justification as changing a contract, and narrowing one is the same change in reverse: a method no caller reaches through the seam is not part of it.
+
+`Store` is the one that was narrower than it looked. It carried twenty-one methods where the only code generic over it, the transfer, reaches nine. The other twelve — opening a finished object, its outboard tree, staging, pins, prune, list, status, the format fingerprint — are asked of the one store by name, so they are inherent to the cache and the seam does not state them. Nothing is polymorphic over them and a trait method nothing is polymorphic over is a function with extra steps, which is exactly the shape that makes a seam read as wider than it is.
+
+## What each crate knows
+
+The rule is one sentence: a crate depends on the vocabulary of the contracts and never on the mechanism of another crate. A change belongs in the crate whose knowledge it needs, and if it needs two, it belongs in whichever of them owns the decision rather than the mechanism.
+
+| Crate | Knows | Cannot know |
+|---|---|---|
+| `engine` | Identity, canonical forms, references, manifests, locks, receipts, records, plans, selection, layout, trees, reconcile, three way, policy, limits, events, error kinds, the six seam traits | Sockets, TLS, HTTP as syntax, tar and zip byte layout, terminal capabilities. It states what is transferred and why a rung was taken; it opens nothing and asks for nothing |
+| `platform` | Volumes, capability probes, atomic publication, advisory locks, boot identity, the processor budget, the credential store, uncached writes | Datasets, references, manifests, digests, archives, the network, the cache's own layout |
+| `cache` | Object placement, packs, outboard trees, compression frames and dictionaries, quarantine, pins, prune, bundles, the format fingerprint, the meta records | References, manifests, selection, archives, the network, destinations, the library |
+| `sources` | Protocols, providers, listing APIs, credentials on the wire, per host measurement, range mechanics | The cache layout, the filesystem, archives, destinations, what a dataset is |
+| `archive` | Container bytes, member enumeration, bounded extraction, path safety, bomb limits | The network, the cache, references, the library |
+| `view` | The event stream | Everything else, which is the whole reason it is a crate rather than a module: the contract says it cannot influence a run, and a crate boundary is how that becomes a fact a compiler checks |
+| `faults` | How to break a seam, and how to decline by name | The product's own logic |
+| `cli` | Argument syntax, configuration precedence, the project file, the run each command performs, rendering, exit codes | Protocol details, archive byte layout, cache layout |
+
+`cli` is the odd one and deliberately so. It holds the run itself, in `run/`, because a run is where the concrete cache, platform and adapters meet and there is exactly one composition of them. The rules those runs apply — the three way table, the reconcile table, the trust classes, resume rungs, splitting, retry — are in `engine` and are tested there without a filesystem. What is in `cli` is the wiring and the order, not the decision.
 
 ## Why blocking, not async
 
@@ -113,6 +132,15 @@ cost 1.02 file operations each.
 Peak memory is 7.5 to 21 MB across every regime including the 256 MiB single file
 one. Nothing is ever loaded whole. The binary is 9,667,072 bytes on Windows and
 8,815,488 on Linux.
+
+It is gated, per target, against the runner that recorded it. The two runners
+differ by 44 percent on the same regime — 21.1 MB on Linux against 14.6 MB on
+Windows for many hosts, concurrency — because the allocator and the page size
+differ by target, so one number could never gate both. Across runs on one runner
+it moves at most 2.8 percent, which is what makes a ten percent one sided band a
+gate rather than a coin toss. On a developer's machine under load the same
+regime has measured 9.9 and 17.9 MB, which is the other reason the band is not
+five percent and the reason the lane is a CI lane.
 
 The many hosts regimes are mostly not transfer cost. They inject 100 ms of
 latency into 40 requests and rate limit one host, and most of what a clock would

@@ -25,6 +25,10 @@ The gate's summary counts declinations apart from steps, because how many tests 
 
 **No comments.** If code needs explaining, the names are wrong. The one exception is `// SAFETY:` on an unsafe block, which a lint requires and another lint refuses where it does not belong.
 
+That rule is mechanical rather than remembered. The `checks` lane runs `xtask`'s comment scanner over every `.rs` file in the workspace and fails on any plain comment: in production, in a test, in a fixture, in `xtask`, inside a macro body, after code on the same line, or written as a block comment. A `// SAFETY:` line and the lines it wraps onto are the only thing it allows, and a doc comment is not a comment. It came back twice by good intentions before the check existed, both times as a paragraph worth keeping, which is why the answer is never to delete the thought: move it into the name, into a doc comment, or into `docs/contracts.md`, then delete the comment.
+
+**Names carry the documentation, so a name is a defect the way a bug is.** Files and modules are named for what they are rather than for what they contain. No `util`, `helpers`, `common`, `misc`, `manager`, `handler`, `base` or `types`. A function's name says what it does and a predicate's says what is true. A test's name says what breaks when it fails. A `mod.rs` declares and re-exports; a `mod.rs` holding logic is a module nobody named. One vocabulary across all eight crates: the contracts say *entry* for a thing in a tree, *member* for a thing in an archive, *object* for bytes in the cache, *artifact* for a thing a manifest names, and *record* for the per destination file, and using one where the docs use another is wrong even where it compiles.
+
 **No version fields, no compatibility code, no second way of doing anything that already exists.**
 
 **Nothing degrades silently.** Every fallback emits a `degrade` event naming what was requested, what was used, and why.
@@ -53,7 +57,7 @@ The gate is eight lanes. A lane runs where it is native or it does not run.
 
 | Lane | What it proves | Machine |
 |---|---|---|
-| `checks` | Format, and the dependency graph against the allow list, the advisories, the licences and the registries. | any |
+| `checks` | Format, every plain comment outside a `SAFETY` block, and the dependency graph against the allow list, the advisories, the licences and the registries. | any |
 | `windows` | Lint with warnings denied, build, the suite, and a build at the stated MSRV, on `x86_64-pc-windows-msvc`. | Windows x86_64 |
 | `windows-arm` | The same on `aarch64-pc-windows-msvc`, run rather than compiled. | Windows aarch64 |
 | `linux` | The same on `x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl`, both linted, both tested. | Linux x86_64 |
@@ -85,7 +89,7 @@ cargo xtask verify --install-hook             writes .git/hooks/pre-push running
 
 `.github/workflows/hosts.yml` runs `network` on all four platforms and `offline` on Linux, on a push to `main` and once a day. They are not on pull requests, because a lane that reaches ftp.gnu.org and files.pythonhosted.org on every push from every branch is impolite to hosts that owe this project nothing, and a third party being down is not a reason to redden a contributor's pull request.
 
-`benchmark` runs on `ubuntu-24.04` and `windows-2025`, and gates the deterministic counters only. Those counters were measured identical across twenty consecutive runs and across two volumes, where wall time on the same regime spreads between 1.6x and 2.5x, so a five percent band is a gate on one and decoration on the other. `MetricKind::Timing` never gates and a test asserts it. The harness passes `--deterministic-io`, because the per host measurement a run records otherwise makes `file-operations` a function of the run rather than of the code.
+`benchmark` runs on `ubuntu-24.04` and `windows-2025`, and gates the deterministic counters only. Those counters were measured identical across twenty consecutive runs and across two volumes, where wall time on the same regime spreads between 1.6x and 2.5x, so a five percent band is a gate on one and decoration on the other. `MetricKind::Timing` never gates and a test asserts it. Peak resident set is the third kind, `MetricKind::Bounded`: it gates upward only, at ten percent above the baseline recorded on the runner that gates it, because it holds within 2.8 percent across runs on one runner and differs 44 percent between the two targets, and because holding less memory is never a regression. That is what makes an object loaded whole a red step rather than a number nobody reads. The harness passes `--deterministic-io`, because the per host measurement a run records otherwise makes `file-operations` a function of the run rather than of the code.
 
 A baseline is per target and is recorded on the runner that gates it, because a counter can depend on what the volume underneath can do. A lane with no baseline records one and passes, which is what the first run on a new target does.
 
