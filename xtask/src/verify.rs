@@ -572,6 +572,37 @@ impl Report {
         });
     }
 
+    fn census(&mut self, name: &str, command: Command, expected: Option<usize>) -> bool {
+        println!("--- {name}");
+        let started = Instant::now();
+        let (passed, seen) = watched(command);
+        let took = started.elapsed();
+        let counted = expected.is_none_or(|wanted| wanted == seen);
+        match expected {
+            Some(wanted) => println!("{name} ran {seen} of {wanted} test binaries"),
+            None => println!(
+                "{name} ran {seen} test binaries, against a count this machine could not take"
+            ),
+        }
+        if !counted {
+            println!("FAIL {name}: the run is not the whole suite, so nothing it says is a result");
+        }
+        let passed = passed && counted;
+        println!(
+            "{} {name} in {:.1} s",
+            if passed { "pass" } else { "FAIL" },
+            took.as_secs_f64()
+        );
+        self.steps.push(Step {
+            name: name.to_owned(),
+            passed,
+            skipped: false,
+            took,
+            declined: String::new(),
+        });
+        passed
+    }
+
     fn step(&mut self, name: &str, mut command: Command) -> bool {
         self.step_here(name, || {
             command.status().is_ok_and(|status| status.success())
@@ -771,7 +802,10 @@ fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
     for target in lane.targets() {
         lint(workspace, report, &target);
         build(workspace, report, &target);
-        let mut test = cargo(workspace, &["test", "--workspace", "--target", &target]);
+        let mut test = cargo(
+            workspace,
+            &["test", "--workspace", "--no-fail-fast", "--target", &target],
+        );
         test.env("FETCHLOOM_VERIFY", "1");
         for (name, value) in &volumes {
             test.env(name, value);
@@ -784,7 +818,11 @@ fn platform(lane: &Lane, workspace: &Path, report: &mut Report) {
             .join(format!("declined-{target}.txt"));
         let _ = std::fs::remove_file(&record);
         test.env("FETCHLOOM_TEST_DECLINED", &record);
-        report.step(&format!("test {target}"), test);
+        report.census(
+            &format!("test {target}"),
+            test,
+            test_targets(workspace, &[]),
+        );
         report.declinations.extend(declinations(&record));
     }
     if lane.msrv {
@@ -1057,7 +1095,8 @@ fn tier_step(
             .or_default()
             .push(suite.target);
     }
-    let mut arguments: Vec<String> = vec!["test".to_owned()];
+    let mut arguments: Vec<String> = vec!["test".to_owned(), "--no-fail-fast".to_owned()];
+    let expected = packages.values().map(Vec::len).sum();
     for (package, targets) in &packages {
         arguments.push("-p".to_owned());
         arguments.push((*package).to_owned());
@@ -1079,7 +1118,7 @@ fn tier_step(
         .join(format!("declined-{}.txt", tier.label()));
     let _ = std::fs::remove_file(&record);
     command.env("FETCHLOOM_TEST_DECLINED", &record);
-    let passed = report.step(&format!("test {}", tier.label()), command);
+    let passed = report.census(&format!("test {}", tier.label()), command, Some(expected));
     report.declinations.extend(declinations(&record));
     passed
 }
@@ -1336,6 +1375,69 @@ fn make_executable(path: &Path) {
     let _ = path;
 }
 
+fn test_targets(workspace: &Path, packages: &[&str]) -> Option<usize> {
+    let output = Command::new(cargo_program())
+        .current_dir(workspace)
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let document: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).ok()?;
+    let listed = document.get("packages")?.as_array()?;
+    let mut found = 0;
+    for package in listed {
+        let name = package.get("name").and_then(serde_json::Value::as_str)?;
+        if !packages.is_empty() && !packages.contains(&name) {
+            continue;
+        }
+        for target in package.get("targets")?.as_array()? {
+            let tested = target
+                .get("test")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let kinds = target.get("kind").and_then(serde_json::Value::as_array);
+            let counted = kinds.is_some_and(|kinds| {
+                kinds.iter().any(|kind| {
+                    matches!(kind.as_str(), Some("lib" | "bin" | "test" | "proc-macro"))
+                })
+            });
+            if tested && counted {
+                found += 1;
+            }
+        }
+    }
+    Some(found)
+}
+
+fn ran(line: &str) -> bool {
+    line.trim_start().starts_with("Running ")
+}
+
+fn watched(mut command: Command) -> (bool, usize) {
+    command.stderr(std::process::Stdio::piped());
+    let Ok(mut child) = command.spawn() else {
+        return (false, 0);
+    };
+    let mut seen = 0;
+    if let Some(stream) = child.stderr.take() {
+        use std::io::BufRead as _;
+        for line in std::io::BufReader::new(stream)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if ran(&line) {
+                seen += 1;
+            }
+            eprintln!("{line}");
+        }
+    }
+    let passed = child.wait().is_ok_and(|status| status.success());
+    (passed, seen)
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(
@@ -1580,5 +1682,39 @@ mod tests {
             .map(|lane| lane.name)
             .collect();
         assert!(here.len() <= 1, "{here:?} all claim this machine");
+    }
+
+    #[test]
+    fn a_running_line_is_counted_and_nothing_else_is() {
+        assert!(super::ran(
+            "     Running tests/bomb.rs (target/debug/deps/bomb-1a2b)"
+        ));
+        assert!(super::ran(
+            "     Running unittests src/lib.rs (target/debug/deps/fetchloom_cache-9f)"
+        ));
+        assert!(!super::ran("   Compiling fetchloom-cache v0.1.0"));
+        assert!(!super::ran("   Doc-tests fetchloom-engine"));
+        assert!(!super::ran("test result: ok. 3 passed"));
+    }
+
+    #[test]
+    fn every_test_this_runner_invokes_refuses_to_stop_at_the_first_failure() {
+        let source = include_str!("verify.rs");
+        let mut invocations = 0;
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("&[\"test\"") && !trimmed.contains("vec![\"test\".to_owned()") {
+                continue;
+            }
+            invocations += 1;
+            assert!(
+                line.contains("--no-fail-fast"),
+                "{line} runs cargo test without --no-fail-fast, so one failing target hides every target after it"
+            );
+        }
+        assert_eq!(
+            invocations, 2,
+            "the runner invokes cargo test somewhere this test does not read"
+        );
     }
 }
