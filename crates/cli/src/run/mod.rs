@@ -13,6 +13,7 @@ mod paths;
 pub(crate) mod ranged;
 mod remote;
 mod selection;
+mod space;
 mod staged;
 mod threeway;
 mod verify;

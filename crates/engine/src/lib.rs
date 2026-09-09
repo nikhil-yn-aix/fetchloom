@@ -1,18 +1,18 @@
 //! Seam traits, domain types, errors, and events for Fetchloom.
 
-pub mod adapter;
+pub mod adapter_suite;
+pub mod adapters;
 pub mod cancel;
 pub mod candidate;
 pub mod canonical;
 pub mod capability;
 pub mod compression;
-pub mod conformance;
 pub mod credential;
 pub mod degrade;
 pub mod digest;
+pub mod disk;
 pub mod document;
 pub mod durability;
-pub mod erased;
 pub mod error;
 pub mod event;
 pub mod flights;
@@ -45,8 +45,10 @@ pub mod threads;
 pub mod timestamp;
 pub mod transfer;
 pub mod tree;
+pub mod tree_corpus;
 pub mod trust;
 pub mod tuning;
 pub mod verification;
 pub mod work;
+
 mod yaml;

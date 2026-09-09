@@ -12,9 +12,9 @@ use super::remote::transfer_object;
 use crate::materialize;
 use fetchloom_cache::Cache;
 use fetchloom_cache::ingest::Ingested;
+use fetchloom_engine::adapters::Adapters;
 use fetchloom_engine::canonical;
 use fetchloom_engine::digest::ContentDigest;
-use fetchloom_engine::erased::Adapters;
 use fetchloom_engine::error::{Error, ErrorKind};
 use fetchloom_engine::event::{Event, EventPayload, Sequence, Span};
 use fetchloom_engine::flights::Flights;
@@ -272,6 +272,13 @@ pub fn materialize_manifest(
     sequence: &Sequence,
 ) -> DatasetRun {
     let emit = |payload: EventPayload| observer.emit(&Event::new(sequence, payload));
+    if let Err(error) = super::space::confirm_room(with.platform, with.cache, destination, manifest)
+    {
+        return DatasetRun {
+            resolved: Vec::new(),
+            outcome: Err(error.with_dataset(manifest.name.clone())),
+        };
+    }
     let resolving = Span::start();
     emit(EventPayload::ResolveStart);
 

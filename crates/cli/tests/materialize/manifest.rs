@@ -345,3 +345,42 @@ fn a_blake3_that_matches_the_bytes_is_verified_rather_than_trusted_on_first_use(
         body(&run)
     );
 }
+
+#[test]
+fn a_run_that_cannot_fit_on_the_volume_is_refused_before_it_fetches_anything() {
+    let scene = two_artifacts("a,b\n");
+    let exabyte = 1_u64 << 60;
+    std::fs::write(
+        &scene.manifest,
+        format!(
+            "name: pair\nartifacts:\n  - id: tools\n    sources: [tools.tar.gz]\n    size: {exabyte}\n"
+        ),
+    )
+    .unwrap();
+
+    let run = get(&scene, &[]);
+
+    assert_eq!(
+        run.status.code(),
+        Some(50),
+        "a run needing an exabyte was not refused for room: {}",
+        stderr(&run)
+    );
+    let said = body(&run);
+    assert_eq!(said["kind"], "resource.disk");
+    assert!(
+        !scene.destination.exists(),
+        "the run wrote a destination it could never have finished"
+    );
+    let objects = scene.cache.join("objects");
+    let partials = scene.cache.join("partial");
+    for held in [&objects, &partials] {
+        let count = std::fs::read_dir(held).map_or(0, std::iter::Iterator::count);
+        assert_eq!(
+            count,
+            0,
+            "the run moved bytes into {} before deciding it had nowhere to put them",
+            held.display()
+        );
+    }
+}
