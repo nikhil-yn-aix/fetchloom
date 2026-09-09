@@ -138,13 +138,46 @@ fn a_pin_refuses_a_symlink_left_at_its_name() {
 }
 
 #[test]
-fn a_cache_hit_on_a_shared_cache_is_not_taken_on_a_fingerprint_alone() {
+fn an_object_this_run_published_passes_its_own_check() {
     let scratch = tempfile::TempDir::new().unwrap();
     let held = cache_in(scratch.path());
     let bytes = bytes_of(4096, 7);
     let digest = publish(&held, &bytes);
     held.check_hit(digest)
         .expect("an object this run published did not pass its own check");
+}
+
+#[test]
+fn an_object_this_run_owns_on_a_private_cache_is_still_checked_on_its_fingerprint() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let held = support::open_cache_compressed(
+        scratch.path(),
+        fetchloom_engine::verification::VerificationPolicy::Fingerprint,
+        fetchloom_engine::seam::policy::IoMode::Buffered,
+        fetchloom_engine::compression::CompressionChoice::None,
+    )
+    .unwrap();
+    let bytes = bytes_of(
+        usize::try_from(fetchloom_engine::limits::PACK_THRESHOLD).unwrap() + 1,
+        21,
+    );
+    let digest = publish(&held, &bytes);
+    let placed = held.placement(digest).unwrap();
+    assert!(!placed.is_packed());
+    let object = placed.container().to_path_buf();
+
+    let mut wrong = bytes.clone();
+    wrong[0] ^= 0xff;
+    support::make_writable(&object);
+    std::fs::write(&object, &wrong).unwrap();
+
+    let refused = held
+        .check_hit(digest)
+        .expect_err("an object that changed under a cache was served as a hit");
+    assert!(
+        format!("{refused}").contains("changed since it was published"),
+        "the fingerprint path is gone, so every hit on a private cache now pays for a hash: {refused}"
+    );
 }
 
 #[test]
