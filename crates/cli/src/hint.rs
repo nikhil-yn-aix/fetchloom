@@ -18,7 +18,7 @@ pub struct Observed {
     pub(crate) lock_written: Option<String>,
 }
 
-const WORTH_SAYING: Duration = Duration::from_secs(120);
+const WORTH_SAYING: Duration = fetchloom_engine::limits::CREDENTIAL_OFFER_THRESHOLD;
 
 impl Observed {
     #[must_use]
@@ -106,7 +106,7 @@ pub fn remember(cache: &std::path::Path, key: &str) {
     if let Some(parent) = at.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(at, b"");
+    let _ = fetchloom_engine::atomic::touch(&at);
 }
 
 #[cfg(test)]

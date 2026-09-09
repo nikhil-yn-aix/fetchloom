@@ -2,6 +2,8 @@
 
 pub mod adapter_suite;
 pub mod adapters;
+pub mod address;
+pub mod atomic;
 pub mod cancel;
 pub mod candidate;
 pub mod canonical;

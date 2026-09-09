@@ -1,5 +1,10 @@
 //! The Platform seam implemented for Windows and Linux.
 
+#[cfg(not(any(target_os = "linux", windows)))]
+compile_error!(
+    "Fetchloom builds for Linux and Windows. This target has no platform seam, so nothing below would compile with a message worth reading."
+);
+
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -106,15 +111,8 @@ impl NativePlatform {
         let Some(boot) = imp::boot_id() else {
             return;
         };
-        let mut beside = path.as_os_str().to_owned();
-        beside.push(format!(".{}.writing", std::process::id()));
-        let beside = PathBuf::from(beside);
-        if std::fs::write(&beside, format!("{} {length}", boot.as_str())).is_err() {
-            return;
-        }
-        self.work.touched_file();
-        if std::fs::rename(&beside, &path).is_err() {
-            let _ = std::fs::remove_file(&beside);
+        let rendered = format!("{} {length}", boot.as_str());
+        if fetchloom_engine::atomic::replace(&path, rendered.as_bytes()).is_err() {
             return;
         }
         self.work.touched_file();

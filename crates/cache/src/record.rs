@@ -1,7 +1,6 @@
 //! The records the cache writes beside its entries.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use fetchloom_engine::error::{Error, ErrorKind, Surface, filesystem_failure};
 use fetchloom_engine::identity::Fingerprint;
@@ -65,20 +64,11 @@ pub fn write<T: Serialize>(
         )
     })?;
 
-    let mut beside = path.as_os_str().to_owned();
-    beside.push(format!(
-        ".{}.{}.writing",
-        std::process::id(),
-        WRITES.fetch_add(1, Ordering::Relaxed)
-    ));
-    let beside = std::path::PathBuf::from(beside);
-
-    std::fs::write(&beside, rendered)
-        .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
-    work.touched_file();
-    std::fs::rename(&beside, path).map_err(|reason| {
-        let _ = std::fs::remove_file(&beside);
-        filesystem_failure(Surface::Cache, path, &reason)
+    fetchloom_engine::atomic::replace(path, &rendered).map_err(|(site, reason)| match site {
+        fetchloom_engine::atomic::Site::Scratch(beside) => {
+            filesystem_failure(Surface::Cache, &beside, &reason)
+        }
+        fetchloom_engine::atomic::Site::Final => filesystem_failure(Surface::Cache, path, &reason),
     })?;
     work.touched_file();
     Ok(())
@@ -109,5 +99,3 @@ pub fn read<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<Option<T>, Error>
 pub(crate) fn read_owner(path: &Path) -> Result<Option<OwnerToken>, Error> {
     read(path)
 }
-
-static WRITES: AtomicU64 = AtomicU64::new(0);

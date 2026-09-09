@@ -18,16 +18,16 @@ impl<P: Platform> Cache<P> {
         self.flush_packs()?;
         let path = self.layout().receipt_of(Receipt::key(&receipt.destination));
         let rendered = receipt.render()?;
-        let mut beside = path.as_os_str().to_owned();
-        beside.push(format!(".{}.writing", std::process::id()));
-        let beside = std::path::PathBuf::from(beside);
-        std::fs::write(&beside, rendered.as_bytes())
-            .map_err(|reason| filesystem_failure(Surface::Cache, &beside, &reason))?;
-        self.work().touched_file();
-        std::fs::rename(&beside, &path).map_err(|reason| {
-            let _ = std::fs::remove_file(&beside);
-            filesystem_failure(Surface::Cache, &path, &reason)
-        })?;
+        fetchloom_engine::atomic::replace(&path, rendered.as_bytes()).map_err(
+            |(site, reason)| match site {
+                fetchloom_engine::atomic::Site::Scratch(beside) => {
+                    filesystem_failure(Surface::Cache, &beside, &reason)
+                }
+                fetchloom_engine::atomic::Site::Final => {
+                    filesystem_failure(Surface::Cache, &path, &reason)
+                }
+            },
+        )?;
         self.work().touched_file();
         Ok(())
     }

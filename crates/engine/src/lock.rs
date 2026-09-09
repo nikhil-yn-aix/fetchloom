@@ -1,7 +1,7 @@
 //! What a lock pins, containing nothing local to one machine.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -204,19 +204,11 @@ impl Lock {
     /// the destination, or renamed onto it.
     pub fn write(&self, path: &Path) -> Result<(), Error> {
         let rendered = crate::document::render_model(self)?;
-        let mut beside = path.as_os_str().to_owned();
-        beside.push(format!(".{}.writing", std::process::id()));
-        let beside = PathBuf::from(beside);
-        let failure = |reason: &std::io::Error| {
+        crate::atomic::replace(path, rendered.as_bytes()).map_err(|(_, reason)| {
             Error::new(
                 ErrorKind::ManifestInvalid,
                 format!("make {} writable: {reason}", path.display()),
             )
-        };
-        std::fs::write(&beside, rendered.as_bytes()).map_err(|reason| failure(&reason))?;
-        std::fs::rename(&beside, path).map_err(|reason| {
-            let _ = std::fs::remove_file(&beside);
-            failure(&reason)
         })
     }
 }
