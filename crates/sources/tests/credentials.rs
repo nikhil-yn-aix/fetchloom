@@ -228,3 +228,32 @@ fn the_secret_never_appears_in_a_redacted_location() {
         "the redacted location's text carried the secret: {exposed}"
     );
 }
+
+#[test]
+fn a_credential_is_refused_rather_than_sent_over_a_connection_in_the_clear() {
+    let server = TestServer::start(Script::serving(object())).unwrap();
+    let source = HttpSource::new(
+        Limits::default(),
+        std::sync::Arc::new(fetchloom_engine::work::WorkCounter::new()),
+    );
+    let credential = credential();
+
+    let refused = source
+        .fetch("http://example.com/object", None, Some(&credential), None)
+        .unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        fetchloom_engine::error::ErrorKind::PolicyCredentialInvalid,
+        "{}",
+        refused.next_action()
+    );
+    assert!(
+        !refused.next_action().contains(SECRET),
+        "the refusal carried the secret: {}",
+        refused.next_action()
+    );
+    assert!(
+        server.received().is_empty(),
+        "a request went out on a connection in the clear with a credential resolved for the host"
+    );
+}

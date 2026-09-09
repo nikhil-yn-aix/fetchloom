@@ -48,6 +48,19 @@ impl Origin {
         &self.host
     }
 
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Whether bytes to this origin travel under TLS, which is what decides
+    /// whether a credential may be sent to it and whether a redirect that
+    /// arrives here is a downgrade.
+    #[must_use]
+    pub fn secured(&self) -> bool {
+        self.scheme == "https"
+    }
+
     /// # Errors
     /// `reference.unresolved` when the location redirected from has no origin,
     /// and `network.status` when the target is relative to a path rather than

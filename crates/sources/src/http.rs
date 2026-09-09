@@ -159,8 +159,31 @@ impl HttpSource {
         let mut current = location.to_owned();
         let mut carried = credential;
 
+        let mut followed = false;
         for _ in 0..=self.limits.redirects {
             let here = Origin::of(&current)?;
+            if followed && !(stays_on_this_machine(&here) && stays_on_this_machine(&start)) {
+                check_addresses(&here)?;
+            }
+            if start.secured() && !here.secured() {
+                return Err(Error::new(
+                    ErrorKind::NetworkTls,
+                    format!(
+                        "ask the source for a location that stays on https, because the request for {start} was redirected to {here}, which leaves TLS, and a run does not continue in the clear"
+                    ),
+                )
+                .with_source(location));
+            }
+            if carried.is_some() && !here.secured() && !stays_on_this_machine(&here) {
+                return Err(Error::new(
+                    ErrorKind::PolicyCredentialInvalid,
+                    format!(
+                        "reach it as https://{} instead, because a credential was resolved for that host and {here} is not secured, so the credential would travel in the clear",
+                        here.host()
+                    ),
+                )
+                .with_source(location));
+            }
             if carried.is_some() && here != start {
                 self.degradations.record(
                     "the credential sent to the source that was asked for",
@@ -197,6 +220,7 @@ impl HttpSource {
                 return Ok((answer, current));
             };
             current = Origin::join(&current, &next)?;
+            followed = true;
         }
 
         Err(Error::new(
@@ -323,8 +347,9 @@ fn authorizing_headers(
 
 fn build_agent(limits: &Limits) -> ureq::Agent {
     let _ = rustls_graviola::default_provider().install_default();
-    ureq::Agent::config_builder()
+    let config = ureq::Agent::config_builder()
         .max_redirects(0)
+        .user_agent(USER_AGENT)
         .http_status_as_error(false)
         .timeout_connect(Some(limits.connect_timeout))
         .timeout_recv_response(Some(limits.response_timeout))
@@ -340,9 +365,11 @@ fn build_agent(limits: &Limits) -> ureq::Agent {
                 .root_certs(ureq::tls::RootCerts::PlatformVerifier)
                 .build(),
         )
-        .build()
-        .into()
+        .build();
+    ureq::Agent::new_with_config(config)
 }
+
+const USER_AGENT: &str = concat!("fetchloom/", env!("CARGO_PKG_VERSION"));
 
 fn redirect_target<T>(answer: &ureq::http::Response<T>, status: u16) -> Option<String> {
     if !matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -755,6 +782,35 @@ pub fn trust_store_loads() -> bool {
         )
         .build();
     true
+}
+
+fn check_addresses(origin: &Origin) -> Result<(), Error> {
+    use std::net::ToSocketAddrs;
+
+    let host = origin.host();
+    let Ok(found) = (host, origin.port()).to_socket_addrs() else {
+        return Ok(());
+    };
+    for address in found {
+        fetchloom_engine::address::allowed(host, address.ip())?;
+    }
+    Ok(())
+}
+
+fn stays_on_this_machine(origin: &Origin) -> bool {
+    use std::net::ToSocketAddrs;
+
+    let Ok(found) = (origin.host(), origin.port()).to_socket_addrs() else {
+        return false;
+    };
+    let mut any = false;
+    for address in found {
+        any = true;
+        if !address.ip().is_loopback() {
+            return false;
+        }
+    }
+    any
 }
 
 #[cfg(test)]

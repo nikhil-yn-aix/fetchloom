@@ -54,6 +54,7 @@ pub enum ErrorKind {
     PolicyCredentialInvalid,
     PolicyTermsRequired,
     PolicyTrustRefused,
+    PolicyAddressRefused,
     ResourceDisk,
     ResourceLimit,
 }
@@ -94,6 +95,7 @@ impl ErrorKind {
             Self::PolicyCredentialInvalid => "policy.credential_invalid",
             Self::PolicyTermsRequired => "policy.terms_required",
             Self::PolicyTrustRefused => "policy.trust_refused",
+            Self::PolicyAddressRefused => "policy.address_refused",
             Self::ResourceDisk => "resource.disk",
             Self::ResourceLimit => "resource.limit",
         }
@@ -133,12 +135,13 @@ impl ErrorKind {
             | Self::PolicyCredentialMissing
             | Self::PolicyCredentialInvalid
             | Self::PolicyTermsRequired
-            | Self::PolicyTrustRefused => Layer::Policy,
+            | Self::PolicyTrustRefused
+            | Self::PolicyAddressRefused => Layer::Policy,
             Self::ResourceDisk | Self::ResourceLimit => Layer::Resource,
         }
     }
 
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::ReferenceUnresolved,
         Self::ManifestInvalid,
         Self::AliasUnstable,
@@ -171,6 +174,7 @@ impl ErrorKind {
         Self::PolicyCredentialInvalid,
         Self::PolicyTermsRequired,
         Self::PolicyTrustRefused,
+        Self::PolicyAddressRefused,
         Self::ResourceDisk,
         Self::ResourceLimit,
     ];

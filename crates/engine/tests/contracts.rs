@@ -89,6 +89,7 @@ fn every_error_kind_the_contract_lists_exists_with_its_layer() {
         ("policy.credential_invalid", Layer::Policy),
         ("policy.terms_required", Layer::Policy),
         ("policy.trust_refused", Layer::Policy),
+        ("policy.address_refused", Layer::Policy),
         ("resource.disk", Layer::Resource),
         ("resource.limit", Layer::Resource),
     ];
@@ -139,8 +140,8 @@ fn every_event_name_the_contract_lists_is_produced_by_a_payload() {
         EventPayload::RunEnd { duration_ms: 1 },
         EventPayload::ResolveStart,
         EventPayload::ResolveAlias {
-            from: "a".to_owned(),
-            to: "b".to_owned(),
+            from: fetchloom_engine::redact::SafeUrl::new("a"),
+            to: fetchloom_engine::redact::SafeUrl::new("b"),
         },
         EventPayload::ResolveEnd { duration_ms: 1 },
         EventPayload::PlanReady,
