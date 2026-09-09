@@ -455,6 +455,14 @@ address it carries: a bracketed literal is the address inside the brackets, a
 userinfo component belongs to no host, and a location naming none has no host to
 be polite to.
 
+every request carries `User-Agent: fetchloom/<version>` and nothing else about
+the machine. the operators whose rate limits this section exists to honor ask
+for one so they can tell one client from another and write to a maintainer
+before they ban an address, and a tool that will not say who it is has no claim
+on being treated politely. no operating system, no hostname, no architecture: a
+name and a version is what identifies the client, and everything else is only
+about the person running it.
+
 a transient failure is retried with exponential backoff and full jitter, up to
 the attempt limit and never past the retry ceiling.
 
@@ -552,6 +560,36 @@ an object lives in one of two placements decided by its size alone, and exactly
 one lookup answers where: a caller asks the cache for an object and is given its
 bytes, never a path it opens itself. a pack is self describing, so it is the
 only authority on what it holds and no index beside it can disagree.
+
+### modes and who may write
+
+on unix a cache is created either private or shared, and what decides it is the
+directory the person put it in rather than a flag. a root whose parent no other
+user may write, which is every default under a home directory, is created `0700`
+along with every directory inside it. a root under a directory another user may
+already write, which is what choosing `/srv` or `/tmp` says, is created `1777`
+so any of them may add an entry and only its owner may remove it. a root that is
+already there keeps whichever it already is, because whoever made it that way
+meant it. objects are published `0444` and packs `0644` in both.
+
+on windows a directory inherits its parent's access control entries and
+fetchloom sets none of its own, so a cache under the per-user default is private
+and a cache an administrator made for several users carries what that
+administrator chose.
+
+no write inside the cache opens a name that already exists. every one creates a
+scratch file exclusively beside its target and renames it on, which fails on a
+symlink rather than writing through it, and a name that is meant to be an empty
+marker is created exclusively or found to be a plain file already. the sticky
+bit was never the guarantee here: it stops one user removing another's entry and
+says nothing about a name that does not exist yet.
+
+a stat fingerprint proves an object was not changed since this run published it.
+it proves nothing about an object another user could have written, because every
+field in it is a field that user chose. on a shared cache an object this process
+does not own is read and hashed rather than stat'd, whatever the verification
+policy says, and `--verify always` is what a caller who cannot accept even the
+owned case asks for.
 
 ### compression
 
@@ -807,6 +845,14 @@ cannot be fetched, and excluding that member with `--select` does not change it.
 | a header the format does not permit, or a truncated archive | `archive.unsupported` |
 | more members, expanded bytes, or ratio than allowed | `archive.bomb` |
 | a name the target volume refuses | `destination.unrepresentable` |
+| a member producing more bytes than the size it declared | `archive.unsupported` |
+
+a member's declared size is what the expansion guard is shown while the archive
+is listed, so it is also what the member's stream is held to while its bytes
+move. a compressed member that produces more than it declared stops at the byte
+that passes the declaration, rather than after the bytes have landed. deflate
+reaches about 1032 to 1, so the compressed size bounds nothing about the output
+and the declaration is the only figure both the guard and the stream agree on.
 
 a hard link to a member the archive does hold materializes the target's bytes as
 a second file. the tree entry types are file, directory and symbolic link, so a
@@ -1128,6 +1174,48 @@ terms are never accepted automatically. if a manifest records
 `requires_acceptance`, fetchloom refuses to transfer until the user asserts
 acceptance, records that the assertion was made, and makes no legal
 determination about what it means.
+
+a credential resolved for a host is never sent over a connection that is not
+secured. `https` carries one and `http` does not, and no flag moves that. the
+one exception is a host whose every address is on this machine, where there is
+no wire between the two ends for anyone to read. everything else is refused with
+`policy.credential_invalid` naming the host and the scheme, before a request is
+issued, which is what ftp already did for a control connection it could not
+secure.
+
+a redirect that leaves `https` for `http` is refused with `network.tls` naming
+both origins. a run that started secured stays secured or stops, because a
+downgrade is a thing a network position arranges rather than a thing a publisher
+means.
+
+## addresses
+
+every address a run would connect to after following an http redirect is checked,
+and one inside this machine or inside the network this machine sits in is refused
+with `policy.address_refused` naming the host, the address, and the class.
+loopback, the unspecified address, the private ranges, the carrier-grade range,
+the link-local range which holds `169.254.169.254`, the protocol assignment,
+documentation, benchmarking, multicast and reserved ranges, and their ipv6
+equivalents including a v4 address embedded in a v6 one.
+
+there is no flag. a flag that re-enables fetching the cloud metadata endpoint
+has one user and it is not the person running the command.
+
+ftp has no redirect to follow and its data connection is opened to the address
+the control connection is already talking to, so there is no second address for
+a server to choose and nothing for this check to guard there.
+
+the location a person names on the command line is theirs to name, so it is not
+checked: they can already open any address on their own machine without this
+tool. what a stranger's document or a stranger's redirect names is checked,
+which is where the reach an attacker gains actually is. a redirect that stays on
+this machine from a start that was already on this machine crosses no boundary
+and is allowed.
+
+the check reads the addresses the name resolves to at the moment it is made, and
+the transport resolves the name again when it connects. a name that answers
+publicly to the check and privately to the transport is not closed by this, and
+closing it needs the resolver the transport itself uses.
 
 ## listing
 
@@ -1468,6 +1556,13 @@ forces a weak trust class. unknown top level keys are an error.
 no key may express a command, a script, or a path to execute. manifests are
 declarative. no shell, no hooks, no generators. that is what makes it safe to
 point fetchloom at a manifest written by someone you have never met.
+
+a source that names a path rather than a location resolves under the directory
+holding the manifest and may not leave it. an absolute path, a rooted path, and
+one that climbs out with `..` are refused with `manifest.invalid` naming the
+directory it had to stay under. a document a stranger wrote does not get to name
+a file on this machine, and the person who wants one names it on the command
+line, which is a different path through the program.
 
 both digests a manifest states are compared to the bytes, `blake3` to the
 content digest and `sha256` to the interop digest, both taken in the pass that

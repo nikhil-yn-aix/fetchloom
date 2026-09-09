@@ -410,6 +410,7 @@ writes is identical at every level.
 | `policy.trust_refused` | 40 | Run once without `--locked` |
 | `policy.credential_missing` | 40 | Follow the numbered steps the run printed |
 | `policy.credential_invalid` | 40 | Renew it or widen its scope |
+| `policy.address_refused` | 40 | A location resolved to an address inside this machine or its network |
 | `resource.disk` | 50 | A volume has no room for what the run needs |
 | `resource.limit` | 50 | A document or a pool exceeded a bound |
 | `destination.conflict` | 60 | You and upstream changed one entry. Upstream's is beside yours as `<name>.upstream` |
@@ -518,6 +519,7 @@ because a flag that exists is a flag that acts and none of the rest has one.
 | Probed candidates | 4 |
 | Credential offer threshold | 120 s |
 | Idle connection age | 60 s |
+| Prune grace | 60 s |
 
 ## Not built
 

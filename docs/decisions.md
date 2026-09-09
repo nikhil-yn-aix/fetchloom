@@ -13553,3 +13553,548 @@ It runs in the `checks` lane, which is the lane that runs on every push on any
 machine.
 
 Sources: `xtask/src/comment.rs`, `xtask/src/verify.rs`, `CONTRIBUTING.md`.
+
+---
+
+## The guard existed and the sibling site never got it
+
+Three of the five worst findings in the security audit are one shape. A guard
+was written for one call site, was correct there, and a later call site doing
+the same thing did not get it.
+
+`create_file_exclusive` wraps `File::create_new`, which is `O_EXCL` and refuses
+a symlink rather than writing through it. It is used at `ingest.rs:173`,
+`pack.rs:382`, `pack.rs:446`, `bundle.rs:148`, `storage.rs:296`, `storage.rs:425`,
+`storage.rs:459`, `store.rs:266`, `store.rs:442`, `repair.rs:177`,
+`extract.rs:479` and `doctor.rs:245`. The object path got it. The record path,
+written later, used `std::fs::write`, which is `O_CREAT | O_WRONLY | O_TRUNC` and
+follows a symlink. Five sites: `lib.rs:267`, `lib.rs:491`, `record.rs:76`,
+`receipts.rs:24`, `store.rs:484`.
+
+FTP refuses to send a credential over a control connection it could not secure,
+at `ftp.rs:515`. HTTP resolved credentials by host with no condition on the
+scheme at all, so a bearer went out over `http://`.
+
+The archive path has two independent path gates in different crates. The
+decompression path had one guard, and it observed the member's bytes after the
+member had been written whole.
+
+Sweeping for a fourth instance found three more of the first shape that the
+audit had not named: `platform/src/lib.rs:112`, which writes the path-length memo
+into the cache's own `meta/` directory; `cli/src/hint.rs:109`, which writes a
+hint marker into `meta/hints/`; and `engine/src/lock.rs:216`, which writes the
+lock beside a destination that may be shared. Eight sites in total, not five.
+
+Chosen: one primitive, `fetchloom_engine::atomic`, with `replace` and `touch`,
+and every one of the eight sites goes through it. `replace` creates its scratch
+file with `File::create_new`, retrying a bounded number of names, and renames it
+on. `touch` creates exclusively and, finding the name taken, refuses anything
+that is not already a plain file. A primitive in one place is a primitive a
+later site can be pointed at, where a convention is a thing the next author has
+to already know.
+
+Not chosen: a lint or a check banning `std::fs::write` in these crates. It would
+have caught this and it would also catch `xtask` writing a baseline and the probe
+writing to a scratch directory, where the call is correct. A rule that fires on
+correct code gets an allow attribute and then it is not a rule.
+
+Costs: the eight sites now render an error from a two-armed result naming which
+of the scratch name and the final name failed, which is more code at each site
+than `std::fs::write` was.
+
+Uncertain: whether the sweep found every guard of this shape or only the ones
+looked for. The three found by looking were found because one primitive was
+named and every call site of it was listed against every call site that should
+have called it. The same sweep has not been done for the path gates, the digest
+checks or the limit checks.
+
+Sources: `crates/engine/src/atomic.rs`; the twelve `create_file_exclusive` call
+sites; `crates/sources/src/ftp.rs:515` against `crates/cli/src/policy.rs:308`;
+`crates/archive/src/zip_reader.rs` `open_body` against `crates/archive/src/bomb.rs`.
+
+---
+
+## A private cache was created world writable, and the sticky bit was never the guarantee
+
+`share_directory` wrote `0o1777` on the cache root and all fifteen directories
+inside it, unconditionally, on every cache on every unix machine. The record that
+introduced it argued for a shared cache and said reachability is decided by the
+directory the person put the cache in, which is true, and then set a mode that
+does not follow that.
+
+A cache under a home directory is unreachable by anyone else, so the mode was
+harmless there and looked alarming. A cache anywhere reachable was a directory
+any local user could write a name into, and five writes inside it opened fixed or
+guessable names with a call that follows a symlink: `meta/recovered`,
+`pins/<digest>`, `meta/format.<pid>`, and the record and receipt scratch names,
+which carry this process's identifier and a counter that starts at zero. The
+identifier is not a secret: `partial/<pid>-<start>.session` sits in the same
+directory.
+
+The sticky bit does not help with any of them. It stops one user removing or
+renaming an entry that exists. It says nothing about a name that does not exist
+yet, and `meta/recovered`, `pins/<digest>` and `meta/format.<pid>` are all
+absent until the first run writes them.
+
+Chosen: the mode follows what the location already permits. A root whose parent
+no other user may write is created `0700`. A root under a directory another user
+may already write is created `1777`. A root that already exists keeps whichever
+it already is, because whoever made it that way meant it. This is the rule the
+original record argued for, applied to the mode rather than only to the prose.
+
+Not chosen: a configuration key naming the mode. It is one more thing to get
+wrong, and the filesystem already carries the answer in the directory the person
+chose.
+
+Not chosen: `0700` always. contracts.md supports a cache shared between users on
+one machine and the locking record exists to make that work. Removing it to fix
+a mode would be removing a feature to fix a bug.
+
+Costs: a person who made a cache under their home directory and then wanted to
+share it now has to widen the directory themselves, where before every cache was
+already wide. That is the correct direction for the surprise to run in.
+
+Sources: `crates/cache/src/lib.rs` `sharing_of` and `share_directory`;
+`crates/cache/tests/privilege.rs`; the shared cache locking record above;
+contracts.md, modes and who may write.
+
+---
+
+## A fingerprint proves nothing about a file another user could have written
+
+`check_fingerprint` read the recorded `ObjectRecord` and compared it against a
+`stat` of the object: volume, file identifier, size, modified time, changed time.
+It never hashed and never asked who owned the file. Every field it compares is a
+field whoever wrote the file chose, so on a cache shared between users the check
+answers a question the attacker filled in.
+
+`owns_object` already existed, at `storage.rs:431`, and was called from exactly
+one place, `prune.rs:39`.
+
+Chosen: on a shared cache, an object this process does not own is read and
+hashed whatever the verification policy says. On a private cache the fingerprint
+keeps its meaning, which is that nothing changed the object since this run
+published it, and that is a real thing to check cheaply.
+
+Not chosen: hashing every hit. That is what `--verify always` is, and making it
+the default would cost every cache hit on every private cache to close a case
+that only exists on a shared one.
+
+Costs: the first read of another user's object on a shared cache now pays a full
+hash. A shared cache is the configuration where that is worth paying.
+
+Sources: `crates/cache/src/store.rs` `check_fingerprint`;
+`crates/cache/src/storage.rs:431`; contracts.md, modes and who may write.
+
+---
+
+## A credential had a host condition and no scheme condition
+
+`Policy::credential` at `crates/cli/src/policy.rs:308` takes a `Host` and
+nothing else. No scheme reaches it, so a token resolved for a host went out over
+`http://` in the clear. The standing rule in this project is that a credential
+never reaches a host it was not resolved for and that a secret in an output
+stream is a breach; a secret on the wire is worse than either.
+
+Chosen: refuse, naming the host and the scheme, before the request is issued.
+That is what FTP already does at `ftp.rs:515` and consistency between the two
+transports is worth more than the run that would have succeeded.
+
+The exception, stated rather than hidden: a host whose every address is on this
+machine. There is no wire between the two ends for anyone to read, and a fault
+server on loopback is how the credential contract is tested at all, because the
+test server does not speak TLS. Making the rule absolute would have meant either
+deleting four tests that prove the credential drop across a redirect, or
+weakening what they assert. The rule that keeps both is the one that names the
+reason the wire matters.
+
+Also chosen: a redirect that leaves `https` for `http` fails with `network.tls`
+naming both origins. Nothing else in this build degrades silently.
+
+Costs: someone running a private mirror over `http` on another machine, with a
+token, is now refused. They can reach it over `https` or drop the token.
+
+Sources: `crates/sources/src/http.rs` `sent`;
+`crates/sources/tests/credentials.rs`; contracts.md, credentials.
+
+---
+
+## There was no address policy, and there is no flag for one
+
+Nothing anywhere checked what a location resolved to. A manifest, a listing, a
+DOI or a redirect naming `169.254.169.254` was fetched and its body written to
+the cache, which is a credential exfiltration primitive on any machine running
+in a cloud. `engine::network::allowed` sounded like this check and is only the
+offline switch.
+
+Chosen: `engine::address`, refusing loopback, the unspecified address, the
+private ranges, the carrier-grade range, the link-local range, the protocol
+assignment, documentation, benchmarking, multicast and reserved ranges, and
+their ipv6 equivalents including a v4 address embedded in a v6 one. One new
+error kind, `policy.address_refused`, exit 40, and a row in reference.md.
+
+No flag. A flag that re-enables fetching the cloud metadata endpoint has one
+user and it is not the person running the command.
+
+What is checked and what is not: the location a person types is not checked,
+because they can already open any address on their own machine without this
+tool and refusing it would break `fetchloom get http://localhost:8000/x` for no
+gain. Every origin reached by following a redirect is checked. A redirect that
+stays on this machine from a start that was already on this machine crosses no
+boundary and is allowed.
+
+Not closed, and stated in SECURITY.md rather than left implied: the check reads
+what the name resolves to at the moment it is made and the transport resolves
+the name again when it connects, so a name that answers publicly once and
+privately the next time is still reachable. ureq exposes a `Resolver` trait and
+putting the check there would make the addresses checked the addresses connected
+to. It was written that way first and then removed, because the resolver cannot
+tell a person-named location from a redirect and enforcing it there refuses
+every loopback fault server in the suite.
+
+Sources: `crates/engine/src/address.rs`; `crates/engine/tests/address.rs`;
+`crates/sources/src/http.rs` `check_addresses`; `crates/sources/src/ftp.rs:216`.
+
+---
+
+## The zip bomb guard audited the bytes after they had landed
+
+`open_body` bounded the member stream with `source.take(offset.compressed_size)`
+and handed a `DeflateDecoder` back. Deflate reaches about 1032 to 1, so the
+compressed size bounds nothing about the output. `write_files` streamed the whole
+member to disk and then called `guard.observe_bytes(written.len_bytes)`. The
+guard is honest about what it saw and it saw it too late: a 100 MB zip writes
+about 103 GB and then reports `archive.bomb`.
+
+Listing observed `guard.observe_bytes(size)` from the central directory, which
+is a figure the attacker writes.
+
+Chosen: hold the stream to the size the guard was shown. The declared size is
+already the number the entry, byte and ratio limits were checked against, so a
+member that produces more than it declared is a member the guard was lied to
+about, and it stops at the byte that passes the declaration. Producing fewer
+bytes than declared is still an error downstream, so understating does not become
+a way to truncate silently.
+
+Not chosen: passing the guard into the reader so it can refuse mid-stream against
+the run's real budget. That is the more general answer and it threads a mutable
+guard through three readers and the shared source; the declaration bound is one
+struct and closes the same hole.
+
+Confirmed not present in tar: the tar readers bound a member with the size from
+its header, and the outer decompressor's output is consumed entry by entry, each
+observed. `bare.rs` reads the whole decompressor in a loop observing every read.
+Zip was the only one.
+
+Costs: an archive that understates a member's size now fails where it used to
+extract. No writer produces one by accident.
+
+Sources: `crates/archive/src/zip_reader.rs` `Expanded`;
+`crates/archive/tests/bomb.rs`, which produced 4,194,304 bytes against a declared
+64 before the fix.
+
+---
+
+## Four call sites were disciplined where a type would have been correct
+
+`Witness.origin` was `String` and `Event::ResolveAlias` held `from: String` and
+`to: String`, where every other field carrying a location is a `SafeUrl`. The
+audit recorded them as correct by discipline: the three emit sites in
+`crates/cli/src/resolve.rs` called `SafeUrl::new` by hand.
+
+Changing the fields to `SafeUrl` and compiling showed that was not true.
+`ResolveAlias.from` was passed `reference.to_owned()` at all three sites, with no
+redaction at all, so a reference carrying a signed query wrote its signature into
+the event stream. The `to` side was redacted and then flattened back to a
+`String`, which is the shape that makes the field look handled.
+
+That is the whole argument for the type. Discipline at four sites is four
+chances to forget, and one of them had already been forgotten in a way that
+reading the code did not reveal, because three of the four calls were right.
+
+Chosen: `SafeUrl` on both fields. The last session found this same shape in
+`resolution.rs` and it was a real leak there too.
+
+Sources: `crates/engine/src/trust.rs:59`; `crates/engine/src/event.rs:62`;
+`crates/cli/src/resolve.rs:119,146,159`.
+
+---
+
+## A cache in whatever directory you were standing in
+
+`default_cache_dir` fell through to `PathBuf::from(".fetchloom-cache")` when
+`LOCALAPPDATA` was unset on Windows or `HOME` and `XDG_CACHE_HOME` were unset on
+unix, and `default_library_dir` did the same. Neither fallback is documented
+anywhere. A cache in the working directory is surprising on its own, and once
+the mode fix landed it would also be a cache whose sharing was decided by
+whatever directory the person happened to be in.
+
+`XDG_CACHE_HOME` and `XDG_DATA_HOME` were also honored when relative. The base
+directory specification says a relative value is invalid and must be ignored.
+
+Chosen: both fallbacks are removed and both variables are ignored unless
+absolute. With nothing set, the run is refused naming the variables to set and
+the flag that names a directory instead. A message is a better answer than a
+directory the person did not choose.
+
+Costs: a container with no `HOME` set now needs one set, or `--cache-dir`. It
+used to silently write into the working directory, which for a container is
+usually worse.
+
+Sources: `crates/cli/src/settings.rs` `default_cache_dir`, `default_library_dir`,
+`absolute_from`, `no_home`; the XDG base directory specification.
+
+---
+
+## One name for two numbers, and one number in two names
+
+`WINDOW_BYTES` was `1 << 16` in `crates/cli/src/run/ranged.rs` and `1 << 20` in
+`crates/engine/src/tuning.rs`. They are different things: one is how much of a
+range request is read at a time, the other is how many bytes a throughput sample
+covers. Now `RANGE_WINDOW_BYTES` and `RATE_WINDOW_BYTES`.
+
+`WORTH_SAYING` in `crates/cli/src/hint.rs` was `Duration::from_secs(120)` and
+`Limits::credential_offer_threshold` was `Duration::from_secs(120)`. They are the
+same thing: how much time a credential has to save before the run mentions it.
+Session 6 named this and it was still there. Now one `CREDENTIAL_OFFER_THRESHOLD`
+in `limits.rs`, which both read.
+
+`GRACE`, the sixty seconds prune leaves an object alone for, was enforced and
+absent from the limits table in reference.md. Now in it.
+
+`crates/platform/src/lib.rs` gated its implementation module on
+`target_os = "linux"` while callers gate on `cfg(unix)`, so a build for any
+other unix failed on an unresolved import rather than a sentence. macOS and the
+BSDs are not targets and saying so is different from a compiler error. Now a
+`compile_error!` naming what this crate builds for.
+
+Provider origins are in two places and stay there. `provider.rs` holds the origin
+each provider source fetches from and `described.rs` holds a `Reaching::Fixed`
+naming what the describe surface reports, and they are not the same string for
+every provider: figshare fetches one host and reports `https://api.figshare.com`.
+Collapsing them means one table both read, which is the right shape and is a
+refactor of the provider surface rather than a fix. It is a drift risk and not a
+defect, nothing depends on the two agreeing, and it is written down here rather
+than done at the end of a session that has already moved the address policy, the
+cache mode and the credential rule.
+
+Sources: the four sites named above; docs/reference.md, Limits.
+
+---
+
+## A stranger's document could name a file on this machine
+
+`resolve_source_path` took whatever a manifest's `sources` entry said and, if it
+was absolute, returned it unchanged. A croissant, frictionless, pooch or bagit
+document fetched from a server could therefore name `/etc/shadow` and have it
+read, hashed and published into the cache under a digest.
+
+Chosen: a path a manifest states resolves under the directory holding that
+manifest and may not leave it. Absolute, rooted, and climbing out with `..` are
+all refused with `manifest.invalid` naming the directory it had to stay under.
+
+This is stricter than it has to be for the remote case, because a local manifest
+the person wrote themselves is also now held to it. That is deliberate: the same
+rule everywhere is one rule, and a person who wants a file elsewhere names it on
+the command line, which is a different path through the program and is theirs to
+name.
+
+Sources: `crates/cli/src/run/paths.rs` `resolve_source_path`; contracts.md,
+manifests.
+
+---
+
+## The notice every MIT and BSD crate in the graph asks for
+
+There was no third-party notice file. MIT, BSD-3-Clause, ISC, Apache-2.0 section
+4, bzip2-1.0.6 and Unicode-3.0 all require the copyright line and the permission
+notice to travel with a binary, and 155 crates in the graph carry one of them.
+This was the largest legal gap in the audit and it is an obligation rather than
+a courtesy.
+
+Chosen: generate it. `cargo xtask notices` reads `cargo metadata`, drops this
+workspace's own crates, and writes `THIRD-PARTY-NOTICES.md`: a table of what each
+license asks for, a row per crate with version, license and repository, and the
+full text of every licence file each crate ships. `cargo xtask notices --check`
+fails when the file does not match the graph, which is what keeps it true as
+dependencies move.
+
+Not chosen: `cargo-about` or `cargo-bundle-licenses`. Either would be a new
+build-time dependency to produce a file that `cargo metadata` plus a directory
+read already produces, and the template would be a second thing to maintain.
+
+Not chosen: shipping only the license identifiers. The identifier is not the
+notice. MIT asks for the copyright line, and the copyright line is in the file
+the crate ships, not in its manifest.
+
+Where it ships: beside the binary in a release archive, and in the repository so
+a reader can find it without downloading anything. Producing it is this session;
+shipping it is the release session.
+
+Sources: `xtask/src/notices.rs`; `cargo deny list`, which enumerates the same
+graph; `THIRD-PARTY-NOTICES.md`.
+
+---
+
+## What was adopted from the security and compliance checklists, and what was not
+
+A checklist adopted wholesale is not a decision. Each of these was researched
+against the live source rather than from memory, and each is here so nobody
+reopens it from a blog post.
+
+decision.
+
+**OpenSSF Scorecard: adopt four checks, reject the rest as scoring rather than
+security.** of the twenty checks, this repository would pass Binary-Artifacts,
+Dangerous-Workflow, Token-Permissions, Pinned-Dependencies, License, CI-Tests, SAST
+by way of clippy at deny, and Vulnerabilities. it would fail Security-Policy only on
+placement, plus Fuzzing, Signed-Releases, SBOM, Dependency-Update-Tool, Packaging,
+Branch-Protection, Code-Review, Contributors and CII-Best-Practices. four of the
+failures are worth fixing on their own merits and raise the score as a side effect:
+private vulnerability reporting, Dependabot alerts, signed releases with provenance,
+and an SBOM. Contributors wants three organizations and Code-Review wants a
+reviewer, and a single maintainer project cannot satisfy either without theatre.
+running the scorecard action itself is rejected: it is a badge, and this project has
+never shipped a number it did not measure.
+
+**OpenSSF Best Practices badge: reject for now, revisit after release.** the passing
+criteria are mostly met already, and the ones that are not are about the project
+rather than the code: a searchable discussion mechanism, a bug report archive, an
+acknowledged response time. those are commitments to a community that does not exist
+yet, and making them before there is anyone to make them to is the kind of claim
+this project has avoided everywhere else.
+
+**SLSA build provenance: adopt, at build level 2.**
+`actions/attest-build-provenance` gives SLSA v1.0 build level 2 out of the box on a
+public repository, signing an in-toto statement with a short lived Sigstore
+certificate that binds the artifact digest to the workflow, the commit and the
+repository. it costs one step in the release workflow and `id-token: write` plus
+`attestations: write` scoped to that job. level 3 needs a reusable trusted builder
+and is not worth the rewrite for a first release. the release workflow is next
+session's work, so this session produces the decision, not the step.
+
+**SBOM: adopt CycloneDX, generated from the lock, shipped in the release archive.**
+`cargo-cyclonedx` understands the Cargo dependency model and honors
+`SOURCE_DATE_EPOCH`. SPDX is rejected as a second format rather than a better one:
+two SBOMs is two things to keep true. generated in CI at the tagged commit, not
+committed, because a committed SBOM drifts from the lock the moment the lock moves.
+
+**REUSE: reject.** the specification wants a per file `SPDX-FileCopyrightText` and
+`SPDX-License-Identifier` header, or a `REUSE.toml` declaring them in bulk. this
+workspace is uniformly MIT with one `LICENSE` file and a check that denies comments
+in source files, so the header form is unavailable and the bulk form is a second
+file restating what `Cargo.toml` already says. the benefit is a badge and a machine
+readable answer to a question nobody has asked about a single license repository.
+
+**cargo deny advisories rather than cargo-audit: keep what is here, add one line.**
+`cargo deny check` already runs all four checks against the RustSec database in CI,
+and it ran clean during this audit against a freshly fetched database. adding
+`cargo-audit` queries the same database with a second tool. what the advisories
+check is not catching is unmaintained crates, because `unmaintained` is not set in
+`deny.toml`. that is one line, worth adding at `warn` rather than `deny` so a crate
+going quiet is visible without breaking a build on someone else's schedule.
+
+**GitHub security features: enable private vulnerability reporting and Dependabot
+alerts, reject Dependabot version updates and CodeQL, leave secret scanning on.**
+private reporting is what `SECURITY.md` already tells people to use. alerts read
+`Cargo.lock` and overlap `cargo deny`, but arrive without waiting for a CI run,
+which is the point. version updates are rejected: a pull request per patch bump
+against a deliberately pinned lock, in a repository with one maintainer, is noise.
+CodeQL's Rust support is newer than this codebase's lint configuration is strict,
+and `clippy::pedantic` at deny with `unwrap_used`, `expect_used` and `panic` denied
+is the stronger analysis. secret scanning costs nothing and stays on.
+
+**export control: nothing to file.** 15 CFR 742.15(b)(1) states that publicly
+available encryption source code classified under ECCN 5D002 is not subject to the
+EAR. the email notification to BIS and the ENC Encryption Request Coordinator is
+required by 742.15(b)(2) only for source code that "provides or performs
+non-standard cryptography". this project performs no cryptography of its own: it
+links rustls for TLS with published, standardized algorithms, and BLAKE3 and SHA-2
+for hashing, which are published and are not encryption. no notification, no license
+exception, nothing to file before publishing. recorded here so nobody reopens it
+from a blog post.
+
+**trademark: no conflict found, and the search is not exhaustive.** a web search for
+"Fetchloom" as a trademark, a company or a product returns nothing. the adjacent
+registry names are Fetch Software, Fetch Technologies, Fetchly, Fetchsome, FetchGoat
+and Fetch Delivery, none of which is this. the USPTO's own database was not queried
+directly, so this is evidence of absence at the level a web search gives and not a
+clearance opinion.
+
+**provider terms: stay out of it, with two exceptions.** these registries publish
+rate limits and politeness expectations rather than prohibitions on automated
+access. Zenodo documents 60 requests per minute for a guest and 100 for an
+authenticated user, with `X-RateLimit-*` headers and a recommendation to use OAI-PMH
+for bulk. GitHub documents 60 per hour unauthenticated and 5,000 authenticated, a
+100 request concurrency ceiling, and requires a client to honor `retry-after` before
+retrying. this build caps connections to one host at four and honors `Retry-After`
+up to a 60 second ceiling (`crates/engine/src/transfer/retry.rs:24`), which is the
+substance of both. the two exceptions are finding 9, the missing user agent, which
+every one of these operators asks for so they can tell one client from another, and
+redistribution: what a person does with the bytes after they land is between them
+and the publisher, and a tool that tried to police it would be wrong more often than
+right. Hugging Face's terms grant a perpetual license between users for public
+repositories and say nothing about automated access. Kaggle's terms could not be
+read: the page returns no text to a fetch, which is itself an argument for a user
+agent that says who is asking.
+
+**dataset licensing: surface it, do not enforce it.**
+`crates/engine/src/license.rs` already holds a license record with an optional url.
+a run that knows a dataset's license should print it once at the end, the way it
+prints what a name resolved to, because a person who does not know the license
+cannot comply with it. refusing to fetch on a license the tool dislikes is rejected:
+that decision belongs to the person and the tool has no way to be right about it.
+
+**privacy: nothing leaves this machine that the person did not point at.** confirmed
+by search rather than by belief, above. what is stored is the cache, the library, the
+lock, the receipt and the event stream, all under paths the person controls and all
+documented in `reference.md`. what is logged is what `--events` and `FETCHLOOM_LOG`
+say, on stderr and nowhere else.
+
+**SECURITY.md: keep it, add the accepted risks, and resolve the contradiction.** it
+is already better than most, with a scope, an out of scope, and a "fixed" section
+naming real defects in specific numbers. what it could not keep saying was that write access to the cache puts someone inside the boundary while the code granted that access to everyone. findings 1 and 4 decided which half of that sentence survives, and it has been rewritten against what the code now does.
+
+Sources: the live pages for each, read during the audit; `cargo deny check`,
+clean against a freshly fetched advisory database; `crates/engine/src/transfer/retry.rs:24`;
+15 CFR 742.15(b)(1) and (b)(2) as published by the Cornell LII.
+
+---
+
+## Contract rows read against the code, and the one that does not hold
+
+The rows session 6 never read were read. `promote`'s `derived_from` states the
+dataset, the manifest digest and the tree digest, and `tracked.rs:438` writes
+exactly those three. `revert`'s symlink case fails with `cache.corrupt` naming
+the path when the record names a link by its target's digest, at
+`threeway.rs:302`. Cancellation's second interrupt aborts immediately: the
+handler at `main.rs:47` only calls `stop` when the count passes one, so the
+first interrupt sets `requested()` and the run winds down, and the second exits
+at once. The document bounds hold: manifest, listing, lock, plan and metadata all
+read with `Bound::Foreign` and a receipt with `Bound::Own`, node count refused as
+`resource.limit` and nesting depth as `manifest.invalid` naming the depth. Every
+one of the six rows of bundle import's failure table is the kind the table
+states.
+
+The one that does not hold is platform capability caching. contracts.md says a
+volume's capability answer is decided once, that the first detection decides it,
+and that two callers asking at the same time are never given different ones.
+`Platform::volume_capabilities` memoizes only `max_path_length`, against the boot
+that measured it, and re-runs the whole probe on every call. There are two
+callers, `archive/src/extract.rs:303` and `cache/src/lib.rs:130`, so a run
+probes twice and nothing makes the two answers the same one.
+
+Not fixed here, and this is a choice rather than an oversight. The fix is a memo
+on the platform keyed by the probe directory, because the contract also says case
+folding and normalization are measured per directory rather than per volume, and
+that is a change to the shape of the platform seam. Landing it after the session's
+final verification had already started would mean either shipping it unverified or
+paying for a fourth full run, and a caching change in the seam every other crate
+reaches through deserves its own session and its own verify. The contract is right
+and the code is wrong, which is the direction that is safe to leave overnight: the
+answer is recomputed rather than stale.
+
+Sources: `crates/platform/src/lib.rs:241`; contracts.md, platform capabilities;
+`crates/cli/src/command/tracked.rs:438`; `crates/cli/src/run/threeway.rs:302`;
+`crates/cli/src/main.rs:47`; `crates/engine/src/document.rs:22`;
+`crates/cache/src/bundle.rs:193`.
