@@ -39,12 +39,12 @@ clippy:
 [doc("no em dashes anywhere, no comments in rust or python")]
 text dir=".":
     @{{self}} _forbid "em dash" '{{em_dash}}' '{{dir}}'
-    @{{self}} _forbid "rust comment" '{{rust_comment}}' '{{dir}}' '*.rs'
-    @{{self}} _forbid "python comment" '{{python_comment}}' '{{dir}}' '*.py'
+    @{{self}} _forbid "rust comment" '{{rust_comment}}' '{{dir}}' rust
+    @{{self}} _forbid "python comment" '{{python_comment}}' '{{dir}}' py
 
 [private]
-_forbid rule pattern dir glob="*":
-    @rg --hidden --glob '!.git' --line-number --glob '{{glob}}' -e '{{pattern}}' '{{dir}}' && { echo "text rule broken: {{rule}}" >&2; exit 1; } || [ $? -eq 1 ]
+_forbid rule pattern dir type="":
+    @rg --hidden --glob '!.git' --line-number {{ if type == "" { "" } else { "--type " + type } }} -e '{{pattern}}' '{{dir}}' && { echo "text rule broken: {{rule}}" >&2; exit 1; } || [ $? -eq 1 ]
 
 [doc("prove every text rule fails on bad lines and passes good ones")]
 [script]
@@ -56,6 +56,9 @@ text-selftest:
     printf '%s\n' '//! crate doc' '/// item doc' 'let url = "https://example.com";' 'let glob = "**/*.edf";' 'let slashes = "//";' > "$root/good/a.rs"
     printf '%s\n' '#!/usr/bin/env python' '"""Doc."""' 'x = "#not"' > "$root/good/a.py"
     printf 'plain - hyphen\n' > "$root/good/a.txt"
+    mkdir "$root/good/skipped"
+    printf 'skipped/\n' > "$root/good/.ignore"
+    printf 'ignored %s file\n' "$(printf '\xe2\x80\x94')" > "$root/good/skipped/a.txt"
     rule "$root/good" || { echo "text rules refused good input" >&2; exit 1; }
     n=0
     bad() {
