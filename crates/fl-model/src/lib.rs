@@ -2,6 +2,7 @@
 
 mod canonical;
 pub mod digest;
+pub mod filter;
 mod hex;
 pub mod name;
 pub mod path;
