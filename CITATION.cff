@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "if fetchloom helped your research, citing it is appreciated but never required."
+title: fetchloom
+abstract: "uv for research data: declare datasets, fetch them from any repository, DOI or URL, pin every file by hash, store each file once, and cache preprocessing."
+type: software
+authors:
+  - given-names: Nikhil
+    family-names: Y N
+    affiliation: KairosLab India Private Limited
+  - name: KairosLab India Private Limited
+repository-code: "https://github.com/nikhil-yn-aix/fetchloom"
+license: Apache-2.0
+keywords:
+  - research data
+  - reproducibility
+  - datasets
+  - data management
