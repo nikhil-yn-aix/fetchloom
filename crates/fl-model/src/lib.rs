@@ -4,4 +4,5 @@ pub mod digest;
 mod hex;
 pub mod name;
 pub mod path;
+pub mod reference;
 mod text;
