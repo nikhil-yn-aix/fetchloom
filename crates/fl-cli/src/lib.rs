@@ -23,16 +23,10 @@ struct Cli {}
 #[must_use]
 pub fn run() -> ExitCode {
     let written = match Cli::try_parse() {
-        Ok(Cli {}) => welcome(&mut io::stdout().lock()),
-        Err(parse) => match parse.print() {
-            Ok(()) => return exit_code(parse.exit_code()),
-            Err(write) => Err(write),
-        },
+        Ok(Cli {}) => welcome(&mut io::stdout().lock()).map(|()| ExitCode::SUCCESS),
+        Err(parse) => parse.print().map(|()| exit_code(parse.exit_code())),
     };
-    match written {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::FAILURE,
-    }
+    written.unwrap_or(ExitCode::FAILURE)
 }
 
 fn exit_code(code: i32) -> ExitCode {

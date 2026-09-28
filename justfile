@@ -38,14 +38,24 @@ clippy:
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 [doc("no em dashes anywhere, no comments in rust or python")]
+[script]
 text dir=".":
-    @{{self}} _forbid "em dash" '{{em_dash}}' '{{dir}}'
-    @{{self}} _forbid "rust comment" '{{rust_comment}}' '{{dir}}' rust
-    @{{self}} _forbid "python comment" '{{python_comment}}' '{{dir}}' py
-
-[private]
-_forbid rule pattern dir type="":
-    @rg --hidden --glob '!.git' --line-number {{ if type == "" { "" } else { "--type " + type } }} -e '{{pattern}}' '{{dir}}' && { echo "text rule broken: {{rule}}" >&2; exit 1; } || [ $? -eq 1 ]
+    broken=0
+    forbid() {
+        rule=$1
+        pattern=$2
+        shift 2
+        if rg --hidden --glob '!.git' --line-number "$@" -e "$pattern" '{{dir}}'; then
+            echo "text rule broken: $rule" >&2
+            broken=1
+        elif [ $? -ne 1 ]; then
+            exit 2
+        fi
+    }
+    forbid "em dash" '{{em_dash}}'
+    forbid "rust comment" '{{rust_comment}}' --type rust
+    forbid "python comment" '{{python_comment}}' --type py
+    exit "$broken"
 
 [doc("prove every text rule fails on bad lines and passes good ones")]
 [script]
