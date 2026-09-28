@@ -1,9 +1,11 @@
 //! Pure types and rules of fetchloom: references, digests, filters, manifests, locks, trees, step keys, error kinds, events and units. It performs no IO.
 
+mod canonical;
 pub mod digest;
 mod hex;
 pub mod name;
 pub mod path;
 pub mod reference;
 mod text;
+pub mod tree;
 pub mod units;

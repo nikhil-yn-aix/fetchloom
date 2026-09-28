@@ -28,6 +28,7 @@ unimplemented = "deny"
 unwrap_used = "deny"
 
 [workspace.dependencies]
+blake3 = "1.8.7"
 clap = { version = "4.6.7", features = ["derive"] }
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.229", features = ["derive"] }
