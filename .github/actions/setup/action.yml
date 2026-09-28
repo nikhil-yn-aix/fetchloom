@@ -1,0 +1,20 @@
+name: setup
+description: Installs the pinned rust toolchain and every tool the justfile pins, then restores the cargo cache.
+runs:
+  using: composite
+  steps:
+    - id: pins
+      shell: bash
+      run: echo "just=$(sed -n 's/^tools := "\(just@[0-9.]*\),.*/\1/p' justfile)" >> "$GITHUB_OUTPUT"
+    - uses: taiki-e/install-action@v2.87.21
+      with:
+        tool: ${{ steps.pins.outputs.just }}
+    - id: tools
+      shell: bash
+      run: echo "list=$(just --evaluate tools)" >> "$GITHUB_OUTPUT"
+    - uses: taiki-e/install-action@v2.87.21
+      with:
+        tool: ${{ steps.tools.outputs.list }}
+    - shell: bash
+      run: rustup toolchain install
+    - uses: Swatinem/rust-cache@v2.9.2
