@@ -14,3 +14,7 @@ workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
