@@ -17,20 +17,17 @@ fn expected_version() -> String {
 }
 
 #[test]
-fn fl_version_prints_name_and_version() -> TestResult {
-    let out = run(FL, &["--version"])?;
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(String::from_utf8(out.stdout)?, expected_version());
-    assert!(out.stderr.is_empty());
-    Ok(())
-}
-
-#[test]
-fn fetchloom_version_prints_the_same_as_fl() -> TestResult {
-    let out = run(FETCHLOOM, &["--version"])?;
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(String::from_utf8(out.stdout)?, expected_version());
-    assert!(out.stderr.is_empty());
+fn both_executables_print_the_name_and_version() -> TestResult {
+    for binary in [FL, FETCHLOOM] {
+        let out = run(binary, &["--version"])?;
+        assert_eq!(out.status.code(), Some(0), "{binary}");
+        assert_eq!(
+            String::from_utf8(out.stdout)?,
+            expected_version(),
+            "{binary}"
+        );
+        assert!(out.stderr.is_empty(), "{binary}");
+    }
     Ok(())
 }
 
