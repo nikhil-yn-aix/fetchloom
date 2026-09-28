@@ -8,7 +8,8 @@ set script-interpreter := ["bash", "-euo", "pipefail"]
 set script-interpreter := ["C:/Program Files/Git/bin/bash.exe", "-euo", "pipefail"]
 
 tools := "just@1.58.0,ripgrep@15.2.0,cargo-nextest@0.9.146,cargo-llvm-cov@0.9.1,cargo-deny@0.20.2,cargo-machete@0.9.2,cargo-mutants@27.1.0,hyperfine@1.20.0"
-local_tools := "samply@0.13.1,cargo-fuzz@0.13.2"
+cargo_fuzz := "cargo-fuzz@0.13.2"
+local_tools := "samply@0.13.1," + cargo_fuzz
 
 self := quote(just_executable()) + " --justfile " + quote(justfile())
 
@@ -17,9 +18,9 @@ fl_release := "target/release/fl" + exe
 venv_bin := if os_family() == "windows" { "Scripts" } else { "bin" }
 coverage_gates := "fl-model=85 fl-store=85 fl-transfer=85 fl-archive=85 fl-steps=85 fl-sources=75 fl-cli=75"
 
-em_dash :='\x{2014}'
-rust_comment := '(^|[^:/"])//([^/!]|$)|(^|\s)/\*|(^|\s)////'
-python_comment := '^\s*#([^!]|$)|\s#'
+em_dash := '\x{2014}'
+rust_comment := '(^|\s)//([^/!]|$)|(^|\s)/\*|(^|\s)////'
+python_comment := '^\s*#([^!]|$)|\S\s{2,}#'
 
 [doc("list the recipes")]
 default:
@@ -64,8 +65,8 @@ text-selftest:
     trap 'rm -rf "$root"' EXIT
     rule() { {{self}} text "$1"; }
     mkdir "$root/good"
-    printf '%s\n' '//! crate doc' '/// item doc' 'let url = "https://example.com";' 'let glob = "**/*.edf";' 'let slashes = "//";' > "$root/good/a.rs"
-    printf '%s\n' '#!/usr/bin/env python' '"""Doc."""' 'x = "#not"' > "$root/good/a.py"
+    printf '%s\n' '//! crate doc' '/// item doc' 'let url = "https://example.com";' 'let glob = "**/*.edf";' 'let slashes = "//";' 'let joined = format!("{base}//{path}");' > "$root/good/a.rs"
+    printf '%s\n' '#!/usr/bin/env python' '"""Doc."""' 'x = "#not"' 'msg = "see issue #12"' > "$root/good/a.py"
     printf 'plain - hyphen\n' > "$root/good/a.txt"
     mkdir "$root/good/skipped"
     printf 'skipped/\n' > "$root/good/.ignore"
@@ -169,6 +170,7 @@ fuzz-all seconds="600":
         exit 0
     fi
     rustup toolchain install nightly --profile minimal
+    command -v cargo-fuzz >/dev/null || cargo install --locked {{cargo_fuzz}}
     for target in $(cargo +nightly fuzz list); do
         {{self}} fuzz "$target" {{seconds}}
     done
