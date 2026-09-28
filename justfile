@@ -78,12 +78,24 @@ text-selftest:
     bad a.py '#'
     echo "text rules: $n bad inputs refused, good input accepted"
 
+[doc("licenses, bans and sources of every dependency")]
+deny:
+    cargo deny --locked check bans licenses sources
+
+[doc("security advisories for every dependency")]
+advisories:
+    cargo deny --locked check advisories
+
+[doc("no unused dependencies")]
+machete:
+    cargo machete
+
 [doc("every test, every target, no early stop")]
 test:
     cargo nextest run --workspace --locked --no-fail-fast
 
 [doc("every static check")]
-lint: fmt clippy text text-selftest
+lint: fmt clippy text text-selftest deny machete
 
 [doc("lint and test")]
 check: lint test
