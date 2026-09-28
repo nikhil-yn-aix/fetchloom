@@ -68,7 +68,8 @@ impl<'de> Deserialize<'de> for Pattern {
 ///
 /// Each path gets a value from BLAKE3 under the context `fetchloom sample v1` over the seed and
 /// the path; the first eight bytes, little endian, decide.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Deserialize)]
+#[serde(try_from = "SampleFields")]
 pub enum Sample {
     /// Keep the `n` files with the lowest values.
     Count {
@@ -87,6 +88,16 @@ pub enum Sample {
 }
 
 impl Sample {
+    fn checked(self) -> Result<Self, FilterError> {
+        match self {
+            Self::Count { n: 0, .. } => Err(FilterError::EmptySample),
+            Self::Fraction { fraction, .. } if !(fraction > 0.0 && fraction <= 1.0) => {
+                Err(FilterError::Fraction(fraction))
+            }
+            _ => Ok(self),
+        }
+    }
+
     fn value(seed: u64, path: &DataPath) -> u64 {
         let hash = Encoder::new("fetchloom sample v1")
             .u64(seed)
@@ -94,6 +105,37 @@ impl Sample {
             .finish();
         let [b0, b1, b2, b3, b4, b5, b6, b7, ..] = hash;
         u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SampleFields {
+    n: Option<u64>,
+    fraction: Option<f64>,
+    #[serde(default)]
+    seed: u64,
+}
+
+impl TryFrom<SampleFields> for Sample {
+    type Error = FilterError;
+
+    fn try_from(fields: SampleFields) -> Result<Self, Self::Error> {
+        let sample = match fields {
+            SampleFields {
+                n: Some(n),
+                fraction: None,
+                seed,
+            } => Self::Count { n, seed },
+            SampleFields {
+                n: None,
+                fraction: Some(fraction),
+                seed,
+            } => Self::Fraction { fraction, seed },
+            SampleFields { n: Some(_), .. } => return Err(FilterError::SampleBoth),
+            SampleFields { .. } => return Err(FilterError::SampleNeither),
+        };
+        sample.checked()
     }
 }
 
@@ -122,13 +164,7 @@ impl Filters {
         max_file_size: Option<Size>,
         sample: Option<Sample>,
     ) -> Result<Self, FilterError> {
-        match sample {
-            Some(Sample::Count { n: 0, .. }) => return Err(FilterError::EmptySample),
-            Some(Sample::Fraction { fraction, .. }) if !(fraction > 0.0 && fraction <= 1.0) => {
-                return Err(FilterError::Fraction(fraction));
-            }
-            _ => {}
-        }
+        let sample = sample.map(Sample::checked).transpose()?;
         Ok(Self {
             selected: set(&select)?,
             excluded: set(&exclude)?,
@@ -336,6 +372,12 @@ pub enum FilterError {
     /// The patterns could not be combined into one matcher.
     #[error("the patterns cannot be combined: {0}")]
     Set(String),
+    /// A sample with both `n` and `fraction`.
+    #[error("a sample takes either `n` or `fraction`, not both")]
+    SampleBoth,
+    /// A sample with neither `n` nor `fraction`.
+    #[error("a sample needs `n` or `fraction`")]
+    SampleNeither,
     /// A sample of zero files.
     #[error("a sample needs at least one file")]
     EmptySample,
