@@ -14,6 +14,7 @@ self := quote(just_executable()) + " --justfile " + quote(justfile())
 
 exe := if os_family() == "windows" { ".exe" } else { "" }
 fl_release := "target/release/fl" + exe
+venv_bin := if os_family() == "windows" { "Scripts" } else { "bin" }
 coverage_gates := "fl-model=85 fl-store=85 fl-transfer=85 fl-archive=85 fl-steps=85 fl-sources=75 fl-cli=75"
 
 em_dash :='\x{2014}'
@@ -175,6 +176,20 @@ profile *args:
     samply record --save-only --output target/profile.json.gz target/profiling/fl{{exe}} {{args}}
     echo "view it with: samply load target/profile.json.gz"
 
+[doc("the python package: format, lint, tests, then the wheel in a fresh venv")]
+py:
+    uv sync --locked
+    uv run --no-sync ruff format --check python
+    uv run --no-sync ruff check python
+    uv run --no-sync pytest
+    rm -rf target/py-dist target/wheel-venv
+    uv build --wheel --out-dir target/py-dist
+    uv venv --quiet target/wheel-venv
+    uv pip install --quiet --python target/wheel-venv target/py-dist/fetchloom-*.whl
+    target/wheel-venv/{{venv_bin}}/fl{{exe}} --version
+    target/wheel-venv/{{venv_bin}}/fetchloom{{exe}} --version
+    target/wheel-venv/{{venv_bin}}/python{{exe}} -c "import fetchloom; print(fetchloom.find_fl_bin())"
+
 [doc("every static check")]
 lint: fmt clippy text text-selftest deny machete
 
@@ -182,4 +197,4 @@ lint: fmt clippy text text-selftest deny machete
 check: lint test
 
 [doc("everything CI runs on a pull request")]
-ci: lint test cov
+ci: lint test cov py
