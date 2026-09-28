@@ -9,7 +9,7 @@ const FL: &str = env!("CARGO_BIN_EXE_fl");
 const FETCHLOOM: &str = env!("CARGO_BIN_EXE_fetchloom");
 
 fn run(binary: &str, args: &[&str]) -> std::io::Result<Output> {
-    Command::new(binary).args(args).env_clear().output()
+    Command::new(binary).args(args).output()
 }
 
 fn expected_version() -> String {

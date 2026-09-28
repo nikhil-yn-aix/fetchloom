@@ -18,16 +18,25 @@ struct Cli {}
 
 /// Runs `fl` with the arguments of this process and returns its exit code.
 ///
-/// `--help`, `--version` and usage errors are answered by the argument parser, which exits the
-/// process itself with code 0 or 2. With no arguments the welcome is written to stdout, and a
-/// failed write gives exit code 1.
+/// `--help` and `--version` print their text and give 0. A usage error prints the usage to stderr
+/// and gives 2. With no arguments the welcome is written to stdout. A failed write gives 1.
 #[must_use]
 pub fn run() -> ExitCode {
-    let Cli {} = Cli::parse();
-    match welcome(&mut io::stdout().lock()) {
+    let written = match Cli::try_parse() {
+        Ok(Cli {}) => welcome(&mut io::stdout().lock()),
+        Err(parse) => match parse.print() {
+            Ok(()) => return exit_code(parse.exit_code()),
+            Err(write) => Err(write),
+        },
+    };
+    match written {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
     }
+}
+
+fn exit_code(code: i32) -> ExitCode {
+    u8::try_from(code).map_or(ExitCode::FAILURE, ExitCode::from)
 }
 
 fn welcome(out: &mut impl Write) -> io::Result<()> {
@@ -39,11 +48,17 @@ fn welcome(out: &mut impl Write) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    struct Broken;
+    struct Failing {
+        on_write: bool,
+    }
 
-    impl Write for Broken {
-        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::BrokenPipe.into())
+    impl Write for Failing {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.on_write {
+                Err(io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(bytes.len())
+            }
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -64,7 +79,21 @@ mod tests {
 
     #[test]
     fn welcome_returns_the_write_error() {
-        let err = welcome(&mut Broken).unwrap_err();
+        let err = welcome(&mut Failing { on_write: true }).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn welcome_returns_the_flush_error() {
+        let err = welcome(&mut Failing { on_write: false }).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn exit_code_keeps_codes_that_fit_and_fails_the_rest() {
+        assert_eq!(exit_code(0), ExitCode::SUCCESS);
+        assert_eq!(exit_code(2), ExitCode::from(2));
+        assert_eq!(exit_code(-1), ExitCode::FAILURE);
+        assert_eq!(exit_code(256), ExitCode::FAILURE);
     }
 }
