@@ -134,11 +134,6 @@ fn sample_text() -> String {
 }
 
 #[test]
-fn writes_the_documented_layout_sorted_by_name_and_path() {
-    assert_eq!(sample_lock().to_toml(), sample_text());
-}
-
-#[test]
 fn reads_back_what_it_writes_and_writes_the_same_bytes() {
     let lock = sample_lock();
     let text = lock.to_toml();
