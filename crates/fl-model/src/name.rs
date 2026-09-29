@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::text;
 
@@ -46,12 +46,6 @@ impl FromStr for Name {
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         Self::new(text)
-    }
-}
-
-impl Serialize for Name {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0)
     }
 }
 

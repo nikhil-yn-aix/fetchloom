@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 use unicode_normalization::{UnicodeNormalization, is_nfc};
 
 use crate::text;
@@ -101,12 +101,6 @@ impl FromStr for DataPath {
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         Self::new(text)
-    }
-}
-
-impl Serialize for DataPath {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0)
     }
 }
 
