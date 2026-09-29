@@ -2,7 +2,9 @@
 
 mod canonical;
 pub mod digest;
+pub mod document;
 pub mod error;
+pub mod event;
 pub mod filter;
 mod hex;
 pub mod lock;
