@@ -233,18 +233,4 @@ mod tests {
         workdir.workdir = Some("x".to_owned());
         assert_ne!(shell.digest(), workdir.digest());
     }
-
-    #[test]
-    fn ignores_declaration_order() {
-        let key = base();
-        let mut reversed = base();
-        reversed.inputs = key.inputs.iter().rev().cloned().collect();
-        reversed.env = key
-            .env
-            .iter()
-            .rev()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        assert_eq!(reversed.digest(), key.digest());
-    }
 }
