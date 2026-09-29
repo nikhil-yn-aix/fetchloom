@@ -208,5 +208,12 @@ lint: fmt clippy text text-selftest deny machete
 [doc("lint and test")]
 check: lint test
 
+[doc("fmt, clippy, text rules and tests of one crate, the inner loop")]
+quick crate:
+    cargo fmt --all --check
+    cargo clippy --package {{crate}} --all-targets --locked -- -D warnings
+    {{self}} text
+    cargo nextest run --package {{crate}} --locked --no-fail-fast
+
 [doc("everything CI runs on a pull request")]
 ci: lint test cov py
