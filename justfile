@@ -162,7 +162,7 @@ mutants-all:
 
 [doc("run one fuzz target for a number of seconds")]
 fuzz target seconds="600":
-    cargo +nightly fuzz run {{target}} -- -max_total_time={{seconds}}
+    cargo +nightly fuzz run --target "$(rustc -vV | sed -n 's/^host: //p')" {{target}} -- -max_total_time={{seconds}}
 
 [doc("run every fuzz target for a number of seconds each")]
 [script]
