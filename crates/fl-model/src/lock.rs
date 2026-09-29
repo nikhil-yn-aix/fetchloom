@@ -1,21 +1,17 @@
 //! The lock file, `data.lock`: exactly what a project resolved, written only by fetchloom.
 
-use std::fmt;
 use std::ops::Range;
 
-use serde::Deserialize;
-use serde::de::{self, Deserializer, Visitor};
-
-use crate::digest::{Algorithm, Digest, DigestError};
+use crate::digest::Digest;
 use crate::error::ErrorKind;
 use crate::name::Name;
 use crate::path::DataPath;
 use crate::reference::Reference;
 use crate::timestamp::Timestamp;
-use crate::toml_error::explain_error;
 use crate::tree;
 use crate::units::count;
 
+mod read;
 mod write;
 
 /// The most files a dataset lists inline; a larger listing is stored as a tree object instead.
@@ -31,13 +27,11 @@ pub struct Lock {
 }
 
 /// One `[[dataset]]` table: what a dataset entry resolved to.
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LockedDataset {
     /// The dataset's name in `data.toml`.
     pub name: Name,
     /// The reference as written in `data.toml`.
-    #[serde(rename = "ref")]
     pub reference: Reference,
     /// The hash of the dataset's `data.toml` entry when it was locked.
     pub spec: Digest,
@@ -58,27 +52,21 @@ pub struct LockedDataset {
 }
 
 /// One file of a locked dataset.
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LockedFile {
     /// Where the file is inside the dataset.
     pub path: DataPath,
     /// Its size in bytes.
     pub size: u64,
     /// Its BLAKE3 digest, always present.
-    #[serde(deserialize_with = "blake3")]
     pub blake3: [u8; 32],
     /// The SHA-256 digest the publisher states.
-    #[serde(default, deserialize_with = "sha256")]
     pub sha256: Option<[u8; 32]>,
     /// The SHA-1 digest the publisher states.
-    #[serde(default, deserialize_with = "sha1")]
     pub sha1: Option<[u8; 20]>,
     /// The MD5 digest the publisher states.
-    #[serde(default, deserialize_with = "md5")]
     pub md5: Option<[u8; 16]>,
     /// Every known location, origin first.
-    #[serde(default)]
     pub at: Vec<String>,
     /// The archive this file came out of, named by its BLAKE3 digest.
     pub from: Option<Digest>,
@@ -87,16 +75,14 @@ pub struct LockedFile {
 }
 
 /// What a listed file is to its dataset.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     /// An archive whose members are listed with `from`; it is not part of the tree.
     Archive,
 }
 
 /// One `[[step]]` table: the result of a step run.
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LockedStep {
     /// The step's name in `data.toml`.
     pub name: Name,
@@ -106,68 +92,6 @@ pub struct LockedStep {
     pub items: Option<u64>,
     /// The tree hash of the step's output.
     pub tree: Digest,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LockText {
-    #[serde(rename = "version")]
-    _version: Version,
-    #[serde(default, rename = "dataset")]
-    datasets: Vec<LockedDataset>,
-    #[serde(default, rename = "step")]
-    steps: Vec<LockedStep>,
-}
-
-struct Version;
-
-impl<'de> Deserialize<'de> for Version {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        match u64::deserialize(deserializer)? {
-            1 => Ok(Self),
-            other => Err(de::Error::custom(format!(
-                "data.lock version {other} is not supported, this fetchloom reads version 1"
-            ))),
-        }
-    }
-}
-
-struct Hex<const N: usize>(Algorithm);
-
-impl<const N: usize> Visitor<'_> for Hex<N> {
-    type Value = [u8; N];
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} lowercase hex characters", 2 * N)
-    }
-
-    fn visit_str<E: de::Error>(self, text: &str) -> Result<[u8; N], E> {
-        crate::hex::decode(text).ok_or_else(|| {
-            E::custom(DigestError::Hex {
-                algorithm: self.0,
-                length: 2 * N,
-                text: text.to_owned(),
-            })
-        })
-    }
-}
-
-fn blake3<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 32], D::Error> {
-    deserializer.deserialize_str(Hex(Algorithm::Blake3))
-}
-
-fn sha256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error> {
-    deserializer
-        .deserialize_str(Hex(Algorithm::Sha256))
-        .map(Some)
-}
-
-fn sha1<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<[u8; 20]>, D::Error> {
-    deserializer.deserialize_str(Hex(Algorithm::Sha1)).map(Some)
-}
-
-fn md5<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<[u8; 16]>, D::Error> {
-    deserializer.deserialize_str(Hex(Algorithm::Md5)).map(Some)
 }
 
 impl Lock {
@@ -233,15 +157,8 @@ impl Lock {
     /// Returns [`LockError`] for invalid TOML, an unknown key, a `version` other than 1, a value
     /// of the wrong form, or anything [`Lock::new`] refuses.
     pub fn from_toml(text: &str) -> Result<Self, LockError> {
-        let read: LockText = toml::from_str(text).map_err(|err| {
-            let explained = explain_error(&err);
-            LockError {
-                message: explained.message,
-                span: explained.span,
-                help: explained.help,
-            }
-        })?;
-        Self::new(read.datasets, read.steps)
+        let (datasets, steps) = read::read(text)?;
+        Self::new(datasets, steps)
     }
 
     /// The lock as `data.lock` text: the same lock always gives the same bytes.

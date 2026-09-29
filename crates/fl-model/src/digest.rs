@@ -3,9 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
-
-use crate::{hex, text};
+use crate::hex;
 
 /// A hash algorithm fetchloom computes or checks.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -148,12 +146,6 @@ impl FromStr for Digest {
         let algorithm =
             Algorithm::from_name(name).ok_or_else(|| DigestError::Algorithm(name.to_owned()))?;
         Self::from_hex(algorithm, hex)
-    }
-}
-
-impl<'de> Deserialize<'de> for Digest {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        text::deserialize(deserializer)
     }
 }
 
