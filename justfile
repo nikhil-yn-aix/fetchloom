@@ -150,9 +150,11 @@ _coverage-gate:
             below.append(crate)
     sys.exit(1 if below else 0)
 
-[doc("mutation testing of one crate")]
+[doc("mutation testing of one crate's changes against main")]
 mutants crate:
-    cargo mutants --package {{crate}} --test-tool nextest --output target
+    mkdir -p target
+    git diff main... > target/mutants.diff
+    cargo mutants --package {{crate}} --in-diff target/mutants.diff --test-tool nextest --output target
 
 [doc("mutation testing of the whole workspace")]
 mutants-all:
