@@ -7,6 +7,7 @@ use globset::{Candidate, Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Deserializer};
 
 use crate::canonical::Encoder;
+use crate::error::ErrorKind;
 use crate::path::DataPath;
 use crate::text;
 use crate::units::Size;
@@ -327,6 +328,14 @@ pub struct Unmatched {
     pub considered: usize,
     /// Up to three paths of the listing, to show what paths look like.
     pub examples: Vec<DataPath>,
+}
+
+impl Unmatched {
+    /// The kind this error is reported as.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        ErrorKind::SelectionEmpty
+    }
 }
 
 impl fmt::Display for Unmatched {
