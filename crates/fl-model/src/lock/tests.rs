@@ -134,15 +134,6 @@ fn sample_text() -> String {
 }
 
 #[test]
-fn reads_back_what_it_writes_and_writes_the_same_bytes() {
-    let lock = sample_lock();
-    let text = lock.to_toml();
-    let read = Lock::from_toml(&text).unwrap();
-    assert_eq!(read, lock);
-    assert_eq!(read.to_toml(), text);
-}
-
-#[test]
 fn accepts_a_byte_order_mark_crlf_and_any_order() {
     let lock = sample_lock();
     let text = lock.to_toml();

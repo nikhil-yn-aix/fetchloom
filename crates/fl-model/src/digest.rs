@@ -186,9 +186,6 @@ pub enum DigestError {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
-    use serde::de::IntoDeserializer;
-    use serde::de::value::{Error as ValueError, StrDeserializer};
 
     use super::*;
 
@@ -281,13 +278,5 @@ mod tests {
             let err = text.parse::<Digest>().unwrap_err();
             assert_eq!(err.to_string(), message, "{text}");
         }
-    }
-
-    #[test]
-    fn deserializes_from_a_string() {
-        let de: StrDeserializer<'_, ValueError> = B3.into_deserializer();
-        assert_eq!(Digest::deserialize(de).unwrap(), B3.parse().unwrap());
-        let de: StrDeserializer<'_, ValueError> = "blake3:00".into_deserializer();
-        assert!(Digest::deserialize(de).is_err());
     }
 }

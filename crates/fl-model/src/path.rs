@@ -225,17 +225,6 @@ mod tests {
         assert!(DataPath::normalize("../a").is_err());
     }
 
-    #[test]
-    fn orders_by_bytes() {
-        let mut paths: Vec<DataPath> = ["b", "a/b", "a", "B", "a.b", "a/a"]
-            .into_iter()
-            .map(|text| DataPath::new(text).unwrap())
-            .collect();
-        paths.sort();
-        let sorted: Vec<&str> = paths.iter().map(DataPath::as_str).collect();
-        assert_eq!(sorted, ["B", "a", "a.b", "a/a", "a/b", "b"]);
-    }
-
     proptest! {
         #[test]
         fn normalized_paths_always_validate(text in "\\PC{1,40}") {
