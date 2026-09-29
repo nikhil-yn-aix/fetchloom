@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
 
 use crate::digest::{Algorithm, Digest, DigestError};
+use crate::error::ErrorKind;
 use crate::name::Name;
 use crate::path::DataPath;
 use crate::reference::Reference;
@@ -332,6 +333,12 @@ pub struct LockError {
 }
 
 impl LockError {
+    /// The kind this error is reported as.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        ErrorKind::ProjectInvalidLock
+    }
+
     fn plain(message: String) -> Self {
         Self {
             message,

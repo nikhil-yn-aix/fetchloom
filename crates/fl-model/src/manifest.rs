@@ -9,6 +9,7 @@ use serde::de::{self, Deserializer, SeqAccess, Visitor};
 
 use crate::canonical::Encoder;
 use crate::digest::Digest;
+use crate::error::ErrorKind;
 use crate::filter::{FilterError, Filters, Pattern, Sample};
 use crate::name::Name;
 use crate::path::DataPath;
@@ -341,6 +342,12 @@ pub struct ManifestError {
 }
 
 impl ManifestError {
+    /// The kind this error is reported as.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        ErrorKind::ProjectInvalidManifest
+    }
+
     fn plain(message: String) -> Self {
         Self {
             message,

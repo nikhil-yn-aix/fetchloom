@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::error::ErrorKind;
 use crate::name::Name;
 use crate::text;
 
@@ -366,6 +367,14 @@ pub enum ReferenceError {
     /// `croissant:` not followed by an http or https URL.
     #[error("reference `{0}` needs an http or https URL after `croissant:`")]
     Croissant(String),
+}
+
+impl ReferenceError {
+    /// The kind this error is reported as.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        ErrorKind::ReferenceInvalid
+    }
 }
 
 #[cfg(test)]
