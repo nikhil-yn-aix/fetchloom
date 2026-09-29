@@ -354,6 +354,16 @@ impl<'s> Reader<'s> {
     }
 
     fn array_in(&mut self, span: Span) -> Fallible<()> {
+        match self.place {
+            Place::At => return Err(at(span, "`at` must be an array of strings".to_owned())),
+            Place::Files => {
+                return Err(at(
+                    span,
+                    "each entry of `files` must be an inline table".to_owned(),
+                ));
+            }
+            _ => {}
+        }
         let (key, key_span) = self.take_key(span)?;
         match (&mut self.table, self.place, key.as_ref()) {
             (Table::Dataset(fields), Place::Table, "files") => {
