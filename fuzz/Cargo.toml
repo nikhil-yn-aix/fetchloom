@@ -1,0 +1,28 @@
+[package]
+name = "fl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+fl-model = { path = "../crates/fl-model" }
+
+[[bin]]
+name = "lock"
+path = "fuzz_targets/lock.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
