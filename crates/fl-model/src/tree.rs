@@ -50,15 +50,23 @@ impl Tree {
     /// and the 32 digest bytes.
     #[must_use]
     pub fn hash(&self) -> Digest {
-        let mut encoder = Encoder::new("fetchloom tree v1");
-        for entry in &self.entries {
-            encoder
-                .str(entry.path.as_str())
-                .u64(entry.size)
-                .fixed(&entry.blake3);
-        }
-        Digest::Blake3(encoder.finish())
+        hash_sorted(
+            self.entries
+                .iter()
+                .map(|entry| (&entry.path, entry.size, &entry.blake3)),
+        )
     }
+}
+
+/// The tree hash of entries already sorted by path with no path twice, without copying them.
+pub(crate) fn hash_sorted<'a>(
+    entries: impl IntoIterator<Item = (&'a DataPath, u64, &'a [u8; 32])>,
+) -> Digest {
+    let mut encoder = Encoder::new("fetchloom tree v1");
+    for (path, size, blake3) in entries {
+        encoder.str(path.as_str()).u64(size).fixed(blake3);
+    }
+    Digest::Blake3(encoder.finish())
 }
 
 /// Why entries do not make a tree.
