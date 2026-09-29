@@ -213,6 +213,7 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+ "toml_writer",
  "unicode-normalization",
 ]
 
