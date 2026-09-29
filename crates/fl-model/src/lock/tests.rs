@@ -225,92 +225,177 @@ fn refuses_malformed_values() {
     }
 }
 
+const GRAMMAR_CASES: &[(&str, &str, &str)] = &[
+    (
+        "version = 1
+",
+        "version = 1
+version = 1
+",
+        "key `version` appears twice",
+    ),
+    (
+        "name = \"bare\"
+",
+        "name = \"bare\"
+name = \"x\"
+",
+        "key `name` appears twice",
+    ),
+    (
+        "size = 40,",
+        "size = 40, size = 41,",
+        "key `size` appears twice",
+    ),
+    (
+        "[[step]]",
+        "[step]",
+        "data.lock holds only `[[dataset]]` and `[[step]]` tables",
+    ),
+    ("[[step]]", "[[stp]]", "unknown table `[[stp]]`"),
+    (
+        "name = \"bare\"",
+        "name.x = \"bare\"",
+        "data.lock uses no dotted keys",
+    ),
+    (
+        "name = \"bare\"",
+        "name = 1",
+        "`name` must be a string, got `1`",
+    ),
+    (
+        "items = 3",
+        "items = 0x3",
+        "`items` must be a whole number, got `0x3`",
+    ),
+    (
+        "name = \"bare\"
+",
+        "",
+        "missing key `name` in a `[[dataset]]`",
+    ),
+    (
+        "path = \"raw/a.edf\", ",
+        "",
+        "missing key `path` in a `file`",
+    ),
+    (
+        "files = [
+",
+        "files = [
+  1,
+",
+        "each entry of `files` must be an inline table",
+    ),
+    (
+        "at = [\"https://host/raw.tar.gz\"]",
+        "at = \"x\"",
+        "`at` must be an array of strings",
+    ),
+    ("items = 3", "items = [3]", "`items` does not take an array"),
+    (
+        "items = 3",
+        "items = { n = 3 }",
+        "`items` does not take an inline table",
+    ),
+    (
+        "version = 1",
+        "version = 1 1",
+        "string values must be quoted",
+    ),
+    (
+        "files = [
+",
+        "files = \"x\"
+files = [
+",
+        "`files` must be an array of inline tables",
+    ),
+    (
+        "files = [
+",
+        "files = []
+files = [
+",
+        "key `files` appears twice",
+    ),
+    (
+        "at = [\"https://host/raw.tar.gz\"]",
+        "at = [], at = []",
+        "key `at` appears twice",
+    ),
+    (
+        "at = [\"https://host/raw.tar.gz\"]",
+        "at = [[\"x\"]]",
+        "`at` must be an array of strings",
+    ),
+    (
+        "files = [
+",
+        "files = [
+  [1],
+",
+        "each entry of `files` must be an inline table",
+    ),
+    (
+        "size = 40, blake3 = \"2222",
+        "size = 40, blake3 = 7, x = \"2222",
+        "blake3 digests are 64 lowercase hex characters",
+    ),
+    (
+        "name = \"bare\"",
+        r#""na\qme" = "bare""#,
+        "missing escaped value",
+    ),
+];
+
 #[test]
 fn refuses_toml_outside_the_lock_grammar() {
     let text = sample_text();
-    let cases = [
-        (
-            "version = 1
-",
-            "version = 1
-version = 1
-",
-            "key `version` appears twice",
-        ),
-        (
-            "name = \"bare\"
-",
-            "name = \"bare\"
-name = \"x\"
-",
-            "key `name` appears twice",
-        ),
-        (
-            "size = 40,",
-            "size = 40, size = 41,",
-            "key `size` appears twice",
-        ),
-        (
-            "[[step]]",
-            "[step]",
-            "data.lock holds only `[[dataset]]` and `[[step]]` tables",
-        ),
-        ("[[step]]", "[[stp]]", "unknown table `[[stp]]`"),
-        (
-            "name = \"bare\"",
-            "name.x = \"bare\"",
-            "data.lock uses no dotted keys",
-        ),
-        (
-            "name = \"bare\"",
-            "name = 1",
-            "`name` must be a string, got `1`",
-        ),
-        (
-            "items = 3",
-            "items = 0x3",
-            "`items` must be a whole number, got `0x3`",
-        ),
-        (
-            "name = \"bare\"
-",
-            "",
-            "missing key `name` in a `[[dataset]]`",
-        ),
-        (
-            "path = \"raw/a.edf\", ",
-            "",
-            "missing key `path` in a `file`",
-        ),
-        (
-            "files = [
-",
-            "files = [
-  1,
-",
-            "each entry of `files` must be an inline table",
-        ),
-        (
-            "at = [\"https://host/raw.tar.gz\"]",
-            "at = \"x\"",
-            "`at` must be an array of strings",
-        ),
-        ("items = 3", "items = [3]", "`items` does not take an array"),
-        (
-            "items = 3",
-            "items = { n = 3 }",
-            "`items` does not take an inline table",
-        ),
-        (
-            "version = 1",
-            "version = 1 1",
-            "string values must be quoted",
-        ),
-    ];
-    for (from, to, message) in cases {
+    for (from, to, message) in GRAMMAR_CASES {
         let bad = text.replacen(from, to, 1);
         let err = refused(&bad);
         assert!(err.to_string().starts_with(message), "{to}: {err}");
+    }
+}
+
+#[test]
+fn a_missing_key_points_at_its_table() {
+    let cases = [
+        (
+            "version = 1
+
+[[dataset]]
+ref = \"x\"
+",
+            "missing key `name` in a `[[dataset]]`",
+            "dataset",
+        ),
+        (
+            "version = 1
+
+[[step]]
+key = \"x\"
+",
+            "missing key `name` in a `[[step]]`",
+            "step",
+        ),
+        (
+            "version = 1
+
+[[dataset]]
+files = [
+  { size = 1 },
+]
+",
+            "missing key `path` in a `file`",
+            "{",
+        ),
+    ];
+    for (text, message, points_at) in cases {
+        let err = refused(text);
+        assert_eq!(err.to_string(), message);
+        assert_eq!(&text[err.span.unwrap()], points_at, "{message}");
     }
 }
 
