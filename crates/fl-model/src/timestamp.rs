@@ -3,10 +3,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
-
-use crate::text;
-
 /// A UTC time to the second in RFC 3339 form, `2026-09-28T10:00:00Z`, on a real calendar date.
 ///
 /// It is only ever read and written, never taken from a clock here.
@@ -64,12 +60,6 @@ fn valid(bytes: &[u8]) -> bool {
 impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for Timestamp {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        text::deserialize(deserializer)
     }
 }
 

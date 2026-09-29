@@ -108,6 +108,7 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+ "toml_parser",
  "toml_writer",
  "unicode-normalization",
 ]

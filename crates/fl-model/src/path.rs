@@ -25,11 +25,7 @@ impl DataPath {
     ///
     /// Returns the [`PathError`] naming the first rule `text` breaks.
     pub fn new(text: &str) -> Result<Self, PathError> {
-        validate(text)?;
-        if !is_nfc(text) {
-            return Err(PathError::NotNfc(text.to_owned()));
-        }
-        Ok(Self(text.to_owned()))
+        Self::try_from(text.to_owned())
     }
 
     /// Converts `text` to NFC, then validates it, for paths as sources list them.
@@ -82,6 +78,19 @@ fn validate(text: &str) -> Result<(), PathError> {
         }
     }
     Ok(())
+}
+
+impl TryFrom<String> for DataPath {
+    type Error = PathError;
+
+    /// Validates `text` as [`DataPath::new`] does, keeping its allocation.
+    fn try_from(text: String) -> Result<Self, PathError> {
+        validate(&text)?;
+        if !is_nfc(&text) {
+            return Err(PathError::NotNfc(text));
+        }
+        Ok(Self(text))
+    }
 }
 
 impl fmt::Display for DataPath {

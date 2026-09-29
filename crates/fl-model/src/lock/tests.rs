@@ -209,12 +209,12 @@ fn refuses_malformed_values() {
         (
             "role = \"archive\"",
             "role = \"member\"",
-            "unknown variant `member`, expected `archive`",
+            "role `member` is not known, expected `archive`",
         ),
         (
             "size = 1834",
             "size = -1",
-            "invalid value: integer `-1`, expected u64",
+            "`size` must be a whole number, got `-1`",
         ),
     ];
     for (from, to, message) in cases {
@@ -222,6 +222,95 @@ fn refuses_malformed_values() {
         let err = refused(&bad);
         assert!(err.to_string().starts_with(message), "{to}: {err}");
         assert!(err.span.is_some(), "{to}");
+    }
+}
+
+#[test]
+fn refuses_toml_outside_the_lock_grammar() {
+    let text = sample_text();
+    let cases = [
+        (
+            "version = 1
+",
+            "version = 1
+version = 1
+",
+            "key `version` appears twice",
+        ),
+        (
+            "name = \"bare\"
+",
+            "name = \"bare\"
+name = \"x\"
+",
+            "key `name` appears twice",
+        ),
+        (
+            "size = 40,",
+            "size = 40, size = 41,",
+            "key `size` appears twice",
+        ),
+        (
+            "[[step]]",
+            "[step]",
+            "data.lock holds only `[[dataset]]` and `[[step]]` tables",
+        ),
+        ("[[step]]", "[[stp]]", "unknown table `[[stp]]`"),
+        (
+            "name = \"bare\"",
+            "name.x = \"bare\"",
+            "data.lock uses no dotted keys",
+        ),
+        (
+            "name = \"bare\"",
+            "name = 1",
+            "`name` must be a string, got `1`",
+        ),
+        (
+            "items = 3",
+            "items = 0x3",
+            "`items` must be a whole number, got `0x3`",
+        ),
+        (
+            "name = \"bare\"
+",
+            "",
+            "missing key `name` in a `[[dataset]]`",
+        ),
+        (
+            "path = \"raw/a.edf\", ",
+            "",
+            "missing key `path` in a `file`",
+        ),
+        (
+            "files = [
+",
+            "files = [
+  1,
+",
+            "each entry of `files` must be an inline table",
+        ),
+        (
+            "at = [\"https://host/raw.tar.gz\"]",
+            "at = \"x\"",
+            "`at` must be an array of strings",
+        ),
+        ("items = 3", "items = [3]", "`items` does not take an array"),
+        (
+            "items = 3",
+            "items = { n = 3 }",
+            "`items` does not take an inline table",
+        ),
+        (
+            "version = 1",
+            "version = 1 1",
+            "string values must be quoted",
+        ),
+    ];
+    for (from, to, message) in cases {
+        let bad = text.replacen(from, to, 1);
+        let err = refused(&bad);
+        assert!(err.to_string().starts_with(message), "{to}: {err}");
     }
 }
 

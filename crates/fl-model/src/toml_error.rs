@@ -28,6 +28,12 @@ fn explain(message: &str) -> (String, Option<String>) {
         return (message.to_owned(), None);
     };
     let valid: Vec<&str> = expected.split('`').skip(1).step_by(2).collect();
+    let (message, help) = unknown_key(key, &valid);
+    (message, Some(help))
+}
+
+/// The message for a key outside `valid`, and help naming the closest valid key.
+pub(crate) fn unknown_key(key: &str, valid: &[&str]) -> (String, String) {
     let help = valid
         .iter()
         .min_by_key(|candidate| distance(key, candidate))
@@ -35,7 +41,7 @@ fn explain(message: &str) -> (String, Option<String>) {
             || "this table takes no keys".to_owned(),
             |closest| format!("the closest valid key is `{closest}`"),
         );
-    (format!("unknown key `{key}`"), Some(help))
+    (format!("unknown key `{key}`"), help)
 }
 
 fn distance(a: &str, b: &str) -> usize {
