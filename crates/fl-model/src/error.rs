@@ -59,6 +59,7 @@ kinds! {
     AuthRequired = "auth.required" => 40, "A source needs credentials that are not configured.";
     AuthRejected = "auth.rejected" => 40, "A source refused the configured credentials.";
     TermsRequired = "terms.required" => 40, "A source needs its terms accepted first.";
+    LocalIo = "local.io" => 50, "A file operation on a local disk failed.";
     LocalUnrepresentable = "local.unrepresentable" => 50, "A path cannot exist on this filesystem.";
     ProjectInvalidManifest = "project.invalid_manifest" => 50, "`data.toml` cannot be read.";
     ProjectInvalidLock = "project.invalid_lock" => 50, "`data.lock` cannot be read.";
@@ -124,6 +125,7 @@ mod tests {
         ("auth.required", 40),
         ("auth.rejected", 40),
         ("terms.required", 40),
+        ("local.io", 50),
         ("local.unrepresentable", 50),
         ("project.invalid_manifest", 50),
         ("project.invalid_lock", 50),
