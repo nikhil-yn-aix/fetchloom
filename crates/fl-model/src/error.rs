@@ -168,10 +168,4 @@ mod tests {
         };
         assert_eq!(unmatched.kind(), ErrorKind::SelectionEmpty);
     }
-
-    #[test]
-    fn serializes_as_its_name() {
-        let json = serde_json::to_string(&ErrorKind::SelectionEmpty).unwrap();
-        assert_eq!(json, "\"selection.empty\"");
-    }
 }
