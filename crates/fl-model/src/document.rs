@@ -71,12 +71,35 @@ pub struct Work {
     pub bytes_up: u64,
     /// Files placed in the project.
     pub files_linked: u64,
+    /// Files placed in the project, by how they were placed.
+    pub links: Links,
+    /// Objects added to a tier that it did not hold before.
+    pub objects_ingested: u64,
+    /// Bytes written into tiers.
+    pub bytes_written: u64,
+    /// Bytes copied to place files in the project.
+    pub bytes_copied: u64,
+    /// Files read again to check their hash.
+    pub files_rehashed: u64,
     /// Objects found, per tier.
     pub tier_hits: BTreeMap<String, u64>,
     /// Requests retried.
     pub retries: u64,
     /// Milliseconds spent, per phase of the command.
     pub phase_ms: BTreeMap<String, u64>,
+}
+
+/// How many files were placed in the project with each link mode.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize)]
+pub struct Links {
+    /// Copy on write clones.
+    pub reflink: u64,
+    /// Hardlinks to objects.
+    pub hardlink: u64,
+    /// Symbolic links to objects.
+    pub symlink: u64,
+    /// Real copies.
+    pub copy: u64,
 }
 
 #[cfg(test)]
@@ -101,7 +124,10 @@ mod tests {
                 r#"{"schema":1,"command":"sync","status":"error","result":{},"#,
                 r#""warnings":["slow mirror"],"#,
                 r#""errors":[{"kind":"selection.empty","message":"`*.edf` matched none of 12 files","help":null,"subject":"eeg"}],"#,
-                r#""work":{"requests":0,"bytes_down":0,"bytes_up":0,"files_linked":0,"tier_hits":{"local":3},"retries":0,"phase_ms":{}}}"#,
+                r#""work":{"requests":0,"bytes_down":0,"bytes_up":0,"files_linked":0,"#,
+                r#""links":{"reflink":0,"hardlink":0,"symlink":0,"copy":0},"#,
+                r#""objects_ingested":0,"bytes_written":0,"bytes_copied":0,"files_rehashed":0,"#,
+                r#""tier_hits":{"local":3},"retries":0,"phase_ms":{}}}"#,
             )
         );
     }
