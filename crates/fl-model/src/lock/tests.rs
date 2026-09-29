@@ -262,8 +262,13 @@ fn refuses_what_breaks_the_lock_rules() {
 
 #[test]
 fn new_refuses_what_cannot_be_written() {
+    let largest = LockedFile {
+        size: i64::MAX.unsigned_abs(),
+        ..file("a", 1, 1)
+    };
+    Lock::new(vec![dataset("x", vec![largest])], Vec::new()).unwrap();
     let too_big = LockedFile {
-        size: u64::MAX,
+        size: i64::MAX.unsigned_abs() + 1,
         ..file("a", 1, 1)
     };
     let err = Lock::new(vec![dataset("x", vec![too_big])], Vec::new()).unwrap_err();
@@ -272,15 +277,19 @@ fn new_refuses_what_cannot_be_written() {
         "file `a` of dataset `x` is larger than a lock can record"
     );
     let mut many = step("s");
-    many.items = Some(u64::MAX);
+    many.items = Some(i64::MAX.unsigned_abs());
+    Lock::new(Vec::new(), vec![many.clone()]).unwrap();
+    many.items = Some(i64::MAX.unsigned_abs() + 1);
     let err = Lock::new(Vec::new(), vec![many]).unwrap_err();
     assert_eq!(
         err.to_string(),
         "step `s` has more items than a lock can record"
     );
-    let files: Vec<LockedFile> = (0..=INLINE_FILES_MAX)
+    let mut files: Vec<LockedFile> = (0..INLINE_FILES_MAX)
         .map(|i| file(&format!("f{i}"), 1, 1))
         .collect();
+    Lock::new(vec![dataset("x", files.clone())], Vec::new()).unwrap();
+    files.push(file("g", 1, 1));
     let err = Lock::new(vec![dataset("x", files)], Vec::new()).unwrap_err();
     assert_eq!(
         err.to_string(),
