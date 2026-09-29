@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::error::ErrorKind;
 use crate::name::Name;
@@ -293,12 +293,6 @@ impl fmt::Display for Reference {
     }
 }
 
-impl Serialize for Reference {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.text)
-    }
-}
-
 impl<'de> Deserialize<'de> for Reference {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         text::deserialize(deserializer)
@@ -532,6 +526,8 @@ mod tests {
             ),
             ("ham10000", Target::Name("ham10000".to_owned())),
             ("HAM10000", Target::Name("HAM10000".to_owned())),
+            ("a_b:x", Target::Name("a_b:x".to_owned())),
+            ("1ab:x", Target::Name("1ab:x".to_owned())),
         ];
         check(&cases);
     }
@@ -563,6 +559,7 @@ mod tests {
             ("https:///x", "reference `https:///x` names no host"),
             ("s3://", "reference `s3://` names no host"),
             ("file://", "reference `file://` names no path"),
+            ("file:x", "reference `file:x` needs `file://`"),
             ("doi:", "`doi:` is not a DOI, expected `doi:10.NNNN/suffix`"),
             (
                 "doi:11.1/x",

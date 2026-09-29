@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::{hex, text};
 
@@ -148,12 +148,6 @@ impl FromStr for Digest {
         let algorithm =
             Algorithm::from_name(name).ok_or_else(|| DigestError::Algorithm(name.to_owned()))?;
         Self::from_hex(algorithm, hex)
-    }
-}
-
-impl Serialize for Digest {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
     }
 }
 

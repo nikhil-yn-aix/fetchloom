@@ -50,19 +50,19 @@ impl fmt::Display for Bytes {
             return write!(f, "{bytes} B{suffix}");
         }
         let bytes = u128::from(bytes);
-        let mut unit = 1_u128;
-        for name in BINARY {
+        let mut unit = 1024_u128;
+        let mut index = 0;
+        while rounded(bytes, unit) >= 1024 && index + 1 < BINARY.len() {
             unit *= 1024;
-            let tenths = rounded(bytes * 10, unit);
-            if tenths < 100 {
-                return write!(f, "{}.{} {name}{suffix}", tenths / 10, tenths % 10);
-            }
-            let whole = rounded(bytes, unit);
-            if whole < 1024 || name == "EiB" {
-                return write!(f, "{whole} {name}{suffix}");
-            }
+            index += 1;
         }
-        Ok(())
+        let name = BINARY[index];
+        let tenths = rounded(bytes * 10, unit);
+        if tenths < 100 {
+            write!(f, "{}.{} {name}{suffix}", tenths / 10, tenths % 10)
+        } else {
+            write!(f, "{} {name}{suffix}", rounded(bytes, unit))
+        }
     }
 }
 
@@ -329,6 +329,9 @@ mod tests {
             ("1 kb", 1000),
             ("1 KB", 1000),
             ("2 gib", 2 * GIB),
+            ("1 GB", 1_000_000_000),
+            ("1 MiB", 1 << 20),
+            ("1.25 KiB", 1280),
             ("1 TB", 1_000_000_000_000),
             ("1 TiB", 1024 * GIB),
             ("0.5 KiB", 512),
