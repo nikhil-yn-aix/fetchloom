@@ -10,7 +10,7 @@ use crate::canonical::Encoder;
 use crate::error::ErrorKind;
 use crate::path::DataPath;
 use crate::text;
-use crate::units::Size;
+use crate::units::{Size, count};
 
 /// A glob matched against the whole path of a file inside a dataset.
 ///
@@ -226,10 +226,10 @@ impl Filters {
         let mut kept: Vec<usize> = match self.sample {
             None => return survivors.into_iter().map(|(index, _)| index).collect(),
             Some(Sample::Fraction { fraction, seed }) => {
-                let limit = fraction * 18_446_744_073_709_551_616.0;
+                let limit = share_of_range(fraction);
                 survivors
                     .into_iter()
-                    .filter(|(_, path)| f64_below(Sample::value(seed, path), limit))
+                    .filter(|(_, path)| u128::from(Sample::value(seed, path)) < limit)
                     .map(|(index, _)| index)
                     .collect()
             }
@@ -249,11 +249,12 @@ impl Filters {
 }
 
 #[expect(
-    clippy::cast_precision_loss,
-    reason = "a sample value only needs to fall on one side of the limit"
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a fraction in (0, 1] times 2^64 is a positive integer part at most 2^64"
 )]
-fn f64_below(value: u64, limit: f64) -> bool {
-    (value as f64) < limit
+fn share_of_range(fraction: f64) -> u128 {
+    (fraction * 18_446_744_073_709_551_616.0) as u128
 }
 
 fn set(patterns: &[Pattern]) -> Result<GlobSet, FilterError> {
@@ -341,12 +342,11 @@ impl Unmatched {
 impl fmt::Display for Unmatched {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_list(f, &self.patterns)?;
-        let noun = if self.considered == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        write!(f, " matched none of {} {noun}", self.considered)?;
+        write!(
+            f,
+            " matched none of {}",
+            count(self.considered as u64, "file", "files")
+        )?;
         if !self.examples.is_empty() {
             f.write_str(", which look like ")?;
             write_list(f, &self.examples)?;
@@ -646,6 +646,11 @@ mod tests {
         assert_eq!(picks, [7, 11, 19]);
         assert_ne!(picks, sampled(Sample::Count { n: 3, seed: 2 }, &files));
         assert_eq!(sampled(Sample::Count { n: 30, seed: 1 }, &files).len(), 20);
+    }
+
+    #[test]
+    fn a_whole_fraction_keeps_even_the_highest_value() {
+        assert!(u128::from(u64::MAX) < share_of_range(1.0));
     }
 
     #[test]
