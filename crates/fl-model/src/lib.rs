@@ -9,6 +9,7 @@ pub mod manifest;
 pub mod name;
 pub mod path;
 pub mod reference;
+pub mod step;
 mod text;
 pub mod timestamp;
 mod toml_error;
