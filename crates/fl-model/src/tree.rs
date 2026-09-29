@@ -2,7 +2,7 @@
 
 use crate::canonical::Encoder;
 use crate::digest::Digest;
-use crate::path::DataPath;
+use crate::path::{DataPath, PathError};
 
 /// One file of a tree.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -56,6 +56,66 @@ impl Tree {
                 .map(|entry| (&entry.path, entry.size, &entry.blake3)),
         )
     }
+
+    /// The stored form of a tree object: the bytes [`Tree::hash`] reads, entry after entry.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let length = self
+            .entries
+            .iter()
+            .map(|entry| ENTRY_FIXED + entry.path.as_str().len())
+            .sum();
+        let mut bytes = Vec::with_capacity(length);
+        for entry in &self.entries {
+            let path = entry.path.as_str().as_bytes();
+            bytes.extend_from_slice(&(path.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(path);
+            bytes.extend_from_slice(&entry.size.to_le_bytes());
+            bytes.extend_from_slice(&entry.blake3);
+        }
+        bytes
+    }
+
+    /// Reads a tree object written by [`Tree::encode`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeError`] when the bytes end inside an entry, a path is not UTF-8 or not a
+    /// valid dataset path, or the paths are not in strictly increasing order.
+    pub fn decode(mut bytes: &[u8]) -> Result<Self, TreeError> {
+        let mut entries: Vec<TreeEntry> = Vec::new();
+        while !bytes.is_empty() {
+            let path_length = usize::try_from(u64::from_le_bytes(take(&mut bytes)?))
+                .map_err(|_| TreeError::Truncated)?;
+            if bytes.len() < path_length {
+                return Err(TreeError::Truncated);
+            }
+            let (path, rest) = bytes.split_at(path_length);
+            bytes = rest;
+            let path = String::from_utf8(path.to_vec()).map_err(|_| TreeError::NotUtf8)?;
+            let path = DataPath::try_from(path)?;
+            if let Some(last) = entries.last()
+                && last.path >= path
+            {
+                return Err(TreeError::Unordered {
+                    before: last.path.clone(),
+                    after: path,
+                });
+            }
+            let size = u64::from_le_bytes(take(&mut bytes)?);
+            let blake3 = take(&mut bytes)?;
+            entries.push(TreeEntry { path, size, blake3 });
+        }
+        Ok(Self { entries })
+    }
+}
+
+const ENTRY_FIXED: usize = 8 + 8 + 32;
+
+fn take<const N: usize>(bytes: &mut &[u8]) -> Result<[u8; N], TreeError> {
+    let (head, rest) = bytes.split_first_chunk::<N>().ok_or(TreeError::Truncated)?;
+    *bytes = rest;
+    Ok(*head)
 }
 
 /// The tree hash of entries already sorted by path with no path twice, without copying them.
@@ -75,6 +135,23 @@ pub enum TreeError {
     /// Two entries share a path.
     #[error("path `{0}` appears twice in one dataset")]
     Duplicate(DataPath),
+    /// A tree object ends in the middle of an entry.
+    #[error("tree object ends inside an entry")]
+    Truncated,
+    /// A tree object holds a path that is not UTF-8.
+    #[error("tree object holds a path that is not UTF-8")]
+    NotUtf8,
+    /// A tree object holds a path that is not a valid dataset path.
+    #[error(transparent)]
+    Path(#[from] PathError),
+    /// A tree object lists its paths out of order or twice.
+    #[error("tree object lists `{after}` after `{before}`")]
+    Unordered {
+        /// The path listed first.
+        before: DataPath,
+        /// The path listed after it, which should sort later.
+        after: DataPath,
+    },
 }
 
 #[cfg(test)]
@@ -181,6 +258,36 @@ mod tests {
         fn any_order_of_the_same_entries_hashes_the_same((entries, shuffled) in files_and_a_shuffle()) {
             let sorted = Tree::new(entries).unwrap().hash();
             prop_assert_eq!(Tree::new(shuffled).unwrap().hash(), sorted);
+        }
+
+        #[test]
+        fn any_tree_decodes_from_its_encoding((entries, _) in files_and_a_shuffle()) {
+            let tree = Tree::new(entries).unwrap();
+            prop_assert_eq!(Tree::decode(&tree.encode()).unwrap(), tree);
+        }
+    }
+
+    #[test]
+    fn decode_refuses_damaged_encodings() {
+        let two = Tree::new(vec![entry("a", 1, 1), entry("b", 2, 2)])
+            .unwrap()
+            .encode();
+        let one = |path: &[u8]| {
+            let mut bytes = (path.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(path);
+            bytes.extend_from_slice(&[0; 40]);
+            bytes
+        };
+        let swapped = [&two[two.len() / 2..], &two[..two.len() / 2]].concat();
+        let cases: [(&[u8], &str); 5] = [
+            (&two[..two.len() - 1], "tree object ends inside an entry"),
+            (&two[..3], "tree object ends inside an entry"),
+            (&swapped, "tree object lists `a` after `b`"),
+            (&one(&[0xff]), "tree object holds a path that is not UTF-8"),
+            (&one(b"../x"), "dataset path `../x` has a `..` component"),
+        ];
+        for (bytes, message) in cases {
+            assert_eq!(Tree::decode(bytes).unwrap_err().to_string(), message);
         }
     }
 }
