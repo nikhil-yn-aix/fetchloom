@@ -53,4 +53,11 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "nightly failed on $(date -u +%F)" --body "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: |
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "nightly failed"' --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "failed again on $(date -u +%F): $run"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "nightly failed" --body "failed on $(date -u +%F): $run"
+          fi
