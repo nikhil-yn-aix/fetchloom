@@ -89,8 +89,12 @@ impl Linked {
 
 type Create = fn(Mode, &Path, &Path) -> io::Result<u64>;
 
-/// The number of files linked at once by [`Linker::link_all`].
-const JOBS: usize = 4;
+/// The number of threads [`Linker::link_all`] links on.
+const JOBS: usize = 8;
+
+/// The files a thread links in one go, neighbours by path, so threads mostly work in different
+/// directories and do not queue on one directory's lock.
+const CHUNK: usize = 32;
 
 /// Links objects of one tier into a project.
 ///
@@ -172,10 +176,25 @@ impl<'t> Linker<'t> {
 
     /// Links every pair of object and destination on a small pool of threads, and returns each
     /// result in order. One failure does not stop the others.
+    ///
+    /// Each thread takes a run of files that sit next to each other by path, so threads rarely
+    /// create names in the same directory at the same moment.
     pub fn link_all(&self, files: &[(Digest, Destination)]) -> Vec<Result<Linked, StoreError>> {
-        parallel::map(files, JOBS, |(digest, destination)| {
-            self.link(digest, destination)
-        })
+        let mut order: Vec<usize> = (0..files.len()).collect();
+        order.sort_by(|a, b| files[*a].1.path().cmp(files[*b].1.path()));
+        let chunks: Vec<&[usize]> = order.chunks(CHUNK).collect();
+        let linked = parallel::map(&chunks, JOBS, |chunk| {
+            chunk
+                .iter()
+                .map(|index| {
+                    let (digest, destination) = &files[*index];
+                    (*index, self.link(digest, destination))
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut results: Vec<_> = linked.into_iter().flatten().collect();
+        results.sort_unstable_by_key(|(index, _)| *index);
+        results.into_iter().map(|(_, result)| result).collect()
     }
 
     fn place(&self, mode: Mode, object: &Path, target: &Path) -> io::Result<u64> {

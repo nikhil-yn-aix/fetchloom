@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use fl_model::digest::Digest;
 use fl_model::path::DataPath;
 use fl_store::data_dir::{DataDir, Destination};
+use fl_store::fingerprint;
 use fl_store::link::{Ladder, Linker, Mode};
 use fl_store::tier::{Sharing, Tier};
 use tempfile::TempDir;
@@ -31,6 +32,7 @@ struct Objects {
 
 static SOURCE: OnceLock<Source> = OnceLock::new();
 static STORED: OnceLock<Objects> = OnceLock::new();
+static LAID_OUT: OnceLock<TempDir> = OnceLock::new();
 
 fn main() {
     divan::main();
@@ -39,6 +41,9 @@ fn main() {
     }
     if let Some(objects) = STORED.get() {
         let _ = fs::remove_dir_all(objects.dir.path());
+    }
+    if let Some(dir) = LAID_OUT.get() {
+        let _ = fs::remove_dir_all(dir.path());
     }
 }
 
@@ -171,4 +176,37 @@ fn link_10000(bencher: divan::Bencher) {
             assert!(results.iter().all(Result::is_ok));
             (results, pairs, dir)
         });
+}
+
+#[expect(clippy::expect_used, reason = "a bench cannot run without its input")]
+fn laid_out() -> &'static TempDir {
+    LAID_OUT.get_or_init(|| {
+        let dir = TempDir::new().expect("a temporary directory");
+        for i in 0..OBJECTS {
+            let dataset = i / (DIRECTORIES * FILES);
+            let directory = i / FILES % DIRECTORIES;
+            let file = i % FILES;
+            let parent = dir
+                .path()
+                .join("data")
+                .join(format!("ds{dataset:02}"))
+                .join(format!("d{directory:02}"));
+            fs::create_dir_all(&parent).expect("a dataset directory");
+            fs::write(parent.join(format!("f{file:02}.bin")), format!("file {i}"))
+                .expect("a data file");
+        }
+        dir
+    })
+}
+
+/// Fingerprints 10,000 files laid out as 20 datasets of 20 directories of 25 files, cache warm.
+#[divan::bench(sample_count = 10, sample_size = 1)]
+#[expect(clippy::expect_used, reason = "a bench cannot run without its input")]
+fn scan_10000(bencher: divan::Bencher) {
+    let root = laid_out().path().join("data");
+    bencher.bench_local(|| {
+        let found = fingerprint::scan(&root).expect("a scanned data directory");
+        assert_eq!(found.len(), OBJECTS);
+        found
+    });
 }
