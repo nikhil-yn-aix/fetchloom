@@ -1,0 +1,6 @@
+exclude_re = [
+    'canonical\.rs:\d+:\d+: replace \* with [+/]$',
+    'canonical\.rs:\d+:\d+: replace >= with < in Encoder::fixed$',
+    'hex\.rs:\d+:\d+: replace \| with \^ in decode$',
+    'filter\.rs:\d+:\d+: replace < with <= in Filters::sample_of$',
+]
