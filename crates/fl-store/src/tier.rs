@@ -10,7 +10,8 @@ use fl_model::document::Work;
 use crate::error::{StoreError, io};
 use crate::layout::{DIRECTORIES, Layout};
 use crate::mode;
-use crate::staged::{BUFFER, Scratch, Staged, create_unique, reserve};
+use crate::platform;
+use crate::staged::{BUFFER, Scratch, Staged, create_unique};
 
 /// Who shares a tier, which decides the modes of the directories it creates.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -119,7 +120,7 @@ impl Tier {
         let (file, path) = create_unique(&self.layout.dir("tmp"))?;
         let scratch = Scratch::new(path);
         if let Some(length) = length {
-            reserve(&file, length).map_err(io("reserve space for", scratch.path()))?;
+            platform::reserve(&file, length).map_err(io("reserve space for", scratch.path()))?;
         }
         Ok(Staged {
             file,
@@ -152,7 +153,7 @@ impl Tier {
         {
             return Err(StoreError::Length { expected, written });
         }
-        mode::seal(&file).map_err(io("make read only", scratch.path()))?;
+        platform::seal(&file).map_err(io("make read only", scratch.path()))?;
         drop(file);
         let blake3 = *hasher.finalize().as_bytes();
         let digest = Digest::Blake3(blake3);

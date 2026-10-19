@@ -9,6 +9,7 @@ use fl_model::digest::Digest;
 
 use crate::error::{StoreError, io};
 use crate::parallel;
+use crate::platform;
 use crate::staged::BUFFER;
 
 /// The number of directories listed at once by [`scan`].
@@ -44,7 +45,7 @@ impl Fingerprint {
         Self {
             size: metadata.len(),
             modified: nanos(metadata.modified().ok()),
-            identity: identity(metadata),
+            identity: platform::identity(metadata),
         }
     }
 }
@@ -111,20 +112,10 @@ pub fn hash_file(path: &Path) -> Result<Digest, StoreError> {
     Ok(Digest::Blake3(*hasher.finalize().as_bytes()))
 }
 
-fn nanos(time: Option<SystemTime>) -> u128 {
+/// Nanoseconds since the unix epoch, or 0 for a time before it or none.
+pub(crate) fn nanos(time: Option<SystemTime>) -> u128 {
     time.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |since| since.as_nanos())
-}
-
-#[cfg(unix)]
-fn identity(metadata: &Metadata) -> u128 {
-    use std::os::unix::fs::MetadataExt;
-    (u128::from(metadata.dev()) << 64) | u128::from(metadata.ino())
-}
-
-#[cfg(windows)]
-fn identity(metadata: &Metadata) -> u128 {
-    nanos(metadata.created().ok())
 }
 
 #[cfg(test)]

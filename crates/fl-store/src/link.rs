@@ -10,8 +10,8 @@ use fl_model::document::Work;
 
 use crate::data_dir::Destination;
 use crate::error::{StoreError, io};
-use crate::mode;
 use crate::parallel;
+use crate::platform;
 use crate::tier::Tier;
 
 /// How a file was placed in a project.
@@ -210,8 +210,8 @@ impl<'t> Linker<'t> {
             _ => {}
         }
         let bytes = (self.create)(mode, object, &staging)?;
-        let finished =
-            finish(mode, self.ladder.writable, &staging).and_then(|()| replace(&staging, target));
+        let finished = finish(mode, self.ladder.writable, &staging)
+            .and_then(|()| platform::replace(&staging, target));
         if finished.is_err() {
             let _ = fs::remove_file(&staging);
         }
@@ -229,67 +229,17 @@ fn staging_path(target: &Path) -> PathBuf {
 
 fn finish(mode: Mode, writable: bool, path: &Path) -> io::Result<()> {
     match mode {
-        Mode::Reflink | Mode::Copy => mode::set_writable(path, writable),
+        Mode::Reflink | Mode::Copy => platform::set_writable(path, writable),
         Mode::Hardlink | Mode::Symlink => Ok(()),
     }
 }
 
 fn create(mode: Mode, object: &Path, to: &Path) -> io::Result<u64> {
     match mode {
-        Mode::Reflink => reflink(object, to).map(|()| 0),
+        Mode::Reflink => platform::reflink(object, to).map(|()| 0),
         Mode::Hardlink => fs::hard_link(object, to).map(|()| 0),
-        Mode::Symlink => symlink(object, to).map(|()| 0),
+        Mode::Symlink => platform::symlink(object, to).map(|()| 0),
         Mode::Copy => fs::copy(object, to),
-    }
-}
-
-#[cfg(unix)]
-fn reflink(object: &Path, to: &Path) -> io::Result<()> {
-    reflink_copy::reflink(object, to)
-}
-
-#[cfg(windows)]
-fn reflink(_object: &Path, _to: &Path) -> io::Result<()> {
-    Err(io::ErrorKind::Unsupported.into())
-}
-
-#[cfg(unix)]
-fn symlink(object: &Path, to: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(object, to)
-}
-
-#[cfg(windows)]
-fn symlink(object: &Path, to: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_file(object, to)
-}
-
-#[cfg(unix)]
-fn replace(staging: &Path, target: &Path) -> io::Result<()> {
-    fs::rename(staging, target)
-}
-
-/// Renames `staging` over `target`. Windows refuses to rename over a read only file, and a
-/// hardlinked destination shares its read only attribute with the object, so the attribute is
-/// cleared through a handle, the rename runs, and the same handle sets it again on the file that
-/// was replaced.
-#[cfg(windows)]
-fn replace(staging: &Path, target: &Path) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const READ_AND_WRITE_ATTRIBUTES: u32 = 0x80 | 0x100;
-    match fs::rename(staging, target) {
-        Err(error)
-            if error.kind() == io::ErrorKind::PermissionDenied
-                && fs::symlink_metadata(target).is_ok_and(|m| m.permissions().readonly()) =>
-        {
-            let replaced = fs::OpenOptions::new()
-                .access_mode(READ_AND_WRITE_ATTRIBUTES)
-                .open(target)?;
-            mode::set_handle_readonly(&replaced, false)?;
-            let renamed = fs::rename(staging, target);
-            mode::set_handle_readonly(&replaced, true)?;
-            renamed
-        }
-        done => done,
     }
 }
 

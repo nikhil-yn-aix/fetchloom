@@ -89,25 +89,6 @@ pub(crate) fn create_unique(dir: &Path) -> Result<(File, PathBuf), StoreError> {
     Err(io("create", &path)(io::ErrorKind::AlreadyExists.into()))
 }
 
-/// Reserves `length` bytes for `file`, so a full disk fails before anything is written.
-#[cfg(unix)]
-pub(crate) fn reserve(file: &File, length: u64) -> io::Result<()> {
-    use rustix::io::Errno;
-    match rustix::fs::fallocate(file, rustix::fs::FallocateFlags::empty(), 0, length) {
-        Ok(()) => Ok(()),
-        Err(errno) if [Errno::OPNOTSUPP, Errno::NOTSUP, Errno::NOSYS].contains(&errno) => {
-            file.set_len(length)
-        }
-        Err(errno) => Err(errno.into()),
-    }
-}
-
-/// Reserves `length` bytes for `file`, so a full disk fails before anything is written.
-#[cfg(windows)]
-pub(crate) fn reserve(file: &File, length: u64) -> io::Result<()> {
-    file.set_len(length)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +122,7 @@ mod tests {
     fn reserve_sets_the_length() {
         let temp = tempfile::tempdir().unwrap();
         let (file, _path) = create_unique(temp.path()).unwrap();
-        reserve(&file, 4096).unwrap();
+        crate::platform::reserve(&file, 4096).unwrap();
         assert_eq!(file.metadata().unwrap().len(), 4096);
     }
 }

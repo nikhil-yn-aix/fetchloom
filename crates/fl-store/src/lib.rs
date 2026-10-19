@@ -8,6 +8,12 @@ mod layout;
 pub mod link;
 mod mode;
 mod parallel;
+#[cfg(unix)]
+#[path = "unix.rs"]
+mod platform;
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod platform;
 pub mod roots;
 pub mod staged;
 pub mod tier;
