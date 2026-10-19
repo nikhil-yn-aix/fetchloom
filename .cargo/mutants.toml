@@ -32,4 +32,14 @@ exclude_re = [
     'replace <impl Write for Staged>::flush -> io::Result<\(\)> with Ok\(\(\)\)$',
     # ext4 and tmpfs never clone, so a successful clone is not reached on the test machines
     'unix\.rs:\d+:\d+: replace reflink -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # an existing directory that is not readable as a tier fails before this guard, and a non permission error with objects present cannot be provoked
+    'tier\.rs:\d+:\d+: replace is_read_only -> bool with true$',
+    # only another writer placing the name between the check and the failed publish reaches it, which the process race test hits in some runs only
+    'tier\.rs:\d+:\d+: replace match guard exists\(target\) with false in Tier::place$',
+    # only a filesystem without hard links falls through to the rename, and no test machine has one
+    'unix\.rs:\d+:\d+: replace match guard matches!\( error\.kind\(\), io::ErrorKind::AlreadyExists \| io::ErrorKind::NotFound \) with true in publish$',
+    # a staging name that cannot be removed cannot be created either, so linking fails the same way one step later
+    'link\.rs:\d+:\d+: replace match guard error\.kind\(\) != io::ErrorKind::NotFound with false in Linker<.t>::place$',
+    # after a rename the scratch name is gone, so removing it again finds nothing unless another host took the same name in a shared tmp
+    'replace Scratch::keep with \(\)$',
 ]
