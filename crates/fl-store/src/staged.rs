@@ -95,7 +95,9 @@ pub(crate) fn reserve(file: &File, length: u64) -> io::Result<()> {
     use rustix::io::Errno;
     match rustix::fs::fallocate(file, rustix::fs::FallocateFlags::empty(), 0, length) {
         Ok(()) => Ok(()),
-        Err(Errno::OPNOTSUPP | Errno::NOTSUP | Errno::NOSYS) => file.set_len(length),
+        Err(errno) if [Errno::OPNOTSUPP, Errno::NOTSUP, Errno::NOSYS].contains(&errno) => {
+            file.set_len(length)
+        }
         Err(errno) => Err(errno.into()),
     }
 }
