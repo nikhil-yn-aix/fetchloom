@@ -17,7 +17,13 @@ fl-model.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+divan.workspace = true
 tempfile.workspace = true
 
+[[bench]]
+name = "store"
+harness = false
+
 [target.'cfg(unix)'.dependencies]
+reflink-copy.workspace = true
 rustix.workspace = true
