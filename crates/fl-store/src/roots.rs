@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{StoreError, io};
-use crate::mode;
+use crate::platform;
 use crate::staged::{Scratch, create_unique};
 use crate::tier::Tier;
 
@@ -53,7 +53,7 @@ impl Tier {
         let (mut file, path) = create_unique(&self.layout().dir("tmp"))?;
         let scratch = Scratch::new(path);
         file.write_all(text.as_bytes())
-            .and_then(|()| mode::seal(&file))
+            .and_then(|()| platform::seal(&file))
             .map_err(io("write", scratch.path()))?;
         drop(file);
         self.place(scratch, &record).map(|_| ())
