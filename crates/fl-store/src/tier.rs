@@ -13,6 +13,10 @@ use crate::mode;
 use crate::platform;
 use crate::staged::{BUFFER, Scratch, Staged, create_unique};
 
+/// Files up to this size are written in one go, so reserving space first buys nothing and costs
+/// a call.
+const RESERVE_ABOVE: u64 = 1 << 20;
+
 /// Who shares a tier, which decides the modes of the directories it creates.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sharing {
@@ -119,7 +123,7 @@ impl Tier {
     pub fn stage(&self, length: Option<u64>) -> Result<Staged, StoreError> {
         let (file, path) = create_unique(&self.layout.dir("tmp"))?;
         let scratch = Scratch::new(path);
-        if let Some(length) = length {
+        if let Some(length) = length.filter(|length| *length > RESERVE_ABOVE) {
             platform::reserve(&file, length).map_err(io("reserve space for", scratch.path()))?;
         }
         Ok(Staged {
@@ -199,20 +203,20 @@ impl Tier {
     }
 
     /// Publishes the finished file of `scratch` at `target` unless something is there already,
-    /// and says whether this call placed it. A hard link fails when the name exists, so of
+    /// and says whether this call placed it. Publishing fails when the name is taken, so of
     /// writers racing for one name exactly one places it. A failure while another writer's file
     /// holds the name counts as already there.
     pub(crate) fn place(&self, scratch: Scratch, target: &Path) -> Result<bool, StoreError> {
         if exists(target) {
             return Ok(false);
         }
-        let mut result = publish(scratch.path(), target);
+        let mut result = platform::publish(scratch.path(), target);
         if let Err(error) = &result
             && error.kind() == io::ErrorKind::NotFound
             && let Some(parent) = target.parent()
         {
             mode::create_dir(parent, self.sharing).map_err(io("create directory", parent))?;
-            result = publish(scratch.path(), target);
+            result = platform::publish(scratch.path(), target);
         }
         match result {
             Ok(renamed) => {
@@ -224,23 +228,6 @@ impl Tier {
             Err(_) if exists(target) => Ok(false),
             Err(error) => Err(io("place", scratch.path())(error)),
         }
-    }
-}
-
-/// Hard links `scratch` at `target`, which fails when the name exists, and says whether it
-/// renamed instead, on a filesystem without hard links.
-fn publish(scratch: &Path, target: &Path) -> io::Result<bool> {
-    match fs::hard_link(scratch, target) {
-        Ok(()) => Ok(false),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
-            ) =>
-        {
-            Err(error)
-        }
-        Err(_) => fs::rename(scratch, target).map(|()| true),
     }
 }
 

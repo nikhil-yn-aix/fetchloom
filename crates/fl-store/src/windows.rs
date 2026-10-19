@@ -74,8 +74,37 @@ pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
     }
 }
 
+/// Renames `scratch` to `target` and says it renamed. Every object and record is read only
+/// before it is placed, and windows refuses to rename over a read only file, so of writers
+/// racing for one name exactly one places it, at the cost of one call instead of a link and a
+/// removal.
+pub(crate) fn publish(scratch: &Path, target: &Path) -> io::Result<bool> {
+    fs::rename(scratch, target).map(|()| true)
+}
+
 fn set_handle_readonly(file: &File, readonly: bool) -> io::Result<()> {
     let mut permissions = file.metadata()?.permissions();
     permissions.set_readonly(readonly);
     file.set_permissions(permissions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publishing_onto_a_read_only_object_fails_and_leaves_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (scratch, target) = (temp.path().join("scratch"), temp.path().join("target"));
+        fs::write(&scratch, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        set_writable(&target, false).unwrap();
+        let error = publish(&scratch, &target).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        set_writable(&target, true).unwrap();
+        fs::remove_file(&target).unwrap();
+        assert!(publish(&scratch, &target).unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
 }
