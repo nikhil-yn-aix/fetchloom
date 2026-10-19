@@ -1,10 +1,8 @@
 //! A tier on a local or network filesystem: a directory of objects and the records beside them.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use fl_model::digest::Digest;
 use fl_model::document::Work;
@@ -12,7 +10,7 @@ use fl_model::document::Work;
 use crate::error::{StoreError, io};
 use crate::layout::{DIRECTORIES, Layout};
 use crate::mode;
-use crate::staged::{Scratch, Staged};
+use crate::staged::{BUFFER, Scratch, Staged, create_unique, reserve};
 
 /// Who shares a tier, which decides the modes of the directories it creates.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -241,44 +239,6 @@ fn can_write(tmp: &Path) -> Result<bool, StoreError> {
         Err(StoreError::Io { source, .. }) if refuses_writes(&source) => Ok(false),
         Err(error) => Err(error),
     }
-}
-
-const NAME_ATTEMPTS: usize = 64;
-
-/// The size of every buffer the store reads files through.
-pub(crate) const BUFFER: usize = 1 << 20;
-
-/// Creates a new file in `dir` under a name no other writer holds: the process id and a counter,
-/// in hex, tried again with the next counter when the name exists, which happens only when a
-/// dead process or another host left it.
-pub(crate) fn create_unique(dir: &Path) -> Result<(File, PathBuf), StoreError> {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let mut path = dir.to_owned();
-    for _ in 0..NAME_ATTEMPTS {
-        let count = NEXT.fetch_add(1, Ordering::Relaxed);
-        path = dir.join(format!("{:x}-{count:x}", process::id()));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((file, path)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(io("create", &path)(error)),
-        }
-    }
-    Err(io("create", &path)(io::ErrorKind::AlreadyExists.into()))
-}
-
-#[cfg(unix)]
-fn reserve(file: &File, length: u64) -> io::Result<()> {
-    use rustix::io::Errno;
-    match rustix::fs::fallocate(file, rustix::fs::FallocateFlags::empty(), 0, length) {
-        Ok(()) => Ok(()),
-        Err(Errno::OPNOTSUPP | Errno::NOTSUP | Errno::NOSYS) => file.set_len(length),
-        Err(errno) => Err(errno.into()),
-    }
-}
-
-#[cfg(windows)]
-fn reserve(file: &File, length: u64) -> io::Result<()> {
-    file.set_len(length)
 }
 
 #[cfg(test)]
