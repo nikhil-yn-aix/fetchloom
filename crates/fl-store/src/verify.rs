@@ -1,6 +1,7 @@
 //! Verification: rehash objects and delete those whose bytes no longer match their name.
 
 use std::io;
+use std::path::Path;
 
 use fl_model::digest::Digest;
 use fl_model::document::Work;
@@ -49,19 +50,7 @@ impl Tier {
                 }
             }
         }
-        let results = parallel::map(&objects, JOBS, |(digest, path)| {
-            let actual = match hash_file(path) {
-                Err(StoreError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-                    return Ok(None);
-                }
-                hashed => hashed?,
-            };
-            if actual == *digest {
-                return Ok(None);
-            }
-            files::remove(path)?;
-            Ok(Some(*digest))
-        });
+        let results = parallel::map(&objects, JOBS, |(digest, path)| check(digest, path));
         let mut verified = Verified {
             checked: objects.len() as u64,
             damaged: Vec::new(),
@@ -71,5 +60,43 @@ impl Tier {
         }
         verified.damaged.sort_unstable();
         Ok(verified)
+    }
+}
+
+/// Rehashes the object at `path` and removes it when its bytes no longer hash to `digest`,
+/// naming it. An object already gone, taken by gc while verify ran, is passed over.
+fn check(digest: &Digest, path: &Path) -> Result<Option<Digest>, StoreError> {
+    let actual = match hash_file(path) {
+        Err(StoreError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        hashed => hashed?,
+    };
+    if actual == *digest {
+        return Ok(None);
+    }
+    files::remove(path)?;
+    Ok(Some(*digest))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn a_gone_object_is_passed_over_and_an_unreadable_one_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let digest = Digest::Blake3(*blake3::hash(b"kept").as_bytes());
+        let kept = temp.path().join("kept");
+        fs::write(&kept, b"kept").unwrap();
+        assert_eq!(check(&digest, &kept).unwrap(), None);
+        assert_eq!(check(&digest, &temp.path().join("gone")).unwrap(), None);
+        assert!(check(&digest, temp.path()).is_err());
+        let damaged = temp.path().join("damaged");
+        fs::write(&damaged, b"changed").unwrap();
+        assert_eq!(check(&digest, &damaged).unwrap(), Some(digest));
+        assert!(!damaged.exists());
     }
 }
