@@ -12,6 +12,7 @@ use fl_model::lock::{Lock, LockedDataset, LockedFile, LockedStep};
 use fl_model::name::Name;
 use fl_model::path::DataPath;
 use fl_model::tree::{Tree, TreeEntry};
+use fl_store::error::StoreError;
 use fl_store::gc::{Collect, Collected};
 use fl_store::tier::{Sharing, Tier};
 use tempfile::TempDir;
@@ -216,4 +217,70 @@ fn what_cannot_be_read_stops_gc_before_anything_goes() -> TestResult {
     );
     assert!(exists(&store.object_path(unneeded)?));
     Ok(())
+}
+
+#[test]
+fn a_file_exactly_as_old_as_the_grace_period_stays() -> TestResult {
+    let store = Store::new()?;
+    let leftover = store.path("tmp").join("dead-writer");
+    fs::write(&leftover, b"half")?;
+    let modified = fs::metadata(&leftover)?.modified()?;
+    let at_grace = store.tier.collect(&Collect {
+        now: modified + HOUR,
+        grace: HOUR,
+        dry_run: false,
+    })?;
+    assert!(at_grace.removed.is_empty(), "{:?}", at_grace.removed);
+    assert!(exists(&leftover));
+    let past_grace = store.tier.collect(&Collect {
+        now: modified + HOUR + Duration::from_secs(1),
+        grace: HOUR,
+        dry_run: false,
+    })?;
+    assert_eq!(past_grace.removed, [leftover]);
+    Ok(())
+}
+
+#[test]
+fn a_tree_object_path_that_is_a_directory_stops_gc() -> TestResult {
+    let store = Store::new()?;
+    let entries = [entry("x", [5; 32])?];
+    let digest = Tree::new(entries.to_vec())?.hash();
+    let name = digest.to_string();
+    let hex = name.split_once(':').ok_or("no colon")?.1;
+    fs::create_dir(store.path("trees").join(hex))?;
+    let lock = Lock::new(vec![dataset("a", &entries, false)?], Vec::new())?;
+    store.lock("project", &lock)?;
+    let error = collect_error(&store)?;
+    assert!(
+        matches!(error, StoreError::Io { op: "read", .. }),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_directory_in_tmp_older_than_the_grace_period_stops_gc() -> TestResult {
+    let store = Store::new()?;
+    let stray = store.path("tmp").join("stray");
+    fs::create_dir(&stray)?;
+    let error = collect_error(&store)?;
+    assert!(
+        matches!(error, StoreError::Io { op: "remove", .. }),
+        "{error}"
+    );
+    assert!(stray.is_dir());
+    Ok(())
+}
+
+fn collect_error(store: &Store) -> Result<StoreError, Box<dyn Error>> {
+    store
+        .tier
+        .collect(&Collect {
+            now: SystemTime::now() + 2 * HOUR,
+            grace: HOUR,
+            dry_run: false,
+        })
+        .err()
+        .ok_or_else(|| "gc ran".into())
 }

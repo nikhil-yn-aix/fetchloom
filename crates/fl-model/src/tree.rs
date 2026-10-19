@@ -290,4 +290,21 @@ mod tests {
             assert_eq!(Tree::decode(bytes).unwrap_err().to_string(), message);
         }
     }
+
+    #[test]
+    fn a_path_longer_than_the_fixed_part_round_trips() {
+        let long = format!("{}/{}", "d".repeat(40), "f".repeat(60));
+        assert!(long.len() > 48);
+        let tree = Tree::new(vec![entry("a", 1, 1), entry(&long, 2, 2)]).unwrap();
+        let bytes = tree.encode();
+        assert_eq!(bytes.len(), 2 * ENTRY_FIXED + 1 + long.len());
+        assert_eq!(Tree::decode(&bytes).unwrap(), tree);
+    }
+
+    #[test]
+    fn a_length_prefix_beyond_the_bytes_left_is_truncated() {
+        let mut bytes = 100_u64.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(Tree::decode(&bytes).unwrap_err(), TreeError::Truncated);
+    }
 }

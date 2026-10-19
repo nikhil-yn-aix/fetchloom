@@ -123,4 +123,27 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn dropping_a_root_twice_succeeds_and_a_directory_in_its_place_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let tier = Tier::open(&temp.path().join("tier"), Sharing::Private).unwrap();
+        let lock = temp.path().join("data.lock");
+        fs::write(
+            &lock,
+            b"version = 1
+",
+        )
+        .unwrap();
+        tier.register_root(&lock).unwrap();
+        let roots = tier.roots().unwrap();
+        tier.drop_root(&roots[0]).unwrap();
+        tier.drop_root(&roots[0]).unwrap();
+        fs::create_dir(&roots[0].record).unwrap();
+        let error = tier.drop_root(&roots[0]).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Io { op: "remove", .. }),
+            "{error}"
+        );
+    }
 }

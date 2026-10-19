@@ -243,4 +243,51 @@ mod tests {
             fl_model::error::ErrorKind::LocalUnrepresentable
         );
     }
+
+    #[test]
+    fn a_parent_replaced_by_a_regular_file_reports_the_failed_create() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        let data = DataDir::new(root.clone());
+        data.destination(&path("eeg"), &path("a/x")).unwrap();
+        fs::remove_dir_all(root.join("eeg")).unwrap();
+        fs::write(root.join("eeg"), b"").unwrap();
+        let error = data.destination(&path("eeg"), &path("b/x")).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::Io {
+                    op: "create directory",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_second_data_dir_over_the_same_directories_succeeds() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        for _ in 0..2 {
+            let data = DataDir::new(root.clone());
+            let destination = data.destination(&path("eeg"), &path("sub/x.edf")).unwrap();
+            assert_eq!(
+                destination.path(),
+                root.join("eeg").join("sub").join("x.edf")
+            );
+        }
+    }
+
+    #[test]
+    fn a_regular_file_where_a_dataset_directory_belongs_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("eeg"), b"").unwrap();
+        let error = DataDir::new(root)
+            .destination(&path("eeg"), &path("x"))
+            .unwrap_err();
+        assert!(matches!(error, StoreError::NotADirectory { .. }), "{error}");
+    }
 }

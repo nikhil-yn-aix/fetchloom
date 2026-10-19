@@ -107,3 +107,41 @@ pub(crate) fn reserve(file: &File, length: u64) -> io::Result<()> {
 pub(crate) fn reserve(file: &File, length: u64) -> io::Result<()> {
     file.set_len(length)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_taken_name_is_skipped_for_the_next_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let taken: Vec<PathBuf> = (0..2)
+            .map(|count| temp.path().join(format!("{:x}-{count:x}", process::id())))
+            .collect();
+        for path in &taken {
+            std::fs::write(path, b"").unwrap();
+        }
+        let (_file, path) = create_unique(temp.path()).unwrap();
+        assert!(!taken.contains(&path));
+        assert_eq!(path.parent(), Some(temp.path()));
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = create_unique(&temp.path().join("missing")).unwrap_err();
+        assert!(
+            matches!(&error, StoreError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reserve_sets_the_length() {
+        let temp = tempfile::tempdir().unwrap();
+        let (file, _path) = create_unique(temp.path()).unwrap();
+        reserve(&file, 4096).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 4096);
+    }
+}
