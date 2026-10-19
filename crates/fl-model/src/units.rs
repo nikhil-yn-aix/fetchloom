@@ -52,7 +52,7 @@ impl fmt::Display for Bytes {
         let bytes = u128::from(bytes);
         let mut unit = 1024_u128;
         let mut index = 0;
-        while rounded(bytes, unit) >= 1024 && index + 1 < BINARY.len() {
+        while rounded(bytes, unit) >= 1024 {
             unit *= 1024;
             index += 1;
         }

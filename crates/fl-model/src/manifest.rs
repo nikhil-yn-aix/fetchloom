@@ -573,6 +573,14 @@ keywords = ["eeg", "motor imagery"]
                 "[datasets.x]\nref = \"zenodo:1\"\nsample = { fraction = 2.0 }\n",
                 "a sample fraction must be above 0 and at most 1, got 2",
             ),
+            (
+                "[datasets.x]\nref = 1\n",
+                "invalid type: integer `1`, expected a string",
+            ),
+            (
+                "[datasets.x]\nref = \"zenodo:1\"\nmax_file_size = true\n",
+                "invalid type: boolean `true`, expected a size like \"2 GiB\" or a number of bytes",
+            ),
             ("[steps.s]\nrun = []\n", "`run` needs a program to run"),
             ("[steps.s]\nrun = \"\"\n", "`run` needs a program to run"),
             (
