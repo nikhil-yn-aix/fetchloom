@@ -142,28 +142,42 @@ fn replacing_a_hardlinked_file_keeps_the_old_object_read_only() -> TestResult {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// More links than the highest per file limit of the filesystems CI runs on: 65,000 on ext4.
+const LINK_CAP: u32 = 70_000;
+
 #[test]
 fn an_object_at_its_link_limit_falls_to_the_next_mode_for_that_file() -> TestResult {
     let temp = temp()?;
     let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
     let full = object(&tier, b"full")?;
     let spare = object(&tier, b"spare")?;
-    let full_path = tier.locate(&full).ok_or("object gone")?.path;
-    let links = temp.path().join("links");
-    fs::create_dir(&links)?;
-    let mut count = 0_u32;
-    loop {
-        match fs::hard_link(&full_path, links.join(count.to_string())) {
-            Ok(()) => count += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::TooManyLinks => break,
-            Err(error) => return Err(error.into()),
-        }
-    }
     let data = DataDir::new(temp.path().join("data"));
     let linker = Linker::new(&tier, Ladder::AUTO);
+    let expected = if clones(temp.path())? {
+        Mode::Reflink
+    } else {
+        let full_path = tier.locate(&full).ok_or("object gone")?.path;
+        let links = temp.path().join("links");
+        fs::create_dir(&links)?;
+        let mut limited = false;
+        for count in 0..LINK_CAP {
+            match fs::hard_link(&full_path, links.join(count.to_string())) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::TooManyLinks => {
+                    limited = true;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if limited {
+            Mode::Symlink
+        } else {
+            Mode::Hardlink
+        }
+    };
     let at_limit = linker.link(&full, &destination(&data, "full")?)?;
-    assert_eq!(at_limit.mode, Mode::Symlink, "after {count} links");
+    assert_eq!(at_limit.mode, expected);
     assert_eq!(fs::read(destination(&data, "full")?.path())?, b"full");
     let next = linker.link(&spare, &destination(&data, "spare")?)?;
     assert!(
