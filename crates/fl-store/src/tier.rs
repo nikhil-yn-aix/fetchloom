@@ -1,7 +1,7 @@
 //! A tier on a local or network filesystem: a directory of objects and the records beside them.
 
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -153,6 +153,34 @@ impl Tier {
         })
     }
 
+    /// Copies the file at `path` into the tier, reading, hashing and writing in one pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] when the file cannot be read or the object written, and
+    /// [`StoreError::Length`] when the file changed size while it was read.
+    pub fn ingest_file(&self, path: &Path) -> Result<Ingested, StoreError> {
+        let mut source = File::open(path).map_err(io("open", path))?;
+        let length = source
+            .metadata()
+            .map_err(io("read metadata of", path))?
+            .len();
+        let mut staged = self.stage(Some(length))?;
+        let mut buffer = vec![0; BUFFER];
+        loop {
+            let count = match source.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(io("read", path)(error)),
+            };
+            staged
+                .write_all(&buffer[..count])
+                .map_err(io("write", staged.scratch.path()))?;
+        }
+        self.ingest(staged)
+    }
+
     fn place(&self, scratch: Scratch, object: &Path) -> Result<bool, StoreError> {
         if exists(object) {
             return Ok(false);
@@ -217,6 +245,9 @@ fn can_write(tmp: &Path) -> Result<bool, StoreError> {
 
 const NAME_ATTEMPTS: usize = 64;
 
+/// The size of every buffer the store reads files through.
+pub(crate) const BUFFER: usize = 1 << 20;
+
 /// Creates a new file in `dir` under a name no other writer holds: the process id and a counter,
 /// in hex, tried again with the next counter when the name exists, which happens only when a
 /// dead process or another host left it.
@@ -252,7 +283,6 @@ fn reserve(file: &File, length: u64) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
 
     use fl_model::digest::Algorithm;
     use fl_model::error::ErrorKind;
@@ -326,6 +356,29 @@ mod tests {
             );
         }
         assert_eq!(tmp_files(&tier), 0);
+    }
+
+    #[test]
+    fn a_local_file_is_ingested_in_one_pass() {
+        let (temp, tier) = tier();
+        let source = temp.path().join("source.bin");
+        let bytes: Vec<u8> = (0..3 * BUFFER + 17)
+            .map(|i| (i % 251).to_le_bytes()[0])
+            .collect();
+        fs::write(&source, &bytes).unwrap();
+        let ingested = tier.ingest_file(&source).unwrap();
+        assert_eq!(
+            ingested.digest,
+            Digest::Blake3(*blake3::hash(&bytes).as_bytes())
+        );
+        assert_eq!(ingested.bytes, bytes.len() as u64);
+        let located = tier.locate(&ingested.digest).unwrap();
+        assert_eq!(fs::read(located.path).unwrap(), bytes);
+        let missing = tier.ingest_file(&temp.path().join("missing")).unwrap_err();
+        assert!(
+            missing.to_string().starts_with("could not open `"),
+            "{missing}"
+        );
     }
 
     #[test]
