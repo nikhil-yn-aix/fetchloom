@@ -207,29 +207,49 @@ impl Tier {
         &self.layout
     }
 
-    /// Renames the finished file of `scratch` to `target` unless something is there already, and
-    /// says whether it was placed. A rename that fails because another writer placed the same
-    /// name first counts as already there.
+    /// Publishes the finished file of `scratch` at `target` unless something is there already,
+    /// and says whether this call placed it. A hard link fails when the name exists, so of
+    /// writers racing for one name exactly one places it. A failure while another writer's file
+    /// holds the name counts as already there.
     pub(crate) fn place(&self, scratch: Scratch, target: &Path) -> Result<bool, StoreError> {
         if exists(target) {
             return Ok(false);
         }
-        let mut result = fs::rename(scratch.path(), target);
+        let mut result = publish(scratch.path(), target);
         if let Err(error) = &result
             && error.kind() == io::ErrorKind::NotFound
             && let Some(parent) = target.parent()
         {
             mode::create_dir(parent, self.sharing).map_err(io("create directory", parent))?;
-            result = fs::rename(scratch.path(), target);
+            result = publish(scratch.path(), target);
         }
         match result {
-            Ok(()) => {
-                scratch.keep();
+            Ok(renamed) => {
+                if renamed {
+                    scratch.keep();
+                }
                 Ok(true)
             }
             Err(_) if exists(target) => Ok(false),
-            Err(error) => Err(io("rename into place", scratch.path())(error)),
+            Err(error) => Err(io("place", scratch.path())(error)),
         }
+    }
+}
+
+/// Hard links `scratch` at `target`, which fails when the name exists, and says whether it
+/// renamed instead, on a filesystem without hard links.
+fn publish(scratch: &Path, target: &Path) -> io::Result<bool> {
+    match fs::hard_link(scratch, target) {
+        Ok(()) => Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+            ) =>
+        {
+            Err(error)
+        }
+        Err(_) => fs::rename(scratch, target).map(|()| true),
     }
 }
 
