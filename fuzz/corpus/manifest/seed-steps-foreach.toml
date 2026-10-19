@@ -1,0 +1,18 @@
+[datasets.eeg]
+ref = "openneuro:ds003061@1.1.0"
+
+[datasets.grch38]
+ref = "ensembl:homo_sapiens/GRCh38@110"
+
+[steps.filter]
+foreach = "eeg:sub-*/"
+run = ["python", "scripts/filter.py", "{item}", "{out}"]
+inputs = ["scripts/filter.py"]
+env = ["FILTER_BAND"]
+shell = "bash"
+workdir = "scripts"
+
+[steps.features]
+foreach = "filter:*.parquet"
+run = "duckdb -c \"SELECT 1\""
+inputs = ["filter"]

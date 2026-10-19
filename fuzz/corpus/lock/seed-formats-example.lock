@@ -1,0 +1,21 @@
+version = 1
+
+[[dataset]]
+name = "eeg"
+ref = "openneuro:ds003061@1.1.0"
+spec = "blake3:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+resolved = "openneuro:ds003061@1.1.0"
+title = "EEG Motor Movement/Imagery"
+license = "CC0-1.0"
+doi = "10.18112/openneuro.ds003061.v1.1.0"
+retrieved = "2026-09-28T10:00:00Z"
+tree = "blake3:90b1536db35969ccf265eff6d75d7fb348f9f29d6de1f029daad45da831327fa"
+files = [
+  { path = "scores.csv", size = 42, blake3 = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a", md5 = "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c", at = ["https://s3.amazonaws.com/openneuro.org/ds003061/participants.tsv"] },
+]
+
+[[step]]
+name = "filter"
+key = "blake3:7777777777777777777777777777777777777777777777777777777777777777"
+items = 3
+tree = "blake3:4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e"

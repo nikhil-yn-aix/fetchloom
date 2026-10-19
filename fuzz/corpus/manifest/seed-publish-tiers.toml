@@ -1,0 +1,17 @@
+[project]
+name = "lab-share"
+
+[datasets.grch38]
+ref = "ensembl:homo_sapiens/GRCh38@110"
+
+[tiers]
+remote = ["s3://lab-bucket/fetchloom", "gs://lab-bucket-2/fetchloom"]
+
+[publish]
+title = "Reference genome mirror"
+creators = [
+  { name = "Okafor, A.", orcid = "0000-0002-1825-0097" },
+  { name = "Singh, P." },
+]
+license = "CC-BY-4.0"
+keywords = ["genomics", "reference"]

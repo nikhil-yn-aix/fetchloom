@@ -1,0 +1,9 @@
+version = 1
+
+[[dataset]]
+name = "huge"
+ref = "s3://lab-bucket/huge"
+spec = "blake3:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+resolved = "s3://lab-bucket/huge"
+retrieved = "2026-09-28T10:00:00Z"
+tree = "blake3:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"

@@ -1,0 +1,36 @@
+version = 1
+
+[[dataset]]
+name = "eeg"
+ref = "openneuro:ds003061@1.1.0"
+spec = "blake3:1c9e04a7b2f1aa000000000000000000000000000000000000000000000000ff"
+resolved = "openneuro:ds003061@1.1.0"
+title = "EEG \"Motor\" Movement\tImagery \\ 運動"
+license = "CC0-1.0"
+doi = "10.18112/openneuro.ds003061.v1.1.0"
+retrieved = "2026-09-28T10:00:00Z"
+tree = "blake3:3407d5cfd446f4fece154fc9393cfea5d4f357b836a15d66b6f24971d43153de"
+files = [
+  { path = "participants.tsv", size = 1834, blake3 = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a", sha256 = "0101010101010101010101010101010101010101010101010101010101010101", sha1 = "fefefefefefefefefefefefefefefefefefefefe", md5 = "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c", at = ["https://s3.amazonaws.com/openneuro.org/ds003061/participants.tsv", "https://doi.org/10.5281/zenodo.1?file=\"participants.tsv\""] },
+  { path = "raw.tar.gz", size = 9007199254740993, blake3 = "7777777777777777777777777777777777777777777777777777777777777777", at = ["https://example.org/raw.tar.gz"], role = "archive" },
+  { path = "sub-01/eeg/résumé #1.edf", size = 0, blake3 = "1010101010101010101010101010101010101010101010101010101010101010", from = "blake3:7777777777777777777777777777777777777777777777777777777777777777" },
+]
+
+[[dataset]]
+name = "grch38"
+ref = "ensembl:homo_sapiens/GRCh38@110"
+spec = "blake3:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
+resolved = "ensembl:homo_sapiens/GRCh38@110"
+retrieved = "2024-02-29T23:59:59Z"
+tree = "blake3:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+
+[[step]]
+name = "features"
+key = "blake3:7777777777777777777777777777777777777777777777777777777777777777"
+tree = "blake3:4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e"
+
+[[step]]
+name = "filter"
+key = "blake3:abababababababababababababababababababababababababababababababab"
+items = 3
+tree = "blake3:1010101010101010101010101010101010101010101010101010101010101010"

@@ -9,7 +9,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 /fuzz/target/
-/fuzz/corpus/
 /fuzz/artifacts/
 .DS_Store
 Thumbs.db
