@@ -27,6 +27,20 @@ pub enum StoreError {
         /// The bytes written.
         written: u64,
     },
+    /// A path that this platform's filesystem cannot hold.
+    #[error("`{path}` cannot exist on this filesystem: {reason}")]
+    Unrepresentable {
+        /// The path inside the data directory.
+        path: String,
+        /// Why it cannot exist.
+        reason: &'static str,
+    },
+    /// A parent of a destination exists as something other than a real directory.
+    #[error("`{}` is not a real directory, and files are placed only in real directories", path.display())]
+    NotADirectory {
+        /// The parent.
+        path: PathBuf,
+    },
 }
 
 impl StoreError {
@@ -34,8 +48,9 @@ impl StoreError {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Io { .. } => ErrorKind::LocalIo,
             Self::Length { .. } => ErrorKind::IntegrityMismatch,
+            Self::Unrepresentable { .. } => ErrorKind::LocalUnrepresentable,
+            Self::Io { .. } | Self::NotADirectory { .. } => ErrorKind::LocalIo,
         }
     }
 }
