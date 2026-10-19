@@ -5,6 +5,7 @@ use std::fs::{self, File, Metadata, Permissions};
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
+use std::time::SystemTime;
 
 use rustix::io::Errno;
 
@@ -59,6 +60,12 @@ pub(crate) fn symlink(object: &Path, to: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(object, to)
 }
 
+/// Sets the modification time of the file at `path` to now, which its owner may do on a read
+/// only file.
+pub(crate) fn freshen(path: &Path) -> io::Result<()> {
+    File::open(path)?.set_modified(SystemTime::now())
+}
+
 /// Renames `staging` over `target`.
 pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
     fs::rename(staging, target)
@@ -97,5 +104,15 @@ mod tests {
         fs::remove_file(&target).unwrap();
         assert!(!publish(&scratch, &target).unwrap());
         assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_reservation_the_device_refuses_is_an_error() {
+        let null = fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+        let error = reserve(&null, 4096).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(Errno::NODEV.raw_os_error()));
     }
 }

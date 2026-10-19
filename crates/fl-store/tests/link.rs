@@ -287,3 +287,44 @@ fn a_non_empty_directory_at_the_destination_is_not_replaced() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn linking_a_file_again_leaves_no_staging_name_behind() -> TestResult {
+    let temp = temp()?;
+    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+    let digest = object(&tier, b"again")?;
+    let data = DataDir::new(temp.path().join("data"));
+    for mode in [Mode::Hardlink, Mode::Symlink, Mode::Copy] {
+        let linker = Linker::new(&tier, Ladder::only(mode));
+        for _ in 0..2 {
+            linker.link(&digest, &destination(&data, "f")?)?;
+        }
+        let names: Vec<_> = fs::read_dir(temp.path().join("data").join("ds"))?
+            .map(|entry| Ok(entry?.file_name()))
+            .collect::<Result<_, std::io::Error>>()?;
+        assert_eq!(names, ["f"], "{mode:?}");
+        assert_eq!(fs::read(destination(&data, "f")?.path())?, b"again");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_tier_opened_by_a_relative_path_gives_symlinks_that_resolve() -> TestResult {
+    let temp = temp()?;
+    let here = std::env::current_dir()?;
+    let (depth, rest) = here
+        .ancestors()
+        .enumerate()
+        .find_map(|(depth, ancestor)| Some((depth, temp.path().strip_prefix(ancestor).ok()?)))
+        .ok_or("the temporary directory shares no ancestor with the working directory")?;
+    let mut relative: std::path::PathBuf = std::iter::repeat_n("..", depth).collect();
+    relative.push(rest);
+    assert!(relative.is_relative());
+    let tier = Tier::open(&relative.join("tier"), Sharing::Private)?;
+    let digest = object(&tier, b"resolves")?;
+    let data = DataDir::new(temp.path().join("data"));
+    let place = destination(&data, "f")?;
+    Linker::new(&tier, Ladder::only(Mode::Symlink)).link(&digest, &place)?;
+    assert_eq!(fs::read(place.path())?, b"resolves");
+    Ok(())
+}

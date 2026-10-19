@@ -12,7 +12,7 @@ use fl_model::tree::Tree;
 
 use crate::error::{StoreError, io};
 use crate::files;
-use crate::layout::object_digest;
+use crate::layout::{entries, object_digest};
 use crate::tier::Tier;
 
 /// How a collection runs.
@@ -78,14 +78,18 @@ impl Tier {
             }
         }
         let old = |path: &Path| -> Result<Option<u64>, StoreError> {
-            let metadata = fs::symlink_metadata(path).map_err(io("read metadata of", path))?;
+            let metadata = match fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(io("read metadata of", path)(error)),
+            };
             let modified = metadata.modified().map_err(io("read the time of", path))?;
             let age = options.now.duration_since(modified).unwrap_or_default();
             Ok((age > options.grace).then_some(metadata.len()))
         };
         let mut doomed = Vec::new();
-        for fan in list(&self.layout().dir("objects"))? {
-            for object in list(&fan)? {
+        for fan in entries(&self.layout().dir("objects"))? {
+            for object in entries(&fan)? {
                 let Digest::Blake3(blake3) = object_digest(&fan, &object)? else {
                     continue;
                 };
@@ -95,14 +99,14 @@ impl Tier {
             }
         }
         for dir in ["trees", "steps"] {
-            let found = list(&self.layout().dir(dir))?;
+            let found = entries(&self.layout().dir(dir))?;
             doomed.extend(
                 found
                     .into_iter()
                     .filter(|path| !marked.names.contains(path)),
             );
         }
-        doomed.extend(list(&self.layout().dir("tmp"))?);
+        doomed.extend(entries(&self.layout().dir("tmp"))?);
         for path in doomed {
             if let Some(bytes) = old(&path)? {
                 collected.bytes += bytes;
@@ -177,11 +181,4 @@ impl Marked {
         self.objects
             .extend(tree.entries().iter().map(|entry| entry.blake3));
     }
-}
-
-fn list(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
-    fs::read_dir(dir)
-        .map_err(io("list", dir))?
-        .map(|entry| entry.map(|entry| entry.path()).map_err(io("list", dir)))
-        .collect()
 }

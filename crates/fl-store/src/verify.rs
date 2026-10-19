@@ -1,14 +1,14 @@
 //! Verification: rehash objects and delete those whose bytes no longer match their name.
 
-use std::fs;
+use std::io;
 
 use fl_model::digest::Digest;
 use fl_model::document::Work;
 
-use crate::error::{StoreError, io};
+use crate::error::StoreError;
 use crate::files;
 use crate::fingerprint::hash_file;
-use crate::layout::object_digest;
+use crate::layout::{entries, object_digest};
 use crate::parallel;
 use crate::tier::Tier;
 
@@ -41,11 +41,8 @@ impl Tier {
     /// [`StoreError::Io`] when an object cannot be read or deleted.
     pub fn verify(&self, select: impl Fn(&Digest) -> bool + Sync) -> Result<Verified, StoreError> {
         let mut objects = Vec::new();
-        let dir = self.layout().dir("objects");
-        for fan in fs::read_dir(&dir).map_err(io("list", &dir))? {
-            let fan = fan.map_err(io("list", &dir))?.path();
-            for object in fs::read_dir(&fan).map_err(io("list", &fan))? {
-                let path = object.map_err(io("list", &fan))?.path();
+        for fan in entries(&self.layout().dir("objects"))? {
+            for path in entries(&fan)? {
                 let digest = object_digest(&fan, &path)?;
                 if select(&digest) {
                     objects.push((digest, path));
@@ -53,7 +50,12 @@ impl Tier {
             }
         }
         let results = parallel::map(&objects, JOBS, |(digest, path)| {
-            let actual = hash_file(path)?;
+            let actual = match hash_file(path) {
+                Err(StoreError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                hashed => hashed?,
+            };
             if actual == *digest {
                 return Ok(None);
             }

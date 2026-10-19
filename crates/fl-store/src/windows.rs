@@ -5,8 +5,15 @@ use std::fs::{self, File, Metadata};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
+use std::time::SystemTime;
 
 use crate::fingerprint::nanos;
+
+/// `FILE_READ_ATTRIBUTES`: read a file's attributes without reading its bytes.
+const READ_ATTRIBUTES: u32 = 0x80;
+
+/// `FILE_WRITE_ATTRIBUTES`: change a file's attributes and times without writing its bytes.
+const WRITE_ATTRIBUTES: u32 = 0x100;
 use crate::tier::Sharing;
 
 /// Directories carry no mode bits on windows.
@@ -40,6 +47,15 @@ pub(crate) fn identity(metadata: &Metadata) -> u128 {
     nanos(metadata.created().ok())
 }
 
+/// Sets the modification time of the file at `path` to now, through a handle that may write
+/// attributes, which a read only file allows.
+pub(crate) fn freshen(path: &Path) -> io::Result<()> {
+    fs::OpenOptions::new()
+        .access_mode(WRITE_ATTRIBUTES)
+        .open(path)?
+        .set_modified(SystemTime::now())
+}
+
 /// Reflinks are not tried on windows yet: the crate that would make them has no tested windows
 /// path.
 pub(crate) fn reflink(_object: &Path, _to: &Path) -> io::Result<()> {
@@ -56,14 +72,13 @@ pub(crate) fn symlink(object: &Path, to: &Path) -> io::Result<()> {
 /// cleared through a handle, the rename runs, and the same handle sets it again on the file that
 /// was replaced.
 pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
-    const READ_AND_WRITE_ATTRIBUTES: u32 = 0x80 | 0x100;
     match fs::rename(staging, target) {
         Err(error)
             if error.kind() == io::ErrorKind::PermissionDenied
                 && fs::symlink_metadata(target).is_ok_and(|m| m.permissions().readonly()) =>
         {
             let replaced = fs::OpenOptions::new()
-                .access_mode(READ_AND_WRITE_ATTRIBUTES)
+                .access_mode(READ_ATTRIBUTES | WRITE_ATTRIBUTES)
                 .open(target)?;
             set_handle_readonly(&replaced, false)?;
             let renamed = fs::rename(staging, target);

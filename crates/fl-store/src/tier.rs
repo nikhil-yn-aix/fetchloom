@@ -69,6 +69,8 @@ impl Tier {
     ///
     /// Returns [`StoreError::Io`] when the layout can neither be created nor found.
     pub fn open(root: &Path, sharing: Sharing) -> Result<Self, StoreError> {
+        let root = std::path::absolute(root).map_err(io("resolve", root))?;
+        let root = root.as_path();
         let layout = Layout::new(root);
         let writable = match create_layout(root, &layout, sharing) {
             Ok(()) => can_write(&layout.dir("tmp"))?,
@@ -169,7 +171,11 @@ impl Tier {
             new = tracing::field::Empty,
         )
         .entered();
-        let new = self.place(scratch, &self.layout.object(&blake3))?;
+        let target = self.layout.object(&blake3);
+        let new = self.place(scratch, &target)?;
+        if !new {
+            let _ = platform::freshen(&target);
+        }
         span.record("new", new);
         Ok(Ingested {
             digest,
@@ -470,5 +476,80 @@ mod tests {
         .add_to(&mut work);
         assert_eq!(work.objects_ingested, 2);
         assert_eq!(work.bytes_written, 15);
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            !rustix::process::geteuid().is_root(),
+            "file modes do not bind root, so run the tests as another user"
+        );
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_tier_under_a_read_only_parent_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        set_mode(&parent, 0o555);
+        let opened = Tier::open(&parent.join("tier"), Sharing::Private);
+        set_mode(&parent, 0o755);
+        assert!(opened.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tier_missing_a_directory_it_cannot_create_opens_for_reading() {
+        let (temp, _) = tier();
+        let v1 = temp.path().join("tier").join("v1");
+        fs::remove_dir(v1.join("steps")).unwrap();
+        set_mode(&v1, 0o555);
+        let opened = Tier::open(&temp.path().join("tier"), Sharing::Private);
+        set_mode(&v1, 0o755);
+        assert!(!opened.unwrap().writable());
+    }
+
+    #[test]
+    fn a_tmp_that_is_a_file_is_an_error_not_a_read_only_tier() {
+        let (temp, _) = tier();
+        let staging = temp.path().join("tier").join("v1").join("tmp");
+        fs::remove_dir(&staging).unwrap();
+        fs::write(&staging, b"").unwrap();
+        let error = Tier::open(&temp.path().join("tier"), Sharing::Private).unwrap_err();
+        assert!(matches!(error, StoreError::Io { .. }), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_object_that_cannot_be_placed_is_an_error() {
+        let (_temp, tier) = tier();
+        let blake3 = *blake3::hash(b"blocked").as_bytes();
+        let fan = tier.layout.object(&blake3).parent().unwrap().to_owned();
+        fs::create_dir(&fan).unwrap();
+        set_mode(&fan, 0o555);
+        let mut staged = tier.stage(None).unwrap();
+        staged.write_all(b"blocked").unwrap();
+        let placed = tier.ingest(staged);
+        set_mode(&fan, 0o755);
+        assert!(matches!(placed, Err(StoreError::Io { .. })), "{placed:?}");
+        assert!(tier.locate(&Digest::Blake3(blake3)).is_none());
+        assert_eq!(tmp_files(&tier), 0);
+    }
+
+    #[test]
+    fn only_a_file_over_the_threshold_has_its_space_reserved_up_front() {
+        let (_temp, tier) = tier();
+        for (length, reserved) in [
+            (RESERVE_ABOVE, 0),
+            (RESERVE_ABOVE + 1, RESERVE_ABOVE + 1),
+            (1, 0),
+        ] {
+            let staged = tier.stage(Some(length)).unwrap();
+            let size = fs::metadata(staged.scratch.path()).unwrap().len();
+            assert_eq!(size, reserved, "promised {length}");
+        }
     }
 }

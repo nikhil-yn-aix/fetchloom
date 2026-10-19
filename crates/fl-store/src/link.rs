@@ -158,8 +158,8 @@ impl<'t> Linker<'t> {
                 Err(error) if error.kind() == io::ErrorKind::NotFound && !object.exists() => {
                     return Err(StoreError::Missing { digest: *digest });
                 }
-                Err(error) if error.kind() == io::ErrorKind::TooManyLinks => {
-                    tracing::debug!(?mode, %error, "link limit, next mode for this file");
+                Err(error) if moves_on(&error) => {
+                    tracing::debug!(?mode, %error, "next mode for this file only");
                     last = Some(error);
                 }
                 Err(error) => {
@@ -212,14 +212,26 @@ impl<'t> Linker<'t> {
         let bytes = (self.create)(mode, object, &staging)?;
         let finished = finish(mode, self.ladder.writable, &staging)
             .and_then(|()| platform::replace(&staging, target));
-        if finished.is_err() {
-            let _ = fs::remove_file(&staging);
-        }
+        let _ = fs::remove_file(&staging);
         finished.map(|()| bytes)
     }
 }
 
 /// The name a file is built under beside its destination before it is renamed over it.
+/// Whether an error concerns this one file or the disk rather than the mode, so the next mode
+/// is tried for this file while later files still start from the same mode.
+fn moves_on(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TooManyLinks
+            | io::ErrorKind::StorageFull
+            | io::ErrorKind::QuotaExceeded
+            | io::ErrorKind::NotADirectory
+            | io::ErrorKind::IsADirectory
+            | io::ErrorKind::DirectoryNotEmpty
+    )
+}
+
 fn staging_path(target: &Path) -> PathBuf {
     let mut name = std::ffi::OsString::from(".");
     name.push(target.file_name().unwrap_or_default());
@@ -267,10 +279,15 @@ mod tests {
         create(mode, object, to)
     }
 
-    fn at_link_limit(mode: Mode, object: &Path, to: &Path) -> io::Result<u64> {
+    thread_local! {
+        static HARDLINK_FAILS: std::cell::Cell<io::ErrorKind> =
+            const { std::cell::Cell::new(io::ErrorKind::TooManyLinks) };
+    }
+
+    fn hardlink_failing(mode: Mode, object: &Path, to: &Path) -> io::Result<u64> {
         if mode == Mode::Hardlink {
             record(mode);
-            return Err(io::ErrorKind::TooManyLinks.into());
+            return Err(HARDLINK_FAILS.with(std::cell::Cell::get).into());
         }
         without_reflink(mode, object, to)
     }
@@ -334,18 +351,28 @@ mod tests {
     }
 
     #[test]
-    fn a_link_limit_moves_on_for_that_file_only() {
-        let fixture = fixture();
-        let linker = linker(&fixture, Ladder::AUTO, at_link_limit);
-        let first = linker
-            .link(&fixture.digest, &destination(&fixture, "a"))
-            .unwrap();
-        assert_eq!(first.mode, Mode::Symlink);
-        assert_eq!(tried(), [Mode::Reflink, Mode::Hardlink, Mode::Symlink]);
-        linker
-            .link(&fixture.digest, &destination(&fixture, "b"))
-            .unwrap();
-        assert_eq!(tried(), [Mode::Hardlink, Mode::Symlink]);
+    fn a_link_limit_or_a_full_disk_moves_on_for_that_file_only() {
+        for kind in [
+            io::ErrorKind::TooManyLinks,
+            io::ErrorKind::StorageFull,
+            io::ErrorKind::QuotaExceeded,
+            io::ErrorKind::NotADirectory,
+            io::ErrorKind::IsADirectory,
+            io::ErrorKind::DirectoryNotEmpty,
+        ] {
+            HARDLINK_FAILS.with(|fails| fails.set(kind));
+            let fixture = fixture();
+            let linker = linker(&fixture, Ladder::AUTO, hardlink_failing);
+            let first = linker
+                .link(&fixture.digest, &destination(&fixture, "a"))
+                .unwrap();
+            assert_eq!(first.mode, Mode::Symlink, "{kind:?}");
+            assert_eq!(tried(), [Mode::Reflink, Mode::Hardlink, Mode::Symlink]);
+            linker
+                .link(&fixture.digest, &destination(&fixture, "b"))
+                .unwrap();
+            assert_eq!(tried(), [Mode::Hardlink, Mode::Symlink], "{kind:?}");
+        }
     }
 
     #[test]
