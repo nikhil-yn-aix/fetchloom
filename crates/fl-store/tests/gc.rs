@@ -284,3 +284,45 @@ fn collect_error(store: &Store) -> Result<StoreError, Box<dyn Error>> {
         .err()
         .ok_or_else(|| "gc ran".into())
 }
+
+fn set_age(path: &Path, age: Duration) -> TestResult {
+    #[cfg(unix)]
+    let file = fs::File::open(path)?;
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new().access_mode(0x100).open(path)?
+    };
+    file.set_modified(SystemTime::now() - age)?;
+    Ok(())
+}
+
+#[test]
+fn an_object_ingested_again_is_kept_through_the_grace_period() -> TestResult {
+    let store = Store::new()?;
+    let blake3 = store.object(b"found again")?;
+    let path = store.object_path(blake3)?;
+    set_age(&path, 3 * HOUR)?;
+    store.object(b"found again")?;
+    assert!(store.collect(Duration::ZERO, false)?.removed.is_empty());
+    set_age(&path, 3 * HOUR)?;
+    assert_eq!(store.collect(Duration::ZERO, false)?.removed, [path]);
+    Ok(())
+}
+
+#[test]
+fn hidden_files_left_by_nfs_are_passed_over() -> TestResult {
+    let store = Store::new()?;
+    let blake3 = store.object(b"kept company")?;
+    let fan = store.object_path(blake3)?;
+    let fan = fan.parent().ok_or("no fan out directory")?;
+    let hidden = [fan.join(".nfs0001"), store.path("objects").join(".nfs0002")];
+    for path in &hidden {
+        fs::write(path, b"")?;
+    }
+    let collected = store.collect(2 * HOUR, false)?;
+    assert_eq!(collected.removed.len(), 1);
+    assert_eq!(store.tier.verify(|_| true)?.checked, 0);
+    assert!(hidden.iter().all(|path| exists(path)));
+    Ok(())
+}

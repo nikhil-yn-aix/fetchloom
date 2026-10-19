@@ -18,7 +18,9 @@ fn identity_tells_two_files_apart_and_one_file_from_itself() -> TestResult {
     let temp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let first = temp.path().join("first");
     fs::write(&first, b"same bytes")?;
-    sleep(Duration::from_millis(50));
+    if cfg!(windows) {
+        sleep(Duration::from_millis(50));
+    }
     let second = temp.path().join("second");
     fs::write(&second, b"same bytes")?;
     let one = Fingerprint::of(&first)?;
@@ -60,5 +62,30 @@ fn ingesting_a_directory_fails_instead_of_looping() -> TestResult {
     fs::create_dir(&directory)?;
     assert!(tier.ingest_file(&directory).is_err());
     assert_eq!(fs::read_dir(temp.path().join("tier/v1/tmp"))?.count(), 0);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_name_that_is_not_unicode_cannot_be_fingerprinted() -> TestResult {
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"bad\xff").to_owned()
+    };
+    #[cfg(windows)]
+    let name = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0x62, 0xD800])
+    };
+    let temp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    fs::write(temp.path().join(name), b"x")?;
+    let error = fl_store::fingerprint::scan(temp.path())
+        .err()
+        .ok_or("scanned a name that has no text form")?;
+    assert!(
+        matches!(error, fl_store::error::StoreError::Unrepresentable { .. }),
+        "{error}"
+    );
     Ok(())
 }

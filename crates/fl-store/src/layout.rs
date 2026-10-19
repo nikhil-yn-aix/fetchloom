@@ -1,10 +1,11 @@
 //! Where things live inside a tier.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use fl_model::digest::{Algorithm, Digest};
 
-use crate::error::StoreError;
+use crate::error::{StoreError, io};
 
 /// The directories of a tier, all below `<tier>/v1`.
 pub(crate) const DIRECTORIES: [&str; 6] = ["objects", "tmp", "partial", "trees", "steps", "roots"];
@@ -56,6 +57,19 @@ impl Layout {
 }
 
 /// The digest an object file is named by, from its fan out directory and its file name.
+/// The entries of a tier directory, without hidden names: an NFS client leaves `.nfs` files
+/// beside a file deleted while open, and they are not the store's to judge.
+pub(crate) fn entries(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).map_err(io("list", dir))? {
+        let entry = entry.map_err(io("list", dir))?;
+        if !entry.file_name().as_encoded_bytes().starts_with(b".") {
+            found.push(entry.path());
+        }
+    }
+    Ok(found)
+}
+
 pub(crate) fn object_digest(fan: &Path, object: &Path) -> Result<Digest, StoreError> {
     let hex = [fan, object]
         .iter()
@@ -85,5 +99,13 @@ mod tests {
             .join("9f")
             .join("1".repeat(62));
         assert_eq!(layout.object(&blake3), expected);
+    }
+
+    #[test]
+    fn entries_leave_out_hidden_names() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(".nfs0001"), b"").unwrap();
+        fs::write(temp.path().join("ab"), b"").unwrap();
+        assert_eq!(entries(temp.path()).unwrap(), [temp.path().join("ab")]);
     }
 }

@@ -91,8 +91,13 @@ impl DataDir {
         match made {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let metadata = fs::symlink_metadata(path).map_err(io("read metadata of", path))?;
-                if *path != self.root && !metadata.is_dir() {
+                let metadata = if *path == self.root {
+                    fs::metadata(path)
+                } else {
+                    fs::symlink_metadata(path)
+                }
+                .map_err(io("read metadata of", path))?;
+                if !metadata.is_dir() {
                     return Err(StoreError::NotADirectory {
                         path: path.to_owned(),
                     });
@@ -285,6 +290,17 @@ mod tests {
         let root = temp.path().join("data");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("eeg"), b"").unwrap();
+        let error = DataDir::new(root)
+            .destination(&path("eeg"), &path("x"))
+            .unwrap_err();
+        assert!(matches!(error, StoreError::NotADirectory { .. }), "{error}");
+    }
+
+    #[test]
+    fn a_root_that_is_a_regular_file_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        fs::write(&root, b"").unwrap();
         let error = DataDir::new(root)
             .destination(&path("eeg"), &path("x"))
             .unwrap_err();

@@ -82,7 +82,14 @@ fn list(path: &Path, prefix: &str) -> Result<Listed, StoreError> {
     let (mut files, mut dirs) = (Vec::new(), Vec::new());
     for entry in fs::read_dir(path).map_err(io("list", path))? {
         let entry = entry.map_err(io("list", path))?;
-        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| StoreError::Unrepresentable {
+                path: entry.path().display().to_string(),
+                reason: "its name is not valid unicode",
+            })?;
+        let name = format!("{prefix}{name}");
         let kind = entry
             .file_type()
             .map_err(io("read the type of", &entry.path()))?;
