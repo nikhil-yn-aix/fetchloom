@@ -77,16 +77,6 @@ impl Tier {
                 self.mark(&root.lock, &mut marked)?;
             }
         }
-        let old = |path: &Path| -> Result<Option<u64>, StoreError> {
-            let metadata = match fs::symlink_metadata(path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(io("read metadata of", path)(error)),
-            };
-            let modified = metadata.modified().map_err(io("read the time of", path))?;
-            let age = options.now.duration_since(modified).unwrap_or_default();
-            Ok((age > options.grace).then_some(metadata.len()))
-        };
         let mut doomed = Vec::new();
         for fan in entries(&self.layout().dir("objects"))? {
             for object in entries(&fan)? {
@@ -108,7 +98,7 @@ impl Tier {
         }
         doomed.extend(entries(&self.layout().dir("tmp"))?);
         for path in doomed {
-            if let Some(bytes) = old(&path)? {
+            if let Some(bytes) = old(&path, options)? {
                 collected.bytes += bytes;
                 collected.removed.push(path);
             }
@@ -175,10 +165,50 @@ impl Tier {
     }
 }
 
+/// The size of the file at `path` when it is older than the grace period. A file that is gone
+/// already, taken by a writer or another collection, is not old.
+fn old(path: &Path, options: &Collect) -> Result<Option<u64>, StoreError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io("read metadata of", path)(error)),
+    };
+    let modified = metadata.modified().map_err(io("read the time of", path))?;
+    let age = options.now.duration_since(modified).unwrap_or_default();
+    Ok((age > options.grace).then_some(metadata.len()))
+}
+
 impl Marked {
     fn mark_tree(&mut self, path: PathBuf, tree: &Tree) {
         self.names.insert(path);
         self.objects
             .extend(tree.entries().iter().map(|entry| entry.blake3));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LATER: Collect = Collect {
+        now: SystemTime::UNIX_EPOCH,
+        grace: Duration::ZERO,
+        dry_run: false,
+    };
+
+    #[test]
+    fn a_file_already_gone_is_not_old_and_one_that_cannot_be_read_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = Collect {
+            now: SystemTime::now() + Duration::from_secs(60),
+            ..LATER
+        };
+        let file = temp.path().join("file");
+        fs::write(&file, b"four").unwrap();
+        assert_eq!(old(&file, &options).unwrap(), Some(4));
+        assert_eq!(old(&temp.path().join("gone"), &options).unwrap(), None);
+        if cfg!(unix) {
+            assert!(old(&file.join("below"), &options).is_err());
+        }
     }
 }
