@@ -35,6 +35,31 @@ fn set_dir_mode(_path: &Path, _sharing: Sharing) -> io::Result<()> {
     Ok(())
 }
 
+/// Makes the file at `path` writable by its owner (0644) or read only (0444, the read only
+/// attribute on windows).
+pub(crate) fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::Permissions::from_mode(if writable { 0o644 } else { 0o444 })
+    };
+    #[cfg(windows)]
+    let permissions = {
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_readonly(!writable);
+        permissions
+    };
+    fs::set_permissions(path, permissions)
+}
+
+/// Sets or clears the read only attribute through an open handle.
+#[cfg(windows)]
+pub(crate) fn set_handle_readonly(file: &File, readonly: bool) -> io::Result<()> {
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(readonly);
+    file.set_permissions(permissions)
+}
+
 /// Makes the open file read only: mode 0444 on unix, the read only attribute on windows.
 pub(crate) fn seal(file: &File) -> io::Result<()> {
     #[cfg(unix)]

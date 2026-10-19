@@ -9,6 +9,9 @@ confidence-threshold = 0.93
 multiple-versions = "deny"
 wildcards = "deny"
 allow-wildcard-paths = true
+skip = [
+    { crate = "syn@2", reason = "only through divan, a dev dependency, and the windows crate that reflink-copy names for windows, where fl-store does not depend on reflink-copy" },
+]
 
 [sources]
 unknown-registry = "deny"

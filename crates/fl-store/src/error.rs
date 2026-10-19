@@ -3,7 +3,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use fl_model::digest::Digest;
 use fl_model::error::ErrorKind;
+use fl_model::lock::LockError;
 
 /// A failure of the store.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +37,35 @@ pub enum StoreError {
         /// Why it cannot exist.
         reason: &'static str,
     },
+    /// A registered lock file that does not parse, so gc cannot tell what it needs.
+    #[error("`{}` cannot be read: {source}", lock.display())]
+    InvalidLock {
+        /// The lock file.
+        lock: PathBuf,
+        /// Why it does not parse.
+        #[source]
+        source: LockError,
+    },
+    /// A tree object that a lock needs is missing or damaged.
+    #[error("tree object `{tree}` {reason}")]
+    Tree {
+        /// The tree's digest.
+        tree: Digest,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// A file in a tier's `objects/` directory that is not named like an object.
+    #[error("`{}` is not an object of this store, so gc leaves the tier untouched", path.display())]
+    Foreign {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The tier holds no object with this digest.
+    #[error("the tier holds no object `{digest}`")]
+    Missing {
+        /// The digest asked for.
+        digest: Digest,
+    },
     /// A parent of a destination exists as something other than a real directory.
     #[error("`{}` is not a real directory, and files are placed only in real directories", path.display())]
     NotADirectory {
@@ -50,7 +81,12 @@ impl StoreError {
         match self {
             Self::Length { .. } => ErrorKind::IntegrityMismatch,
             Self::Unrepresentable { .. } => ErrorKind::LocalUnrepresentable,
-            Self::Io { .. } | Self::NotADirectory { .. } => ErrorKind::LocalIo,
+            Self::InvalidLock { .. } => ErrorKind::ProjectInvalidLock,
+            Self::Io { .. }
+            | Self::NotADirectory { .. }
+            | Self::Missing { .. }
+            | Self::Tree { .. }
+            | Self::Foreign { .. } => ErrorKind::LocalIo,
         }
     }
 }
