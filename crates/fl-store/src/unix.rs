@@ -63,3 +63,39 @@ pub(crate) fn symlink(object: &Path, to: &Path) -> io::Result<()> {
 pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
     fs::rename(staging, target)
 }
+
+/// Hard links `scratch` at `target`, which fails when the name exists, unlike a rename that
+/// would replace it, and says whether it renamed instead, on a filesystem without hard links.
+pub(crate) fn publish(scratch: &Path, target: &Path) -> io::Result<bool> {
+    match fs::hard_link(scratch, target) {
+        Ok(()) => Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+            ) =>
+        {
+            Err(error)
+        }
+        Err(_) => fs::rename(scratch, target).map(|()| true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publishing_onto_a_taken_name_fails_and_leaves_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (scratch, target) = (temp.path().join("scratch"), temp.path().join("target"));
+        fs::write(&scratch, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        let error = publish(&scratch, &target).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        fs::remove_file(&target).unwrap();
+        assert!(!publish(&scratch, &target).unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+}
