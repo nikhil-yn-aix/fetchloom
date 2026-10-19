@@ -1,14 +1,18 @@
 //! Fingerprints: what a placed file looked like, so a later check can tell a change cheaply.
 
 use std::fs::{self, File, Metadata};
-use std::io::{self, Read};
-use std::path::Path;
+use std::io::{self, BufReader};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fl_model::digest::Digest;
 
 use crate::error::{StoreError, io};
+use crate::parallel;
 use crate::staged::BUFFER;
+
+/// The number of directories listed at once by [`scan`].
+const JOBS: usize = 8;
 
 /// What a file looked like: its size, modification time and identity.
 ///
@@ -46,7 +50,7 @@ impl Fingerprint {
 }
 
 /// Every file and symlink below `dir`, as its path relative to `dir` written with `/`, with its
-/// fingerprint, sorted by path.
+/// fingerprint, sorted by path. Directories are listed in parallel, one depth at a time.
 ///
 /// Metadata comes from the directory listings: on windows it costs nothing beyond the listing,
 /// and on unix one `fstatat` per entry. NTFS refreshes a listed size and time only for the name a
@@ -57,26 +61,40 @@ impl Fingerprint {
 /// Returns [`StoreError::Io`] when a directory cannot be listed.
 pub fn scan(dir: &Path) -> Result<Vec<(String, Fingerprint)>, StoreError> {
     let mut found = Vec::new();
-    let mut pending = vec![(dir.to_owned(), String::new())];
-    while let Some((path, prefix)) = pending.pop() {
-        for entry in fs::read_dir(&path).map_err(io("list", &path))? {
-            let entry = entry.map_err(io("list", &path))?;
-            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
-            let kind = entry
-                .file_type()
-                .map_err(io("read the type of", &entry.path()))?;
-            if kind.is_dir() {
-                pending.push((entry.path(), format!("{name}/")));
-            } else {
-                let metadata = entry
-                    .metadata()
-                    .map_err(io("read metadata of", &entry.path()))?;
-                found.push((name, Fingerprint::from_metadata(&metadata)));
-            }
+    let mut level = vec![(dir.to_owned(), String::new())];
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for listed in parallel::map(&level, JOBS, |(path, prefix)| list(path, prefix)) {
+            let (files, dirs) = listed?;
+            found.extend(files);
+            next.extend(dirs);
         }
+        level = next;
     }
     found.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     Ok(found)
+}
+
+type Listed = (Vec<(String, Fingerprint)>, Vec<(PathBuf, String)>);
+
+fn list(path: &Path, prefix: &str) -> Result<Listed, StoreError> {
+    let (mut files, mut dirs) = (Vec::new(), Vec::new());
+    for entry in fs::read_dir(path).map_err(io("list", path))? {
+        let entry = entry.map_err(io("list", path))?;
+        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        let kind = entry
+            .file_type()
+            .map_err(io("read the type of", &entry.path()))?;
+        if kind.is_dir() {
+            dirs.push((entry.path(), format!("{name}/")));
+        } else {
+            let metadata = entry
+                .metadata()
+                .map_err(io("read metadata of", &entry.path()))?;
+            files.push((name, Fingerprint::from_metadata(&metadata)));
+        }
+    }
+    Ok((files, dirs))
 }
 
 /// The BLAKE3 digest of the file at `path`, for a file whose fingerprint moved.
@@ -85,21 +103,11 @@ pub fn scan(dir: &Path) -> Result<Vec<(String, Fingerprint)>, StoreError> {
 ///
 /// Returns [`StoreError::Io`] when the file cannot be read.
 pub fn hash_file(path: &Path) -> Result<Digest, StoreError> {
-    let mut file = File::open(path).map_err(io("open", path))?;
+    let file = File::open(path).map_err(io("open", path))?;
     let length = file.metadata().map_err(io("read metadata of", path))?.len();
     let size = usize::try_from(length).map_or(BUFFER, |length| length.clamp(1, BUFFER));
-    let mut buffer = vec![0; size];
     let mut hasher = blake3::Hasher::new();
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                hasher.update(&buffer[..count]);
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(io("read", path)(error)),
-        }
-    }
+    io::copy(&mut BufReader::with_capacity(size, file), &mut hasher).map_err(io("read", path))?;
     Ok(Digest::Blake3(*hasher.finalize().as_bytes()))
 }
 
