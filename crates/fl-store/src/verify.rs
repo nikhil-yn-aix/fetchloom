@@ -1,12 +1,12 @@
 //! Verification: rehash objects and delete those whose bytes no longer match their name.
 
 use std::fs;
-use std::io;
 
 use fl_model::digest::Digest;
 use fl_model::document::Work;
 
 use crate::error::{StoreError, io};
+use crate::files;
 use crate::fingerprint::hash_file;
 use crate::layout::object_digest;
 use crate::parallel;
@@ -57,12 +57,8 @@ impl Tier {
             if actual == *digest {
                 return Ok(None);
             }
-            match fs::remove_file(path) {
-                Err(error) if error.kind() != io::ErrorKind::NotFound => {
-                    Err(io("remove", path)(error))
-                }
-                _ => Ok(Some(*digest)),
-            }
+            files::remove(path)?;
+            Ok(Some(*digest))
         });
         let mut verified = Verified {
             checked: objects.len() as u64,

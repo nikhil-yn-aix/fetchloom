@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{StoreError, io};
+use crate::files;
 use crate::platform;
 use crate::staged::{Scratch, create_unique};
 use crate::tier::Tier;
@@ -85,12 +86,7 @@ impl Tier {
     ///
     /// Returns [`StoreError::Io`] when the record cannot be removed.
     pub fn drop_root(&self, root: &Root) -> Result<(), StoreError> {
-        match fs::remove_file(&root.record) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => {
-                Err(io("remove", &root.record)(error))
-            }
-            _ => Ok(()),
-        }
+        files::remove(&root.record)
     }
 }
 

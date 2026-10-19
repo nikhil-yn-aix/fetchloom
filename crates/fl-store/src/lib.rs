@@ -2,6 +2,7 @@
 
 pub mod data_dir;
 pub mod error;
+mod files;
 pub mod fingerprint;
 pub mod gc;
 mod layout;
