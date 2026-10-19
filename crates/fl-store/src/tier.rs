@@ -86,10 +86,17 @@ impl Tier {
     /// Finds the object named by `digest`. Only BLAKE3 digests name objects.
     #[must_use]
     pub fn locate(&self, digest: &Digest) -> Option<Located> {
+        let span = tracing::debug_span!(
+            "locate",
+            tier = %self.layout.root().display(),
+            %digest,
+            found = tracing::field::Empty,
+        )
+        .entered();
         let path = self.object_path(digest)?;
-        fs::symlink_metadata(&path)
-            .is_ok_and(|metadata| metadata.is_file())
-            .then_some(Located { path })
+        let found = fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file());
+        span.record("found", found);
+        found.then_some(Located { path })
     }
 
     /// Where the object named by `digest` lives or would live, for BLAKE3 digests.
@@ -148,9 +155,19 @@ impl Tier {
         mode::seal(&file).map_err(io("make read only", scratch.path()))?;
         drop(file);
         let blake3 = *hasher.finalize().as_bytes();
+        let digest = Digest::Blake3(blake3);
+        let span = tracing::debug_span!(
+            "ingest",
+            tier = %self.layout.root().display(),
+            %digest,
+            bytes = written,
+            new = tracing::field::Empty,
+        )
+        .entered();
         let new = self.place(scratch, &self.layout.object(&blake3))?;
+        span.record("new", new);
         Ok(Ingested {
-            digest: Digest::Blake3(blake3),
+            digest,
             new,
             bytes: written,
         })
@@ -163,6 +180,7 @@ impl Tier {
     /// Returns [`StoreError::Io`] when the file cannot be read or the object written, and
     /// [`StoreError::Length`] when the file changed size while it was read.
     pub fn ingest_file(&self, path: &Path) -> Result<Ingested, StoreError> {
+        let _span = tracing::debug_span!("ingest_file", path = %path.display()).entered();
         let mut source = File::open(path).map_err(io("open", path))?;
         let length = source
             .metadata()

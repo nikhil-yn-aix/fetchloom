@@ -56,6 +56,15 @@ impl Tier {
     /// [`StoreError::Tree`] for a tree object that is missing or damaged, and
     /// [`StoreError::Io`] when a file cannot be read or removed.
     pub fn collect(&self, options: &Collect) -> Result<Collected, StoreError> {
+        let span = tracing::debug_span!(
+            "gc",
+            tier = %self.layout().root().display(),
+            dry_run = options.dry_run,
+            removed = tracing::field::Empty,
+            bytes = tracing::field::Empty,
+            dropped_roots = tracing::field::Empty,
+        )
+        .entered();
         let mut collected = Collected::default();
         let mut marked = Marked::default();
         let mut dead = Vec::new();
@@ -100,6 +109,9 @@ impl Tier {
             }
         }
         collected.removed.sort_unstable();
+        span.record("removed", collected.removed.len());
+        span.record("bytes", collected.bytes);
+        span.record("dropped_roots", collected.dropped_roots.len());
         if !options.dry_run {
             for root in &dead {
                 self.drop_root(root)?;

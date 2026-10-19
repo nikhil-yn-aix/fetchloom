@@ -130,12 +130,22 @@ impl<'t> Linker<'t> {
             .object_path(digest)
             .ok_or(StoreError::Missing { digest: *digest })?;
         let target = destination.path();
+        let span = tracing::debug_span!(
+            "link",
+            %digest,
+            target = %target.display(),
+            mode = tracing::field::Empty,
+            bytes_copied = tracing::field::Empty,
+        )
+        .entered();
         let modes = self.ladder.modes;
         let start = self.floor.load(Ordering::Relaxed).min(modes.len() - 1);
         let mut last = None;
         for (index, mode) in modes.iter().enumerate().skip(start) {
             match self.place(*mode, &object, target) {
                 Ok(bytes_copied) => {
+                    span.record("mode", tracing::field::debug(mode));
+                    span.record("bytes_copied", bytes_copied);
                     return Ok(Linked {
                         mode: *mode,
                         bytes_copied,
@@ -144,8 +154,12 @@ impl<'t> Linker<'t> {
                 Err(error) if error.kind() == io::ErrorKind::NotFound && !object.exists() => {
                     return Err(StoreError::Missing { digest: *digest });
                 }
-                Err(error) if error.kind() == io::ErrorKind::TooManyLinks => last = Some(error),
+                Err(error) if error.kind() == io::ErrorKind::TooManyLinks => {
+                    tracing::debug!(?mode, %error, "link limit, next mode for this file");
+                    last = Some(error);
+                }
                 Err(error) => {
+                    tracing::debug!(?mode, %error, "mode refused, next mode from now on");
                     self.floor.fetch_max(index + 1, Ordering::Relaxed);
                     last = Some(error);
                 }
