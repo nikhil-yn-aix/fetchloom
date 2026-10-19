@@ -1,0 +1,36 @@
+[project]
+name = "motor-imagery"
+data_dir = "data"
+
+[datasets.eeg]
+ref = "openneuro:ds003061@1.1.0"
+select = ["**/*.edf", "participants.tsv"]
+exclude = ["**/derivatives/**"]
+facets = { subject = ["01", "02", "03"] }
+max_file_size = "2 GiB"
+sample = { n = 20, seed = 1 }
+extract = "auto"
+link = "auto"
+
+[datasets.grch38]
+ref = "ensembl:homo_sapiens/GRCh38@110"
+select = ["*dna.primary_assembly.fa.gz"]
+
+[steps.filter]
+foreach = "eeg:sub-*/"
+run = ["python", "scripts/filter.py", "{item}", "{out}"]
+inputs = ["scripts/filter.py", "uv.lock"]
+env = ["FILTER_BAND"]
+
+[steps.features]
+run = "duckdb -c \"COPY (SELECT * FROM '{in.filter}/**/*.parquet') TO '{out}/features.parquet'\""
+inputs = ["filter"]
+
+[tiers]
+remote = ["s3://lab-bucket/fetchloom"]
+
+[publish]
+title = "Filtered motor imagery EEG"
+creators = [{ name = "Okafor, A.", orcid = "0000-0002-1825-0097" }]
+license = "CC-BY-4.0"
+keywords = ["eeg", "motor imagery"]

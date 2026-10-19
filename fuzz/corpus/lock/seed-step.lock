@@ -1,0 +1,23 @@
+version = 1
+
+[[dataset]]
+name = "results"
+ref = "local:./results"
+spec = "blake3:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+resolved = "local:./results"
+retrieved = "2026-09-28T10:00:00Z"
+tree = "blake3:90b1536db35969ccf265eff6d75d7fb348f9f29d6de1f029daad45da831327fa"
+files = [
+  { path = "scores.csv", size = 42, blake3 = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" },
+]
+
+[[step]]
+name = "features"
+key = "blake3:7777777777777777777777777777777777777777777777777777777777777777"
+tree = "blake3:4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e"
+
+[[step]]
+name = "filter"
+key = "blake3:abababababababababababababababababababababababababababababababab"
+items = 12
+tree = "blake3:1010101010101010101010101010101010101010101010101010101010101010"

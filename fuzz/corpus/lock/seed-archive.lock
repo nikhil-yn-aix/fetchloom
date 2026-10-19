@@ -1,0 +1,13 @@
+version = 1
+
+[[dataset]]
+name = "images"
+ref = "openneuro:ds000001@1.0.0"
+spec = "blake3:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+resolved = "openneuro:ds000001@1.0.0"
+retrieved = "2026-09-28T10:00:00Z"
+tree = "blake3:34b9e497316960d38ced089d2fc011f52c936597db13c241e1aef4f85780af64"
+files = [
+  { path = "sub-01.tar.gz", size = 2048, blake3 = "7777777777777777777777777777777777777777777777777777777777777777", at = ["https://example.org/sub-01.tar.gz"], role = "archive" },
+  { path = "sub-01/run1.edf", size = 500, blake3 = "1010101010101010101010101010101010101010101010101010101010101010", from = "blake3:7777777777777777777777777777777777777777777777777777777777777777" },
+]
