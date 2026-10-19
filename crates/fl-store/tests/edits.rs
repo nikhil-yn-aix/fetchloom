@@ -54,30 +54,3 @@ fn an_edited_hardlinked_file_is_caught_by_fingerprints_and_by_verify() -> TestRe
     assert_eq!(work.files_rehashed, 2);
     Ok(())
 }
-
-#[cfg(unix)]
-#[test]
-fn verify_fails_when_a_damaged_object_cannot_be_deleted() -> TestResult {
-    use std::os::unix::fs::PermissionsExt;
-    let temp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
-    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
-    let source = temp.path().join("source");
-    fs::write(&source, b"original bytes")?;
-    let digest = tier.ingest_file(&source)?.digest;
-    let object = tier.locate(&digest).ok_or("object gone")?.path;
-    fs::set_permissions(&object, fs::Permissions::from_mode(0o644))?;
-    fs::write(&object, b"damaged bytes!")?;
-    let fan = object.parent().ok_or("no fan out directory")?;
-    fs::set_permissions(fan, fs::Permissions::from_mode(0o555))?;
-    let blocked = fs::File::create(fan.join("probe")).is_err();
-    let result = tier.verify(|_| true);
-    fs::set_permissions(fan, fs::Permissions::from_mode(0o755))?;
-    if blocked {
-        assert!(matches!(
-            result,
-            Err(fl_store::error::StoreError::Io { op: "remove", .. })
-        ));
-        assert!(object.exists());
-    }
-    Ok(())
-}

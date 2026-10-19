@@ -34,6 +34,22 @@ fn read_only(path: &Path) -> Result<bool, Box<dyn Error>> {
     Ok(fs::metadata(path)?.permissions().readonly())
 }
 
+/// Whether the filesystem under `dir` clones files, asked of it directly.
+#[cfg(unix)]
+fn clones(dir: &Path) -> Result<bool, Box<dyn Error>> {
+    let probe = tempfile::tempdir_in(dir)?;
+    let source = probe.path().join("source");
+    fs::write(&source, b"probe")?;
+    Ok(reflink_copy::reflink(&source, probe.path().join("clone")).is_ok())
+}
+
+/// Windows is not asked to clone yet, so a forced reflink is always refused there.
+#[cfg(windows)]
+#[expect(clippy::unnecessary_wraps, reason = "shares the unix signature")]
+fn clones(_dir: &Path) -> Result<bool, Box<dyn Error>> {
+    Ok(false)
+}
+
 #[test]
 fn each_mode_forced_alone_places_the_bytes_and_reports_itself() -> TestResult {
     let temp = temp()?;
@@ -43,13 +59,11 @@ fn each_mode_forced_alone_places_the_bytes_and_reports_itself() -> TestResult {
     for mode in [Mode::Reflink, Mode::Hardlink, Mode::Symlink, Mode::Copy] {
         let place = destination(&data, &format!("{mode:?}"))?;
         let linked = Linker::new(&tier, Ladder::only(mode)).link(&digest, &place);
-        if mode == Mode::Reflink && !cfg!(target_os = "macos") {
-            if cfg!(windows) {
-                assert!(linked.is_err(), "windows does not try reflink");
-            }
-            if linked.is_err() {
-                continue;
-            }
+        if mode == Mode::Reflink && !clones(temp.path())? {
+            let error = linked.err().ok_or("reflink claimed where clones fail")?;
+            assert!(matches!(error, StoreError::Io { .. }), "{error}");
+            assert!(fs::symlink_metadata(place.path()).is_err());
+            continue;
         }
         let linked = linked?;
         let copied = if mode == Mode::Copy { 6 } else { 0 };

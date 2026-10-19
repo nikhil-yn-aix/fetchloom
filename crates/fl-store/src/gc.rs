@@ -11,6 +11,7 @@ use fl_model::lock::Lock;
 use fl_model::tree::Tree;
 
 use crate::error::{StoreError, io};
+use crate::files;
 use crate::layout::object_digest;
 use crate::tier::Tier;
 
@@ -117,7 +118,7 @@ impl Tier {
                 self.drop_root(root)?;
             }
             for path in &collected.removed {
-                remove(path)?;
+                files::remove(path)?;
             }
         }
         Ok(collected)
@@ -183,11 +184,4 @@ fn list(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
         .map_err(io("list", dir))?
         .map(|entry| entry.map(|entry| entry.path()).map_err(io("list", dir)))
         .collect()
-}
-
-fn remove(path: &Path) -> Result<(), StoreError> {
-    match fs::remove_file(path) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(io("remove", path)(error)),
-        _ => Ok(()),
-    }
 }

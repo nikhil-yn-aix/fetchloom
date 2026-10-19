@@ -440,9 +440,10 @@ mod tests {
     #[test]
     fn a_tier_that_cannot_be_written_opens_for_reading() {
         use std::os::unix::fs::PermissionsExt;
-        if rustix::process::geteuid().is_root() {
-            return;
-        }
+        assert!(
+            !rustix::process::geteuid().is_root(),
+            "file modes do not bind root, so run the tests as another user"
+        );
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("tier");
         Tier::open(&root, Sharing::Private).unwrap();
