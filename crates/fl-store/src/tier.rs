@@ -1,7 +1,7 @@
 //! A tier on a local or network filesystem: a directory of objects and the records beside them.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
 use fl_model::digest::Digest;
@@ -181,24 +181,14 @@ impl Tier {
     /// [`StoreError::Length`] when the file changed size while it was read.
     pub fn ingest_file(&self, path: &Path) -> Result<Ingested, StoreError> {
         let _span = tracing::debug_span!("ingest_file", path = %path.display()).entered();
-        let mut source = File::open(path).map_err(io("open", path))?;
+        let source = File::open(path).map_err(io("open", path))?;
         let length = source
             .metadata()
             .map_err(io("read metadata of", path))?
             .len();
         let mut staged = self.stage(Some(length))?;
-        let mut buffer = vec![0; BUFFER];
-        loop {
-            let count = match source.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(count) => count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(io("read", path)(error)),
-            };
-            staged
-                .write_all(&buffer[..count])
-                .map_err(io("write", staged.scratch.path()))?;
-        }
+        io::copy(&mut BufReader::with_capacity(BUFFER, source), &mut staged)
+            .map_err(io("copy into the tier", path))?;
         self.ingest(staged)
     }
 
@@ -294,6 +284,7 @@ fn can_write(tmp: &Path) -> Result<bool, StoreError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
 
     use fl_model::digest::Algorithm;
     use fl_model::error::ErrorKind;
@@ -469,5 +460,26 @@ mod tests {
         let tier = Tier::open(&root, Sharing::Private).unwrap();
         set(0o755);
         assert!(!tier.writable());
+    }
+
+    #[test]
+    fn ingested_adds_new_objects_and_bytes_to_work() {
+        let ingested = Ingested {
+            digest: Digest::Blake3([1; 32]),
+            new: true,
+            bytes: 5,
+        };
+        let mut work = Work::default();
+        ingested.add_to(&mut work);
+        ingested.add_to(&mut work);
+        assert_eq!(work.objects_ingested, 2);
+        assert_eq!(work.bytes_written, 10);
+        Ingested {
+            new: false,
+            ..ingested
+        }
+        .add_to(&mut work);
+        assert_eq!(work.objects_ingested, 2);
+        assert_eq!(work.bytes_written, 15);
     }
 }

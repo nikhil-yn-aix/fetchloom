@@ -75,3 +75,19 @@ pub(crate) fn seal(file: &File) -> io::Result<()> {
     };
     file.set_permissions(permissions)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_parent_is_an_error_and_an_existing_directory_is_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = create_dir(&temp.path().join("a").join("b"), Sharing::Private).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let dir = temp.path().join("a");
+        create_dir(&dir, Sharing::Private).unwrap();
+        create_dir(&dir, Sharing::Private).unwrap();
+        assert!(dir.is_dir());
+    }
+}

@@ -9,6 +9,7 @@ use fl_model::digest::Digest;
 use fl_model::document::Work;
 use fl_model::path::DataPath;
 use fl_store::data_dir::{DataDir, Destination};
+use fl_store::error::StoreError;
 use fl_store::link::{Ladder, Linked, Linker, Mode};
 use fl_store::tier::{Sharing, Tier};
 use tempfile::TempDir;
@@ -201,5 +202,60 @@ fn a_second_link_of_ten_thousand_objects_copies_nothing() -> TestResult {
     assert_eq!(second.files_linked, 10_000);
     assert_eq!(second.bytes_copied, 0);
     assert_eq!(second.links.hardlink + second.links.reflink, 10_000);
+    Ok(())
+}
+
+#[test]
+fn an_object_deleted_from_the_tier_is_missing_in_every_mode() -> TestResult {
+    let temp = temp()?;
+    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+    let digest = object(&tier, b"soon gone")?;
+    let path = tier.locate(&digest).ok_or("object gone")?.path;
+    fs::remove_file(&path)?;
+    let data = DataDir::new(temp.path().join("data"));
+    for ladder in [Ladder::only(Mode::Hardlink), Ladder::COPY] {
+        let error = Linker::new(&tier, ladder)
+            .link(&digest, &destination(&data, "f")?)
+            .err()
+            .ok_or("linked a deleted object")?;
+        assert!(
+            matches!(error, StoreError::Missing { digest: missing } if missing == digest),
+            "{error}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_destination_directory_removed_behind_the_data_dir_is_an_io_error() -> TestResult {
+    let temp = temp()?;
+    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+    let digest = object(&tier, b"present")?;
+    let data = DataDir::new(temp.path().join("data"));
+    let place = destination(&data, "sub/f")?;
+    fs::remove_dir(temp.path().join("data").join("ds").join("sub"))?;
+    let error = Linker::new(&tier, Ladder::only(Mode::Hardlink))
+        .link(&digest, &place)
+        .err()
+        .ok_or("linked into a removed directory")?;
+    assert!(matches!(error, StoreError::Io { .. }), "{error}");
+    assert!(tier.locate(&digest).is_some());
+    Ok(())
+}
+
+#[test]
+fn a_non_empty_directory_at_the_destination_is_not_replaced() -> TestResult {
+    let temp = temp()?;
+    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+    let digest = object(&tier, b"present")?;
+    let data = DataDir::new(temp.path().join("data"));
+    let place = destination(&data, "f")?;
+    fs::create_dir(place.path())?;
+    fs::write(place.path().join("inside"), b"keep")?;
+    for ladder in [Ladder::only(Mode::Hardlink), Ladder::COPY] {
+        let result = Linker::new(&tier, ladder).link(&digest, &place);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(fs::read(place.path().join("inside"))?, b"keep");
+    }
     Ok(())
 }
