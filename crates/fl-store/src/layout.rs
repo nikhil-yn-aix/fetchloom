@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use fl_model::digest::Digest;
+use fl_model::digest::{Algorithm, Digest};
+
+use crate::error::StoreError;
 
 /// The directories of a tier, all below `<tier>/v1`.
 pub(crate) const DIRECTORIES: [&str; 6] = ["objects", "tmp", "partial", "trees", "steps", "roots"];
@@ -33,6 +35,14 @@ impl Layout {
         self.root.join(name)
     }
 
+    /// The record in directory `dir` named by `digest`'s hex, such as a tree object or a step
+    /// record.
+    pub(crate) fn named(&self, dir: &str, digest: &Digest) -> PathBuf {
+        let text = digest.to_string();
+        let hex = text.split_once(':').map_or(text.as_str(), |(_, hex)| hex);
+        self.dir(dir).join(hex)
+    }
+
     /// Where the object with BLAKE3 digest `blake3` lives: two hex characters of fan out, then the
     /// other sixty two.
     pub(crate) fn object(&self, blake3: &[u8; 32]) -> PathBuf {
@@ -43,6 +53,21 @@ impl Layout {
         path.push(rest);
         path
     }
+}
+
+/// The digest an object file is named by, from its fan out directory and its file name.
+pub(crate) fn object_digest(fan: &Path, object: &Path) -> Result<Digest, StoreError> {
+    let hex = [fan, object]
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("")
+        })
+        .collect::<String>();
+    Digest::from_hex(Algorithm::Blake3, &hex).map_err(|_| StoreError::Foreign {
+        path: object.to_owned(),
+    })
 }
 
 #[cfg(test)]

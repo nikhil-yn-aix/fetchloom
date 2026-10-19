@@ -1,0 +1,219 @@
+//! Garbage collection against registered locks, on the real filesystem.
+
+use std::error::Error;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use fl_model::digest::Digest;
+use fl_model::error::ErrorKind;
+use fl_model::lock::{Lock, LockedDataset, LockedFile, LockedStep};
+use fl_model::name::Name;
+use fl_model::path::DataPath;
+use fl_model::tree::{Tree, TreeEntry};
+use fl_store::gc::{Collect, Collected};
+use fl_store::tier::{Sharing, Tier};
+use tempfile::TempDir;
+
+type TestResult = Result<(), Box<dyn Error>>;
+
+const HOUR: Duration = Duration::from_secs(3600);
+
+struct Store {
+    temp: TempDir,
+    tier: Tier,
+}
+
+impl Store {
+    fn new() -> Result<Self, Box<dyn Error>> {
+        let temp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+        let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+        Ok(Self { temp, tier })
+    }
+
+    fn object(&self, bytes: &[u8]) -> Result<[u8; 32], Box<dyn Error>> {
+        let mut staged = self.tier.stage(None)?;
+        staged.write_all(bytes)?;
+        match self.tier.ingest(staged)?.digest {
+            Digest::Blake3(blake3) => Ok(blake3),
+            other => Err(format!("not blake3: {other}").into()),
+        }
+    }
+
+    fn path(&self, relative: &str) -> PathBuf {
+        self.temp.path().join("tier").join("v1").join(relative)
+    }
+
+    fn object_path(&self, blake3: [u8; 32]) -> Result<PathBuf, Box<dyn Error>> {
+        Ok(self
+            .tier
+            .locate(&Digest::Blake3(blake3))
+            .ok_or("object gone")?
+            .path)
+    }
+
+    fn lock(&self, project: &str, lock: &Lock) -> Result<PathBuf, Box<dyn Error>> {
+        let path = self.temp.path().join(project).join("data.lock");
+        fs::create_dir_all(path.parent().ok_or("no parent")?)?;
+        fs::write(&path, lock.to_toml())?;
+        self.tier.register_root(&path)?;
+        Ok(path)
+    }
+
+    fn collect(&self, after: Duration, dry_run: bool) -> Result<Collected, Box<dyn Error>> {
+        Ok(self.tier.collect(&Collect {
+            now: SystemTime::now() + after,
+            grace: HOUR,
+            dry_run,
+        })?)
+    }
+}
+
+fn entry(path: &str, blake3: [u8; 32]) -> Result<TreeEntry, Box<dyn Error>> {
+    Ok(TreeEntry {
+        path: DataPath::new(path)?,
+        size: 1,
+        blake3,
+    })
+}
+
+fn dataset(
+    name: &str,
+    entries: &[TreeEntry],
+    inline: bool,
+) -> Result<LockedDataset, Box<dyn Error>> {
+    let tree = Tree::new(entries.to_vec())?.hash();
+    let files = entries
+        .iter()
+        .map(|entry| LockedFile {
+            path: entry.path.clone(),
+            size: entry.size,
+            blake3: entry.blake3,
+            sha256: None,
+            sha1: None,
+            md5: None,
+            at: Vec::new(),
+            from: None,
+            role: None,
+        })
+        .collect();
+    Ok(LockedDataset {
+        name: Name::new(name)?,
+        reference: "zenodo:1".parse()?,
+        spec: Digest::Blake3([1; 32]),
+        resolved: "zenodo:1".parse()?,
+        title: None,
+        license: None,
+        doi: None,
+        retrieved: "2026-10-19T10:00:00Z".parse()?,
+        tree,
+        files: inline.then_some(files),
+    })
+}
+
+fn write_tree(store: &Store, entries: &[TreeEntry]) -> Result<Digest, Box<dyn Error>> {
+    let tree = Tree::new(entries.to_vec())?;
+    let digest = tree.hash();
+    let name = digest.to_string();
+    let hex = name.split_once(':').ok_or("no colon")?.1;
+    fs::write(store.path("trees").join(hex), tree.encode())?;
+    Ok(digest)
+}
+
+fn exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+#[test]
+fn old_unmarked_files_go_and_needed_or_young_ones_stay() -> TestResult {
+    let store = Store::new()?;
+    let needed = store.object(b"needed")?;
+    let unneeded = store.object_path(store.object(b"unneeded")?)?;
+    let lock = Lock::new(
+        vec![dataset("a", &[entry("x", needed)?], true)?],
+        Vec::new(),
+    )?;
+    store.lock("project", &lock)?;
+    let leftover = store.path("tmp").join("dead-writer");
+    fs::write(&leftover, b"half")?;
+    assert_eq!(store.collect(Duration::ZERO, false)?, Collected::default());
+    let collected = store.collect(2 * HOUR, false)?;
+    let mut expected = vec![unneeded, leftover.clone()];
+    expected.sort_unstable();
+    assert_eq!(collected.removed, expected);
+    assert_eq!(collected.bytes, 8 + 4);
+    assert!(exists(&store.object_path(needed)?));
+    assert!(!exists(&leftover));
+    Ok(())
+}
+
+#[test]
+fn a_dry_run_lists_without_removing() -> TestResult {
+    let store = Store::new()?;
+    let unneeded = store.object(b"unneeded")?;
+    let path = store.object_path(unneeded)?;
+    let gone = store.lock("gone", &Lock::new(Vec::new(), Vec::new())?)?;
+    fs::remove_file(&gone)?;
+    let collected = store.collect(2 * HOUR, true)?;
+    assert_eq!(collected.removed, std::slice::from_ref(&path));
+    assert_eq!(collected.dropped_roots, [std::path::absolute(&gone)?]);
+    assert!(exists(&path));
+    assert_eq!(store.tier.roots()?.len(), 1);
+    let collected = store.collect(2 * HOUR, false)?;
+    assert_eq!(collected.dropped_roots.len(), 1);
+    assert!(!exists(&path));
+    assert!(store.tier.roots()?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn tree_objects_and_step_results_keep_what_they_list() -> TestResult {
+    let store = Store::new()?;
+    let in_tree = store.object(b"in a tree")?;
+    let in_step = store.object(b"step output")?;
+    let dataset_entries = [entry("big", in_tree)?];
+    let dataset_tree = write_tree(&store, &dataset_entries)?;
+    let step_tree = write_tree(&store, &[entry("out", in_step)?])?;
+    let key = Digest::Blake3([9; 32]);
+    let record = store.path("steps").join("09".repeat(32));
+    fs::write(&record, b"record")?;
+    let step = LockedStep {
+        name: Name::new("s")?,
+        key,
+        items: None,
+        tree: step_tree,
+    };
+    let lock = Lock::new(vec![dataset("a", &dataset_entries, false)?], vec![step])?;
+    store.lock("project", &lock)?;
+    let collected = store.collect(2 * HOUR, false)?;
+    assert!(collected.removed.is_empty(), "{:?}", collected.removed);
+    assert!(exists(&record));
+    assert_ne!(dataset_tree, step_tree);
+    Ok(())
+}
+
+#[test]
+fn what_cannot_be_read_stops_gc_before_anything_goes() -> TestResult {
+    let store = Store::new()?;
+    let unneeded = store.object(b"unneeded")?;
+    let missing_tree = Lock::new(
+        vec![dataset("a", &[entry("x", [5; 32])?], false)?],
+        Vec::new(),
+    )?;
+    let lock = store.lock("tree", &missing_tree)?;
+    let error = store.collect(2 * HOUR, false).err().ok_or("gc ran")?;
+    assert!(error.to_string().contains("is missing, and"), "{error}");
+    fs::write(&lock, "version = 2\n")?;
+    let error = store.tier.collect(&Collect {
+        now: SystemTime::now() + 2 * HOUR,
+        grace: HOUR,
+        dry_run: false,
+    });
+    assert_eq!(
+        error.err().ok_or("gc ran")?.kind(),
+        ErrorKind::ProjectInvalidLock
+    );
+    assert!(exists(&store.object_path(unneeded)?));
+    Ok(())
+}

@@ -86,13 +86,18 @@ impl Tier {
     /// Finds the object named by `digest`. Only BLAKE3 digests name objects.
     #[must_use]
     pub fn locate(&self, digest: &Digest) -> Option<Located> {
-        let Digest::Blake3(blake3) = digest else {
-            return None;
-        };
-        let path = self.layout.object(blake3);
+        let path = self.object_path(digest)?;
         fs::symlink_metadata(&path)
             .is_ok_and(|metadata| metadata.is_file())
             .then_some(Located { path })
+    }
+
+    /// Where the object named by `digest` lives or would live, for BLAKE3 digests.
+    pub(crate) fn object_path(&self, digest: &Digest) -> Option<PathBuf> {
+        match digest {
+            Digest::Blake3(blake3) => Some(self.layout.object(blake3)),
+            _ => None,
+        }
     }
 
     /// Starts a new object in `tmp/`.
@@ -179,24 +184,32 @@ impl Tier {
         self.ingest(staged)
     }
 
-    fn place(&self, scratch: Scratch, object: &Path) -> Result<bool, StoreError> {
-        if exists(object) {
+    /// The tier's paths.
+    pub(crate) const fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// Renames the finished file of `scratch` to `target` unless something is there already, and
+    /// says whether it was placed. A rename that fails because another writer placed the same
+    /// name first counts as already there.
+    pub(crate) fn place(&self, scratch: Scratch, target: &Path) -> Result<bool, StoreError> {
+        if exists(target) {
             return Ok(false);
         }
-        let mut result = fs::rename(scratch.path(), object);
+        let mut result = fs::rename(scratch.path(), target);
         if let Err(error) = &result
             && error.kind() == io::ErrorKind::NotFound
-            && let Some(fan) = object.parent()
+            && let Some(parent) = target.parent()
         {
-            mode::create_dir(fan, self.sharing).map_err(io("create directory", fan))?;
-            result = fs::rename(scratch.path(), object);
+            mode::create_dir(parent, self.sharing).map_err(io("create directory", parent))?;
+            result = fs::rename(scratch.path(), target);
         }
         match result {
             Ok(()) => {
                 scratch.keep();
                 Ok(true)
             }
-            Err(_) if exists(object) => Ok(false),
+            Err(_) if exists(target) => Ok(false),
             Err(error) => Err(io("rename into place", scratch.path())(error)),
         }
     }
