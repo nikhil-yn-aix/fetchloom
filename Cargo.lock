@@ -487,11 +487,14 @@ dependencies = [
 name = "fl-transfer"
 version = "0.1.0"
 dependencies = [
+ "fl-model",
  "rcgen",
  "reqwest",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "toml",
  "url",
 ]
 
