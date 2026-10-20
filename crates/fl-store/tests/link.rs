@@ -234,6 +234,37 @@ fn a_second_link_of_ten_thousand_objects_copies_nothing() -> TestResult {
 }
 
 #[test]
+fn bulk_linking_answers_in_order_and_goes_on_past_a_failure() -> TestResult {
+    let temp = temp()?;
+    let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
+    let data = DataDir::new(temp.path().join("data"));
+    let mut pairs = Vec::new();
+    for index in (0..100_u8).rev() {
+        let digest = if index % 7 == 0 {
+            Digest::Blake3([index; 32])
+        } else {
+            object(&tier, &[index])?
+        };
+        pairs.push((digest, destination(&data, &format!("{index:03}"))?));
+    }
+    let results = Linker::new(&tier, Ladder::AUTO).link_all(&pairs);
+    assert_eq!(results.len(), pairs.len());
+    for ((digest, destination), result) in pairs.iter().zip(&results) {
+        match result {
+            Ok(_) => assert_eq!(fs::read(destination.path())?, object_bytes(&tier, digest)?),
+            Err(StoreError::Missing { digest: missing }) => assert_eq!(missing, digest),
+            Err(error) => return Err(error.to_string().into()),
+        }
+    }
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 15);
+    Ok(())
+}
+
+fn object_bytes(tier: &Tier, digest: &Digest) -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(fs::read(tier.locate(digest).ok_or("object gone")?.path)?)
+}
+
+#[test]
 fn an_object_deleted_from_the_tier_is_missing_in_every_mode() -> TestResult {
     let temp = temp()?;
     let tier = Tier::open(&temp.path().join("tier"), Sharing::Private)?;
