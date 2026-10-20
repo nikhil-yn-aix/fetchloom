@@ -172,14 +172,17 @@ impl Split<'_> {
         if buffer.is_empty() {
             return Ok(buffer);
         }
-        let offset = part.start + part.done;
-        part.done += buffer.len() as u64;
-        self.feed.write(offset, buffer).await.map_err(|_| {
-            Failure::last(TransferError::Sink {
-                url: self.url.clone(),
-                source: std::io::Error::other("the writer thread stopped"),
-            })
-        })?;
+        let length = buffer.len() as u64;
+        self.feed
+            .write(part.start + part.done, buffer)
+            .await
+            .map_err(|_| {
+                Failure::last(TransferError::Sink {
+                    url: self.url.clone(),
+                    source: std::io::Error::other("the writer thread stopped"),
+                })
+            })?;
+        part.done += length;
         Ok(self.feed.buffer())
     }
 }

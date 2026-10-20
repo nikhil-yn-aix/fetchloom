@@ -335,6 +335,7 @@ impl Client {
             request = request.basic_auth(user, password);
             credentialed = true;
         } else if own_origin
+            && url.scheme() == "https"
             && let Some(origin) = url.origin()
             && let Some(found) = self
                 .credentials
