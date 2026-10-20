@@ -47,6 +47,13 @@ kinds! {
     ReferenceInvalid = "reference.invalid" => 10, "A reference is not valid reference syntax.";
     ReferenceAmbiguous = "reference.ambiguous" => 11, "A name matched several records.";
     SelectionEmpty = "selection.empty" => 12, "A filter pattern matched no file.";
+    NetworkUnreachable = "network.unreachable" => 20, "A host could not be reached or dropped the connection.";
+    NetworkTimeout = "network.timeout" => 20, "A connection stayed silent for longer than allowed.";
+    NetworkStatus = "network.status" => 20, "A server answered with an error status.";
+    NetworkRateLimited = "network.rate_limited" => 20, "A host asked to wait longer than fetchloom waits.";
+    NetworkRefused = "network.refused" => 20, "A redirect pointed at an address that is never contacted.";
+    NetworkInsecure = "network.insecure" => 20, "Plain http where only https is allowed.";
+    NetworkProtocol = "network.protocol" => 20, "A server broke the rules of HTTP.";
     OfflineMissing = "offline.missing" => 20, "Offline, and a needed object is in no local tier.";
     IntegrityDrift = "integrity.drift" => 30, "A source now serves other bytes than the lock records.";
     IntegrityMismatch = "integrity.mismatch" => 30, "Received bytes do not match their stated hash.";
@@ -113,6 +120,13 @@ mod tests {
         ("reference.invalid", 10),
         ("reference.ambiguous", 11),
         ("selection.empty", 12),
+        ("network.unreachable", 20),
+        ("network.timeout", 20),
+        ("network.status", 20),
+        ("network.rate_limited", 20),
+        ("network.refused", 20),
+        ("network.insecure", 20),
+        ("network.protocol", 20),
         ("offline.missing", 20),
         ("integrity.drift", 30),
         ("integrity.mismatch", 30),
