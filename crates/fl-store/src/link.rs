@@ -217,7 +217,6 @@ impl<'t> Linker<'t> {
     }
 }
 
-/// The name a file is built under beside its destination before it is renamed over it.
 /// Whether an error concerns this one file or the disk rather than the mode, so the next mode
 /// is tried for this file while later files still start from the same mode.
 fn moves_on(error: &io::Error) -> bool {
@@ -232,6 +231,7 @@ fn moves_on(error: &io::Error) -> bool {
     )
 }
 
+/// The name a file is built under beside its destination before it is renamed over it.
 fn staging_path(target: &Path) -> PathBuf {
     let mut name = std::ffi::OsString::from(".");
     name.push(target.file_name().unwrap_or_default());

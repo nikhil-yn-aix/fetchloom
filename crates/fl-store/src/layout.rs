@@ -56,7 +56,6 @@ impl Layout {
     }
 }
 
-/// The digest an object file is named by, from its fan out directory and its file name.
 /// The entries of a tier directory, without hidden names: an NFS client leaves `.nfs` files
 /// beside a file deleted while open, and they are not the store's to judge.
 pub(crate) fn entries(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
@@ -70,6 +69,7 @@ pub(crate) fn entries(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
     Ok(found)
 }
 
+/// The digest an object file is named by, from its fan out directory and its file name.
 pub(crate) fn object_digest(fan: &Path, object: &Path) -> Result<Digest, StoreError> {
     let hex = [fan, object]
         .iter()
