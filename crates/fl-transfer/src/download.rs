@@ -9,8 +9,10 @@ use tracing::Instrument;
 use crate::client::{Answer, Ask, Client, Failure, protocol};
 use crate::error::TransferError;
 use crate::hash::{Hasher, Hashes};
-use crate::retry::{self, Next};
+use crate::hosts::Slot;
+use crate::retry;
 use crate::sink::Sink;
+use crate::split::{self, SPLIT_ABOVE, Split};
 use crate::url::SafeUrl;
 use crate::writer::{BUFFER, Writer, rehash};
 
@@ -48,6 +50,7 @@ pub struct Downloaded<S> {
 enum Step {
     Done,
     Again,
+    Split,
 }
 
 struct Run<'a, S> {
@@ -129,7 +132,7 @@ impl<'a, S: Sink> Run<'a, S> {
         Ok(Self {
             client,
             download,
-            writer: Writer::start(sink, hasher, fresh, true),
+            writer: Writer::start(sink, hasher, fresh),
             offset: kept,
             saved: kept,
             validator,
@@ -150,6 +153,7 @@ impl<'a, S: Sink> Run<'a, S> {
             let ask = Ask {
                 url: &self.download.url,
                 from: self.offset,
+                to: None,
                 if_range: if_range.as_deref(),
                 attempt: self.failures + 1,
             };
@@ -159,9 +163,10 @@ impl<'a, S: Sink> Run<'a, S> {
             };
             match step {
                 Ok(Step::Again) => {}
+                Ok(Step::Split) => return self.finish_split().await,
                 Ok(Step::Done) => match self.verify().await? {
-                    Step::Done => return self.finish().await,
                     Step::Again => {}
+                    _ => return self.finish().await,
                 },
                 Err(failure) => self.recover(failure).await?,
             }
@@ -187,6 +192,9 @@ impl<'a, S: Sink> Run<'a, S> {
                         .allocate(length)
                         .await
                         .map_err(|error| self.sink(error))?;
+                }
+                if let Some(slots) = self.spare_slots(&answer) {
+                    return self.split(answer, slots).await;
                 }
                 self.stream(answer).await
             }
@@ -320,6 +328,100 @@ impl<'a, S: Sink> Run<'a, S> {
         Ok(self.writer.buffer())
     }
 
+    fn spare_slots(&self, answer: &Answer) -> Option<Vec<Slot>> {
+        let stable = self.download.stable || matches!(self.validator, Validator::StrongEtag(_));
+        let ranges = answer
+            .response
+            .headers()
+            .get(header::ACCEPT_RANGES)
+            .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"bytes"));
+        if self.offset > 0 || !stable || !ranges || self.length? <= SPLIT_ABOVE {
+            return None;
+        }
+        let hosts = self.client.hosts();
+        let host = self.download.url.host()?;
+        let slots: Vec<Slot> = (1..self.client.config.per_host)
+            .map_while(|_| hosts.try_take(host))
+            .collect();
+        (!slots.is_empty()).then_some(slots)
+    }
+
+    async fn split(&mut self, answer: Answer, slots: Vec<Slot>) -> Result<Step, Failure> {
+        let length = self.offset.max(self.length.unwrap_or_default());
+        self.writer
+            .unhashed()
+            .await
+            .map_err(|error| self.sink(error))?;
+        let mut parts = split::plan(length, 1 + slots.len());
+        let if_range = match &self.validator {
+            Validator::StrongEtag(etag) => Some(etag.clone()),
+            _ => None,
+        };
+        let fetched = Split {
+            client: self.client,
+            url: &self.download.url,
+            if_range: if_range.as_deref(),
+            feed: self.writer.feed(),
+        }
+        .fetch(&mut parts, answer.response)
+        .await;
+        drop(slots);
+        self.offset = split::prefix(&parts);
+        match fetched {
+            Ok(()) => Ok(Step::Split),
+            Err(failure) => {
+                self.save().await.map_err(Failure::last)?;
+                Err(Failure::last(failure.error))
+            }
+        }
+    }
+
+    async fn finish_split(self) -> Result<Downloaded<S>, TransferError> {
+        let Self {
+            download,
+            writer,
+            offset: length,
+            restarted,
+            ..
+        } = self;
+        let (sink, _) = writer
+            .finish()
+            .await
+            .map_err(|error| sink_error(download, error))?;
+        let stated = download.stated.clone();
+        let (sink, hashes, read) = tokio::task::spawn_blocking(move || {
+            let mut sink = sink;
+            let mut hasher = Hasher::new(&stated);
+            let read = rehash(&mut sink, &mut hasher, length)?;
+            Ok::<_, std::io::Error>((sink, hasher.finish(), read))
+        })
+        .await
+        .map_err(|error| sink_error(download, std::io::Error::other(error)))?
+        .map_err(|error| sink_error(download, error))?;
+        let url = &download.url;
+        let expected = download.length.unwrap_or(length);
+        if read != length || expected != length {
+            return Err(TransferError::Length {
+                url: url.clone(),
+                expected,
+                received: read,
+            });
+        }
+        hashes
+            .check(&download.stated)
+            .map_err(|source| TransferError::Mismatch {
+                url: url.clone(),
+                source,
+            })?;
+        Ok(Downloaded {
+            sink,
+            bytes: length,
+            hashes,
+            resumed: false,
+            restarted,
+        })
+    }
+
     async fn verify(&mut self) -> Result<Step, TransferError> {
         let url = &self.download.url;
         if let Some(expected) = self.download.length
@@ -359,22 +461,9 @@ impl<'a, S: Sink> Run<'a, S> {
                 self.restart().await.map_err(|failure| failure.error)?;
             }
         }
-        if !failure.transient {
-            return Err(failure.error);
-        }
-        let next = retry::next(self.failures, failure.retry_after, &mut self.client.rng());
-        match next {
-            Next::Wait(wait) => {
-                self.client.counters.retry();
-                self.client.timer.sleep(wait).await;
-                Ok(())
-            }
-            Next::GiveUp => Err(failure.error),
-            Next::TooLong(wait) => Err(TransferError::RateLimited {
-                host: self.download.url.host().unwrap_or_default().to_owned(),
-                wait,
-            }),
-        }
+        self.client
+            .pause(self.failures, failure, &self.download.url)
+            .await
     }
 
     async fn restart(&mut self) -> Result<(), Failure> {
@@ -451,7 +540,7 @@ fn validator(headers: &HeaderMap) -> Validator {
 }
 
 /// The first byte and the total length a `Content-Range: bytes a-b/total` names.
-fn content_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
+pub(crate) fn content_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
     let value = headers.get(header::CONTENT_RANGE)?.to_str().ok()?;
     let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
     let (start, _) = range.split_once('-')?;

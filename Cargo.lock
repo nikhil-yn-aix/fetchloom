@@ -560,6 +560,7 @@ dependencies = [
  "blake3",
  "fastrand",
  "fl-model",
+ "futures-util",
  "httpdate",
  "md-5",
  "rcgen",
