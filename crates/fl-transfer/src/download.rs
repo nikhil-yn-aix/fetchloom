@@ -269,7 +269,15 @@ impl<'a, S: Sink> Run<'a, S> {
         Ok(Step::Again)
     }
 
-    async fn stream(&mut self, mut answer: Answer) -> Result<Step, Failure> {
+    async fn stream(&mut self, answer: Answer) -> Result<Step, Failure> {
+        let span = answer.span.clone();
+        let start = self.offset;
+        let streamed = self.stream_body(answer).instrument(span.clone()).await;
+        span.record("bytes", self.offset.saturating_sub(start));
+        streamed
+    }
+
+    async fn stream_body(&mut self, mut answer: Answer) -> Result<Step, Failure> {
         let mut buffer = self.writer.buffer();
         loop {
             let idle = self.client.config.idle;
@@ -363,7 +371,7 @@ impl<'a, S: Sink> Run<'a, S> {
             if_range: if_range.as_deref(),
             feed: self.writer.feed(),
         }
-        .fetch(&mut parts, answer.response)
+        .fetch(&mut parts, (answer.response, answer.span))
         .await;
         drop(slots);
         self.offset = split::prefix(&parts);

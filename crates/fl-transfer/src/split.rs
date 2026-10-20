@@ -2,6 +2,7 @@
 
 use futures_util::future::try_join_all;
 use reqwest::Response;
+use tracing::{Instrument, Span};
 
 use crate::client::{Ask, Client, Failure, protocol};
 use crate::download::content_range;
@@ -61,14 +62,22 @@ pub(crate) fn prefix(parts: &[Part]) -> u64 {
 impl Split<'_> {
     /// Fetches every part at once, the first from `first`, the response that is already open.
     /// Each part retries on its own; the first part to give up stops the others.
-    pub(crate) async fn fetch(&self, parts: &mut [Part], first: Response) -> Result<(), Failure> {
+    pub(crate) async fn fetch(
+        &self,
+        parts: &mut [Part],
+        first: (Response, Span),
+    ) -> Result<(), Failure> {
         let mut first = Some(first);
         try_join_all(parts.iter_mut().map(|part| self.part(part, first.take())))
             .await
             .map(|_| ())
     }
 
-    async fn part(&self, part: &mut Part, mut open: Option<Response>) -> Result<(), Failure> {
+    async fn part(
+        &self,
+        part: &mut Part,
+        mut open: Option<(Response, Span)>,
+    ) -> Result<(), Failure> {
         let mut failures = 0;
         while part.start + part.done < part.end {
             let response = match open.take() {
@@ -76,7 +85,12 @@ impl Split<'_> {
                 None => self.ask(part, failures + 1).await,
             };
             let pumped = match response {
-                Ok(response) => self.pump(response, part).await,
+                Ok((response, span)) => {
+                    let start = part.done;
+                    let pumped = self.pump(response, part).instrument(span.clone()).await;
+                    span.record("bytes", part.done - start);
+                    pumped
+                }
                 Err(failure) => Err(failure),
             };
             if let Err(failure) = pumped {
@@ -90,7 +104,7 @@ impl Split<'_> {
         Ok(())
     }
 
-    async fn ask(&self, part: &Part, attempt: u32) -> Result<Response, Failure> {
+    async fn ask(&self, part: &Part, attempt: u32) -> Result<(Response, Span), Failure> {
         let from = part.start + part.done;
         let answer = self
             .client
@@ -110,7 +124,7 @@ impl Split<'_> {
                 "did not send the range asked for, though it offered ranges",
             )));
         }
-        Ok(answer.response)
+        Ok((answer.response, answer.span))
     }
 
     async fn pump(&self, mut response: Response, part: &mut Part) -> Result<(), Failure> {
