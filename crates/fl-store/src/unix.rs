@@ -107,12 +107,11 @@ mod tests {
     }
 
     #[test]
-    fn a_reservation_the_device_refuses_is_an_error() {
-        let null = fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .unwrap();
-        let error = reserve(&null, 4096).unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(Errno::NODEV.raw_os_error()));
+    fn a_reservation_through_a_read_only_handle_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file");
+        fs::write(&path, b"").unwrap();
+        let error = reserve(&File::open(&path).unwrap(), 4096).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(Errno::BADF.raw_os_error()));
     }
 }
