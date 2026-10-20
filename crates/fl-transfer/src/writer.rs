@@ -2,6 +2,7 @@
 //! the network never waits on the disk and memory stays bounded.
 
 use std::io;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fl_model::partial::PartialRecord;
 use tokio::sync::{mpsc, oneshot};
@@ -22,36 +23,71 @@ enum Command {
     Allocate(u64),
     Save(PartialRecord),
     Hashes(oneshot::Sender<Hashes>),
+    Unhashed,
+}
+
+/// A handle that hands buffers to the writer. Clones feed the same writer, so the parts of a
+/// split download share it and its bound on memory.
+#[derive(Clone)]
+pub(crate) struct Feed {
+    commands: mpsc::Sender<Command>,
+    spare: Arc<Mutex<mpsc::UnboundedReceiver<Vec<u8>>>>,
+}
+
+/// The writer thread is gone; [`Writer::stopped`] says why.
+#[derive(Debug)]
+pub(crate) struct Stopped;
+
+impl Feed {
+    /// An empty buffer of [`BUFFER`] bytes, reused when the writer has handed one back.
+    pub(crate) fn buffer(&self) -> Vec<u8> {
+        self.spare
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_recv()
+            .unwrap_or_else(|_| Vec::with_capacity(BUFFER))
+    }
+
+    /// Hands `buffer` to the writer, to be written at `offset`.
+    pub(crate) async fn write(&self, offset: u64, buffer: Vec<u8>) -> Result<(), Stopped> {
+        self.commands
+            .send(Command::Write { offset, buffer })
+            .await
+            .map_err(|_| Stopped)
+    }
 }
 
 /// The network side of a writer thread.
 pub(crate) struct Writer<S> {
-    commands: mpsc::Sender<Command>,
-    spare: mpsc::UnboundedReceiver<Vec<u8>>,
+    feed: Feed,
     thread: Option<JoinHandle<io::Result<(S, Hasher)>>>,
 }
 
 impl<S: Sink> Writer<S> {
     /// Starts the thread with `sink`, whose kept bytes `hasher` has already seen. `fresh` is a
     /// hasher that has seen nothing, used after a reset.
-    pub(crate) fn start(sink: S, hasher: Hasher, fresh: Hasher, hash: bool) -> Self {
+    pub(crate) fn start(sink: S, hasher: Hasher, fresh: Hasher) -> Self {
         let (commands, received) = mpsc::channel(DEPTH);
         let (returned, spare) = mpsc::unbounded_channel();
-        let thread = tokio::task::spawn_blocking(move || {
-            run(sink, hasher, &fresh, hash, received, &returned)
-        });
+        let thread =
+            tokio::task::spawn_blocking(move || run(sink, hasher, &fresh, received, &returned));
         Self {
-            commands,
-            spare,
+            feed: Feed {
+                commands,
+                spare: Arc::new(Mutex::new(spare)),
+            },
             thread: Some(thread),
         }
     }
 
-    /// An empty buffer of [`BUFFER`] bytes, reused when the writer has handed one back.
-    pub(crate) fn buffer(&mut self) -> Vec<u8> {
-        self.spare
-            .try_recv()
-            .unwrap_or_else(|_| Vec::with_capacity(BUFFER))
+    /// A handle for handing buffers over.
+    pub(crate) fn feed(&self) -> Feed {
+        self.feed.clone()
+    }
+
+    /// An empty buffer of [`BUFFER`] bytes.
+    pub(crate) fn buffer(&self) -> Vec<u8> {
+        self.feed.buffer()
     }
 
     /// Hands `buffer` to the writer, to be written at `offset`.
@@ -74,6 +110,11 @@ impl<S: Sink> Writer<S> {
         self.send(Command::Save(record)).await
     }
 
+    /// Stops hashing, for writes that arrive out of order.
+    pub(crate) async fn unhashed(&mut self) -> io::Result<()> {
+        self.send(Command::Unhashed).await
+    }
+
     /// The hashes of everything written so far.
     pub(crate) async fn hashes(&mut self) -> io::Result<Hashes> {
         let (reply, answer) = oneshot::channel();
@@ -89,12 +130,19 @@ impl<S: Sink> Writer<S> {
         Ok((sink, hasher.finish()))
     }
 
+    /// The error that stopped the thread.
+    pub(crate) async fn stopped(&mut self) -> io::Error {
+        match join(self.thread.take()).await {
+            Err(error) => error,
+            Ok(_) => stopped(),
+        }
+    }
+
     async fn send(&mut self, command: Command) -> io::Result<()> {
-        if self.commands.send(command).await.is_ok() {
+        if self.feed.commands.send(command).await.is_ok() {
             return Ok(());
         }
-        join(self.thread.take()).await?;
-        Err(stopped())
+        Err(self.stopped().await)
     }
 }
 
@@ -113,10 +161,10 @@ fn run<S: Sink>(
     mut sink: S,
     mut hasher: Hasher,
     fresh: &Hasher,
-    hash: bool,
     mut received: mpsc::Receiver<Command>,
     returned: &mpsc::UnboundedSender<Vec<u8>>,
 ) -> io::Result<(S, Hasher)> {
+    let mut hash = true;
     while let Some(command) = received.blocking_recv() {
         match command {
             Command::Write { offset, mut buffer } => {
@@ -136,6 +184,7 @@ fn run<S: Sink>(
             Command::Hashes(reply) => {
                 let _ = reply.send(hasher.clone().finish());
             }
+            Command::Unhashed => hash = false,
         }
     }
     Ok((sink, hasher))

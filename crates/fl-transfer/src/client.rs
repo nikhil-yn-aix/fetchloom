@@ -16,7 +16,9 @@ use crate::address::is_public;
 use crate::counters::Counters;
 use crate::credentials::Credentials;
 use crate::error::TransferError;
+use crate::hosts::Hosts;
 use crate::resolve::{Refusal, Resolver, Shared};
+use crate::retry::{self, Next};
 use crate::url::SafeUrl;
 
 const USER_AGENT: &str = concat!("fetchloom/", env!("CARGO_PKG_VERSION"));
@@ -100,12 +102,14 @@ pub struct Client {
     rng: Mutex<fastrand::Rng>,
     pub(crate) config: Config,
     pub(crate) counters: Counters,
+    hosts: Arc<Hosts>,
 }
 
 /// One request to make: where, and from which byte.
 pub(crate) struct Ask<'a> {
     pub(crate) url: &'a SafeUrl,
     pub(crate) from: u64,
+    pub(crate) to: Option<u64>,
     pub(crate) if_range: Option<&'a str>,
     pub(crate) attempt: u32,
 }
@@ -199,6 +203,7 @@ impl Client {
             credentials,
             timer,
             rng: Mutex::new(fastrand::Rng::with_seed(seed)),
+            hosts: Hosts::new(config.per_host),
             config,
             counters: Counters::default(),
         })
@@ -210,8 +215,39 @@ impl Client {
         &self.counters
     }
 
-    pub(crate) fn rng(&self) -> std::sync::MutexGuard<'_, fastrand::Rng> {
-        self.rng.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The connections per host this client allows, shared with a scheduler that starts its
+    /// downloads, so split downloads add range requests only where a host has room.
+    #[must_use]
+    pub fn hosts(&self) -> Arc<Hosts> {
+        Arc::clone(&self.hosts)
+    }
+
+    /// Waits before the next attempt after `failures` failed ones, or says why there is none.
+    pub(crate) async fn pause(
+        &self,
+        failures: u32,
+        failure: Failure,
+        url: &SafeUrl,
+    ) -> Result<(), TransferError> {
+        if !failure.transient {
+            return Err(failure.error);
+        }
+        let next = {
+            let mut rng = self.rng.lock().unwrap_or_else(PoisonError::into_inner);
+            retry::next(failures, failure.retry_after, &mut rng)
+        };
+        match next {
+            Next::Wait(wait) => {
+                self.counters.retry();
+                self.timer.sleep(wait).await;
+                Ok(())
+            }
+            Next::GiveUp => Err(failure.error),
+            Next::TooLong(wait) => Err(TransferError::RateLimited {
+                host: url.host().unwrap_or_default().to_owned(),
+                wait,
+            }),
+        }
     }
 
     /// Sends one GET and follows its redirects, checking every hop.
@@ -317,8 +353,9 @@ impl Client {
             request = request.header(name, value);
             credentialed = true;
         }
-        if ask.from > 0 {
-            request = request.header(header::RANGE, format!("bytes={}-", ask.from));
+        if ask.from > 0 || ask.to.is_some() {
+            let to = ask.to.map(|to| to.to_string()).unwrap_or_default();
+            request = request.header(header::RANGE, format!("bytes={}-{to}", ask.from));
             if let Some(validator) = ask.if_range {
                 request = request.header(header::IF_RANGE, validator);
             }

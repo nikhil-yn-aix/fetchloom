@@ -15,6 +15,7 @@ workspace = true
 blake3.workspace = true
 fastrand.workspace = true
 fl-model.workspace = true
+futures-util.workspace = true
 httpdate.workspace = true
 md5.workspace = true
 reqwest.workspace = true

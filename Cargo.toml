@@ -33,6 +33,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 divan = "0.1.21"
 fastrand = "2.5.0"
 fl-model = { path = "crates/fl-model" }
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
 httpdate = "1.0.3"
 md5 = { package = "md-5", version = "0.11.0" }
