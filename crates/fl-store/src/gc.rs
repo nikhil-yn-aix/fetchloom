@@ -39,7 +39,7 @@ pub struct Collected {
 
 #[derive(Default)]
 struct Marked {
-    objects: HashSet<[u8; 32]>,
+    objects: HashSet<Digest>,
     names: HashSet<PathBuf>,
 }
 
@@ -80,10 +80,7 @@ impl Tier {
         let mut doomed = Vec::new();
         for fan in entries(&self.layout().dir("objects"))? {
             for object in entries(&fan)? {
-                let Digest::Blake3(blake3) = object_digest(&fan, &object)? else {
-                    continue;
-                };
-                if !marked.objects.contains(&blake3) {
+                if !marked.objects.contains(&object_digest(&fan, &object)?) {
                     doomed.push(object);
                 }
             }
@@ -126,7 +123,9 @@ impl Tier {
         })?;
         for dataset in parsed.datasets() {
             if let Some(files) = &dataset.files {
-                marked.objects.extend(files.iter().map(|file| file.blake3));
+                marked
+                    .objects
+                    .extend(files.iter().map(|file| Digest::Blake3(file.blake3)));
             } else {
                 let tree = self
                     .read_tree(&dataset.tree)?
@@ -181,8 +180,11 @@ fn old(path: &Path, options: &Collect) -> Result<Option<u64>, StoreError> {
 impl Marked {
     fn mark_tree(&mut self, path: PathBuf, tree: &Tree) {
         self.names.insert(path);
-        self.objects
-            .extend(tree.entries().iter().map(|entry| entry.blake3));
+        self.objects.extend(
+            tree.entries()
+                .iter()
+                .map(|entry| Digest::Blake3(entry.blake3)),
+        );
     }
 }
 
