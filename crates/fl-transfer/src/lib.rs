@@ -2,4 +2,5 @@
 
 pub mod address;
 pub mod credentials;
+pub mod hash;
 pub mod url;
