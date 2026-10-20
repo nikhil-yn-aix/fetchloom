@@ -2,7 +2,7 @@
 all-features = true
 
 [licenses]
-allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+allow = ["Apache-2.0", "BSD-3-Clause", "CDLA-Permissive-2.0", "ISC", "MIT", "MIT-0", "Unicode-3.0"]
 confidence-threshold = 0.93
 
 [bans]
@@ -10,7 +10,7 @@ multiple-versions = "deny"
 wildcards = "deny"
 allow-wildcard-paths = true
 skip = [
-    { crate = "syn@2", reason = "only through divan, a dev dependency, and the windows crate that reflink-copy names for windows, where fl-store does not depend on reflink-copy" },
+    { crate = "syn@2", reason = "only through divan, a dev dependency, and the windows crate that reflink-copy names for windows, where fl-store does not depend on reflink-copy, and the jni macros that rustls-platform-verifier needs only on android" },
 ]
 
 [sources]

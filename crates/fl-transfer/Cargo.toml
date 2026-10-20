@@ -12,5 +12,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+reqwest.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
 url.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
+tokio-rustls.workspace = true
