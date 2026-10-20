@@ -12,12 +12,15 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+fl-model.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+toml.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 tokio-rustls.workspace = true
