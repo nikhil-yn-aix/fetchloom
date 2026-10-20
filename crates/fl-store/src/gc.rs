@@ -31,7 +31,8 @@ pub struct Collect {
 pub struct Collected {
     /// Lock files that are gone, whose roots were dropped.
     pub dropped_roots: Vec<PathBuf>,
-    /// Files removed from the tier: objects, trees, step records and leftovers in `tmp/`.
+    /// Files removed from the tier: objects, trees, step records, leftovers in `tmp/` and
+    /// unfinished downloads.
     pub removed: Vec<PathBuf>,
     /// The bytes those files held.
     pub bytes: u64,
@@ -45,8 +46,8 @@ struct Marked {
 
 impl Tier {
     /// Drops the roots whose lock file is gone, marks everything the other locks need, and
-    /// removes every object, tree, step record and `tmp/` file that is unmarked and older than
-    /// the grace period.
+    /// removes every object, tree, step record, `tmp/` file and unfinished download that is
+    /// unmarked and older than the grace period.
     ///
     /// Anything that cannot be read stops the collection before a file is removed: a lock, or a
     /// tree object a dataset lists its files in.
@@ -94,6 +95,7 @@ impl Tier {
             );
         }
         doomed.extend(entries(&self.layout().dir("tmp"))?);
+        doomed.extend(entries(&self.layout().dir("partial"))?);
         for path in doomed {
             if let Some(bytes) = old(&path, options)? {
                 collected.bytes += bytes;

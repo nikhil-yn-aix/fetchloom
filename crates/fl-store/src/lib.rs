@@ -9,6 +9,7 @@ mod layout;
 pub mod link;
 mod mode;
 mod parallel;
+pub mod partial;
 #[cfg(unix)]
 #[path = "unix.rs"]
 mod platform;

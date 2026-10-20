@@ -326,3 +326,30 @@ fn hidden_files_left_by_nfs_are_passed_over() -> TestResult {
     assert!(hidden.iter().all(|path| exists(path)));
     Ok(())
 }
+
+#[test]
+fn a_stale_partial_goes_and_a_fresh_one_stays() -> TestResult {
+    let store = Store::new()?;
+    let mut stale = store
+        .tier
+        .partial(&Digest::Blake3([1; 32]), SystemTime::now())?;
+    stale.write_at(0, b"old")?;
+    let stale_path = stale.path().to_owned();
+    drop(stale);
+    let mut fresh = store
+        .tier
+        .partial(&Digest::Blake3([2; 32]), SystemTime::now())?;
+    fresh.write_at(0, b"new")?;
+    let fresh_path = fresh.path().to_owned();
+    drop(fresh);
+    set_age(&stale_path, 2 * HOUR)?;
+    let collected = store.tier.collect(&Collect {
+        now: SystemTime::now(),
+        grace: HOUR,
+        dry_run: false,
+    })?;
+    assert_eq!(collected.removed, std::slice::from_ref(&stale_path));
+    assert!(!exists(&stale_path));
+    assert!(exists(&fresh_path));
+    Ok(())
+}
