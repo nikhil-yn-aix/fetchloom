@@ -29,6 +29,7 @@ url.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 tokio-rustls.workspace = true
