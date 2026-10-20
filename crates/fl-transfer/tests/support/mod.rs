@@ -4,6 +4,7 @@
 
 #![allow(dead_code, reason = "each test binary uses part of the support module")]
 
+pub mod disk;
 pub mod memory;
 
 use std::io;
