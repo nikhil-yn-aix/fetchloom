@@ -4,6 +4,8 @@
 
 #![allow(dead_code, reason = "each test binary uses part of the support module")]
 
+pub mod memory;
+
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
