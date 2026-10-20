@@ -18,7 +18,8 @@ use crate::staged::{Scratch, create_unique};
 use crate::tier::{Ingested, Tier};
 
 /// A partial untouched for this long belongs to a writer that is gone, so another may take it.
-/// A running download saves its record far more often than this.
+/// A running download writes into it far more often, unless it is allowed to stay silent for
+/// longer than this.
 pub const ABANDONED: Duration = Duration::from_mins(10);
 
 const PART: &str = "part";
