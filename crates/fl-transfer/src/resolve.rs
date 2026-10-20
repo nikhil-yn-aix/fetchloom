@@ -115,3 +115,57 @@ impl Resolve for Shared {
 fn lower(host: &str) -> String {
     host.to_ascii_lowercase()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addresses(texts: &[&str]) -> Vec<SocketAddr> {
+        texts
+            .iter()
+            .map(|text| SocketAddr::new(text.parse().unwrap(), 443))
+            .collect()
+    }
+
+    #[test]
+    fn names_nobody_typed_lose_private_addresses_and_typed_ones_keep_them() {
+        let resolver = Resolver::new(false, ["Proxy.Lab".to_owned()]);
+        let found = addresses(&["10.0.0.1", "93.184.215.14"]);
+        assert_eq!(
+            resolver.choose("cdn.org", found.clone()),
+            Ok(addresses(&["93.184.215.14"]))
+        );
+        assert_eq!(
+            resolver.choose("inside.lab", addresses(&["10.0.0.1", "127.0.0.1"])),
+            Err(Refusal::Private("inside.lab".to_owned()))
+        );
+        resolver.typed("Inside.Lab");
+        assert_eq!(
+            resolver.choose("inside.lab", found.clone()),
+            Ok(found.clone())
+        );
+        assert_eq!(resolver.choose("proxy.lab", found.clone()), Ok(found));
+    }
+
+    #[test]
+    fn the_address_that_answered_last_is_tried_first() {
+        let resolver = Resolver::new(false, []);
+        let found = addresses(&["1.1.1.1", "1.0.0.1", "8.8.8.8"]);
+        resolver.answered("dns.org", "8.8.8.8".parse().unwrap());
+        assert_eq!(
+            resolver.choose("DNS.org", found),
+            Ok(addresses(&["8.8.8.8", "1.1.1.1", "1.0.0.1"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_refuses_every_name() {
+        let shared = Shared(Arc::new(Resolver::new(true, [])));
+        let name: Name = "zenodo.org".parse().unwrap();
+        let error = shared.resolve(name).await.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "offline, so `zenodo.org` is not looked up"
+        );
+    }
+}
