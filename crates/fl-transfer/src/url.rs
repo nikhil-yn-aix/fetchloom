@@ -1,9 +1,10 @@
 //! Locations that never show their secrets.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::str::FromStr;
 
-use url::Url;
+use url::{Host, Url};
 
 const HIDDEN: &str = "***";
 
@@ -13,7 +14,7 @@ const HIDDEN: &str = "***";
 /// signed link or a password in a URL never reaches a log. The full text leaves this crate only
 /// as a request.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct SafeUrl(Url);
+pub struct SafeUrl(Box<Url>);
 
 /// The scheme, host and port that credentials are scoped to.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -36,7 +37,9 @@ impl SafeUrl {
     ///
     /// Returns [`UrlError`] when `text` is not an absolute URL.
     pub fn parse(text: &str) -> Result<Self, UrlError> {
-        Url::parse(text).map(Self).map_err(UrlError)
+        Url::parse(text)
+            .map(|url| Self(Box::new(url)))
+            .map_err(UrlError)
     }
 
     /// The scheme, such as `https`.
@@ -67,6 +70,32 @@ impl SafeUrl {
         let user = self.0.username();
         let password = self.0.password();
         (!user.is_empty() || password.is_some()).then_some((user, password))
+    }
+
+    /// The URL to send: the whole text, minus user info and fragment, which never travel.
+    pub(crate) fn to_request(&self) -> Url {
+        let mut url = (*self.0).clone();
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_fragment(None);
+        url
+    }
+
+    /// The location a redirect's `Location` header names, read against this one.
+    pub(crate) fn join(&self, location: &str) -> Result<Self, UrlError> {
+        self.0
+            .join(location)
+            .map(|url| Self(Box::new(url)))
+            .map_err(UrlError)
+    }
+
+    /// The address the host is written as, when it is an IP literal.
+    pub(crate) fn ip(&self) -> Option<IpAddr> {
+        match self.0.host()? {
+            Host::Ipv4(v4) => Some(IpAddr::V4(v4)),
+            Host::Ipv6(v6) => Some(IpAddr::V6(v6)),
+            Host::Domain(_) => None,
+        }
     }
 }
 
@@ -189,6 +218,22 @@ mod tests {
             assert_eq!(parsed.to_string(), shown, "{text}");
             assert_eq!(format!("{parsed:?}"), format!("SafeUrl({shown})"));
         }
+    }
+
+    #[test]
+    fn a_request_keeps_the_query_and_drops_user_info_and_fragment() {
+        let parsed = url("https://me:pw@host.org/a?sig=abc#frag");
+        assert_eq!(parsed.to_request().as_str(), "https://host.org/a?sig=abc");
+        assert_eq!(parsed.user_info(), Some(("me", Some("pw"))));
+        assert_eq!(url("https://host.org/a").user_info(), None);
+        let joined = url("https://host.org/a/b").join("../c?d=e").unwrap();
+        assert_eq!(joined.to_request().as_str(), "https://host.org/c?d=e");
+        assert_eq!(url("http://[::1]:9/").ip(), Some("::1".parse().unwrap()));
+        assert_eq!(
+            url("http://10.0.0.1/").ip(),
+            Some("10.0.0.1".parse().unwrap())
+        );
+        assert_eq!(url("http://host.org/").ip(), None);
     }
 
     #[test]
