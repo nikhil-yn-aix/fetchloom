@@ -85,6 +85,8 @@ pub struct Work {
     pub tier_hits: BTreeMap<String, u64>,
     /// Requests retried.
     pub retries: u64,
+    /// Downloads continued from bytes an earlier attempt kept.
+    pub resumes: u64,
     /// Milliseconds spent, per phase of the command.
     pub phase_ms: BTreeMap<String, u64>,
 }
@@ -127,7 +129,7 @@ mod tests {
                 r#""work":{"requests":0,"bytes_down":0,"bytes_up":0,"files_linked":0,"#,
                 r#""links":{"reflink":0,"hardlink":0,"symlink":0,"copy":0},"#,
                 r#""objects_ingested":0,"bytes_written":0,"bytes_copied":0,"files_rehashed":0,"#,
-                r#""tier_hits":{"local":3},"retries":0,"phase_ms":{}}}"#,
+                r#""tier_hits":{"local":3},"retries":0,"resumes":0,"phase_ms":{}}}"#,
             )
         );
     }
