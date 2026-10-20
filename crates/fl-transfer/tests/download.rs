@@ -424,3 +424,36 @@ async fn plain_http_never_carries_a_credential_and_https_never_falls_to_it() -> 
     assert_eq!(insecure.requests().len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_failed_download_has_saved_its_progress_when_it_returns() -> TestResult {
+    let bytes = body(1000);
+    let stall = bytes.clone();
+    let stalled = Server::plain(move |_| Reply {
+        body: Body::Stall {
+            bytes: stall.clone(),
+            after: 600,
+        },
+        ..Reply::ok(Vec::new())
+    })
+    .await?;
+    let temp = tempfile::tempdir()?;
+    let download = Download {
+        stable: true,
+        length: Some(1000),
+        ..plain(&stalled.url("/"))?
+    };
+    let client = client(&Waits::default())?;
+    let sink = support::disk::Disk::open(temp.path())?;
+    let error = client
+        .download(&download, sink)
+        .await
+        .err()
+        .ok_or("finished")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkTimeout);
+    let record = support::disk::read_record(&temp.path().join("record.json"))
+        .ok_or("no record was saved")?;
+    assert_eq!(record.received, 600);
+    assert_eq!(client.counters().read().requests, 5);
+    Ok(())
+}

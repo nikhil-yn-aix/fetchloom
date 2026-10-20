@@ -111,21 +111,24 @@ impl<'a, S: Sink> Run<'a, S> {
                 && (download.stable || record.validator != Validator::None)
         });
         let hasher = fresh.clone();
-        let (sink, hasher, kept, record) = tokio::task::spawn_blocking(move || {
+        let (sink, kept) = tokio::task::spawn_blocking(move || {
             let mut sink = sink;
             let mut hasher = hasher;
             let wanted = record.as_ref().map_or(0, |record| record.received);
             let kept = rehash(&mut sink, &mut hasher, wanted)?;
             if kept == 0 || kept < wanted {
                 sink.reset()?;
-                return Ok::<_, std::io::Error>((sink, Hasher::new(&[]), 0, None));
+                return Ok::<_, std::io::Error>((sink, None));
             }
-            Ok((sink, hasher, kept, record))
+            Ok((sink, record.map(|record| (record, hasher, kept))))
         })
         .await
         .map_err(|error| sink_error(download, std::io::Error::other(error)))?
         .map_err(|error| sink_error(download, error))?;
-        let hasher = if kept == 0 { fresh.clone() } else { hasher };
+        let (record, hasher, kept) = match kept {
+            Some((record, hasher, kept)) => (Some(record), hasher, kept),
+            None => (None, fresh.clone(), 0),
+        };
         let (validator, length) = record.map_or((Validator::None, download.length), |record| {
             (record.validator, record.length.or(download.length))
         });
@@ -145,6 +148,17 @@ impl<'a, S: Sink> Run<'a, S> {
     }
 
     async fn run(mut self) -> Result<Downloaded<S>, TransferError> {
+        match self.drive().await {
+            Ok(Step::Split) => self.finish_split().await,
+            Ok(_) => self.finish().await,
+            Err(error) => {
+                let _ = self.writer.finish().await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn drive(&mut self) -> Result<Step, TransferError> {
         loop {
             let if_range = match &self.validator {
                 Validator::StrongEtag(etag) if self.offset > 0 => Some(etag.clone()),
@@ -163,10 +177,10 @@ impl<'a, S: Sink> Run<'a, S> {
             };
             match step {
                 Ok(Step::Again) => {}
-                Ok(Step::Split) => return self.finish_split().await,
+                Ok(Step::Split) => return Ok(Step::Split),
                 Ok(Step::Done) => match self.verify().await? {
                     Step::Again => {}
-                    _ => return self.finish().await,
+                    _ => return Ok(Step::Done),
                 },
                 Err(failure) => self.recover(failure).await?,
             }
