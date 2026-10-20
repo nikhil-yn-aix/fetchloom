@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{StoreError, io};
 use crate::files;
+use crate::layout::entries;
 use crate::platform;
 use crate::staged::{Scratch, create_unique};
 use crate::tier::Tier;
@@ -68,8 +69,7 @@ impl Tier {
     pub fn roots(&self) -> Result<Vec<Root>, StoreError> {
         let dir = self.layout().dir("roots");
         let mut roots = Vec::new();
-        for entry in fs::read_dir(&dir).map_err(io("list", &dir))? {
-            let record = entry.map_err(io("list", &dir))?.path();
+        for record in entries(&dir)? {
             let lock = fs::read_to_string(&record).map_err(io("read", &record))?;
             roots.push(Root {
                 record,
@@ -118,6 +118,14 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn hidden_names_in_roots_are_not_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let tier = Tier::open(&temp.path().join("tier"), Sharing::Private).unwrap();
+        fs::write(temp.path().join("tier/v1/roots/.nfs0001"), [0xff, 0xfe]).unwrap();
+        assert!(tier.roots().unwrap().is_empty());
     }
 
     #[test]
