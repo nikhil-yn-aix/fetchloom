@@ -55,7 +55,7 @@ pub enum StoreError {
         reason: String,
     },
     /// A file in a tier's `objects/` directory that is not named like an object.
-    #[error("`{}` is not an object of this store, so gc leaves the tier untouched", path.display())]
+    #[error("`{}` is not an object of this store, so the tier is left untouched", path.display())]
     Foreign {
         /// The file.
         path: PathBuf,
