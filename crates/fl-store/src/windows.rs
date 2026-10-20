@@ -8,13 +8,13 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::fingerprint::nanos;
+use crate::tier::Sharing;
 
 /// `FILE_READ_ATTRIBUTES`: read a file's attributes without reading its bytes.
 const READ_ATTRIBUTES: u32 = 0x80;
 
 /// `FILE_WRITE_ATTRIBUTES`: change a file's attributes and times without writing its bytes.
 const WRITE_ATTRIBUTES: u32 = 0x100;
-use crate::tier::Sharing;
 
 /// Directories carry no mode bits on windows.
 #[expect(
