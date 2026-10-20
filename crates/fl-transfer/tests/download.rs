@@ -457,3 +457,62 @@ async fn a_failed_download_has_saved_its_progress_when_it_returns() -> TestResul
     assert_eq!(client.counters().read().requests, 5);
     Ok(())
 }
+
+struct Broken;
+
+impl fl_transfer::sink::Sink for Broken {
+    fn record(&self) -> Option<fl_model::partial::PartialRecord> {
+        None
+    }
+
+    fn allocate(&mut self, _length: u64) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> std::io::Result<()> {
+        Err(std::io::Error::other("the disk is full"))
+    }
+
+    fn read_at(&mut self, _offset: u64, _buffer: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    fn reset(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn save(&mut self, _record: &fl_model::partial::PartialRecord) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_sink_that_fails_is_reported_as_itself_and_not_retried() -> TestResult {
+    let server = serve(vec![
+        ResponseTemplate::new(200).set_body_bytes(body(600_000)),
+    ])
+    .await;
+    let client = client(&Waits::default())?;
+    let download = Download {
+        stable: true,
+        ..plain(&format!("{}/file", server.uri()))?
+    };
+    let error = client
+        .download(&download, Broken)
+        .await
+        .err()
+        .ok_or("a broken sink took the bytes")?;
+    assert_eq!(error.kind(), ErrorKind::LocalIo);
+    assert!(error.to_string().ends_with("the disk is full"), "{error}");
+    assert_eq!(client.counters().read().requests, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_credential_place_used_alone_still_never_goes_over_http() -> TestResult {
+    let insecure = Server::plain(|_| Reply::ok(body(5))).await?;
+    let client = client_with(quick(), tokens(&[&insecure]), &Waits::default())?;
+    fetch(&client, &plain(&insecure.url("/file"))?).await?;
+    assert_eq!(insecure.requests()[0].header("authorization"), None);
+    Ok(())
+}

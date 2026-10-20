@@ -320,3 +320,66 @@ async fn bytes_kept_for_another_location_are_not_resumed() -> TestResult {
     assert_eq!(downloaded.hashes.blake3, *blake3::hash(&body).as_bytes());
     Ok(())
 }
+
+#[tokio::test]
+async fn a_range_carrying_another_strong_etag_starts_again() -> TestResult {
+    let body = pattern(1000);
+    let payload = body.clone();
+    let server = Server::plain(move |request| {
+        if ranged(request) {
+            partial(&payload, 400).header("etag", "\"v2\"")
+        } else {
+            Reply::ok(payload.clone()).header("etag", "\"v2\"")
+        }
+    })
+    .await?;
+    let job = job(&server)?;
+    let stale: Vec<u8> = body[..400].iter().map(|byte| byte ^ 0xff).collect();
+    let sink = kept(
+        &job,
+        &stale,
+        400,
+        1000,
+        Validator::StrongEtag("\"v1\"".to_owned()),
+    );
+    let downloaded = client(&Waits::default())?.download(&job, sink).await?;
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].header("if-range"), Some("\"v1\""));
+    assert_eq!(requests[1].header("range"), None);
+    assert!(downloaded.restarted);
+    assert_eq!(downloaded.sink.bytes, body);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pinned_file_that_fails_after_resuming_starts_again_once() -> TestResult {
+    use md5::Digest as _;
+    let body = pattern(1000);
+    let payload = body.clone();
+    let server = Server::plain(move |request| {
+        if ranged(request) {
+            partial(&payload, 400)
+        } else {
+            Reply::ok(payload.clone())
+        }
+    })
+    .await?;
+    let job = Download {
+        stable: true,
+        stated: vec![fl_model::digest::Digest::Md5(
+            md5::Md5::digest(&body).into(),
+        )],
+        ..job(&server)?
+    };
+    let stale: Vec<u8> = body[..400].iter().map(|byte| byte ^ 0xff).collect();
+    let sink = kept(&job, &stale, 400, 1000, Validator::None);
+    let downloaded = client(&Waits::default())?.download(&job, sink).await?;
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].header("range"), Some("bytes=400-"));
+    assert_eq!(requests[1].header("range"), None);
+    assert!(downloaded.restarted);
+    assert_eq!(downloaded.sink.bytes, body);
+    Ok(())
+}

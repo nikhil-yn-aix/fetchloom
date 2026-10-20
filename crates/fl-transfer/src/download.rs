@@ -249,11 +249,12 @@ impl<'a, S: Sink> Run<'a, S> {
             )));
         }
         let now = validator(headers);
-        let weak = matches!(
-            self.validator,
-            Validator::WeakEtag(_) | Validator::LastModified(_)
-        );
-        if weak && now != self.validator {
+        let changed = match &self.validator {
+            Validator::None => false,
+            Validator::StrongEtag(_) => now != Validator::None && now != self.validator,
+            Validator::WeakEtag(_) | Validator::LastModified(_) => now != self.validator,
+        };
+        if changed {
             tracing::warn!(
                 "{} changed since the bytes kept, so the download starts again",
                 answer.url
@@ -338,12 +339,12 @@ impl<'a, S: Sink> Run<'a, S> {
         if buffer.is_empty() {
             return Ok(buffer);
         }
-        let start = self.offset;
-        self.offset += buffer.len() as u64;
+        let length = buffer.len() as u64;
         self.writer
-            .write(start, buffer)
+            .write(self.offset, buffer)
             .await
             .map_err(|error| self.sink(error))?;
+        self.offset += length;
         if self.offset - self.saved >= RECORD_EVERY {
             self.save().await.map_err(Failure::last)?;
         }
@@ -391,10 +392,11 @@ impl<'a, S: Sink> Run<'a, S> {
         self.offset = split::prefix(&parts);
         match fetched {
             Ok(()) => Ok(Step::Split),
-            Err(failure) => {
-                self.save().await.map_err(Failure::last)?;
-                Err(Failure::last(failure.error))
+            Err(failure) if matches!(failure.error, TransferError::Sink { .. }) => {
+                let error = self.writer.stopped().await;
+                Err(self.sink(error))
             }
+            Err(failure) => Err(Failure::last(failure.error)),
         }
     }
 
@@ -462,7 +464,7 @@ impl<'a, S: Sink> Run<'a, S> {
             .map_err(|error| sink_error(self.download, error))?;
         match hashes.check(&self.download.stated) {
             Ok(()) => Ok(Step::Done),
-            Err(_) if self.resumed && !self.restarted && !self.download.stable => {
+            Err(_) if self.resumed && !self.restarted => {
                 tracing::warn!("{url} does not match after resuming, so the download starts again");
                 self.restart().await.map_err(|failure| failure.error)?;
                 Ok(Step::Again)
@@ -476,7 +478,8 @@ impl<'a, S: Sink> Run<'a, S> {
 
     async fn recover(&mut self, failure: Failure) -> Result<(), TransferError> {
         self.failures += 1;
-        if self.offset > 0 {
+        let writer_gone = matches!(failure.error, TransferError::Sink { .. });
+        if self.offset > 0 && !writer_gone {
             if self.download.stable || self.validator != Validator::None {
                 self.save().await?;
             } else {
