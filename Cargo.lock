@@ -558,6 +558,7 @@ name = "fl-transfer"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "divan",
  "fastrand",
  "fl-model",
  "futures-util",
