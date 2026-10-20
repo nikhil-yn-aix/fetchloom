@@ -119,6 +119,7 @@ pub(crate) struct Answer {
     pub(crate) response: Response,
     pub(crate) url: SafeUrl,
     pub(crate) credentialed: bool,
+    pub(crate) span: tracing::Span,
 }
 
 /// A failed attempt.
@@ -266,7 +267,7 @@ impl Client {
             self.check_hop(&url, previous.as_ref())?;
             let credentialed = previous.is_none() || url.origin() == home;
             let (request, credentialed) = self.request(&url, ask, credentialed)?;
-            let response = self.exchange(request, &url, ask).await?;
+            let (response, span) = self.exchange(request, &url, ask).await?;
             match redirect(&response) {
                 Some(location) => {
                     let next = url.join(location).map_err(|_| {
@@ -279,6 +280,7 @@ impl Client {
                         response,
                         url,
                         credentialed,
+                        span,
                     });
                 }
             }
@@ -368,7 +370,7 @@ impl Client {
         request: RequestBuilder,
         url: &SafeUrl,
         ask: &Ask<'_>,
-    ) -> Result<Response, Failure> {
+    ) -> Result<(Response, tracing::Span), Failure> {
         let host = url.host().unwrap_or_default();
         let span = tracing::debug_span!(
             "request",
@@ -376,6 +378,7 @@ impl Client {
             attempt = ask.attempt,
             from = ask.from,
             status = tracing::field::Empty,
+            bytes = tracing::field::Empty,
         );
         self.counters.request();
         let limit = self.config.connect + self.config.response;
@@ -399,7 +402,7 @@ impl Client {
         {
             self.resolver.answered(host, address.ip());
         }
-        Ok(response)
+        Ok((response, span))
     }
 
     /// What a failed request or body read means.
