@@ -396,12 +396,12 @@ mod tests {
         let path = temp.path().join("credentials.toml");
         let file = CredentialsFile::new(path.clone());
         assert!(file.find(&origin("https://a.org/")).unwrap().is_none());
-        fs::write(&path, "\"a.org\" = \"abc\"\n").unwrap();
+        private_file(&path, "\"a.org\" = \"abc\"\n");
         assert!(file.find(&origin("https://a.org/")).unwrap().is_none());
         let fresh = CredentialsFile::new(path.clone());
         let found = header(fresh.find(&origin("https://A.org/x")).unwrap());
         assert_eq!(found.unwrap().1, "Bearer abc");
-        fs::write(&path, "a = 1\n").unwrap();
+        private_file(&path, "a = 1\n");
         let error = CredentialsFile::new(path)
             .find(&origin("https://a.org/"))
             .unwrap_err();
