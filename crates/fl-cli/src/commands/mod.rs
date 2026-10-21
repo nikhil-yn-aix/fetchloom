@@ -62,7 +62,7 @@ pub(crate) async fn lock(context: &Context<'_>) -> Result<Outcome, Failure> {
     let project = Project::find(context.cwd)?;
     let _held = context.hold(&project)?;
     let manifest = project.manifest()?;
-    let (lock, written) = relock(context, &project, &manifest, None).await?;
+    let Relocked { lock, written, .. } = relock(context, &project, &manifest, None).await?;
     let files = lock_files(&lock);
     Ok(Outcome {
         status: fl_model::document::Status::Ok,
@@ -84,16 +84,27 @@ pub(crate) async fn sync(context: &Context<'_>) -> Result<Outcome, Failure> {
     Ok(synced.outcome())
 }
 
+/// A lock brought in line with `data.toml`.
+pub(crate) struct Relocked {
+    /// The lock.
+    pub(crate) lock: Lock,
+    /// It differed from `data.lock`, which now holds it.
+    pub(crate) written: bool,
+    /// The bytes downloaded to learn the hashes of new files.
+    pub(crate) fetched: u64,
+}
+
 /// Brings `data.lock` in line with `manifest`, resolving only the entries whose spec changed.
-/// Returns the lock and whether it was written. `typed` is the reference the user wrote on this
+/// `typed` is the reference the user wrote on this
 /// command line: only the URL it names may reach a private address.
 pub(crate) async fn relock(
     context: &Context<'_>,
     project: &Project,
     manifest: &Manifest,
     typed: Option<&Reference>,
-) -> Result<(Lock, bool), Failure> {
+) -> Result<Relocked, Failure> {
     let old = project.lock()?;
+    let mut fetched = 0;
     let mut datasets = Vec::with_capacity(manifest.datasets.len());
     let mut failures = Vec::new();
     for (name, spec) in &manifest.datasets {
@@ -107,7 +118,10 @@ pub(crate) async fn relock(
         let typed = typed
             .is_some_and(|typed| typed.as_str() == spec.reference.as_str() && is_typed_url(typed));
         match resolve_dataset(context, name, spec, before, typed).await {
-            Ok(locked) => datasets.push(locked),
+            Ok((locked, bytes)) => {
+                datasets.push(locked);
+                fetched += bytes;
+            }
             Err(failure) => failures.push(failure.subject(name.as_str())),
         }
     }
@@ -122,7 +136,11 @@ pub(crate) async fn relock(
             files: lock_files(&lock),
         });
     }
-    Ok((lock, written))
+    Ok(Relocked {
+        lock,
+        written,
+        fetched,
+    })
 }
 
 /// Whether every dataset of `manifest` is locked with its current spec, and nothing else is.
@@ -142,7 +160,7 @@ async fn resolve_dataset(
     spec: &DatasetSpec,
     before: Option<&LockedDataset>,
     typed: bool,
-) -> Result<LockedDataset, Failure> {
+) -> Result<(LockedDataset, u64), Failure> {
     let filters = spec
         .filters()
         .map_err(|error| Failure::new(ErrorKind::ProjectInvalidManifest, error.to_string()))?;
@@ -168,6 +186,7 @@ async fn resolve_dataset(
         .map(|entry| want(entry, &known, typed))
         .collect::<Result<Vec<_>, _>>()?;
     let gots = fetch_reported(context, name, wants).await?;
+    let fetched = gots.iter().map(|got| got.fetched).sum();
     let files: Vec<LockedFile> = listing
         .entries
         .iter()
@@ -186,7 +205,7 @@ async fn resolve_dataset(
     )
     .map_err(|error| Failure::new(ErrorKind::NetworkProtocol, error.to_string()))?
     .hash();
-    Ok(LockedDataset {
+    let locked = LockedDataset {
         name: name.clone(),
         reference: spec.reference.clone(),
         spec: spec.spec(),
@@ -197,7 +216,8 @@ async fn resolve_dataset(
         retrieved: clock::now()?,
         tree,
         files: Some(files),
-    })
+    };
+    Ok((locked, fetched))
 }
 
 /// Whether `reference` is a URL the user wrote, whose host may be private.
@@ -422,9 +442,12 @@ pub(crate) async fn sync_project(
 ) -> Result<Synced, Failure> {
     let manifest = project.manifest()?;
     let root = project.data_dir(&manifest)?;
-    let lock = match project.lock()? {
-        Some(lock) if is_current(&manifest, &lock) => lock,
-        _ => relock(context, project, &manifest, None).await?.0,
+    let (lock, fetched) = match project.lock()? {
+        Some(lock) if is_current(&manifest, &lock) => (lock, 0),
+        _ => {
+            let relocked = relock(context, project, &manifest, None).await?;
+            (relocked.lock, relocked.fetched)
+        }
     };
     let shown_root = manifest.project.data_dir.to_string();
     let mut state = project.state()?;
@@ -447,7 +470,7 @@ pub(crate) async fn sync_project(
     let mut synced = Synced {
         datasets: chosen.len(),
         linked: 0,
-        fetched: 0,
+        fetched,
         root: root.clone(),
     };
     for (locked, dir, slots) in surveys {

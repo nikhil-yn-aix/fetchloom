@@ -46,7 +46,9 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
     let text = edit(&project.manifest_text()?, &name, &reference, add)?;
     let manifest = Manifest::from_toml(&text)?;
     let data_dir = project.data_dir(&manifest)?;
-    let (_, written) = relock(context, &project, &manifest, Some(&reference)).await?;
+    let written = relock(context, &project, &manifest, Some(&reference))
+        .await?
+        .written;
     project.write_manifest(&text)?;
     context.emit(Event::Added {
         dataset: name.clone(),
