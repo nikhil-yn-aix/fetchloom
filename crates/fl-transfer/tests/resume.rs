@@ -383,3 +383,29 @@ async fn a_pinned_file_that_fails_after_resuming_starts_again_once() -> TestResu
     assert_eq!(downloaded.sink.bytes, body);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_record_claiming_more_than_the_sink_holds_starts_again() -> TestResult {
+    let body = pattern(1000);
+    let payload = body.clone();
+    let server = Server::plain(move |_| Reply::ok(payload.clone())).await?;
+    let job = job(&server)?;
+    let mut sink = kept(
+        &job,
+        &body,
+        400,
+        1000,
+        Validator::StrongEtag("\"v1\"".to_owned()),
+    );
+    sink.bytes.truncate(200);
+    let waits = Waits::default();
+    let client = client(&waits)?;
+    let downloaded = client.download(&job, sink).await?;
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].header("range"), None);
+    assert!(downloaded.sink.resets >= 1);
+    assert!(!downloaded.resumed);
+    assert_eq!(downloaded.sink.bytes, body);
+    Ok(())
+}

@@ -374,6 +374,8 @@ async fn a_credential_reaches_its_origin_and_no_other() -> TestResult {
     let home = Server::tls(move |request| {
         if request.target == "/away" {
             Reply::status(302).header("Location", &target)
+        } else if request.target == "/near" {
+            Reply::status(302).header("Location", "/file")
         } else {
             Reply::ok(body(5))
         }
@@ -386,6 +388,7 @@ async fn a_credential_reaches_its_origin_and_no_other() -> TestResult {
     )?;
     fetch(&client, &plain(&home.url("/file"))?).await?;
     fetch(&client, &plain(&home.url("/away"))?).await?;
+    fetch(&client, &plain(&home.url("/near"))?).await?;
     let sent: Vec<Option<String>> = home
         .requests()
         .iter()
@@ -393,7 +396,10 @@ async fn a_credential_reaches_its_origin_and_no_other() -> TestResult {
         .map(|request| request.header("authorization").map(str::to_owned))
         .collect();
     let bearer = Some("Bearer s3cret".to_owned());
-    assert_eq!(sent, [bearer.clone(), bearer, None]);
+    assert_eq!(
+        sent,
+        [bearer.clone(), bearer.clone(), bearer.clone(), bearer, None]
+    );
     Ok(())
 }
 
@@ -514,5 +520,17 @@ async fn a_credential_place_used_alone_still_never_goes_over_http() -> TestResul
     let client = client_with(quick(), tokens(&[&insecure]), &Waits::default())?;
     fetch(&client, &plain(&insecure.url("/file"))?).await?;
     assert_eq!(insecure.requests()[0].header("authorization"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_untrusted_certificate_is_refused_and_says_why() -> TestResult {
+    let server = Server::tls(|_| Reply::ok(body(5))).await?;
+    let client = client_with(quick(), Chain::new(Vec::new()), &Waits::default())?;
+    let error = fetch(&client, &plain(&server.url("/file"))?)
+        .await
+        .err()
+        .ok_or("an untrusted server was downloaded from")?;
+    assert!(error.to_string().contains("certificate"), "{error}");
     Ok(())
 }
