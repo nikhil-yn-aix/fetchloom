@@ -76,11 +76,15 @@ impl World {
     }
 
     pub fn fl(&self, dir: &Path, args: &[&str]) -> Result<Ran, Failure> {
+        self.fl_with_store(dir, &self.store, args)
+    }
+
+    pub fn fl_with_store(&self, dir: &Path, store: &Path, args: &[&str]) -> Result<Ran, Failure> {
         let out = Command::new(env!("CARGO_BIN_EXE_fl"))
             .args(args)
             .current_dir(dir)
             .env_remove("FETCHLOOM_LOG")
-            .env("FETCHLOOM_STORE", &self.store)
+            .env("FETCHLOOM_STORE", store)
             .env("FETCHLOOM_CONFIG", self.config.join("config.toml"))
             .output()?;
         Ok(Ran {

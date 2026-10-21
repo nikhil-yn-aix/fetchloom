@@ -45,6 +45,7 @@ fn job(url: &str) -> Result<Download, Box<dyn Error>> {
         length: Some(LENGTH as u64),
         stated: Vec::new(),
         stable: true,
+        typed: true,
     })
 }
 

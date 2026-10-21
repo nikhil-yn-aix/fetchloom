@@ -45,6 +45,7 @@ fn plain(url: &str) -> Result<Download, Box<dyn Error>> {
         length: None,
         stated: Vec::new(),
         stable: false,
+        typed: true,
     })
 }
 

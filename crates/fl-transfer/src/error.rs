@@ -47,8 +47,8 @@ pub enum TransferError {
         /// How long it asked for.
         wait: Duration,
     },
-    /// A redirect led to an address that is never contacted.
-    #[error("{url} leads to a private or reserved address, which is not followed")]
+    /// A location nobody typed, or a redirect, led to an address that is never contacted.
+    #[error("{url} leads to a private or reserved address, which is not contacted")]
     Refused {
         /// Where the redirect led.
         url: SafeUrl,

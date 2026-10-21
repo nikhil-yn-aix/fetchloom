@@ -1,5 +1,7 @@
 //! The declarative adapter against the zenodo record.
 
+use std::sync::Arc;
+
 use fl_model::digest::{Algorithm, Digest};
 use fl_model::error::ErrorKind;
 use fl_model::reference::Reference;
@@ -59,6 +61,28 @@ async fn a_concept_id_follows_the_redirect_to_the_record() -> Result<(), Failure
     let listing = adapter.resolve(&reference).await?;
     assert_eq!(listing.resolved.as_str(), "zenodo:3608990");
     assert_eq!(client.counters().read().requests, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_record_server_nobody_trusted_is_never_contacted_at_a_private_address()
+-> Result<(), Failure> {
+    let server = MockServer::start().await;
+    support::serve(&server, "/api/records/3608990", RECORD).await;
+    let client = support::client()?;
+    let adapter = Declarative::from_toml(&support::adapter_text(&server), Arc::clone(&client))?;
+    assert_eq!(adapter.record_host(), Some("127.0.0.1"));
+    let reference: Reference = "zenodo:3608990".parse()?;
+    let error = adapter.resolve(&reference).await.err().ok_or("resolved")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkRefused);
+    assert_eq!(client.counters().read().bytes_down, 0);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
     Ok(())
 }
 

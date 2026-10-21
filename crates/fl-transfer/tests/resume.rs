@@ -25,6 +25,7 @@ fn job(server: &Server) -> Result<Download, Box<dyn std::error::Error>> {
         length: None,
         stated: Vec::new(),
         stable: false,
+        typed: true,
     })
 }
 

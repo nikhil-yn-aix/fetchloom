@@ -26,10 +26,13 @@ pub fn adapter_text(server: &MockServer) -> String {
 }
 
 pub fn declarative(server: &MockServer, client: &Arc<Client>) -> Result<Declarative, Failure> {
-    Ok(Declarative::from_toml(
-        &adapter_text(server),
-        Arc::clone(client),
-    )?)
+    let adapter = Declarative::from_toml(&adapter_text(server), Arc::clone(client))?;
+    client.trust(
+        adapter
+            .record_host()
+            .ok_or("the adapter names no record host")?,
+    );
+    Ok(adapter)
 }
 
 pub fn no_filters() -> Result<Filters, Failure> {

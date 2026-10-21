@@ -19,6 +19,7 @@ use fl_model::lock::{Lock, LockedDataset, LockedFile};
 use fl_model::manifest::{DatasetSpec, Manifest};
 use fl_model::name::Name;
 use fl_model::path::DataPath;
+use fl_model::reference::{Reference, Target, UrlScheme};
 use fl_model::tree::{Tree, TreeEntry};
 use fl_sources::Entry;
 use fl_store::fingerprint::{self, Fingerprint};
@@ -61,7 +62,7 @@ pub(crate) async fn lock(context: &Context<'_>) -> Result<Outcome, Failure> {
     let project = Project::find(context.cwd)?;
     let _held = context.hold(&project)?;
     let manifest = project.manifest()?;
-    let (lock, written) = relock(context, &project, &manifest).await?;
+    let (lock, written) = relock(context, &project, &manifest, None).await?;
     let files = lock_files(&lock);
     Ok(Outcome {
         status: fl_model::document::Status::Ok,
@@ -84,11 +85,13 @@ pub(crate) async fn sync(context: &Context<'_>) -> Result<Outcome, Failure> {
 }
 
 /// Brings `data.lock` in line with `manifest`, resolving only the entries whose spec changed.
-/// Returns the lock and whether it was written.
+/// Returns the lock and whether it was written. `typed` is the reference the user wrote on this
+/// command line: only the URL it names may reach a private address.
 pub(crate) async fn relock(
     context: &Context<'_>,
     project: &Project,
     manifest: &Manifest,
+    typed: Option<&Reference>,
 ) -> Result<(Lock, bool), Failure> {
     let old = project.lock()?;
     let mut datasets = Vec::with_capacity(manifest.datasets.len());
@@ -101,7 +104,9 @@ pub(crate) async fn relock(
             datasets.push(kept.clone());
             continue;
         }
-        match resolve_dataset(context, name, spec, before).await {
+        let typed = typed
+            .is_some_and(|typed| typed.as_str() == spec.reference.as_str() && is_typed_url(typed));
+        match resolve_dataset(context, name, spec, before, typed).await {
             Ok(locked) => datasets.push(locked),
             Err(failure) => failures.push(failure.subject(name.as_str())),
         }
@@ -136,6 +141,7 @@ async fn resolve_dataset(
     name: &Name,
     spec: &DatasetSpec,
     before: Option<&LockedDataset>,
+    typed: bool,
 ) -> Result<LockedDataset, Failure> {
     let filters = spec
         .filters()
@@ -159,7 +165,7 @@ async fn resolve_dataset(
     let wants = listing
         .entries
         .iter()
-        .map(|entry| want(entry, &known))
+        .map(|entry| want(entry, &known, typed))
         .collect::<Result<Vec<_>, _>>()?;
     let gots = fetch_reported(context, name, wants).await?;
     let files: Vec<LockedFile> = listing
@@ -194,7 +200,18 @@ async fn resolve_dataset(
     })
 }
 
-fn want(entry: &Entry, known: &HashMap<&str, [u8; 32]>) -> Result<Want, Failure> {
+/// Whether `reference` is a URL the user wrote, whose host may be private.
+pub(crate) fn is_typed_url(reference: &Reference) -> bool {
+    matches!(
+        reference.target(),
+        Target::Url {
+            scheme: UrlScheme::Http | UrlScheme::Https,
+            ..
+        }
+    )
+}
+
+fn want(entry: &Entry, known: &HashMap<&str, [u8; 32]>, typed: bool) -> Result<Want, Failure> {
     let url = entry.urls.first().ok_or_else(|| {
         Failure::new(
             ErrorKind::ReferenceUnresolved,
@@ -206,6 +223,7 @@ fn want(entry: &Entry, known: &HashMap<&str, [u8; 32]>) -> Result<Want, Failure>
         size: entry.size,
         stated: entry.stated.clone(),
         blake3: known.get(url.to_string().as_str()).copied(),
+        typed,
     })
 }
 
@@ -405,7 +423,7 @@ pub(crate) async fn sync_project(
     let manifest = project.manifest()?;
     let lock = match project.lock()? {
         Some(lock) if is_current(&manifest, &lock) => lock,
-        _ => relock(context, project, &manifest).await?.0,
+        _ => relock(context, project, &manifest, None).await?.0,
     };
     let root = project.data_dir(&manifest);
     let shown_root = manifest.project.data_dir.to_string();
@@ -541,6 +559,7 @@ fn locked_want(file: &LockedFile) -> Result<Want, Failure> {
         size: Some(file.size),
         stated,
         blake3: Some(file.blake3),
+        typed: false,
     })
 }
 

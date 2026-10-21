@@ -73,6 +73,7 @@ pub(crate) async fn fetch(
         length: None,
         stated: Vec::new(),
         stable: false,
+        typed: false,
     };
     let finished = client
         .download(&download, Capture(Vec::new()))
