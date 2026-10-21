@@ -43,9 +43,9 @@ pub struct Manifest {
 pub struct Project {
     /// The project's name.
     pub name: Option<String>,
-    /// Where datasets land, relative to the project root; `data` by default.
-    #[serde(default = "default_data_dir")]
-    pub data_dir: String,
+    /// Where datasets land, relative to the project root and inside it; `data` by default.
+    #[serde(default = "default_data_dir", deserialize_with = "data_dir")]
+    pub data_dir: DataPath,
 }
 
 impl Default for Project {
@@ -57,8 +57,16 @@ impl Default for Project {
     }
 }
 
-fn default_data_dir() -> String {
-    "data".to_owned()
+fn default_data_dir() -> DataPath {
+    DataPath::known("data")
+}
+
+/// The start of the message for a `data_dir` that leaves the project.
+pub(crate) const DATA_DIR_OUTSIDE: &str = "`data_dir` must be a folder inside the project";
+
+fn data_dir<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DataPath, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    DataPath::new(&text).map_err(|error| de::Error::custom(format!("{DATA_DIR_OUTSIDE}: {error}")))
 }
 
 /// One `[datasets.NAME]` entry.
@@ -416,7 +424,7 @@ keywords = ["eeg", "motor imagery"]
     fn reads_every_key_of_the_documented_example() {
         let manifest = read(EXAMPLE);
         assert_eq!(manifest.project.name.as_deref(), Some("motor-imagery"));
-        assert_eq!(manifest.project.data_dir, "data");
+        assert_eq!(manifest.project.data_dir.as_str(), "data");
         let eeg = &manifest.datasets[&name("eeg")];
         assert!(
             matches!(eeg.reference.target(), Target::Scheme { scheme, .. } if scheme == "openneuro")
@@ -458,10 +466,45 @@ keywords = ["eeg", "motor imagery"]
     }
 
     #[test]
+    fn a_data_dir_that_leaves_the_project_is_refused_with_help() {
+        for data_dir in [
+            "/etc",
+            "../x",
+            "a/../../x",
+            "C:/x",
+            "C:\\\\x",
+            "\\\\\\\\server\\\\share",
+            "//server/share",
+            "",
+        ] {
+            let error = refused(&format!("[project]\ndata_dir = \"{data_dir}\"\n"));
+            assert!(
+                error
+                    .message
+                    .starts_with("`data_dir` must be a folder inside the project"),
+                "{data_dir}: {}",
+                error.message
+            );
+            assert!(error.span.is_some(), "{data_dir}");
+            assert_eq!(
+                error.help.as_deref(),
+                Some("write a relative path without `..`, like `data` or `cache/data`"),
+                "{data_dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nested_data_dir_is_kept() {
+        let manifest = read("[project]\ndata_dir = \"cache/data\"\n");
+        assert_eq!(manifest.project.data_dir.as_str(), "cache/data");
+    }
+
+    #[test]
     fn an_empty_file_is_an_empty_project() {
         let manifest = read("");
         assert!(manifest.project.name.is_none());
-        assert_eq!(manifest.project.data_dir, "data");
+        assert_eq!(manifest.project.data_dir.as_str(), "data");
         assert!(manifest.datasets.is_empty());
         assert!(manifest.steps.is_empty());
         assert!(manifest.tiers.remote.is_empty());

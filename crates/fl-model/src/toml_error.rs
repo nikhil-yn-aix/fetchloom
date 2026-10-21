@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use crate::manifest::DATA_DIR_OUTSIDE;
+
 /// A TOML reading error in fetchloom's words: a message, where it points and what may help.
 pub(crate) struct Explained {
     pub(crate) message: String,
@@ -18,6 +20,12 @@ pub(crate) fn explain_error(err: &toml::de::Error) -> Explained {
 }
 
 fn explain(message: &str) -> (String, Option<String>) {
+    if message.starts_with(DATA_DIR_OUTSIDE) {
+        return (
+            message.to_owned(),
+            Some("write a relative path without `..`, like `data` or `cache/data`".to_owned()),
+        );
+    }
     if let Some(key) = message.strip_prefix("missing field ") {
         return (format!("missing key {key}"), None);
     }

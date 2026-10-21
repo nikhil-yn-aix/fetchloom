@@ -34,7 +34,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Outcome, Failure> {
         for slot in survey(
             context,
             &root,
-            &manifest.project.data_dir,
+            manifest.project.data_dir.as_str(),
             &dir,
             locked,
             &state,

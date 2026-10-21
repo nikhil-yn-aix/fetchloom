@@ -244,3 +244,30 @@ async fn the_trace_file_holds_resolve_transfer_and_link_spans_on_more_than_one_t
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_refuses_a_data_dir_outside_the_project_and_writes_nothing() -> TestResult {
+    let world = World::start().await?;
+    let outside = world.temp.path().join("outside");
+    let absolute = outside.display().to_string().replace('\\', "/");
+    for data_dir in ["../outside", "a/../../outside", absolute.as_str()] {
+        std::fs::write(
+            world.project.join("data.toml"),
+            format!(
+                "[project]\ndata_dir = \"{data_dir}\"\n\n[datasets.iris]\nref = \"zenodo:3608990\"\n"
+            ),
+        )?;
+        let ran = world.here(&["sync"])?;
+        assert_eq!(ran.code, Some(50), "{data_dir}: {}", ran.stderr);
+        assert!(
+            ran.stderr.contains("error[project.invalid_manifest]"),
+            "{}",
+            ran.stderr
+        );
+        assert!(ran.stderr.contains("\n  help: "), "{}", ran.stderr);
+        assert!(!outside.exists(), "{data_dir}");
+        assert!(!world.project.join("data.lock").exists(), "{data_dir}");
+        assert_eq!(world.requests().await?, 0, "{data_dir}");
+    }
+    Ok(())
+}

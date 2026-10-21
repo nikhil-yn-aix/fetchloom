@@ -408,7 +408,7 @@ pub(crate) async fn sync_project(
         _ => relock(context, project, &manifest).await?.0,
     };
     let root = project.data_dir(&manifest);
-    let shown_root = manifest.project.data_dir.clone();
+    let shown_root = manifest.project.data_dir.to_string();
     let mut state = project.state()?;
     let chosen: Vec<&LockedDataset> = lock
         .datasets()

@@ -94,7 +94,7 @@ impl Project {
 
     /// The data directory named in `manifest`.
     pub(crate) fn data_dir(&self, manifest: &Manifest) -> PathBuf {
-        self.root.join(&manifest.project.data_dir)
+        self.root.join(manifest.project.data_dir.as_str())
     }
 
     fn state_dir(&self) -> Result<PathBuf, Failure> {
