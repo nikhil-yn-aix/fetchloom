@@ -1,0 +1,7 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: "redact(&world, &ran.stderr)"
+---
+  Unchanged 3608990
+Everything already matches data.lock, nothing to do.
+       Work 0 requests · 0 B down · 0 objects ingested · 0 B written · 0 files linked
