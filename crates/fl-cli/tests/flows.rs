@@ -382,3 +382,22 @@ async fn sync_refuses_a_committed_symlink_on_the_way_to_the_data_dir_and_writes_
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_that_locks_first_counts_the_bytes_locking_fetched() -> TestResult {
+    let world = World::start().await?;
+    std::fs::write(
+        world.project.join("data.toml"),
+        "[datasets.iris]\nref = \"zenodo:3608990\"\n",
+    )?;
+    let ran = world.here(&["sync", "--json"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    let document = json(&ran)?;
+    assert_eq!(
+        document["result"]["bytes_fetched"],
+        IRIS.len(),
+        "{document}"
+    );
+    assert_eq!(document["result"]["linked"], 1, "{document}");
+    Ok(())
+}
