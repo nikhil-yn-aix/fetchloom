@@ -1,3 +1,6 @@
 [[profile.default.overrides]]
 filter = 'package(fl-model) & binary(golden) & test(=golden_lock_is_byte_identical)'
 success-output = "final"
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
