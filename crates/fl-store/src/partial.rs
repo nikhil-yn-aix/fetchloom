@@ -42,7 +42,9 @@ impl Tier {
     /// The unfinished download named `key`: one abandoned by an earlier writer when there is
     /// one, taken over by renaming it to this writer's name, or a new empty one.
     ///
-    /// A partial another writer touched within [`ABANDONED`] of `now` is left to it.
+    /// A partial another writer touched within [`ABANDONED`] of `now` is left to it, and so is
+    /// one that cannot be renamed. A partial taken over is touched at `now`, so no other writer
+    /// takes it in turn.
     ///
     /// # Errors
     ///
@@ -65,17 +67,20 @@ impl Tier {
             if !abandoned(&found, now) {
                 continue;
             }
-            match fs::rename(&found, &part) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(io("take over", &found)(error)),
+            if fs::rename(&found, &part).is_err() {
+                continue;
             }
             let old_record = dir.join(format!("{stem}.{RECORD}"));
             let record = match fs::rename(&old_record, &record_path) {
                 Ok(()) => read_record(&record_path),
                 Err(_) => None,
             };
-            return self.open_partial(part, record_path, record, false);
+            let taken = self.open_partial(part, record_path, record, false)?;
+            taken
+                .file
+                .set_modified(now)
+                .map_err(io("touch", &taken.part))?;
+            return Ok(taken);
         }
         self.open_partial(part, record_path, None, true)
     }
@@ -283,6 +288,20 @@ mod tests {
         let mut buffer = [0; 8];
         assert_eq!(second.read_at(1, &mut buffer).unwrap(), 4);
         assert_eq!(&buffer[..4], b"ello");
+    }
+
+    #[test]
+    fn a_partial_just_taken_over_is_not_taken_again() {
+        let (_temp, tier) = tier();
+        let mut first = tier.partial(&KEY, SystemTime::now()).unwrap();
+        first.save(&record(3)).unwrap();
+        drop(first);
+        let second = tier.partial(&KEY, later()).unwrap();
+        assert_eq!(second.record(), Some(&record(3)));
+        let third = tier.partial(&KEY, later()).unwrap();
+        assert_ne!(third.path(), second.path());
+        assert!(second.path().exists());
+        assert!(third.record().is_none());
     }
 
     #[test]

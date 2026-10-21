@@ -10,6 +10,7 @@ use fl_model::digest::Digest;
 use fl_model::error::ErrorKind;
 use fl_model::lock::{Lock, LockedDataset, LockedFile, LockedStep};
 use fl_model::name::Name;
+use fl_model::partial::{PartialRecord, Validator};
 use fl_model::path::DataPath;
 use fl_model::tree::{Tree, TreeEntry};
 use fl_store::error::StoreError;
@@ -351,5 +352,63 @@ fn a_stale_partial_goes_and_a_fresh_one_stays() -> TestResult {
     assert_eq!(collected.removed, std::slice::from_ref(&stale_path));
     assert!(!exists(&stale_path));
     assert!(exists(&fresh_path));
+    Ok(())
+}
+
+fn record() -> PartialRecord {
+    PartialRecord {
+        location: "https://host.org/a".to_owned(),
+        length: None,
+        validator: Validator::None,
+        received: 3,
+    }
+}
+
+#[test]
+fn a_download_record_goes_with_its_bytes_and_alone_by_its_own_age() -> TestResult {
+    let store = Store::new()?;
+    let mut writing = store
+        .tier
+        .partial(&Digest::Blake3([1; 32]), SystemTime::now())?;
+    writing.save(&record())?;
+    let mut done = store
+        .tier
+        .partial(&Digest::Blake3([2; 32]), SystemTime::now())?;
+    done.save(&record())?;
+    let orphan = store.path("partial").join("orphan.json");
+    fs::write(&orphan, b"{}")?;
+    let writing_record = writing.path().with_extension("json");
+    let done_record = done.path().with_extension("json");
+    let done_part = done.path().to_owned();
+    drop(done);
+    for path in [&writing_record, &done_record, &done_part, &orphan] {
+        set_age(path, 2 * HOUR)?;
+    }
+    let collected = store.tier.collect(&Collect {
+        now: SystemTime::now(),
+        grace: HOUR,
+        dry_run: false,
+    })?;
+    let mut expected = vec![done_part, done_record, orphan];
+    expected.sort_unstable();
+    assert_eq!(collected.removed, expected);
+    assert!(exists(&writing_record));
+    assert!(exists(writing.path()));
+    Ok(())
+}
+
+#[test]
+fn an_object_a_download_finds_again_is_kept_through_the_grace_period() -> TestResult {
+    let store = Store::new()?;
+    let blake3 = store.object(b"old")?;
+    let path = store.object_path(blake3)?;
+    set_age(&path, 3 * HOUR)?;
+    let mut partial = store
+        .tier
+        .partial(&Digest::Blake3([3; 32]), SystemTime::now())?;
+    partial.write_at(0, b"old")?;
+    let ingested = store.tier.ingest_partial(partial, blake3, 3)?;
+    assert!(!ingested.new);
+    assert!(store.collect(Duration::ZERO, false)?.removed.is_empty());
     Ok(())
 }
