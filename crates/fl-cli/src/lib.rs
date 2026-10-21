@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+mod observe;
+
 const WELCOME: &str = concat!(
     "fl ",
     env!("CARGO_PKG_VERSION"),
@@ -23,10 +25,28 @@ struct Cli {}
 #[must_use]
 pub fn run() -> ExitCode {
     let written = match Cli::try_parse() {
-        Ok(Cli {}) => welcome(&mut io::stdout().lock()).map(|()| ExitCode::SUCCESS),
+        Ok(Cli {}) => match observed() {
+            Ok(_guard) => welcome(&mut io::stdout().lock()).map(|()| ExitCode::SUCCESS),
+            Err(code) => Ok(code),
+        },
         Err(parse) => parse.print().map(|()| exit_code(parse.exit_code())),
     };
     written.unwrap_or(ExitCode::FAILURE)
+}
+
+fn observed() -> Result<observe::Guard, ExitCode> {
+    observe::panic_hook(None);
+    observe::install(&observe::Options {
+        verbose: 0,
+        log_file: None,
+        trace_file: None,
+        filter: std::env::var("FETCHLOOM_LOG").ok(),
+    })
+    .map_err(|error| {
+        let kind = error.kind();
+        let _ignored = writeln!(io::stderr(), "error[{kind}]: {error}");
+        ExitCode::from(kind.exit_code())
+    })
 }
 
 fn exit_code(code: i32) -> ExitCode {
