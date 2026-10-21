@@ -267,7 +267,7 @@ fn private(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot be read: {error}"))?
         .permissions()
         .mode();
-    if mode & 0o077 == 0 {
+    if mode.trailing_zeros() >= 6 {
         Ok(())
     } else {
         Err(format!(
@@ -379,6 +379,15 @@ mod tests {
             .find(&origin("https://a.org/"))
             .unwrap_err();
         assert!(error.to_string().contains("cannot be read"), "{error}");
+    }
+
+    fn private_file(path: &Path, text: &str) {
+        fs::write(path, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
 
     #[test]
