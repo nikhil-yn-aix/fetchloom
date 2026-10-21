@@ -318,6 +318,23 @@ mod tests {
     }
 
     #[test]
+    fn allocating_sizes_the_file() {
+        let (_temp, tier) = tier();
+        let mut partial = tier.partial(&KEY, SystemTime::now()).unwrap();
+        partial.allocate(4096).unwrap();
+        assert_eq!(fs::metadata(partial.path()).unwrap().len(), 4096);
+    }
+
+    #[test]
+    fn a_reset_without_a_record_is_fine_and_one_that_cannot_remove_it_fails() {
+        let (_temp, tier) = tier();
+        let mut partial = tier.partial(&KEY, SystemTime::now()).unwrap();
+        partial.reset().unwrap();
+        fs::create_dir(partial.path().with_extension(RECORD)).unwrap();
+        assert!(partial.reset().is_err());
+    }
+
+    #[test]
     fn a_reset_drops_bytes_and_record() {
         let (_temp, tier) = tier();
         let mut partial = tier.partial(&KEY, SystemTime::now()).unwrap();
