@@ -1,8 +1,6 @@
 //! No secret reaches a log line: every event at trace level, from fetchloom and from the HTTP
 //! stack beneath it, is captured and searched for the secrets the downloads carried.
 
-mod support;
-
 use std::error::Error;
 use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -10,8 +8,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use fl_transfer::credentials::{Chain, Environment};
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
-use support::memory::{Memory, Waits, client_with, quick};
-use support::{Reply, Server};
+
+use crate::support::memory::{Memory, Waits, client_with, quick};
+use crate::support::{Reply, Server};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
