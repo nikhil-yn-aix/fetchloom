@@ -16,7 +16,7 @@ use fl_store::tier::{Sharing, Tier};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const HELPER: &str = "child";
+const HELPER: &str = "processes::child";
 const ROLE: &str = "FL_STORE_CHILD";
 const TIER: &str = "FL_STORE_TIER";
 const GO: &str = "FL_STORE_GO";
