@@ -33,6 +33,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 divan = "0.1.21"
 fastrand = "2.5.0"
 fl-model = { path = "crates/fl-model" }
+fl-transfer = { path = "crates/fl-transfer" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
 httpdate = "1.0.3"
@@ -44,6 +45,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+serde_json_path = "0.7.2"
 sha1 = "0.11.0"
 sha2 = "0.11.1"
 tempfile = "3.27.0"
