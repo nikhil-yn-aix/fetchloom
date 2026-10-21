@@ -70,7 +70,6 @@ impl Output {
 /// Writes the human story to stderr.
 pub(crate) struct Human {
     loudness: i8,
-    hinted: Mutex<bool>,
 }
 
 impl Human {
@@ -78,10 +77,7 @@ impl Human {
     /// summed up at the end.
     pub(crate) fn new(verbose: u8, quiet: u8) -> Self {
         let loudness = i8::try_from(i16::from(verbose) - i16::from(quiet)).unwrap_or(i8::MIN);
-        Self {
-            loudness,
-            hinted: Mutex::new(false),
-        }
+        Self { loudness }
     }
 
     fn finish(&self, outcome: &Outcome, work: &Work) -> io::Result<()> {
@@ -106,13 +102,6 @@ impl Reporter for Human {
     fn emit(&self, event: Event) {
         if self.loudness < 0 {
             return;
-        }
-        if let Event::Hint(_) = event {
-            let mut hinted = self.hinted.lock().unwrap_or_else(PoisonError::into_inner);
-            if *hinted {
-                return;
-            }
-            *hinted = true;
         }
         if let Some(text) = line(&event) {
             write_err(&text);

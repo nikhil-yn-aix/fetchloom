@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use fl_model::digest::Digest;
 use fl_model::document::Status;
 use fl_model::error::ErrorKind;
 use fl_model::event::Event;
 use fl_model::path::DataPath;
 use fl_model::reference::Reference;
+use fl_store::fingerprint;
 use serde_json::json;
 
 use crate::commands::{Context, everything, fetch_reported, plural, want};
@@ -56,6 +58,7 @@ pub(crate) async fn run(
         .zip(&gots)
         .map(|(entry, got)| (entry.path.clone(), got.blake3))
         .collect();
+    refuse_others(&target, &files)?;
     let placed = context.engine.link(&root, &dir, &files)?;
     context.emit(Event::Linked {
         dataset: name.clone(),
@@ -73,6 +76,23 @@ pub(crate) async fn run(
             plural(placed.len() as u64, "file", "files")
         ),
     })
+}
+
+/// Refuses a target directory that already holds other bytes at any of the files' paths, so
+/// `get` never overwrites what is there.
+fn refuse_others(target: &Path, files: &[(DataPath, [u8; 32])]) -> Result<(), Failure> {
+    for (path, blake3) in files {
+        let place = target.join(path.as_str());
+        if place.exists() && fingerprint::hash_file(&place)? != Digest::Blake3(*blake3) {
+            return Err(Failure::new(
+                ErrorKind::LocalModified,
+                format!("`{}` already holds other bytes", place.display()),
+            )
+            .subject(place.display().to_string())
+            .help("move it away or fetch into another directory with `-o DIR`"));
+        }
+    }
+    Ok(())
 }
 
 fn split(target: &Path) -> Result<(PathBuf, DataPath), Failure> {

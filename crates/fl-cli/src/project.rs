@@ -89,8 +89,7 @@ impl Project {
 
     /// Writes `text` as `data.toml`.
     pub(crate) fn write_manifest(&self, text: &str) -> Result<(), Failure> {
-        let path = self.manifest_path();
-        fs::write(&path, text).map_err(|error| Failure::io("write", &path, &error))
+        write_if_changed(&self.manifest_path(), text).map(|_| ())
     }
 
     /// The data directory named in `manifest`.

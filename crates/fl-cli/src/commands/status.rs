@@ -60,8 +60,13 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Outcome, Failure> {
     let sentence = match (differ, current) {
         (0, true) => "Everything matches data.lock.".to_owned(),
         (0, false) => "The files match data.lock, but data.lock is out of date.".to_owned(),
+        _ if modified.is_empty() => format!(
+            "{} missing, `fl sync` places {}.",
+            plural(differ, "file is", "files are"),
+            if differ == 1 { "it" } else { "them" }
+        ),
         _ => format!(
-            "{} {} from data.lock, `fl sync` places what is missing.",
+            "{} {} from data.lock; move hand edits out of the data directory before `fl sync`.",
             plural(differ, "file", "files"),
             if differ == 1 { "differs" } else { "differ" }
         ),
