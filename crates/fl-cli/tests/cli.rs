@@ -56,6 +56,28 @@ fn unknown_argument_fails_with_usage_on_stderr() -> TestResult {
 }
 
 #[test]
+fn a_bad_log_filter_is_a_usage_error() -> TestResult {
+    let out = Command::new(FL)
+        .env("FETCHLOOM_LOG", "fl_store=loud")
+        .output()?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.starts_with("error[usage]: "), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn a_good_log_filter_keeps_the_welcome() -> TestResult {
+    let out = Command::new(FL)
+        .env("FETCHLOOM_LOG", "fl_store=trace")
+        .output()?;
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8(out.stdout)?.starts_with("fl "));
+    Ok(())
+}
+
+#[test]
 fn help_names_fl() -> TestResult {
     let out = run(FL, &["--help"])?;
     assert_eq!(out.status.code(), Some(0));
