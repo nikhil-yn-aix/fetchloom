@@ -1,0 +1,18 @@
+[adapter]
+name = "zenodo"
+scheme = "zenodo"
+pattern = "{id}"
+record = "https://zenodo.org/api/records/{id}"
+resolved = "zenodo:{$.id}"
+files = "$.files[*]"
+path = "$.key"
+size = "$.size"
+url = "$.links.self"
+hash = { md5 = "$.checksum" }
+strip = { md5 = "md5:" }
+
+[adapter.meta]
+title = "$.metadata.title"
+version = "$.metadata.version"
+license = "$.metadata.license.id"
+doi = "$.doi"
