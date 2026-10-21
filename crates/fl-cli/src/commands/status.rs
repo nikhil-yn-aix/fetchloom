@@ -23,7 +23,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Outcome, Failure> {
             "data.lock is out of date with data.toml, `fl lock` brings it in line".to_owned(),
         ));
     }
-    let root = project.data_dir(&manifest);
+    let root = project.data_dir(&manifest)?;
     let state = project.state()?;
     let mut missing = Vec::new();
     let mut modified = Vec::new();

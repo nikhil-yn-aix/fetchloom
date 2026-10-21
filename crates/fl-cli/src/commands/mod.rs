@@ -421,11 +421,11 @@ pub(crate) async fn sync_project(
     only: Option<&Name>,
 ) -> Result<Synced, Failure> {
     let manifest = project.manifest()?;
+    let root = project.data_dir(&manifest)?;
     let lock = match project.lock()? {
         Some(lock) if is_current(&manifest, &lock) => lock,
         _ => relock(context, project, &manifest, None).await?.0,
     };
-    let root = project.data_dir(&manifest);
     let shown_root = manifest.project.data_dir.to_string();
     let mut state = project.state()?;
     let chosen: Vec<&LockedDataset> = lock
