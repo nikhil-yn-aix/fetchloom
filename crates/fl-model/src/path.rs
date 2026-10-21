@@ -43,6 +43,11 @@ impl DataPath {
         Ok(Self(normal.into_owned()))
     }
 
+    /// A path written into the code itself, which needs no validation.
+    pub(crate) fn known(text: &'static str) -> Self {
+        Self(text.to_owned())
+    }
+
     /// The path as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
