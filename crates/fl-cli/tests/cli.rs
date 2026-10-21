@@ -35,11 +35,10 @@ fn both_executables_print_the_name_and_version() -> TestResult {
 fn no_arguments_prints_the_welcome() -> TestResult {
     let out = run(FL, &[])?;
     assert_eq!(out.status.code(), Some(0));
-    let expected = format!(
-        "fl {}, uv for research data\nfetchloom by KairosLab\n",
-        env!("CARGO_PKG_VERSION")
-    );
-    assert_eq!(String::from_utf8(out.stdout)?, expected);
+    let stdout = String::from_utf8(out.stdout)?;
+    let first = format!("fl {}, uv for research data\n", env!("CARGO_PKG_VERSION"));
+    assert!(stdout.starts_with(&first), "{stdout}");
+    assert!(stdout.ends_with("\nfetchloom by KairosLab\n"), "{stdout}");
     assert!(out.stderr.is_empty());
     Ok(())
 }
@@ -57,7 +56,10 @@ fn unknown_argument_fails_with_usage_on_stderr() -> TestResult {
 
 #[test]
 fn a_bad_log_filter_is_a_usage_error() -> TestResult {
+    let temp = tempfile::tempdir()?;
     let out = Command::new(FL)
+        .arg("status")
+        .current_dir(temp.path())
         .env("FETCHLOOM_LOG", "fl_store=loud")
         .output()?;
     assert_eq!(out.status.code(), Some(2));
@@ -68,12 +70,16 @@ fn a_bad_log_filter_is_a_usage_error() -> TestResult {
 }
 
 #[test]
-fn a_good_log_filter_keeps_the_welcome() -> TestResult {
+fn a_good_log_filter_lets_the_command_run() -> TestResult {
+    let temp = tempfile::tempdir()?;
     let out = Command::new(FL)
+        .arg("status")
+        .current_dir(temp.path())
         .env("FETCHLOOM_LOG", "fl_store=trace")
         .output()?;
-    assert_eq!(out.status.code(), Some(0));
-    assert!(String::from_utf8(out.stdout)?.starts_with("fl "));
+    assert_eq!(out.status.code(), Some(50));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.starts_with("error[project.missing]: "), "{stderr}");
     Ok(())
 }
 

@@ -33,6 +33,8 @@ clap = { version = "4.6.7", features = ["derive"] }
 divan = "0.1.21"
 fastrand = "2.5.0"
 fl-model = { path = "crates/fl-model" }
+fl-sources = { path = "crates/fl-sources" }
+fl-store = { path = "crates/fl-store" }
 fl-transfer = { path = "crates/fl-transfer" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
@@ -53,6 +55,7 @@ thiserror = "2.0.21"
 tokio = "1.54.0"
 tokio-rustls = "0.26.6"
 toml = { version = "1.1.6", default-features = false, features = ["std", "parse", "serde"] }
+toml_edit = { version = "0.25.17", default-features = false, features = ["parse", "display"] }
 toml_parser = { version = "1.1.3", default-features = false, features = ["std"] }
 toml_writer = "1.1.2"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }

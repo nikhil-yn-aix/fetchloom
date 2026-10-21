@@ -26,6 +26,39 @@ pub enum Event {
         /// The license the source states.
         license: Option<String>,
     },
+    /// A project file was created.
+    Initialized {
+        /// The file, relative to where the command ran or absolute.
+        path: String,
+    },
+    /// A dataset was written into `data.toml`.
+    Added {
+        /// The dataset.
+        dataset: Name,
+        /// Its reference.
+        reference: Reference,
+    },
+    /// Files of a dataset were fetched into the store.
+    Fetched {
+        /// The dataset.
+        dataset: Name,
+        /// How many files were fetched.
+        files: u64,
+        /// Their total size in bytes.
+        bytes: u64,
+        /// How long it took.
+        elapsed: Duration,
+    },
+    /// A managed file is not under the data directory.
+    Missing {
+        /// The file, relative to the project root.
+        path: String,
+    },
+    /// A managed file differs from what the lock records.
+    Modified {
+        /// The file, relative to the project root.
+        path: String,
+    },
     /// A transfer began.
     TransferStarted {
         /// Identifies the transfer within the command.
