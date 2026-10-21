@@ -2,8 +2,6 @@
 //! behaviour a mock server cannot produce: stalls in the middle of a body,
 //! byte-by-byte trickles and TLS.
 
-#![allow(dead_code, reason = "each test binary uses part of the support module")]
-
 pub mod disk;
 pub mod memory;
 
@@ -29,8 +27,6 @@ const MAX_HEAD: usize = 64 * 1024;
 /// One request as the server received it.
 #[derive(Debug, Clone)]
 pub struct Recorded {
-    /// The request method, for example `GET`.
-    pub method: String,
     /// The request target as sent: path and query.
     pub target: String,
     /// The request headers in arrival order with lowercased names.
@@ -345,7 +341,7 @@ fn parse_head(head: &str) -> io::Result<Recorded> {
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split(' ');
-    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+    let (Some(_), Some(target)) = (parts.next(), parts.next()) else {
         return Err(io::Error::other("malformed request line"));
     };
     let headers = lines
@@ -354,7 +350,6 @@ fn parse_head(head: &str) -> io::Result<Recorded> {
         .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
         .collect();
     Ok(Recorded {
-        method: method.to_owned(),
         target: target.to_owned(),
         headers,
     })

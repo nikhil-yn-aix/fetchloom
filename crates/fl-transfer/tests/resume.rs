@@ -1,14 +1,13 @@
 //! Resuming a download: which requests are sent for bytes already kept, and what is done with
 //! each answer.
 
-mod support;
-
 use fl_model::error::ErrorKind;
 use fl_model::partial::{PartialRecord, Validator};
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
-use support::memory::{Memory, Waits, client};
-use support::{Recorded, Reply, Server};
+
+use crate::support::memory::{Memory, Waits, client};
+use crate::support::{Recorded, Reply, Server};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

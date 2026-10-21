@@ -1,8 +1,6 @@
 //! Single downloads against real servers on loopback: requests, retries, redirects, timeouts
 //! and credentials, checked by counters and by what the servers received.
 
-mod support;
-
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,10 +13,11 @@ use fl_transfer::credentials::{Chain, Environment};
 use fl_transfer::download::{Download, Downloaded};
 use fl_transfer::url::SafeUrl;
 use md5::Digest as _;
-use support::memory::{Memory, Waits, client, client_with, quick};
-use support::{Body, Reply, Server};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+use crate::support::memory::{Memory, Waits, client, client_with, quick};
+use crate::support::{Body, Reply, Server};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -454,14 +453,14 @@ async fn a_failed_download_has_saved_its_progress_when_it_returns() -> TestResul
         ..plain(&stalled.url("/"))?
     };
     let client = client(&Waits::default())?;
-    let sink = support::disk::Disk::open(temp.path())?;
+    let sink = crate::support::disk::Disk::open(temp.path())?;
     let error = client
         .download(&download, sink)
         .await
         .err()
         .ok_or("finished")?;
     assert_eq!(error.kind(), ErrorKind::NetworkTimeout);
-    let record = support::disk::read_record(&temp.path().join("record.json"))
+    let record = crate::support::disk::read_record(&temp.path().join("record.json"))
         .ok_or("no record was saved")?;
     assert_eq!(record.received, 600);
     assert_eq!(client.counters().read().requests, 5);

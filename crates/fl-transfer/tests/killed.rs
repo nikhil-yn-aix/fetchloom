@@ -1,8 +1,6 @@
 //! A download in a real process killed halfway, then continued by another: only the missing
 //! bytes are asked for, and the file comes out whole.
 
-mod support;
-
 use std::error::Error;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -14,13 +12,14 @@ use fl_transfer::client::Config;
 use fl_transfer::credentials::Chain;
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
-use support::disk::{Disk, read_record};
-use support::memory::{Waits, client_with, quick};
-use support::{Body, Recorded, Reply, Server};
+
+use crate::support::disk::{Disk, read_record};
+use crate::support::memory::{Waits, client_with, quick};
+use crate::support::{Body, Recorded, Reply, Server};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const HELPER: &str = "child";
+const HELPER: &str = "killed::child";
 const URL: &str = "FL_TRANSFER_URL";
 const DIR: &str = "FL_TRANSFER_DIR";
 const MIB: usize = 1 << 20;

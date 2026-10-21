@@ -1,15 +1,14 @@
 //! Large files split into parallel ranges: when it happens, what is asked for, and that every
 //! byte is fetched once.
 
-mod support;
-
 use std::error::Error;
 use std::sync::Arc;
 
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
-use support::memory::{Memory, Waits, client};
-use support::{Recorded, Reply, Server};
+
+use crate::support::memory::{Memory, Waits, client};
+use crate::support::{Recorded, Reply, Server};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
