@@ -70,3 +70,9 @@ panic = "abort"
 inherits = "release"
 strip = false
 debug = "full"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
