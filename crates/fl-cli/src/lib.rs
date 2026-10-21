@@ -109,6 +109,7 @@ fn execute(
         Err(failure) => return (Err(failure), Work::default()),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .thread_name("fl-worker")
         .enable_all()
         .build()
     {
