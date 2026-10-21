@@ -129,9 +129,12 @@ impl World {
         ];
         let mut text = text.to_owned();
         for (root, name) in roots {
-            let raw = root.display().to_string();
-            for form in [raw.replace('\\', "\\\\"), raw.replace('\\', "/"), raw] {
-                text = text.replace(&form, name);
+            let canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+            for path in [canonical, root.clone()] {
+                let raw = path.display().to_string();
+                for form in [raw.replace('\\', "\\\\"), raw.replace('\\', "/"), raw] {
+                    text = text.replace(&form, name);
+                }
             }
         }
         text.replace("\\\\", "/").replace('\\', "/")
