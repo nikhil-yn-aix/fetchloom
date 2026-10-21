@@ -346,3 +346,39 @@ async fn a_record_whose_file_link_points_at_loopback_is_refused() -> TestResult 
     assert!(!manifest.contains("zenodo:77"), "{manifest}");
     Ok(())
 }
+
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return std::os::windows::fs::symlink_dir(target, link);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_refuses_a_committed_symlink_on_the_way_to_the_data_dir_and_writes_nothing()
+-> TestResult {
+    for (data_dir, link) in [("data", "data"), ("a/b", "a")] {
+        let world = World::start().await?;
+        let outside = world.temp.path().join("outside");
+        std::fs::create_dir_all(&outside)?;
+        symlink_dir(&outside, &world.project.join(link))?;
+        std::fs::write(
+            world.project.join("data.toml"),
+            format!(
+                "[project]\ndata_dir = \"{data_dir}\"\n\n[datasets.iris]\nref = \"zenodo:3608990\"\n"
+            ),
+        )?;
+        let ran = world.here(&["sync"])?;
+        assert_eq!(ran.code, Some(50), "{data_dir}: {}", ran.stderr);
+        assert!(
+            ran.stderr.contains("error[project.invalid_manifest]"),
+            "{}",
+            ran.stderr
+        );
+        assert!(ran.stderr.contains("\n  help: "), "{}", ran.stderr);
+        assert_eq!(std::fs::read_dir(&outside)?.count(), 0, "{data_dir}");
+        assert!(!world.project.join("data.lock").exists(), "{data_dir}");
+        assert_eq!(world.requests().await?, 0, "{data_dir}");
+    }
+    Ok(())
+}

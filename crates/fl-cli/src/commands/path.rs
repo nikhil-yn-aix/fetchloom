@@ -52,7 +52,7 @@ pub(crate) async fn run(
             })
         })?;
     let mut path = project
-        .data_dir(&manifest)
+        .data_dir(&manifest)?
         .join(dataset_dir(&manifest, &name)?.as_str());
     if let Some(inside) = &inside {
         path = path.join(inside.as_str());

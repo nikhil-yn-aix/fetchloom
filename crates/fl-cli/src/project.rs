@@ -92,9 +92,30 @@ impl Project {
         write_if_changed(&self.manifest_path(), text).map(|_| ())
     }
 
-    /// The data directory named in `manifest`.
-    pub(crate) fn data_dir(&self, manifest: &Manifest) -> PathBuf {
-        self.root.join(manifest.project.data_dir.as_str())
+    /// The data directory named in `manifest`, refused when any part of the way to it from the
+    /// project root is a symlink, which a cloned repository could point anywhere.
+    pub(crate) fn data_dir(&self, manifest: &Manifest) -> Result<PathBuf, Failure> {
+        let mut path = self.root.clone();
+        for component in manifest.project.data_dir.as_str().split('/') {
+            path.push(component);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(Failure::new(
+                        ErrorKind::ProjectInvalidManifest,
+                        format!(
+                            "data.toml: `data_dir` passes through the symlink `{}`",
+                            path.display()
+                        ),
+                    )
+                    .subject(MANIFEST)
+                    .help("make it a real folder, or name another `data_dir` in data.toml"));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => return Err(Failure::io("inspect", &path, &error)),
+            }
+        }
+        Ok(self.root.join(manifest.project.data_dir.as_str()))
     }
 
     fn state_dir(&self) -> Result<PathBuf, Failure> {
