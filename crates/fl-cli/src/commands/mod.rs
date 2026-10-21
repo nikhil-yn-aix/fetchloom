@@ -421,29 +421,11 @@ pub(crate) async fn sync_project(
         let slots = survey(context, &root, &shown_root, &dir, locked, &state)?;
         surveys.push((*locked, dir, slots));
     }
-    let modified: Vec<&str> = surveys
+    refuse_modified(surveys.iter().flat_map(|(_, _, slots)| slots.iter()))?;
+    let keys: Vec<String> = surveys
         .iter()
-        .flat_map(|(_, _, slots)| slots.iter())
-        .filter(|slot| matches!(slot.found, Found::Modified))
-        .map(|slot| slot.shown.as_str())
+        .flat_map(|(_, _, slots)| slots.iter().map(|slot| slot.key.clone()))
         .collect();
-    if !modified.is_empty() {
-        return Err(Failure::new(
-            ErrorKind::LocalModified,
-            format!(
-                "{} changed by hand and would be overwritten: {}",
-                plural(
-                    modified.len() as u64,
-                    "managed file was",
-                    "managed files were"
-                ),
-                modified.join(", ")
-            ),
-        )
-        .help(
-            "move your edits out of the data directory, delete the files, then run `fl sync` again",
-        ));
-    }
     let mut synced = Synced {
         datasets: chosen.len(),
         linked: 0,
@@ -496,9 +478,39 @@ pub(crate) async fn sync_project(
             extra_bytes: copied,
         });
     }
+    if only.is_none() {
+        let locked: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
+        state.files.retain(|key, _| locked.contains(key.as_str()));
+    }
     project.write_state(&state)?;
     context.engine.register(&project.lock_path())?;
     Ok(synced)
+}
+
+/// Refuses to go on when any of `slots` was changed by hand, before anything is touched.
+fn refuse_modified<'s>(slots: impl Iterator<Item = &'s Slot<'s>>) -> Result<(), Failure> {
+    let modified: Vec<&str> = slots
+        .filter(|slot| matches!(slot.found, Found::Modified))
+        .map(|slot| slot.shown.as_str())
+        .collect();
+    if !modified.is_empty() {
+        return Err(Failure::new(
+            ErrorKind::LocalModified,
+            format!(
+                "{} changed by hand and would be overwritten: {}",
+                plural(
+                    modified.len() as u64,
+                    "managed file was",
+                    "managed files were"
+                ),
+                modified.join(", ")
+            ),
+        )
+        .help(
+            "move your edits out of the data directory, delete the files, then run `fl sync` again",
+        ));
+    }
+    Ok(())
 }
 
 fn locked_want(file: &LockedFile) -> Result<Want, Failure> {

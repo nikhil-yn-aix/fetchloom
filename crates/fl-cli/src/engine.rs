@@ -16,7 +16,7 @@ use fl_model::filter::Filters;
 use fl_model::partial::PartialRecord;
 use fl_model::path::DataPath;
 use fl_model::reference::Reference;
-use fl_sources::{Declarative, Listing, Registry};
+use fl_sources::{Declarative, Listing, Registry, Source};
 use fl_store::data_dir::{DataDir, Destination};
 use fl_store::link::{Ladder, Linked, Linker};
 use fl_store::partial::Partial;
@@ -117,16 +117,18 @@ impl Engine {
         let mut results: Vec<Option<Result<Got, Failure>>> = Vec::with_capacity(wants.len());
         let mut queue = Vec::new();
         for (index, want) in wants.into_iter().enumerate() {
-            let held = want
-                .blake3
-                .filter(|blake3| self.tier.locate(&Digest::Blake3(*blake3)).is_some());
-            if let Some(blake3) = held {
-                self.count(|work| *work.tier_hits.entry(LOCAL.to_owned()).or_default() += 1);
-                results.push(Some(Ok(Got {
+            let held = want.blake3.and_then(|blake3| {
+                let located = self.tier.locate(&Digest::Blake3(blake3))?;
+                let size = fs::metadata(&located.path).ok()?.len();
+                Some(Got {
                     blake3,
-                    size: want.size.unwrap_or_default(),
+                    size,
                     fetched: 0,
-                })));
+                })
+            });
+            if let Some(got) = held {
+                self.count(|work| *work.tier_hits.entry(LOCAL.to_owned()).or_default() += 1);
+                results.push(Some(Ok(got)));
                 continue;
             }
             results.push(None);
@@ -303,10 +305,26 @@ fn user_adapters(dir: &Path, client: &Arc<Client>) -> Result<Vec<Declarative>, F
         .map(|path| {
             let text =
                 fs::read_to_string(path).map_err(|error| Failure::io("read", path, &error))?;
-            Declarative::from_toml(&text, Arc::clone(client)).map_err(|error| {
+            let adapter = Declarative::from_toml(&text, Arc::clone(client)).map_err(|error| {
                 Failure::new(error.kind(), format!("`{}`: {error}", path.display()))
                     .subject(path.display().to_string())
-            })
+            })?;
+            if adapter
+                .schemes()
+                .iter()
+                .any(|scheme| matches!(scheme.as_str(), "http" | "https"))
+            {
+                return Err(Failure::new(
+                    ErrorKind::LocalInvalidConfig,
+                    format!(
+                        "`{}` claims http or https, which only fetchloom serves",
+                        path.display()
+                    ),
+                )
+                .subject(path.display().to_string())
+                .help("give the adapter a scheme of its own"));
+            }
+            Ok(adapter)
         })
         .collect()
 }

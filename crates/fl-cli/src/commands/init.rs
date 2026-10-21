@@ -1,6 +1,7 @@
 //! `fl init`: a minimal `data.toml`, and the project's files kept out of git.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use fl_model::document::Status;
@@ -51,7 +52,13 @@ pub(crate) fn create(
     let mut document = DocumentMut::new();
     document["project"] = table();
     document["project"]["name"] = value(name);
-    fs::write(&path, document.to_string()).map_err(|error| Failure::io("write", &path, &error))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| Failure::io("create", &path, &error))?;
+    file.write_all(document.to_string().as_bytes())
+        .map_err(|error| Failure::io("write", &path, &error))?;
     context.emit(Event::Initialized {
         path: path.display().to_string(),
     });

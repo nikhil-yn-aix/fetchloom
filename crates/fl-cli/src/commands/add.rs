@@ -45,12 +45,12 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
     let _held = context.hold(&project)?;
     let text = edit(&project.manifest_text()?, &name, &reference, add)?;
     let manifest = Manifest::from_toml(&text)?;
+    let (_, written) = relock(context, &project, &manifest).await?;
     project.write_manifest(&text)?;
     context.emit(Event::Added {
         dataset: name.clone(),
         reference: reference.clone(),
     });
-    let (_, written) = relock(context, &project, &manifest).await?;
     let mut result =
         json!({ "dataset": name.as_str(), "ref": reference.as_str(), "locked": written });
     let sentence = if add.no_sync {
@@ -109,14 +109,24 @@ fn edit(text: &str, name: &Name, reference: &Reference, add: &Add) -> Result<Str
             "choose another name: `fl add {reference} --as NAME`"
         )));
     }
-    let mut entry = Table::new();
+    let entry = datasets
+        .entry(name.as_str())
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorKind::ProjectInvalidManifest,
+                format!("data.toml: `datasets.{name}` is not a table"),
+            )
+        })?;
     entry.insert("ref", value(reference.as_str()));
     for (key, globs) in [("select", &add.select), ("exclude", &add.exclude)] {
-        if !globs.is_empty() {
+        if globs.is_empty() {
+            entry.remove(key);
+        } else {
             entry.insert(key, value(globs.iter().collect::<Array>()));
         }
     }
-    datasets.insert(name.as_str(), Item::Table(entry));
     Ok(document.to_string())
 }
 
@@ -211,6 +221,23 @@ mod tests {
         assert_eq!(
             edited,
             "# mine\n[project]\nname = \"p\"\n\n[datasets.iris]\nref = \"zenodo:3608990\"\nselect = [\"*.csv\"]\n"
+        );
+    }
+
+    #[test]
+    fn adding_again_keeps_the_entry_s_other_keys_and_replaces_its_filters() {
+        let text =
+            "[datasets.iris]\nref = \"zenodo:1\"\npath = \"flowers\"\nselect = [\"*.csv\"]\n";
+        let edited = edit(
+            text,
+            &Name::new("iris").unwrap(),
+            &"zenodo:1".parse().unwrap(),
+            &adding(&[]),
+        )
+        .unwrap();
+        assert_eq!(
+            edited,
+            "[datasets.iris]\nref = \"zenodo:1\"\npath = \"flowers\"\n"
         );
     }
 
