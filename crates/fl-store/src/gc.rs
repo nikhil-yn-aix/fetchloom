@@ -95,9 +95,21 @@ impl Tier {
             );
         }
         doomed.extend(entries(&self.layout().dir("tmp"))?);
-        doomed.extend(entries(&self.layout().dir("partial"))?);
-        for path in doomed {
-            if let Some(bytes) = old(&path, options)? {
+        let mut judged: Vec<(PathBuf, PathBuf)> = doomed
+            .into_iter()
+            .map(|path| (path.clone(), path))
+            .collect();
+        for path in entries(&self.layout().dir("partial"))? {
+            let part = path.with_extension("part");
+            let by = if fs::symlink_metadata(&part).is_ok() {
+                part
+            } else {
+                path.clone()
+            };
+            judged.push((path, by));
+        }
+        for (path, by) in judged {
+            if let Some(bytes) = old(&path, &by, options)? {
                 collected.bytes += bytes;
                 collected.removed.push(path);
             }
@@ -166,17 +178,30 @@ impl Tier {
     }
 }
 
-/// The size of the file at `path` when it is older than the grace period. A file that is gone
-/// already, taken by a writer or another collection, is not old.
-fn old(path: &Path, options: &Collect) -> Result<Option<u64>, StoreError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io("read metadata of", path)(error)),
+/// The size of the file at `path` when the file at `by`, itself or the bytes a download record
+/// belongs to, is older than the grace period. A file that is gone already, taken by a writer
+/// or another collection, is not old.
+fn old(path: &Path, by: &Path, options: &Collect) -> Result<Option<u64>, StoreError> {
+    let Some(judged) = metadata(by)? else {
+        return Ok(None);
     };
-    let modified = metadata.modified().map_err(io("read the time of", path))?;
+    let modified = judged.modified().map_err(io("read the time of", by))?;
     let age = options.now.duration_since(modified).unwrap_or_default();
-    Ok((age > options.grace).then_some(metadata.len()))
+    if age <= options.grace {
+        return Ok(None);
+    }
+    if path == by {
+        return Ok(Some(judged.len()));
+    }
+    Ok(metadata(path)?.map(|metadata| metadata.len()))
+}
+
+fn metadata(path: &Path) -> Result<Option<fs::Metadata>, StoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io("read metadata of", path)(error)),
+    }
 }
 
 impl Marked {
@@ -209,10 +234,17 @@ mod tests {
         };
         let file = temp.path().join("file");
         fs::write(&file, b"four").unwrap();
-        assert_eq!(old(&file, &options).unwrap(), Some(4));
-        assert_eq!(old(&temp.path().join("gone"), &options).unwrap(), None);
+        assert_eq!(old(&file, &file, &options).unwrap(), Some(4));
+        assert_eq!(
+            old(&file, &temp.path().join("gone"), &options).unwrap(),
+            None
+        );
+        assert_eq!(
+            old(&temp.path().join("gone"), &file, &options).unwrap(),
+            None
+        );
         if cfg!(unix) {
-            assert!(old(&file.join("below"), &options).is_err());
+            assert!(old(&file.join("below"), &file.join("below"), &options).is_err());
         }
     }
 }
