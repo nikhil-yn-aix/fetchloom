@@ -367,6 +367,18 @@ mod tests {
     fn secrets_never_show() {
         let credential = Credential::token("abc");
         assert!(!format!("{credential:?} {}", credential.value).contains("abc"));
+        assert_eq!(credential.value.to_string(), "***");
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_an_error_and_a_missing_one_is_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = CredentialsFile::new(temp.path().join("none.toml"));
+        assert!(missing.find(&origin("https://a.org/")).unwrap().is_none());
+        let error = CredentialsFile::new(temp.path().to_owned())
+            .find(&origin("https://a.org/"))
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot be read"), "{error}");
     }
 
     #[test]

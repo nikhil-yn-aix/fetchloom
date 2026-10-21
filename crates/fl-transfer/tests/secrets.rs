@@ -116,6 +116,7 @@ async fn no_secret_reaches_a_log_line_at_trace_level() -> TestResult {
     let logs = captured.text();
     assert!(logs.contains("request"), "nothing was captured");
     assert!(logs.contains("TRACE"), "trace events were not captured");
+    assert!(logs.contains("attempt=1"), "the attempt was not recorded");
     assert!(!logs.contains(SECRET), "a secret was logged");
     Ok(())
 }

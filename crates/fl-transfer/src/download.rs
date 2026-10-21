@@ -106,8 +106,7 @@ impl<'a, S: Sink> Run<'a, S> {
     ) -> Result<Self, TransferError> {
         let fresh = Hasher::new(&download.stated);
         let record = sink.record().filter(|record| {
-            record.received > 0
-                && record.location == download.url.to_string()
+            record.location == download.url.to_string()
                 && (download.stable || record.validator != Validator::None)
         });
         let hasher = fresh.clone();
@@ -161,7 +160,7 @@ impl<'a, S: Sink> Run<'a, S> {
     async fn drive(&mut self) -> Result<Step, TransferError> {
         loop {
             let if_range = match &self.validator {
-                Validator::StrongEtag(etag) if self.offset > 0 => Some(etag.clone()),
+                Validator::StrongEtag(etag) => Some(etag.clone()),
                 _ => None,
             };
             let ask = Ask {
