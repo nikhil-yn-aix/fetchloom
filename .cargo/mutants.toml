@@ -1,0 +1,45 @@
+exclude_globs = [
+    # built only on windows: the linux mutation run cannot compile it, and the windows test job runs it
+    "crates/fl-store/src/windows.rs",
+]
+
+exclude_re = [
+    # the product only sizes a buffer, and every factor still gives the same encoding
+    'canonical\.rs:\d+:\d+: replace \* with [+/]$',
+    # a width check that the caller already guarantees, so the other branch is never taken
+    'canonical\.rs:\d+:\d+: replace >= with < in Encoder::fixed$',
+    # the nibbles never overlap, so xor and or give the same byte
+    'hex\.rs:\d+:\d+: replace \| with \^ in decode$',
+    # equal values sample the same way on either side of the boundary
+    'filter\.rs:\d+:\d+: replace < with <= in Filters::sample_of$',
+    # the sum only sizes the output buffer
+    'tree\.rs:\d+:\d+: replace \+ with \* in Tree::encode$',
+    # a path ending at the buffer end still fails as truncated at the next read
+    'tree\.rs:\d+:\d+: replace < with <= in Tree::decode$',
+    # the fixed entry size only sizes a buffer
+    'tree\.rs:\d+:\d+: replace \+ with [-*]$',
+    # a cache: without it the directory is created again and found to exist
+    'data_dir\.rs:\d+:\d+: replace DataDir::remembered -> bool with false$',
+    # device and inode bits never overlap, so xor and or give the same identity
+    'unix\.rs:\d+:\d+: replace \| with \^ in identity$',
+    # only a file vanishing between listing and removal reaches the not found arm
+    'replace match guard error\.kind\(\) != io::ErrorKind::NotFound with true in (remove|Tier::verify)$',
+    # only a filesystem without fallocate refuses it, and every test filesystem has it
+    'unix\.rs:\d+:\d+: replace match guard \[Errno::OPNOTSUPP, Errno::NOTSUP, Errno::NOSYS\]\.contains\(&errno\) with false in reserve$',
+    # one thread and many give the same ordered results by design
+    'parallel\.rs:\d+:\d+: replace == with != in map$',
+    # flushing a file is a no op
+    'replace <impl Write for Staged>::flush -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # ext4 and tmpfs never clone, so a successful clone is not reached on the test machines
+    'unix\.rs:\d+:\d+: replace reflink -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # an existing directory that is not readable as a tier fails before this guard, and a non permission error with objects present cannot be provoked
+    'tier\.rs:\d+:\d+: replace is_read_only -> bool with true$',
+    # only another writer placing the name between the check and the failed publish reaches it, which the process race test hits in some runs only
+    'tier\.rs:\d+:\d+: replace match guard exists\(target\) with false in Tier::place$',
+    # only a filesystem without hard links falls through to the rename, and no test machine has one
+    'unix\.rs:\d+:\d+: replace match guard matches!\( error\.kind\(\), io::ErrorKind::AlreadyExists \| io::ErrorKind::NotFound \) with true in publish$',
+    # a staging name that cannot be removed cannot be created either, so linking fails the same way one step later
+    'link\.rs:\d+:\d+: replace match guard error\.kind\(\) != io::ErrorKind::NotFound with false in Linker<.t>::place$',
+    # after a rename the scratch name is gone, so removing it again finds nothing unless another host took the same name in a shared tmp
+    'replace Scratch::keep with \(\)$',
+]
