@@ -69,8 +69,11 @@ kinds! {
     LocalIo = "local.io" => 50, "A file operation on a local disk failed.";
     LocalUnrepresentable = "local.unrepresentable" => 50, "A path cannot exist on this filesystem.";
     LocalInvalidConfig = "local.invalid_config" => 50, "A machine configuration or adapter file cannot be read.";
+    LocalModified = "local.modified" => 50, "A managed file under the data directory was changed by hand.";
     ProjectInvalidManifest = "project.invalid_manifest" => 50, "`data.toml` cannot be read.";
     ProjectInvalidLock = "project.invalid_lock" => 50, "`data.lock` cannot be read.";
+    ProjectMissing = "project.missing" => 50, "No `data.toml` here or in any parent directory.";
+    ProjectExists = "project.exists" => 50, "A `data.toml` is already there.";
     StepFailed = "step.failed" => 60, "A step's command failed.";
     PluginCrashed = "plugin.crashed" => 70, "A plugin process exited unexpectedly.";
     PluginProtocol = "plugin.protocol" => 70, "A plugin broke the plugin protocol.";
@@ -143,8 +146,11 @@ mod tests {
         ("local.io", 50),
         ("local.unrepresentable", 50),
         ("local.invalid_config", 50),
+        ("local.modified", 50),
         ("project.invalid_manifest", 50),
         ("project.invalid_lock", 50),
+        ("project.missing", 50),
+        ("project.exists", 50),
         ("step.failed", 60),
         ("plugin.crashed", 70),
         ("plugin.protocol", 70),

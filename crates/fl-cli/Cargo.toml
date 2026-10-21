@@ -13,15 +13,22 @@ autotests = false
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 clap.workspace = true
 fl-model.workspace = true
+fl-sources.workspace = true
+fl-store.workspace = true
+fl-transfer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+toml_edit.workspace = true
 tracing.workspace = true
 tracing-chrome.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 
 [[test]]
