@@ -119,7 +119,10 @@ impl<S: Sink> Writer<S> {
     pub(crate) async fn hashes(&mut self) -> io::Result<Hashes> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Hashes(reply)).await?;
-        answer.await.map_err(|_| stopped())
+        match answer.await {
+            Ok(hashes) => Ok(hashes),
+            Err(_) => Err(self.stopped().await),
+        }
     }
 
     /// Waits for every write, and hands back the sink and the hashes.
@@ -207,4 +210,45 @@ pub(crate) fn rehash<S: Sink>(sink: &mut S, hasher: &mut Hasher, length: u64) ->
         offset += read as u64;
     }
     Ok(offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Full;
+
+    impl Sink for Full {
+        fn record(&self) -> Option<PartialRecord> {
+            None
+        }
+
+        fn allocate(&mut self, _length: u64) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> io::Result<()> {
+            Err(io::Error::other("the disk is full"))
+        }
+
+        fn read_at(&mut self, _offset: u64, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn reset(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn save(&mut self, _record: &PartialRecord) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn hashes_after_a_failed_write_report_the_sink_error() {
+        let mut writer = Writer::start(Full, Hasher::new(&[]), Hasher::new(&[]));
+        writer.write(0, vec![1; 8]).await.unwrap();
+        let error = writer.hashes().await.unwrap_err();
+        assert_eq!(error.to_string(), "the disk is full");
+    }
 }
