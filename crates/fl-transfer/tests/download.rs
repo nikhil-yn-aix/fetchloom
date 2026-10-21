@@ -262,7 +262,11 @@ async fn redirects_stay_on_the_typed_host_and_never_reach_private_addresses() ->
         .respond_with(ResponseTemplate::new(200).set_body_bytes(body(5)))
         .mount(&server)
         .await;
-    let client = client(&Waits::default())?;
+    let config = Config {
+        connect: Config::default().connect,
+        ..quick()
+    };
+    let client = client_with(config, Chain::new(Vec::new()), &Waits::default())?;
     let done = fetch(&client, &plain(&format!("{}/same", server.uri()))?).await?;
     assert_eq!(done.sink.bytes, body(5));
     assert_eq!(client.counters().read().requests, 2);
