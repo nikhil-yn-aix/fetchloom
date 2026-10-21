@@ -39,6 +39,7 @@ fl-transfer = { path = "crates/fl-transfer" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
 httpdate = "1.0.3"
+insta = { version = "1.49.0", default-features = false }
 md5 = { package = "md-5", version = "0.11.0" }
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
