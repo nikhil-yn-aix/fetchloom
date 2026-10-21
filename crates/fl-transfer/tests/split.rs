@@ -58,6 +58,7 @@ fn download(server: &Server) -> Result<Download, Box<dyn Error>> {
         length: None,
         stated: Vec::new(),
         stable: false,
+        typed: true,
     })
 }
 

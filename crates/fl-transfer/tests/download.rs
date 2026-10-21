@@ -33,6 +33,7 @@ fn plain(url: &str) -> Result<Download, Box<dyn Error>> {
         length: None,
         stated: Vec::new(),
         stable: false,
+        typed: true,
     })
 }
 
@@ -236,6 +237,47 @@ async fn offline_sends_nothing() -> TestResult {
         server.received_requests().await.unwrap_or_default().len(),
         0
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_location_nobody_typed_never_reaches_a_private_address() -> TestResult {
+    let server = MockServer::start().await;
+    let port = server.address().port();
+    Mock::given(path("/file"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body(5)))
+        .mount(&server)
+        .await;
+    let config = Config {
+        connect: Config::default().connect,
+        ..quick()
+    };
+    let client = client_with(config, Chain::new(Vec::new()), &Waits::default())?;
+    for url in [
+        format!("http://127.0.0.1:{port}/file"),
+        format!("http://localhost:{port}/file"),
+        "http://169.254.169.254/latest/meta-data".to_owned(),
+    ] {
+        let download = Download {
+            typed: false,
+            ..plain(&url)?
+        };
+        let error = fetch(&client, &download)
+            .await
+            .err()
+            .ok_or("a location nobody typed reached a private address")?;
+        assert_eq!(error.kind(), ErrorKind::NetworkRefused, "{url}");
+    }
+    assert_eq!(client.counters().read().bytes_down, 0);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    let done = fetch(&client, &plain(&format!("{}/file", server.uri()))?).await?;
+    assert_eq!(done.sink.bytes, body(5));
     Ok(())
 }
 

@@ -112,6 +112,7 @@ pub(crate) struct Ask<'a> {
     pub(crate) to: Option<u64>,
     pub(crate) if_range: Option<&'a str>,
     pub(crate) attempt: u32,
+    pub(crate) typed: bool,
 }
 
 /// A response, and how it was reached.
@@ -210,6 +211,12 @@ impl Client {
         })
     }
 
+    /// Trusts `host` as if the user had typed it, so its private addresses are allowed: for
+    /// hosts the user configured, such as an adapter's record server.
+    pub fn trust(&self, host: &str) {
+        self.resolver.typed(host);
+    }
+
     /// The work this client has done.
     #[must_use]
     pub const fn counters(&self) -> &Counters {
@@ -257,7 +264,9 @@ impl Client {
         if self.config.offline {
             return Err(Failure::last(TransferError::Offline { url: first.clone() }));
         }
-        if let Some(host) = first.host() {
+        if ask.typed
+            && let Some(host) = first.host()
+        {
             self.resolver.typed(host);
         }
         let home = first.origin();
@@ -298,10 +307,7 @@ impl Client {
                 "only http and https are fetched",
             )));
         }
-        let Some(previous) = previous else {
-            return Ok(());
-        };
-        if previous.scheme() == "https" && url.scheme() == "http" {
+        if previous.is_some_and(|previous| previous.scheme() == "https" && url.scheme() == "http") {
             return Err(Failure::last(insecure(
                 url,
                 "a redirect from https to http is not followed",

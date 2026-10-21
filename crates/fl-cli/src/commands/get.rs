@@ -12,7 +12,7 @@ use fl_model::reference::Reference;
 use fl_store::fingerprint;
 use serde_json::json;
 
-use crate::commands::{Context, everything, fetch_reported, plural, want};
+use crate::commands::{Context, everything, fetch_reported, is_typed_url, plural, want};
 use crate::failure::Failure;
 use crate::report::Outcome;
 
@@ -48,7 +48,13 @@ pub(crate) async fn run(
     let wants = listing
         .entries
         .iter()
-        .map(|entry| want(entry, &std::collections::HashMap::new()))
+        .map(|entry| {
+            want(
+                entry,
+                &std::collections::HashMap::new(),
+                is_typed_url(&reference),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let gots = fetch_reported(context, &name, wants).await?;
     let started = Instant::now();

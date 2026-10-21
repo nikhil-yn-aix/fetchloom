@@ -29,6 +29,7 @@ pub(crate) struct Split<'a> {
     pub(crate) client: &'a Client,
     pub(crate) url: &'a SafeUrl,
     pub(crate) if_range: Option<&'a str>,
+    pub(crate) typed: bool,
     pub(crate) feed: Feed,
 }
 
@@ -114,6 +115,7 @@ impl Split<'_> {
                 to: Some(part.end - 1),
                 if_range: self.if_range,
                 attempt,
+                typed: self.typed,
             })
             .await?;
         let status = answer.response.status().as_u16();

@@ -46,6 +46,8 @@ pub(crate) struct Want {
     pub(crate) stated: Vec<Digest>,
     /// Its BLAKE3 digest, when a lock already pins it.
     pub(crate) blake3: Option<[u8; 32]>,
+    /// The user wrote its URL on this command line, so its host may be private.
+    pub(crate) typed: bool,
 }
 
 /// One file the store now holds.
@@ -84,6 +86,9 @@ impl Engine {
         let mut registry = Registry::builtin(Arc::clone(&client))?;
         if let Some(dir) = &config.settings {
             for source in user_adapters(&dir.join("sources"), &client)? {
+                if let Some(host) = source.record_host() {
+                    client.trust(host);
+                }
                 registry.add(Arc::new(source));
             }
         }
@@ -259,6 +264,7 @@ async fn download(
         length: want.size,
         stable: !stated.is_empty(),
         stated,
+        typed: want.typed,
     };
     let done = client.download(&download, Landing(partial)).await?;
     let (blake3, size) = (done.hashes.blake3, done.bytes);

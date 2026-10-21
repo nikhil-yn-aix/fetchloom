@@ -112,6 +112,7 @@ pub struct Declarative {
     name: String,
     schemes: Vec<String>,
     record: String,
+    record_host: Option<String>,
     resolved: Vec<Part>,
     resolved_text: String,
     files: Query,
@@ -164,9 +165,13 @@ impl Declarative {
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
         let optional = |text: &Option<String>| text.as_deref().map(Query::parse).transpose();
+        let record_host = SafeUrl::parse(&spec.record.replace("{id}", "id"))
+            .ok()
+            .and_then(|url| url.host().map(str::to_owned));
         Ok(Self {
             schemes: vec![spec.scheme],
             record: spec.record,
+            record_host,
             resolved: template(&spec.resolved)?,
             resolved_text: spec.resolved,
             files: Query::parse(&spec.files)?,
@@ -189,6 +194,13 @@ impl Declarative {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The host that serves the adapter's records, which only whoever installed the adapter
+    /// can trust with private addresses.
+    #[must_use]
+    pub fn record_host(&self) -> Option<&str> {
+        self.record_host.as_deref()
     }
 
     async fn listing(&self, reference: &Reference) -> Result<Listing, SourceError> {

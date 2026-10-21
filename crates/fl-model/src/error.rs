@@ -51,7 +51,7 @@ kinds! {
     NetworkTimeout = "network.timeout" => 20, "A connection stayed silent for longer than allowed.";
     NetworkStatus = "network.status" => 20, "A server answered with an error status.";
     NetworkRateLimited = "network.rate_limited" => 20, "A host asked to wait longer than fetchloom waits.";
-    NetworkRefused = "network.refused" => 20, "A redirect pointed at an address that is never contacted.";
+    NetworkRefused = "network.refused" => 20, "A location nobody typed pointed at a private or reserved address.";
     NetworkInsecure = "network.insecure" => 20, "Plain http where only https is allowed.";
     NetworkProtocol = "network.protocol" => 20, "A server broke the rules of HTTP.";
     OfflineMissing = "offline.missing" => 20, "Offline, and a needed object is in no local tier.";

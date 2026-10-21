@@ -30,6 +30,9 @@ pub struct Download {
     pub stated: Vec<Digest>,
     /// The bytes at this location never change: a pinned hash or an immutable version.
     pub stable: bool,
+    /// The user wrote this URL, so its host may be private. A URL read from a record or a lock
+    /// never is, and reaches public addresses only.
+    pub typed: bool,
 }
 
 /// A finished download.
@@ -169,6 +172,7 @@ impl<'a, S: Sink> Run<'a, S> {
                 to: None,
                 if_range: if_range.as_deref(),
                 attempt: self.failures + 1,
+                typed: self.download.typed,
             };
             let step = match self.client.send(&ask).await {
                 Ok(answer) => self.receive(answer).await,
@@ -383,6 +387,7 @@ impl<'a, S: Sink> Run<'a, S> {
             client: self.client,
             url: &self.download.url,
             if_range: if_range.as_deref(),
+            typed: self.download.typed,
             feed: self.writer.feed(),
         }
         .fetch(&mut parts, (answer.response, answer.span))

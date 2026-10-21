@@ -259,6 +259,7 @@ async fn fetch<S: Sink>(length: u64, stated: Vec<Digest>, sink: S) -> S {
         length: Some(length),
         stated,
         stable: true,
+        typed: true,
     };
     let done = client()
         .download(&download, sink)

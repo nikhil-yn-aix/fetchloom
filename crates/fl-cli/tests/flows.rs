@@ -5,7 +5,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::support::{Failure, IRIS, IRIS_MD5, World, json, make_writable};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
+
+use crate::support::{Failure, IRIS, IRIS_MD5, RECORD, World, json, make_writable};
 
 type TestResult = Result<(), Failure>;
 
@@ -269,5 +272,77 @@ async fn sync_refuses_a_data_dir_outside_the_project_and_writes_nothing() -> Tes
         assert!(!world.project.join("data.lock").exists(), "{data_dir}");
         assert_eq!(world.requests().await?, 0, "{data_dir}");
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lock_pointing_at_loopback_is_refused_and_a_typed_url_is_not() -> TestResult {
+    let world = World::start().await?;
+    let uri = format!("{}/files/iris.csv", world.server.uri());
+    let ran = world.here(&["add", &uri, "--as", "iris"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    assert_eq!(world.requests().await?, 1);
+    std::fs::remove_file(world.config.join("sources").join("zenodo.toml"))?;
+    let other = world.temp.path().join("other");
+    std::fs::create_dir_all(&other)?;
+    for name in ["data.toml", "data.lock"] {
+        std::fs::copy(world.project.join(name), other.join(name))?;
+    }
+    let lock = std::fs::read_to_string(other.join("data.lock"))?;
+    assert!(lock.contains(&uri), "{lock}");
+    let fresh = world.temp.path().join("fresh-store");
+    let ran = world.fl_with_store(&other, &fresh, &["sync", "--json"])?;
+    assert_eq!(ran.code, Some(20), "{}", ran.stdout);
+    let document = json(&ran)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "network.refused",
+        "{document}"
+    );
+    assert_eq!(work(&document, "requests")?, 0);
+    assert_eq!(work(&document, "bytes_down")?, 0);
+    assert_eq!(work(&document, "objects_ingested")?, 0);
+    assert!(!other.join("data").join("iris").exists());
+    assert_eq!(world.requests().await?, 1);
+
+    let ran = world.fl_with_store(&other, &fresh, &["get", &uri, "-o", "typed"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    assert_eq!(std::fs::read(other.join("typed").join("iris.csv"))?, IRIS);
+    assert_eq!(world.requests().await?, 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_whose_file_link_points_at_loopback_is_refused() -> TestResult {
+    let world = World::start().await?;
+    let port = world.server.address().port();
+    let record = RECORD
+        .replace("https://zenodo.org", &format!("http://localhost:{port}"))
+        .replace("\"id\": 3608990", "\"id\": 77");
+    let record_bytes = record.len() as u64;
+    Mock::given(method("GET"))
+        .and(path("/api/records/77"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(record))
+        .mount(&world.server)
+        .await;
+    let ran = world.here(&["add", "zenodo:77", "--json"])?;
+    assert_eq!(ran.code, Some(20), "{}", ran.stdout);
+    let document = json(&ran)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "network.refused",
+        "{document}"
+    );
+    assert_eq!(work(&document, "bytes_down")?, record_bytes);
+    assert_eq!(work(&document, "objects_ingested")?, 0);
+    let reached: Vec<String> = world
+        .server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
+    assert_eq!(reached, ["/api/records/77"]);
+    let manifest = std::fs::read_to_string(world.project.join("data.toml"))?;
+    assert!(!manifest.contains("zenodo:77"), "{manifest}");
     Ok(())
 }
