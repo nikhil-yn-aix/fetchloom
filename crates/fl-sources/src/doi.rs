@@ -32,6 +32,7 @@ pub(crate) async fn route(
         reference: reference.clone(),
         reason: error.to_string(),
     })?;
+    let mut landing: Option<Url> = None;
     for _ in 0..HOPS {
         let url = SafeUrl::parse(at.as_str()).map_err(|error| SourceError::Invalid {
             reference: reference.clone(),
@@ -53,16 +54,13 @@ pub(crate) async fn route(
                 other => SourceError::Transfer(other),
             })?;
         let Some(location) = page.header("location").filter(|_| page.status / 100 == 3) else {
-            return Err(SourceError::NoLanding {
-                reference,
-                host: at.host_str().unwrap_or_default().to_owned(),
-                landing: at.to_string(),
-            });
+            return Err(no_landing(reference, landing.as_ref().unwrap_or(&at)));
         };
         at = at.join(location).map_err(|_| SourceError::Body {
             url: page.url.clone(),
             reason: "redirected to a location that is not a URL".to_owned(),
         })?;
+        landing.get_or_insert_with(|| at.clone());
         if let Some(found) = sources
             .iter()
             .rev()
@@ -71,9 +69,14 @@ pub(crate) async fn route(
             return Ok(found);
         }
     }
-    Err(SourceError::NoLanding {
+    Err(no_landing(reference, landing.as_ref().unwrap_or(&at)))
+}
+
+/// No source serves `landing`, the page the resolver named for `reference`.
+fn no_landing(reference: String, landing: &Url) -> SourceError {
+    SourceError::NoLanding {
         reference,
-        host: at.host_str().unwrap_or_default().to_owned(),
-        landing: at.to_string(),
-    })
+        host: landing.host_str().unwrap_or_default().to_owned(),
+        landing: landing.to_string(),
+    }
 }
