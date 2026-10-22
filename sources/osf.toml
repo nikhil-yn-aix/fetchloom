@@ -1,0 +1,20 @@
+[adapter]
+name = "osf"
+scheme = "osf"
+pattern = "{id}"
+record = "https://api.osf.io/v2/nodes/{id}/"
+resolved = "osf:{id}"
+landing = ["https://osf.io/{id}", "https://osf.io/{id}/files"]
+listing = "https://api.osf.io/v2/nodes/{id}/files/osfstorage/"
+files = "$.data[?@.attributes.kind=='file']"
+folders = "$.data[?@.attributes.kind=='folder']"
+descend = "$.relationships.files.links.related.href"
+path = "$.attributes.materialized_path"
+size = "$.attributes.size"
+url = "$.links.download"
+digest = ["sha256:{$.attributes.extra.hashes.sha256}", "md5:{$.attributes.extra.hashes.md5}"]
+paginate = { kind = "next", field = "$.links.next" }
+search = { url = "https://api.osf.io/v2/nodes/?filter[title]={query}&page[size]={limit}", items = "$.data[*]", ref = "osf:{$.id}", title = "$.attributes.title" }
+
+[adapter.meta]
+title = "$.data.attributes.title"

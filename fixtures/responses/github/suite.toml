@@ -1,0 +1,17 @@
+hosts = ["api.github.com", "github.com"]
+
+[small]
+reference = "github:dbrgn/tealdeer@v1.7.3"
+resolved = "github:dbrgn/tealdeer@v1.7.3"
+files = 5
+requests = 1
+first = { path = "completions_bash", size = 800, digests = ["sha256:3a14c45f758ce95ba088c79cd2c0a5b6890a8255d51af22028d4f3ebe977a656"] }
+serve = [{ path = "/repos/dbrgn/tealdeer/releases/tags/v1.7.3", body = "tealdeer/v1.7.3.json" }]
+
+[unhashed]
+reference = "github:dbrgn/tealdeer@v1.7.3"
+resolved = "github:dbrgn/tealdeer@v1.7.3"
+files = 5
+requests = 1
+first = { path = "completions_bash", size = 800 }
+serve = [{ path = "/repos/dbrgn/tealdeer/releases/tags/v1.7.3", body = "tealdeer/v1.7.3-unhashed.json" }]

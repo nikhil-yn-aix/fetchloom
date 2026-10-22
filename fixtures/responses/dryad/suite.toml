@@ -1,0 +1,35 @@
+hosts = ["datadryad.org"]
+
+[small]
+reference = "dryad:doi:10.5061/dryad.2jm63xt6m"
+resolved = "dryad:doi:10.5061/dryad.2jm63xt6m"
+files = 3
+requests = 2
+first = { path = "d2_TBR_cognitive_game_data.csv", size = 3994, digests = ["sha256:6f2159397fade9b4ef4a2b5677a5fe0b99a0c87b390e14f935da3d7703de8ca7"] }
+serve = [
+  { path = "/api/v2/datasets/doi:10.5061%2Fdryad.2jm63xt6m", body = "small/dataset.json" },
+  { path = "/api/v2/versions/469499/files", body = "small/files.json" },
+]
+
+[paged]
+reference = "dryad:doi:10.5061/dryad.280gb5n4d"
+resolved = "dryad:doi:10.5061/dryad.280gb5n4d"
+files = 36
+requests = 3
+first = { path = "Figure1-Opiates__proximal.pzfx", size = 99314, digests = ["sha256:c0e76e83a4c45f0152dbc450418bbde633f6490da11bd9f2ba63b090dd61a332"] }
+serve = [
+  { path = "/api/v2/datasets/doi:10.5061%2Fdryad.280gb5n4d", body = "paged/dataset.json" },
+  { path = "/api/v2/versions/470066/files", body = "paged/p1.json" },
+  { path = "/api/v2/versions/470066/files", query = { page = "2" }, body = "paged/p2.json" },
+]
+
+[unhashed]
+reference = "dryad:doi:10.5061/dryad.2jm63xt6m"
+resolved = "dryad:doi:10.5061/dryad.2jm63xt6m"
+files = 3
+requests = 2
+first = { path = "d2_TBR_cognitive_game_data.csv", size = 3994 }
+serve = [
+  { path = "/api/v2/datasets/doi:10.5061%2Fdryad.2jm63xt6m", body = "small/dataset.json" },
+  { path = "/api/v2/versions/469499/files", body = "small/files-unhashed.json" },
+]

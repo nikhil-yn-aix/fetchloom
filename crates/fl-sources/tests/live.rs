@@ -3,16 +3,15 @@
 
 use std::sync::Arc;
 
-use fl_sources::Registry;
+use fl_sources::{Listing, Registry};
 use fl_transfer::client::{Client, Config};
 use fl_transfer::credentials::Chain;
 use fl_transfer::download::Download;
 
 use crate::support::{self, Failure, Memory};
 
-/// Resolves `reference` against the real provider, fetches its first file and checks it
-/// against what the provider states, and returns how many files it lists.
-async fn smoke(reference: &str) -> Result<usize, Failure> {
+/// Resolves `reference` against the real provider.
+async fn resolve(reference: &str) -> Result<(Listing, Arc<Client>), Failure> {
     if std::env::var_os("FETCHLOOM_LIVE").is_none() {
         return Err("live tests run with FETCHLOOM_LIVE=1".into());
     }
@@ -25,6 +24,13 @@ async fn smoke(reference: &str) -> Result<usize, Failure> {
     let listing = registry
         .resolve(&reference.parse()?, &support::no_filters()?)
         .await?;
+    Ok((listing, client))
+}
+
+/// Resolves `reference` against the real provider, fetches its first file and checks it
+/// against what the provider states, and returns how many files it lists.
+async fn smoke(reference: &str) -> Result<usize, Failure> {
+    let (listing, client) = resolve(reference).await?;
     let entry = listing.entries.first().ok_or("no files")?;
     let download = Download {
         url: entry.urls[0].clone(),
@@ -98,5 +104,49 @@ async fn ckan() -> Result<(), Failure> {
 #[ignore = "reaches data.caltech.edu"]
 async fn inveniordm() -> Result<(), Failure> {
     assert_eq!(smoke("inveniordm:data.caltech.edu/mhmjd-4pr39").await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches api.github.com and github.com"]
+async fn github() -> Result<(), Failure> {
+    assert_eq!(smoke("github:dbrgn/tealdeer@v1.7.3").await?, 5);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches api.github.com and github.com"]
+async fn github_latest() -> Result<(), Failure> {
+    assert!(smoke("github:dbrgn/tealdeer").await? > 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches www.kaggle.com"]
+async fn kaggle() -> Result<(), Failure> {
+    assert_eq!(smoke("kaggle:uciml/iris@2").await?, 2);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches www.kaggle.com"]
+async fn kaggle_pages() -> Result<(), Failure> {
+    let (listing, _) = resolve("kaggle:justinianus/icpc-world-finals-ranking-since-1999@9").await?;
+    assert_eq!(listing.entries.len(), 27);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches api.osf.io and osf.io"]
+async fn osf() -> Result<(), Failure> {
+    assert_eq!(smoke("osf:w867p").await?, 23);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches datadryad.org"]
+async fn dryad() -> Result<(), Failure> {
+    let (listing, _) = resolve("dryad:doi:10.5061/dryad.2jm63xt6m").await?;
+    assert_eq!(listing.entries.len(), 3);
     Ok(())
 }

@@ -1,0 +1,24 @@
+hosts = ["www.kaggle.com"]
+
+[small]
+reference = "kaggle:uciml/iris"
+resolved = "kaggle:uciml/iris@2"
+files = 2
+requests = 2
+first = { path = "Iris.csv", size = 5107 }
+serve = [
+  { path = "/api/v1/datasets/view/uciml/iris", body = "iris/view.json" },
+  { path = "/api/v1/datasets/list/uciml/iris", query = { datasetVersionNumber = "2" }, body = "iris/list.json" },
+]
+
+[paged]
+reference = "kaggle:justinianus/icpc-world-finals-ranking-since-1999"
+resolved = "kaggle:justinianus/icpc-world-finals-ranking-since-1999@9"
+files = 27
+requests = 3
+first = { path = "icpc-full.csv", size = 546143 }
+serve = [
+  { path = "/api/v1/datasets/view/justinianus/icpc-world-finals-ranking-since-1999", body = "icpc/view.json" },
+  { path = "/api/v1/datasets/list/justinianus/icpc-world-finals-ranking-since-1999", query = { datasetVersionNumber = "9" }, body = "icpc/list-p1.json" },
+  { path = "/api/v1/datasets/list/justinianus/icpc-world-finals-ranking-since-1999", query = { datasetVersionNumber = "9", pageToken = "CfDJ8JDwKpgsc5hJpcljKjpYpOG1rvc6SIBbFt3xnZFytoSHRsjHFQ6Xc8OcVWdL5MZc00c0BVi7o-bQPU-ZOVwx7_BCVIhGxf2wLXLp2FSfb41x9MKVFfsNeAZ1zon1o3yKdjVqcnRsvsl7WvE" }, body = "icpc/list-p2.json" },
+]

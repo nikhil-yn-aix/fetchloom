@@ -1,0 +1,40 @@
+hosts = ["api.osf.io", "osf.io"]
+
+[small]
+reference = "osf:w867p"
+resolved = "osf:w867p"
+files = 23
+requests = 6
+first = { path = "README.md", size = 3579, digests = ["sha256:a0be6f54cc78ad631cf385d4834e2a72c8a7abc56f08e7c435ed8d050f611e4d", "md5:29f4bf65ba670a8b082d243c2e294730"] }
+serve = [
+  { path = "/v2/nodes/w867p/", body = "w867p/node.json" },
+  { path = "/v2/nodes/w867p/files/osfstorage/", body = "w867p/root.json" },
+  { path = "/v2/nodes/w867p/files/osfstorage/6ad8b463bd9bddd1f0c60d20/", body = "w867p/code.json" },
+  { path = "/v2/nodes/w867p/files/osfstorage/6ad8b46694a1e700447d551b/", body = "w867p/data.json" },
+  { path = "/v2/nodes/w867p/files/osfstorage/6ad8b46a94a1e700447d551e/", body = "w867p/figures.json" },
+  { path = "/v2/nodes/w867p/files/osfstorage/6ad8b46d783178a5559cfeab/", body = "w867p/results.json" },
+]
+
+[paged]
+reference = "osf:y6zs8"
+resolved = "osf:y6zs8"
+files = 11
+requests = 3
+first = { path = "all-portals.csv", size = 58502, digests = ["sha256:1337b61f742305c2711ba85f78653eb494116277cc7b4022ea20328598a66294", "md5:9a14180a68f6693b4f2a15c4aeadf3ea"] }
+serve = [
+  { path = "/v2/nodes/y6zs8/", body = "y6zs8/node.json" },
+  { path = "/v2/nodes/y6zs8/files/osfstorage/", body = "y6zs8/p1.json" },
+  { path = "/v2/nodes/y6zs8/files/osfstorage/", query = { page = "2" }, body = "y6zs8/p2.json" },
+]
+
+[unhashed]
+reference = "osf:y6zs8"
+resolved = "osf:y6zs8"
+files = 11
+requests = 3
+first = { path = "all-portals.csv", size = 58502 }
+serve = [
+  { path = "/v2/nodes/y6zs8/", body = "y6zs8/node.json" },
+  { path = "/v2/nodes/y6zs8/files/osfstorage/", body = "y6zs8/p1-unhashed.json" },
+  { path = "/v2/nodes/y6zs8/files/osfstorage/", query = { page = "2" }, body = "y6zs8/p2-unhashed.json" },
+]
