@@ -173,6 +173,7 @@ impl<'a, S: Sink> Run<'a, S> {
                 if_range: if_range.as_deref(),
                 attempt: self.failures + 1,
                 typed: self.download.typed,
+                follow: true,
             };
             let step = match self.client.send(&ask).await {
                 Ok(answer) => self.receive(answer).await,

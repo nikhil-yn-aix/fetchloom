@@ -1,37 +1,66 @@
 //! The sources fetchloom knows, by scheme, and the one call that resolves and filters.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use fl_model::filter::Filters;
 use fl_model::reference::{Reference, Target};
 use fl_transfer::client::Client;
+use fl_transfer::credentials::Variable;
 use tracing::Instrument;
+use url::Url;
 
 use crate::declarative::Declarative;
+use crate::doi;
 use crate::http::Http;
 use crate::listing::Listing;
 use crate::source::{Source, SourceError};
 
-const ZENODO: &str = include_str!("../../../sources/zenodo.toml");
+/// The declarative adapters built into fetchloom.
+const EMBEDDED: [&str; 1] = [include_str!("../../../sources/zenodo.toml")];
+
+const DOI_RESOLVER: &str = "https://doi.org/";
 
 /// The sources, found by the scheme of a reference.
-#[derive(Default)]
 pub struct Registry {
     sources: Vec<Arc<dyn Source>>,
+    adapters: Vec<Arc<Declarative>>,
+    resolver: Url,
+    client: Arc<Client>,
 }
 
 impl Registry {
+    /// No sources yet, with DOIs looked up at doi.org.
+    #[must_use]
+    pub fn new(client: Arc<Client>) -> Self {
+        Self {
+            sources: Vec::new(),
+            adapters: Vec::new(),
+            resolver: Url::parse(DOI_RESOLVER).unwrap_or_else(|_| unreachable!()),
+            client,
+        }
+    }
+
     /// The built in sources: the http adapter for `http` and `https`, and every embedded
     /// declarative adapter.
     ///
     /// # Errors
     ///
     /// Returns [`SourceError::Adapter`] when an embedded adapter cannot be read.
-    pub fn builtin(client: Arc<Client>) -> Result<Self, SourceError> {
-        let mut registry = Self::default();
-        registry.add(Arc::new(Http::new()));
-        registry.add(Arc::new(Declarative::from_toml(ZENODO, client)?));
+    pub fn builtin(client: &Arc<Client>) -> Result<Self, SourceError> {
+        let mut registry = Self::new(Arc::clone(client));
+        registry.add(Arc::new(Http::new(Arc::clone(client))));
+        for text in EMBEDDED {
+            registry.adapt(Declarative::from_toml(text, Arc::clone(client))?);
+        }
         Ok(registry)
+    }
+
+    /// Looks DOIs up at `resolver` instead of doi.org.
+    #[must_use]
+    pub fn with_resolver(mut self, resolver: Url) -> Self {
+        self.resolver = resolver;
+        self
     }
 
     /// Adds a source. For a scheme already served, the later source replaces the earlier.
@@ -39,13 +68,33 @@ impl Registry {
         self.sources.push(source);
     }
 
-    /// Resolves `reference` through the source of its scheme, then keeps the entries that
-    /// `filters` keep, in order.
+    /// Adds a declarative adapter, whose credential [`Registry::credentials`] then declares.
+    pub fn adapt(&mut self, adapter: Declarative) {
+        let adapter = Arc::new(adapter);
+        self.adapters.push(Arc::clone(&adapter));
+        self.sources.push(adapter);
+    }
+
+    /// The credentials the declarative adapters declare, their tokens read through `read`.
+    pub fn credentials(
+        &self,
+        read: impl Fn(&str) -> Option<String> + Clone + Send + Sync + 'static,
+    ) -> Vec<Variable> {
+        self.adapters
+            .iter()
+            .filter_map(|adapter| adapter.credential(read.clone()))
+            .collect()
+    }
+
+    /// Resolves `reference` through the source of its scheme, a DOI through the source its
+    /// landing page belongs to, then keeps the entries that `filters` keep, in order.
     ///
     /// # Errors
     ///
-    /// Returns [`SourceError::NoSource`] when no source serves the scheme, whatever the source
-    /// itself reports, and [`SourceError::Selection`] when a pattern matches no file.
+    /// Returns [`SourceError::NoSource`] when no source serves the scheme,
+    /// [`SourceError::NoLanding`] when no source serves a DOI's landing page, whatever the
+    /// source itself reports, [`SourceError::Selection`] when a pattern matches no file, and
+    /// [`SourceError::Collision`] when two kept paths differ only by case.
     pub async fn resolve(
         &self,
         reference: &Reference,
@@ -54,6 +103,17 @@ impl Registry {
         let scheme = scheme_of(reference);
         let span = tracing::debug_span!("resolve", scheme, reference = reference.as_str());
         async {
+            let routed;
+            let reference = match reference.target() {
+                Target::Doi { prefix, suffix } => {
+                    let doi = format!("{prefix}/{suffix}");
+                    routed = doi::route(&self.client, &self.resolver, &doi, &self.sources).await?;
+                    tracing::debug!("{} lands on {}", reference.as_str(), routed.as_str());
+                    &routed
+                }
+                _ => reference,
+            };
+            let scheme = scheme_of(reference);
             let source = self
                 .sources
                 .iter()
@@ -77,11 +137,26 @@ impl Registry {
             }
             let mut flags = flags.into_iter();
             listing.entries.retain(|_| flags.next().unwrap_or(false));
+            refuse_collisions(&listing)?;
             Ok(listing)
         }
         .instrument(span)
         .await
     }
+}
+
+fn refuse_collisions(listing: &Listing) -> Result<(), SourceError> {
+    let mut seen: HashMap<String, &str> = HashMap::with_capacity(listing.entries.len());
+    for entry in &listing.entries {
+        let path = entry.path.as_str();
+        if let Some(first) = seen.insert(path.to_lowercase(), path) {
+            return Err(SourceError::Collision {
+                first: first.to_owned(),
+                second: path.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn scheme_of(reference: &Reference) -> &str {

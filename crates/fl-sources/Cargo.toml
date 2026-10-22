@@ -19,6 +19,7 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_json_path.workspace = true
+spdx.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true

@@ -26,6 +26,7 @@ pub(crate) enum Refusal {
 pub(crate) struct Resolver {
     offline: bool,
     typed: Mutex<HashSet<String>>,
+    pinned: Mutex<HashMap<String, HashSet<u16>>>,
     answered: Mutex<HashMap<String, IpAddr>>,
 }
 
@@ -36,6 +37,7 @@ impl Resolver {
         Self {
             offline,
             typed: Mutex::new(trusted.into_iter().map(|host| lower(&host)).collect()),
+            pinned: Mutex::default(),
             answered: Mutex::default(),
         }
     }
@@ -48,12 +50,65 @@ impl Resolver {
             .insert(lower(host));
     }
 
-    /// Whether the caller asked for `host`.
+    /// Records a host and port someone configured, whose private addresses are allowed on
+    /// that port only.
+    pub(crate) fn pin(&self, host: &str, port: u16) {
+        self.pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(lower(host))
+            .or_default()
+            .insert(port);
+    }
+
+    /// Whether the caller asked for `host`, or configured it on some port.
     pub(crate) fn is_typed(&self, host: &str) -> bool {
+        let host = lower(host);
         self.typed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(&lower(host))
+            .contains(&host)
+            || self
+                .pinned
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&host)
+    }
+
+    /// Whether private addresses of `host` may be reached on `port`: the caller asked for the
+    /// host, or configured it on that port.
+    pub(crate) fn allows(&self, host: &str, port: u16) -> bool {
+        let host = lower(host);
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&host)
+            || self
+                .pinned
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&host)
+                .is_some_and(|ports| ports.contains(&port))
+    }
+
+    /// Whether `host` was configured on other ports only, and the address it last answered
+    /// from is not known to be public, so a request to `port` must not go out.
+    pub(crate) fn pinned_elsewhere(&self, host: &str, port: u16) -> bool {
+        let host = lower(host);
+        let pinned = self
+            .pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&host)
+            .is_some_and(|ports| !ports.contains(&port));
+        pinned
+            && !self.allows(&host, port)
+            && !self
+                .answered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&host)
+                .is_some_and(|ip| is_public(*ip))
     }
 
     /// Records that `address` answered for `host`, so later connections try it first.

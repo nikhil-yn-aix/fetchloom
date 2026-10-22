@@ -19,7 +19,7 @@ use crate::error::TransferError;
 use crate::hosts::Hosts;
 use crate::resolve::{Refusal, Resolver, Shared};
 use crate::retry::{self, Next};
-use crate::url::SafeUrl;
+use crate::url::{Origin, SafeUrl};
 
 const USER_AGENT: &str = concat!("fetchloom/", env!("CARGO_PKG_VERSION"));
 
@@ -113,6 +113,7 @@ pub(crate) struct Ask<'a> {
     pub(crate) if_range: Option<&'a str>,
     pub(crate) attempt: u32,
     pub(crate) typed: bool,
+    pub(crate) follow: bool,
 }
 
 /// A response, and how it was reached.
@@ -211,10 +212,10 @@ impl Client {
         })
     }
 
-    /// Trusts `host` as if the user had typed it, so its private addresses are allowed: for
-    /// hosts the user configured, such as an adapter's record server.
-    pub fn trust(&self, host: &str) {
-        self.resolver.typed(host);
+    /// Trusts the host and port of `origin`, so its private addresses are allowed on that port
+    /// only: for servers the user configured, such as an adapter's record server.
+    pub fn trust(&self, origin: &Origin) {
+        self.resolver.pin(origin.host(), origin.port());
     }
 
     /// The work this client has done.
@@ -258,7 +259,7 @@ impl Client {
         }
     }
 
-    /// Sends one GET and follows its redirects, checking every hop.
+    /// Sends one GET and follows its redirects when asked to, checking every hop.
     pub(crate) async fn send(&self, ask: &Ask<'_>) -> Result<Answer, Failure> {
         let first = ask.url;
         if self.config.offline {
@@ -277,7 +278,7 @@ impl Client {
             let credentialed = previous.is_none() || url.origin() == home;
             let (request, credentialed) = self.request(&url, ask, credentialed)?;
             let (response, span) = self.exchange(request, &url, ask).await?;
-            match redirect(&response) {
+            match redirect(&response).filter(|_| ask.follow) {
                 Some(location) => {
                     let next = url.join(location).map_err(|_| {
                         Failure::last(protocol(&url, "redirected to a location that is not a URL"))
@@ -313,11 +314,15 @@ impl Client {
                 "a redirect from https to http is not followed",
             )));
         }
-        let typed = url.host().is_some_and(|host| self.resolver.is_typed(host));
-        if let Some(ip) = url.ip()
-            && !typed
-            && !is_public(ip)
-        {
+        let (host, port) = (
+            url.host().unwrap_or_default(),
+            url.port().unwrap_or_default(),
+        );
+        let refused = match url.ip() {
+            Some(ip) => !is_public(ip) && !self.resolver.allows(host, port),
+            None => self.resolver.pinned_elsewhere(host, port),
+        };
+        if refused {
             return Err(Failure::last(TransferError::Refused { url: url.clone() }));
         }
         Ok(())

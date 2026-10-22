@@ -6,7 +6,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 use fl_model::error::ErrorKind;
 
@@ -100,13 +100,22 @@ impl CredentialError {
 
 /// Places tried in order, the first that holds a credential winning. Only https origins are
 /// ever looked up, so no credential is sent over plain http.
-pub struct Chain(Vec<Box<dyn Credentials>>);
+pub struct Chain(RwLock<Vec<Box<dyn Credentials>>>);
 
 impl Chain {
     /// The places, in the order they are tried.
     #[must_use]
     pub fn new(places: Vec<Box<dyn Credentials>>) -> Self {
-        Self(places)
+        Self(RwLock::new(places))
+    }
+
+    /// Adds a place, tried after every earlier one: for credentials that sources declare once
+    /// they are loaded.
+    pub fn add(&self, place: Box<dyn Credentials>) {
+        self.0
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(place);
     }
 }
 
@@ -115,7 +124,7 @@ impl Credentials for Chain {
         if origin.scheme() != "https" {
             return Ok(None);
         }
-        for place in &self.0 {
+        for place in self.0.read().unwrap_or_else(PoisonError::into_inner).iter() {
             if let Some(found) = place.find(origin)? {
                 return Ok(Some(found));
             }
