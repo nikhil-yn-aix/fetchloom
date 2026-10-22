@@ -5,6 +5,7 @@ pub mod error;
 mod files;
 pub mod fingerprint;
 pub mod gc;
+mod index;
 mod layout;
 pub mod link;
 mod mode;

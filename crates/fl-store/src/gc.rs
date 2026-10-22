@@ -31,8 +31,8 @@ pub struct Collect {
 pub struct Collected {
     /// Lock files that are gone, whose roots were dropped.
     pub dropped_roots: Vec<PathBuf>,
-    /// Files removed from the tier: objects, trees, step records, leftovers in `tmp/` and
-    /// unfinished downloads.
+    /// Files removed from the tier: objects, trees, step records, index entries, leftovers in
+    /// `tmp/` and unfinished downloads.
     pub removed: Vec<PathBuf>,
     /// The bytes those files held.
     pub bytes: u64,
@@ -113,6 +113,14 @@ impl Tier {
                 collected.bytes += bytes;
                 collected.removed.push(path);
             }
+        }
+        let dead_entries = {
+            let removed: HashSet<&Path> = collected.removed.iter().map(PathBuf::as_path).collect();
+            self.dead_entries(&removed)?
+        };
+        for (path, bytes) in dead_entries {
+            collected.bytes += bytes;
+            collected.removed.push(path);
         }
         collected.removed.sort_unstable();
         span.record("removed", collected.removed.len());

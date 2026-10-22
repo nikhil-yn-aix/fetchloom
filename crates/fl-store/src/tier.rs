@@ -203,6 +203,11 @@ impl Tier {
         self.ingest(staged)
     }
 
+    /// Who shares the tier.
+    pub(crate) const fn sharing(&self) -> Sharing {
+        self.sharing
+    }
+
     /// The tier's paths.
     pub(crate) const fn layout(&self) -> &Layout {
         &self.layout
