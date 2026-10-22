@@ -491,3 +491,22 @@ async fn a_hugging_face_repository_synced_twice_transfers_nothing_the_second_tim
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invalid_user_adapter_is_named_with_the_key_at_fault() -> TestResult {
+    let world = World::start().await?;
+    let broken = world.config.join("sources").join("broken.toml");
+    std::fs::write(
+        &broken,
+        "[adapter]\nname = \"b\"\nscheme = \"b\"\npattern = \"{id}\"\nrecord = \"https://b.org/{nope}\"\nresolved = \"b:{id}\"\nfiles = \"$[*]\"\npath = \"$.p\"\nurl = \"$.u\"\n",
+    )?;
+    let ran = world.here(&["add", "zenodo:3608990", "--json"])?;
+    assert_eq!(ran.code, Some(50), "{}", ran.stdout);
+    let document = json(&ran)?;
+    assert_eq!(document["errors"][0]["kind"], "local.invalid_config");
+    let message = document["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("broken.toml"), "{message}");
+    assert!(message.contains("{nope}"), "{message}");
+    assert_eq!(world.requests().await?, 0);
+    Ok(())
+}
