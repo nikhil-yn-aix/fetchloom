@@ -1,0 +1,19 @@
+[adapter]
+name = "github"
+scheme = "github"
+pattern = "{owner}/{repo}@{tag}"
+record = "https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+forms = [{ pattern = "{owner}/{repo}", record = "https://api.github.com/repos/{owner}/{repo}/releases/latest" }]
+capture = { tag = "$.tag_name" }
+resolved = "github:{owner}/{repo}@{tag}"
+landing = ["https://github.com/{owner}/{repo}/releases/tag/{tag}", "https://github.com/{owner}/{repo}"]
+files = "$.assets[*]"
+path = "$.name"
+size = "$.size"
+url = "$.browser_download_url"
+digest = "$.digest"
+search = { url = "https://api.github.com/search/repositories?q={query}&per_page={limit}", items = "$.items[*]", ref = "github:{$.full_name}", title = "$.full_name" }
+
+[adapter.meta]
+title = "$.name"
+version = "$.tag_name"

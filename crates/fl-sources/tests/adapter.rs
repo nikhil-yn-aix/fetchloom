@@ -85,6 +85,23 @@ async fn the_zenodo_record_states_its_metadata_with_the_license_in_spdx_case() -
 }
 
 #[tokio::test]
+async fn a_record_in_hand_lists_its_files_without_a_request() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    let client = support::client()?;
+    let adapter = support::declarative(&server, &client)?;
+    let record = serde_json::from_str(RECORD)?;
+    let listing = adapter.read(&"zenodo:3608990".parse()?, &record)?;
+    let paths: Vec<&str> = listing
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert_eq!(paths, ["iris.csv"]);
+    assert_eq!(client.counters().read().requests, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_concept_id_follows_the_redirect_to_the_record() -> Result<(), Failure> {
     let server = MockServer::start().await;
     support::answer(

@@ -299,25 +299,51 @@ impl Declarative {
         self.origin.as_ref()
     }
 
-    async fn listing(&self, reference: &Reference) -> Result<Listing, SourceError> {
+    /// Lists `record`, a record of `reference` already in hand, as the adapter reads the first
+    /// page it fetches: the parts its pattern takes and captures, the resolved reference, the
+    /// metadata and the files the record holds. Folders are not walked and no request is made.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Invalid`] when the reference matches no pattern, and
+    /// [`SourceError::Record`] when the record lacks a value the adapter needs.
+    pub fn read(&self, reference: &Reference, record: &Value) -> Result<Listing, SourceError> {
+        let (form, mut parts) = self.form(reference)?;
+        let url = locate(&form.record, &parts, &Value::Null, reference.as_str())?;
+        let mut done = Listing {
+            resolved: reference.clone(),
+            meta: Meta::default(),
+            entries: Vec::new(),
+        };
+        self.absorb(&mut parts, &mut done, record, &url)?;
+        for file in self.files.all(record) {
+            done.entries.push(self.entry(file, &parts, &url)?);
+        }
+        Ok(done)
+    }
+
+    fn form(&self, reference: &Reference) -> Result<(&Form, Parts), SourceError> {
         let Target::Scheme { body, .. } = reference.target() else {
             return Err(SourceError::Unresolved {
                 reference: reference.as_str().to_owned(),
             });
         };
-        let raw = reference.as_str();
-        let (form, mut parts) = self
-            .forms
+        self.forms
             .iter()
             .find_map(|form| form.pattern.matches(body).map(|parts| (form, parts)))
             .ok_or_else(|| {
                 let patterns: Vec<&str> =
                     self.forms.iter().map(|form| form.pattern.text()).collect();
                 SourceError::Invalid {
-                    reference: raw.to_owned(),
+                    reference: reference.as_str().to_owned(),
                     reason: format!("it does not match {}", patterns.join(" or ")),
                 }
-            })?;
+            })
+    }
+
+    async fn listing(&self, reference: &Reference) -> Result<Listing, SourceError> {
+        let raw = reference.as_str();
+        let (form, mut parts) = self.form(reference)?;
         let typed = form.pattern.has_host();
         let location = locate(&form.record, &parts, &Value::Null, raw)?;
         let mut done = Listing {

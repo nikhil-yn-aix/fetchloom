@@ -1,0 +1,21 @@
+[adapter]
+name = "zenodo"
+scheme = "zenodo"
+pattern = "{id}"
+record = "https://zenodo.org/api/records/{id}"
+resolved = "zenodo:{$.id}"
+landing = ["https://zenodo.org/records/{id}", "https://zenodo.org/record/{id}"]
+files = "$.files[*]"
+path = "$.key"
+size = "$.size"
+url = "$.links.self"
+digest = "$.checksum"
+auth = { header = "Authorization", format = "Bearer {token}", env = "ZENODO_TOKEN" }
+search = { url = "https://zenodo.org/api/records?q={query}&size={limit}", items = "$.hits.hits[*]", ref = "zenodo:{$.id}", title = "$.metadata.title" }
+
+[adapter.meta]
+title = "$.metadata.title"
+version = "$.metadata.version"
+license = "$.metadata.license.id"
+doi = "$.doi"
+creators = "$.metadata.creators[*].name"

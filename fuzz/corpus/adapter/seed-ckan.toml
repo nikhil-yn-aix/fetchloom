@@ -1,0 +1,17 @@
+[adapter]
+name = "ckan"
+scheme = "ckan"
+pattern = "{host}/{id}"
+record = "https://{host}/api/3/action/package_show?id={id}"
+resolved = "ckan:{host}/{$.result.id}"
+files = "$.result.resources[?length(@.name) > 0]"
+path = "$.name"
+size = "$.size"
+url = "$.url"
+digest = "$.hash"
+
+[adapter.meta]
+title = "$.result.title"
+version = "$.result.version"
+license = "$.result.license_id"
+creators = "$.result.author"

@@ -1,0 +1,22 @@
+[adapter]
+name = "kaggle"
+scheme = "kaggle"
+pattern = "{owner}/{dataset}@{version}"
+record = "https://www.kaggle.com/api/v1/datasets/view/{owner}/{dataset}"
+forms = [{ pattern = "{owner}/{dataset}", record = "https://www.kaggle.com/api/v1/datasets/view/{owner}/{dataset}" }]
+capture = { version = "$.currentVersionNumber" }
+resolved = "kaggle:{owner}/{dataset}@{version}"
+landing = ["https://www.kaggle.com/datasets/{owner}/{dataset}"]
+listing = "https://www.kaggle.com/api/v1/datasets/list/{owner}/{dataset}?datasetVersionNumber={version}"
+files = "$.datasetFiles[*]"
+path = "$.name"
+size = "$.totalBytes"
+url = "https://www.kaggle.com/api/v1/datasets/download/{owner}/{dataset}/{%$.name}?datasetVersionNumber={version}"
+paginate = { kind = "cursor", param = "pageToken", field = "$.nextPageToken" }
+search = { url = "https://www.kaggle.com/api/v1/datasets/list?search={query}&pageSize={limit}", items = "$[*]", ref = "kaggle:{$.ref}", title = "$.title" }
+
+[adapter.meta]
+title = "$.title"
+version = "$.currentVersionNumber"
+license = "$.licenseName"
+creators = "$.ownerName"

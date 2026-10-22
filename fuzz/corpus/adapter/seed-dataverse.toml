@@ -1,0 +1,26 @@
+[adapter]
+name = "dataverse"
+scheme = "dataverse"
+pattern = "{host}/{pid...}"
+record = "https://{host}/api/datasets/:persistentId/?persistentId={pid}"
+resolved = "dataverse:{host}/{pid}"
+landing = [
+    "https://{host}/citation?persistentId={pid...}",
+    "https://{host}/dataset.xhtml?persistentId={pid...}",
+]
+files = "$.data.latestVersion.files[*]"
+path = [
+    "{$.directoryLabel}/{$.dataFile.originalFileName}",
+    "{$.directoryLabel}/{$.label}",
+    "$.dataFile.originalFileName",
+    "$.label",
+]
+size = ["$.dataFile.originalFileSize", "$.dataFile.filesize"]
+url = "https://{host}/api/access/datafile/{$.dataFile.id}?format=original"
+digest = ["{$.dataFile.checksum.type}:{$.dataFile.checksum.value}", "md5:{$.dataFile.md5}"]
+
+[adapter.meta]
+title = "$.data.latestVersion.metadataBlocks.citation.fields[?@.typeName=='title'].value"
+version = "$.data.latestVersion.versionNumber"
+license = "$.data.latestVersion.license.name"
+creators = "$.data.latestVersion.metadataBlocks.citation.fields[?@.typeName=='author'].value[*].authorName.value"
