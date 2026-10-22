@@ -188,7 +188,7 @@ fn valid(value: &str, kind: Kind) -> bool {
 #[derive(Debug)]
 enum Segment {
     Literal(String),
-    Part(String),
+    Part(String, bool),
     Value(Query, bool),
 }
 
@@ -203,8 +203,8 @@ pub(crate) enum Context {
 }
 
 /// Text with `{name}` parts of a pattern and `{$.path}` values of a JSON document in it. A
-/// template that starts with `$` is one `JSONPath` alone. In a URL, `{%$.path}` escapes the
-/// value as one path segment, slashes included.
+/// template that starts with `$` is one `JSONPath` alone. In a URL, `{%$.path}` and `{%name}`
+/// escape the value as one path segment, slashes included.
 #[derive(Debug)]
 pub(crate) struct Template {
     text: String,
@@ -241,12 +241,14 @@ impl Template {
                 segments.push(Segment::Literal(rest[..start].to_owned()));
             }
             let inner = &rest[start + 1..end];
-            if let Some(path) = inner.strip_prefix('%') {
-                segments.push(Segment::Value(Query::parse(path)?, true));
-            } else if inner.starts_with('$') {
-                segments.push(Segment::Value(Query::parse(inner)?, false));
+            let (single, inner) = match inner.strip_prefix('%') {
+                Some(inner) => (true, inner),
+                None => (false, inner),
+            };
+            if inner.starts_with('$') {
+                segments.push(Segment::Value(Query::parse(inner)?, single));
             } else {
-                segments.push(Segment::Part(inner.to_owned()));
+                segments.push(Segment::Part(inner.to_owned(), single));
             }
             rest = &rest[end + 1..];
         }
@@ -267,7 +269,7 @@ impl Template {
     /// The pattern parts this template names.
     pub(crate) fn parts(&self) -> impl Iterator<Item = &str> {
         self.segments.iter().filter_map(|segment| match segment {
-            Segment::Part(name) => Some(name.as_str()),
+            Segment::Part(name, _) => Some(name.as_str()),
             _ => None,
         })
     }
@@ -286,8 +288,13 @@ impl Template {
         for segment in &self.segments {
             match segment {
                 Segment::Literal(literal) => text.push_str(literal),
-                Segment::Part(name) => {
-                    text.push_str(parts.get(name).ok_or_else(|| Missing::Part(name.clone()))?);
+                Segment::Part(name, single) => {
+                    let part = parts.get(name).ok_or_else(|| Missing::Part(name.clone()))?;
+                    if self.context == Context::Url && *single {
+                        escape_segment(part, &mut text);
+                    } else {
+                        text.push_str(part);
+                    }
                 }
                 Segment::Value(query, single) => {
                     let found = query
@@ -416,6 +423,12 @@ mod tests {
         assert_eq!(
             segment.render(&Parts::new(), &nested).unwrap(),
             "https://x.org/f/a%20b%2Fc.csv"
+        );
+        let part = Template::parse("https://x.org/d/{%doi}", Context::Url).unwrap();
+        assert_eq!(
+            part.render(&parts(&[("doi", "doi:10.5/x")]), &nested)
+                .unwrap(),
+            "https://x.org/d/doi:10.5%2Fx"
         );
         let whole = Template::parse("{$.next}", Context::Url).unwrap();
         assert_eq!(
