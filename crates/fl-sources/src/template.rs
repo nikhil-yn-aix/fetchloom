@@ -161,6 +161,12 @@ impl Pattern {
     }
 }
 
+/// Whether `value` may stand as a part of a reference: letters, digits and `. _ - ~ :`, not
+/// `.` or `..`.
+pub(crate) fn word(value: &str) -> bool {
+    valid(value, Kind::Word)
+}
+
 fn valid(value: &str, kind: Kind) -> bool {
     let word = |segment: &str| {
         !segment.is_empty()

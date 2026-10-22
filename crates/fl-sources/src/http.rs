@@ -92,7 +92,7 @@ impl Http {
                     other => SourceError::Transfer(other),
                 })?;
             let html = String::from_utf8_lossy(&page.body);
-            for link in index::links(&url, &html) {
+            for link in index::links(&page.url, &html) {
                 let path = format!("{prefix}{}", link.name);
                 if link.dir {
                     queue.push_back((link.url, format!("{path}/")));

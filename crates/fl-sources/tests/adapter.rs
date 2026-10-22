@@ -370,6 +370,16 @@ async fn a_landing_page_names_the_record_it_shows() -> Result<(), Failure> {
             .landing("https://zenodo.org/communities/x")
             .is_none()
     );
+    let osf = Declarative::from_toml(
+        include_str!("../../../sources/osf.toml"),
+        support::client()?,
+    )?;
+    assert_eq!(
+        osf.landing("https://osf.io/w867p/")
+            .map(|found| found.as_str().to_owned())
+            .as_deref(),
+        Some("osf:w867p")
+    );
     Ok(())
 }
 
@@ -396,5 +406,28 @@ async fn a_search_returns_references_and_titles() -> Result<(), Failure> {
         .map(|hit| (hit.reference.as_str(), hit.title.as_deref()))
         .collect();
     assert_eq!(found, [("zenodo:1", Some("One")), ("zenodo:2", None)]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_captured_part_that_would_change_the_url_is_refused() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    mount(&server, None, page(&["a"], &json!({"version": "1?x=y"}))).await;
+    let text = TOY
+        .replace(
+            "record = \"BASE/records/{id}\"",
+            "record = \"BASE/records/{id}\"
+capture = { version = \"$.version\" }",
+        )
+        .replace(
+            "resolved = \"toy:{$.id}\"",
+            "resolved = \"toy:{id}@{version}\"",
+        )
+        .replace("BASE", &server.uri());
+    let client = support::client()?;
+    let adapter = Declarative::from_toml(&text, Arc::clone(&client))?;
+    client.trust(adapter.record_origin().ok_or("no record host")?);
+    let error = listed(&adapter, "toy:7").await.err().ok_or("listed")?;
+    assert!(error.to_string().contains("cannot hold"), "{error}");
     Ok(())
 }

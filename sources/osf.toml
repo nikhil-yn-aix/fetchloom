@@ -4,7 +4,7 @@ scheme = "osf"
 pattern = "{id}"
 record = "https://api.osf.io/v2/nodes/{id}/"
 resolved = "osf:{id}"
-landing = ["https://osf.io/{id}", "https://osf.io/{id}/files"]
+landing = ["https://osf.io/{id}", "https://osf.io/{id}/", "https://osf.io/{id}/files"]
 listing = "https://api.osf.io/v2/nodes/{id}/files/osfstorage/"
 files = "$.data[?@.attributes.kind=='file']"
 folders = "$.data[?@.attributes.kind=='folder']"

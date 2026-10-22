@@ -56,10 +56,17 @@ pub(crate) async fn route(
         let Some(location) = page.header("location").filter(|_| page.status / 100 == 3) else {
             return Err(no_landing(reference, landing.as_ref().unwrap_or(&at)));
         };
-        at = at.join(location).map_err(|_| SourceError::Body {
+        let next = at.join(location).map_err(|_| SourceError::Body {
             url: page.url.clone(),
             reason: "redirected to a location that is not a URL".to_owned(),
         })?;
+        if at.scheme() == "https" && next.scheme() != "https" {
+            return Err(SourceError::Transfer(TransferError::Insecure {
+                url: page.url,
+                reason: "a redirect from https to http is not followed",
+            }));
+        }
+        at = next;
         landing.get_or_insert_with(|| at.clone());
         if let Some(found) = sources
             .iter()

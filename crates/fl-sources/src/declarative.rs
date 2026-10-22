@@ -21,7 +21,7 @@ use crate::listing::{Entry, Listing, Meta};
 use crate::paging::{self, Paging};
 use crate::record;
 use crate::source::{Hit, Read, Searchable, Source, SourceError};
-use crate::template::{Context, Missing, Parts, Pattern, Query, Template, escape, plain};
+use crate::template::{Context, Missing, Parts, Pattern, Query, Template, escape, plain, word};
 
 /// The most folders one listing may walk into.
 const FOLDERS: usize = 10_000;
@@ -434,6 +434,9 @@ impl Declarative {
                 .map_err(fail)?
                 .and_then(plain)
                 .ok_or_else(|| fail("no value that is text or a number"))?;
+            if !word(&value) {
+                return Err(fail("a value a reference part cannot hold"));
+            }
             parts.insert(name.clone(), value);
         }
         done.resolved = self.resolved(parts, record, url)?;

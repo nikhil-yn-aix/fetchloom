@@ -512,3 +512,20 @@ async fn an_invalid_user_adapter_is_named_with_the_key_at_fault() -> TestResult 
     assert_eq!(world.requests().await?, 0);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_file_changed_since_the_lock_is_drift() -> TestResult {
+    let world = World::start().await?;
+    let raw = world.project.join("raw");
+    std::fs::create_dir_all(&raw)?;
+    std::fs::write(raw.join("a.csv"), b"a,b")?;
+    let ran = world.here(&["add", "./raw"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    std::fs::write(raw.join("a.csv"), b"changed")?;
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    let fresh = world.temp.path().join("fresh-store");
+    let ran = world.fl_with_store(&world.project, &fresh, &["sync", "--json"])?;
+    assert_eq!(ran.code, Some(30), "{}", ran.stdout);
+    assert_eq!(json(&ran)?["errors"][0]["kind"], "integrity.drift");
+    Ok(())
+}
