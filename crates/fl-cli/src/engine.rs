@@ -16,7 +16,7 @@ use fl_model::filter::Filters;
 use fl_model::partial::PartialRecord;
 use fl_model::path::DataPath;
 use fl_model::reference::Reference;
-use fl_sources::{Declarative, Listing, Registry, Source};
+use fl_sources::{Declarative, Files, HuggingFace, Listing, Registry, Source};
 use fl_store::data_dir::{DataDir, Destination};
 use fl_store::link::{Ladder, Linked, Linker};
 use fl_store::partial::Partial;
@@ -82,6 +82,16 @@ impl Engine {
         let chain = Arc::new(Chain::new(places));
         let client = Arc::new(Client::new(config.transfer.clone(), chain.clone())?);
         let mut registry = Registry::builtin(&client)?;
+        registry.add(Arc::new(Files::new(config.cwd.clone())));
+        if let Some(endpoint) = &config.hub {
+            if let Some(origin) = endpoint.origin() {
+                client.trust(&origin);
+            }
+            registry.add(Arc::new(HuggingFace::at(
+                endpoint.clone(),
+                Arc::clone(&client),
+            )));
+        }
         if let Some(dir) = &config.settings {
             for source in user_adapters(&dir.join("sources"), &client)? {
                 if let Some(origin) = source.record_origin() {
@@ -252,6 +262,22 @@ async fn download(
     tier: &Arc<Tier>,
     want: &Want,
 ) -> Result<(Got, Ingested), Failure> {
+    if let Some(path) = want.url.to_file_path() {
+        let copying = Arc::clone(tier);
+        let ingested = blocking(move || copying.ingest_file(&path).map_err(Failure::from)).await?;
+        let Digest::Blake3(blake3) = ingested.digest else {
+            return Err(Failure::new(
+                ErrorKind::LocalIo,
+                "an object is named by BLAKE3",
+            ));
+        };
+        let got = Got {
+            blake3,
+            size: ingested.bytes,
+            fetched: 0,
+        };
+        return Ok((got, ingested));
+    }
     let key = Digest::Blake3(*blake3::hash(want.url.to_string().as_bytes()).as_bytes());
     let opened = Arc::clone(tier);
     let partial = blocking(move || {

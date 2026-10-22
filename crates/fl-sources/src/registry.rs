@@ -41,8 +41,9 @@ impl Registry {
         }
     }
 
-    /// The built in sources: the http adapter for `http` and `https`, Hugging Face, Croissant,
-    /// and every embedded declarative adapter.
+    /// The built in sources: the http adapter for `http` and `https`, Hugging Face,
+    /// Croissant, and every embedded declarative adapter. Local files are added by whoever
+    /// knows the directory relative paths are read against.
     ///
     /// # Errors
     ///
@@ -159,8 +160,7 @@ fn scheme_of(reference: &Reference) -> &str {
     match reference.target() {
         Target::Url { scheme, .. } => scheme.name(),
         Target::Scheme { scheme, .. } => scheme,
-        Target::File { .. } => "file",
-        Target::Path(_) => "a local path",
+        Target::File { .. } | Target::Path(_) => "file",
         Target::Doi { .. } => "doi",
         Target::Remote { .. } => "a named remote",
         Target::Name(_) => "a bare name",

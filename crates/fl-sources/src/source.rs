@@ -135,6 +135,14 @@ pub enum SourceError {
         /// The page where the terms are accepted.
         page: String,
     },
+    /// A local file or directory cannot be read.
+    #[error("`{}` cannot be read: {reason}", path.display())]
+    Local {
+        /// The file or directory.
+        path: std::path::PathBuf,
+        /// What went wrong.
+        reason: String,
+    },
     /// An adapter file cannot be used.
     #[error("the adapter is not valid: {reason}")]
     Adapter {
@@ -153,6 +161,7 @@ impl SourceError {
             }
             Self::Collision { .. } => ErrorKind::LocalUnrepresentable,
             Self::Terms { .. } => ErrorKind::TermsRequired,
+            Self::Local { .. } => ErrorKind::LocalIo,
             Self::Invalid { .. } => ErrorKind::ReferenceInvalid,
             Self::Transfer(error) => error.kind(),
             Self::Selection(error) => error.kind(),

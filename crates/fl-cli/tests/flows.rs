@@ -401,3 +401,93 @@ async fn a_sync_that_locks_first_counts_the_bytes_locking_fetched() -> TestResul
     assert_eq!(document["result"]["linked"], 1, "{document}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_directory_is_added_file_by_file_without_a_request() -> TestResult {
+    let world = World::start().await?;
+    let raw = world.project.join("raw");
+    std::fs::create_dir_all(raw.join("sub"))?;
+    std::fs::write(raw.join("a.csv"), b"a,b\n")?;
+    std::fs::write(raw.join("sub").join("b.csv"), b"c,d\n")?;
+    let ran = world.here(&["add", "./raw", "--json"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    let document = json(&ran)?;
+    assert_eq!(work(&document, "requests")?, 0);
+    assert_eq!(
+        std::fs::read(
+            world
+                .project
+                .join("data")
+                .join("raw")
+                .join("sub")
+                .join("b.csv")
+        )?,
+        b"c,d\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hugging_face_repository_synced_twice_transfers_nothing_the_second_time() -> TestResult {
+    let world = World::start().await?;
+    let sha = "c".repeat(40);
+    let abc_sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let tree = serde_json::json!([
+        {"type": "directory", "oid": "0", "size": 0, "path": "data"},
+        {"type": "file", "oid": "1", "size": 6, "path": "README.md"},
+        {"type": "file", "oid": "2", "size": 3, "path": "data/x.bin", "lfs": {"oid": abc_sha256, "size": 3}},
+    ]);
+    let answers = [
+        (
+            "/api/datasets/lab/set/revision/main".to_owned(),
+            serde_json::json!({"sha": sha, "gated": false})
+                .to_string()
+                .into_bytes(),
+        ),
+        (
+            format!("/api/datasets/lab/set/tree/{sha}"),
+            tree.to_string().into_bytes(),
+        ),
+        (
+            format!("/datasets/lab/set/resolve/{sha}/README.md"),
+            b"hello\n".to_vec(),
+        ),
+        (
+            format!("/datasets/lab/set/resolve/{sha}/data/x.bin"),
+            b"abc".to_vec(),
+        ),
+    ];
+    for (route, body) in answers {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&world.server)
+            .await;
+    }
+    let endpoint = world.server.uri();
+    let env = [("HF_ENDPOINT", endpoint.as_str())];
+    let run = |args: &[&str]| world.fl_with_env(&world.project, &world.store, args, &env);
+    let added = run(&["add", "hf:datasets/lab/set", "--json"])?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+    let lock = std::fs::read_to_string(world.project.join("data.lock"))?;
+    assert!(lock.contains(abc_sha256), "{lock}");
+    for _ in 0..2 {
+        let synced = run(&["sync", "--json"])?;
+        assert_eq!(synced.code, Some(0), "{}", synced.stderr);
+        let document = json(&synced)?;
+        assert_eq!(work(&document, "bytes_down")?, 0);
+        assert_eq!(work(&document, "requests")?, 0);
+    }
+    assert_eq!(
+        std::fs::read(
+            world
+                .project
+                .join("data")
+                .join("set")
+                .join("data")
+                .join("x.bin")
+        )?,
+        b"abc"
+    );
+    Ok(())
+}

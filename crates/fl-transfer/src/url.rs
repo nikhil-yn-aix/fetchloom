@@ -65,6 +65,14 @@ impl SafeUrl {
         })
     }
 
+    /// The local path a `file://` URL names.
+    #[must_use]
+    pub fn to_file_path(&self) -> Option<std::path::PathBuf> {
+        (self.0.scheme() == "file")
+            .then(|| self.0.to_file_path().ok())
+            .flatten()
+    }
+
     /// The port, stated or implied by the scheme.
     #[must_use]
     pub fn port(&self) -> Option<u16> {
