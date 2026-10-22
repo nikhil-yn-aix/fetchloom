@@ -1,0 +1,9 @@
+hosts = ["data.humdata.org"]
+
+[small]
+reference = "ckan:data.humdata.org/cerf-allocations-cub"
+resolved = "ckan:data.humdata.org/a5344d91-3300-471d-87e6-706a270fb54e"
+files = 2
+requests = 1
+first = { path = "CUB CERF Allocations.csv", size = 22424 }
+serve = [{ path = "/api/3/action/package_show", query = { id = "cerf-allocations-cub" }, body = "cerf-allocations-cub/record.json" }]

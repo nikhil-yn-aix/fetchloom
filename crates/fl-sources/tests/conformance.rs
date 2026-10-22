@@ -270,7 +270,7 @@ async fn unhashed_files_download(adapter: &Adapter) -> Result<(), Failure> {
         .ok_or_else(|| format!("{}: no file without a stated hash", adapter.name))?;
     let url = &entry.urls[0];
     Mock::given(method("GET"))
-        .and(path(url.to_string().trim_start_matches(&server.uri())))
+        .and(path(route(url, &server)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"bytes".to_vec()))
         .with_priority(1)
         .mount(&server)
@@ -296,7 +296,7 @@ async fn wrong_hashes_are_refused(adapter: &Adapter) -> Result<(), Failure> {
     };
     let url = &entry.urls[0];
     Mock::given(method("GET"))
-        .and(path(url.to_string().trim_start_matches(&server.uri())))
+        .and(path(route(url, &server)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"other bytes".to_vec()))
         .with_priority(1)
         .mount(&server)
@@ -316,6 +316,14 @@ async fn wrong_hashes_are_refused(adapter: &Adapter) -> Result<(), Failure> {
         adapter.name
     );
     Ok(())
+}
+
+fn route(url: &SafeUrl, server: &MockServer) -> String {
+    let text = url.to_string();
+    let rest = text.trim_start_matches(&server.uri());
+    rest.split_once('?')
+        .map_or(rest, |(route, _)| route)
+        .to_owned()
 }
 
 fn download(url: SafeUrl, stated: Vec<Digest>) -> Download {
@@ -341,4 +349,24 @@ async fn hugging_face() -> Result<(), Failure> {
 #[tokio::test]
 async fn croissant() -> Result<(), Failure> {
     conforms("croissant").await
+}
+
+#[tokio::test]
+async fn figshare() -> Result<(), Failure> {
+    conforms("figshare").await
+}
+
+#[tokio::test]
+async fn dataverse() -> Result<(), Failure> {
+    conforms("dataverse").await
+}
+
+#[tokio::test]
+async fn ckan() -> Result<(), Failure> {
+    conforms("ckan").await
+}
+
+#[tokio::test]
+async fn inveniordm() -> Result<(), Failure> {
+    conforms("inveniordm").await
 }

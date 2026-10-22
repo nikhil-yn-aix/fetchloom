@@ -66,3 +66,37 @@ async fn croissant() -> Result<(), Failure> {
     assert_eq!(smoke(reference).await?, 3);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "reaches api.figshare.com and ndownloader.figshare.com"]
+async fn figshare() -> Result<(), Failure> {
+    assert_eq!(smoke("figshare:34433697").await?, 18);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches dataverse.harvard.edu"]
+async fn dataverse() -> Result<(), Failure> {
+    assert_eq!(
+        smoke("dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP").await?,
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches data.humdata.org"]
+async fn ckan() -> Result<(), Failure> {
+    assert_eq!(
+        smoke("ckan:data.humdata.org/cerf-allocations-cub").await?,
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "reaches data.caltech.edu"]
+async fn inveniordm() -> Result<(), Failure> {
+    assert_eq!(smoke("inveniordm:data.caltech.edu/mhmjd-4pr39").await?, 1);
+    Ok(())
+}

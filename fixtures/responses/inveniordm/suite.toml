@@ -1,0 +1,23 @@
+hosts = ["data.caltech.edu"]
+
+[small]
+reference = "inveniordm:data.caltech.edu/mhmjd-4pr39"
+resolved = "inveniordm:data.caltech.edu/mhmjd-4pr39"
+files = 1
+requests = 2
+first = { path = "Extended Data.xlsx", size = 21989, digests = ["md5:71d42904d778fb3a201ef6d6bbcabb2f"] }
+serve = [
+    { path = "/api/records/mhmjd-4pr39", body = "mhmjd-4pr39/record.json" },
+    { path = "/api/records/mhmjd-4pr39/files", body = "mhmjd-4pr39/files.json" },
+]
+
+[unhashed]
+reference = "inveniordm:data.caltech.edu/mhmjd-4pr39"
+resolved = "inveniordm:data.caltech.edu/mhmjd-4pr39"
+files = 1
+requests = 2
+first = { path = "Extended Data.xlsx", size = 21989 }
+serve = [
+    { path = "/api/records/mhmjd-4pr39", body = "mhmjd-4pr39/record.json" },
+    { path = "/api/records/mhmjd-4pr39/files", body = "mhmjd-4pr39/files-unhashed.json" },
+]

@@ -1,0 +1,26 @@
+[adapter]
+name = "figshare"
+scheme = "figshare"
+pattern = "{id}"
+record = "https://api.figshare.com/v2/articles/{id}"
+forms = [{ pattern = "{id}@{version}", record = "https://api.figshare.com/v2/articles/{id}/versions/{version}" }]
+capture = { version = "$.version" }
+resolved = "figshare:{id}@{version}"
+landing = [
+    "https://figshare.com/articles/{kind}/{slug}/{id}/{version}",
+    "https://figshare.com/articles/{kind}/{slug}/{id}",
+    "https://{portal}.figshare.com/articles/{kind}/{slug}/{id}/{version}",
+    "https://{portal}.figshare.com/articles/{kind}/{slug}/{id}",
+]
+files = "$.files[*]"
+path = "$.name"
+size = "$.size"
+url = "$.download_url"
+digest = "md5:{$.computed_md5}"
+
+[adapter.meta]
+title = "$.title"
+version = "$.version"
+license = "$.license.name"
+doi = "$.doi"
+creators = "$.authors[*].full_name"

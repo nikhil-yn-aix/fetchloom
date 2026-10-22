@@ -305,6 +305,7 @@ async fn digests_name_their_algorithm_and_urls_may_be_relative() -> Result<(), F
     let body = json!({"id": 7, "files": [
         {"name": "a", "size": "12", "kind": "SHA-256", "sum": "AB".repeat(32), "href": "../files/a"},
         {"name": "b", "kind": "crc", "sum": "1", "md5": "x", "href": "/files/b"},
+        {"name": "c", "size": "", "kind": "md5", "sum": "", "href": "/files/c"},
     ]});
     Mock::given(method("GET"))
         .and(path("/records/7"))
@@ -321,8 +322,8 @@ async fn digests_name_their_algorithm_and_urls_may_be_relative() -> Result<(), F
     let adapter = Declarative::from_toml(&text, Arc::clone(&client))?;
     client.trust(adapter.record_origin().ok_or("no record host")?);
     let listing = adapter.resolve(&"toy:7".parse()?).await?;
-    let [a, b] = &listing.entries[..] else {
-        return Err("two files".into());
+    let [a, b, c] = &listing.entries[..] else {
+        return Err("three files".into());
     };
     assert_eq!(a.size, Some(12));
     assert_eq!(
@@ -332,6 +333,8 @@ async fn digests_name_their_algorithm_and_urls_may_be_relative() -> Result<(), F
     assert_eq!(a.urls[0].to_string(), format!("{}/files/a", server.uri()));
     assert!(b.stated.is_empty());
     assert_eq!(b.size, None);
+    assert!(c.stated.is_empty());
+    assert_eq!(c.size, None);
     Ok(())
 }
 
