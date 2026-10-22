@@ -51,3 +51,10 @@ async fn a_zenodo_doi() -> Result<(), Failure> {
     assert_eq!(smoke("doi:10.5281/zenodo.3608990").await?, 1);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "reaches huggingface.co"]
+async fn hugging_face() -> Result<(), Failure> {
+    assert_eq!(smoke("hf:datasets/rajpurkar/squad").await?, 4);
+    Ok(())
+}

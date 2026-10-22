@@ -29,6 +29,8 @@ pub struct Page {
     pub status: u16,
     /// Where the document was found, after redirects.
     pub url: SafeUrl,
+    /// A credential went with the request that answered.
+    pub credentialed: bool,
     headers: HeaderMap,
     /// The body, at most [`LIMIT`] bytes.
     pub body: Vec<u8>,
@@ -147,6 +149,7 @@ impl Client {
             status,
             headers: std::mem::take(response.headers_mut()),
             url,
+            credentialed,
             body,
         })
     }

@@ -346,7 +346,7 @@ pub(crate) fn escape(text: &str, out: &mut String) {
 }
 
 /// Appends `text` to `out` as one path segment: like [`escape`], with `/` encoded too.
-fn escape_segment(text: &str, out: &mut String) {
+pub(crate) fn escape_segment(text: &str, out: &mut String) {
     for piece in text.split('/').enumerate() {
         if piece.0 > 0 {
             out.push_str("%2F");

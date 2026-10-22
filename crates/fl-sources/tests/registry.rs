@@ -176,7 +176,7 @@ async fn a_doi_routes_to_the_source_of_its_landing_page() -> Result<(), Failure>
     let client = support::client()?;
     let mut registry = Registry::new(Arc::clone(&client))
         .with_resolver(Url::parse(&format!("{}/", resolver.uri()))?);
-    registry.adapt(support::declarative(&records, &client)?);
+    registry.add(Arc::new(support::declarative(&records, &client)?));
     client.trust(
         &fl_transfer::url::SafeUrl::parse(&resolver.uri())?
             .origin()
