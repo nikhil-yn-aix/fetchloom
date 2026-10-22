@@ -309,3 +309,47 @@ async fn an_index_reached_through_a_redirect_lists_links_under_where_it_landed()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_file_and_a_folder_of_the_same_name_are_refused() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/d/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("<a href=\"a\">a</a> <a href=\"A/\">A/</a>"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/d/A/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<a href=\"b\">b</a>"))
+        .mount(&server)
+        .await;
+    let registry = Registry::builtin(&support::client()?)?;
+    let reference: Reference = format!("{}/d/", server.uri()).parse()?;
+    let error = registry
+        .resolve(&reference, &support::no_filters()?)
+        .await
+        .err()
+        .ok_or("resolved")?;
+    assert_eq!(error.kind(), ErrorKind::LocalUnrepresentable);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_doi_landing_on_a_private_host_is_not_trusted() -> Result<(), Failure> {
+    let resolver = MockServer::start().await;
+    let landing = "https://127.0.0.1:9/citation?persistentId=doi:10.1/x";
+    doi(&resolver, "10.1/x", landing).await;
+    let client = support::client()?;
+    client.trust(&SafeUrl::parse(&resolver.uri())?.origin().ok_or("origin")?);
+    let registry =
+        Registry::builtin(&client)?.with_resolver(Url::parse(&format!("{}/", resolver.uri()))?);
+    let error = registry
+        .resolve(&"doi:10.1/x".parse()?, &support::no_filters()?)
+        .await
+        .err()
+        .ok_or("resolved")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkRefused, "{error}");
+    Ok(())
+}

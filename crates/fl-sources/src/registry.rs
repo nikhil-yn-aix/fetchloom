@@ -110,16 +110,17 @@ impl Registry {
         let scheme = scheme_of(reference);
         let span = tracing::debug_span!("resolve", scheme, reference = reference.as_str());
         async {
-            let routed;
-            let reference = match reference.target() {
+            let routed = match reference.target() {
                 Target::Doi { prefix, suffix } => {
                     let doi = format!("{prefix}/{suffix}");
-                    routed = doi::route(&self.client, &self.resolver, &doi, &self.sources).await?;
-                    tracing::debug!("{} lands on {}", reference.as_str(), routed.as_str());
-                    &routed
+                    let found =
+                        doi::route(&self.client, &self.resolver, &doi, &self.sources).await?;
+                    tracing::debug!("{} lands on {}", reference.as_str(), found.as_str());
+                    Some(found)
                 }
-                _ => reference,
+                _ => None,
             };
+            let reference = routed.as_ref().unwrap_or(reference);
             let scheme = scheme_of(reference);
             let source = self
                 .sources
@@ -129,7 +130,11 @@ impl Registry {
                 .ok_or_else(|| SourceError::NoSource {
                     scheme: scheme.to_owned(),
                 })?;
-            let mut listing = source.resolve(reference).await?;
+            let mut listing = if routed.is_some() {
+                source.resolve_routed(reference).await?
+            } else {
+                source.resolve(reference).await?
+            };
             let kept = filters
                 .apply(
                     listing
@@ -153,14 +158,27 @@ impl Registry {
 }
 
 fn refuse_collisions(listing: &Listing) -> Result<(), SourceError> {
-    let mut seen: HashMap<String, &str> = HashMap::with_capacity(listing.entries.len());
+    let collision = |first: &str, second: &str| SourceError::Collision {
+        first: first.to_owned(),
+        second: second.to_owned(),
+    };
+    let mut files: HashMap<String, &str> = HashMap::with_capacity(listing.entries.len());
+    let mut dirs: HashMap<String, &str> = HashMap::new();
     for entry in &listing.entries {
         let path = entry.path.as_str();
-        if let Some(first) = seen.insert(path.to_lowercase(), path) {
-            return Err(SourceError::Collision {
-                first: first.to_owned(),
-                second: path.to_owned(),
-            });
+        let lower = path.to_lowercase();
+        if let Some(first) = files.insert(lower.clone(), path) {
+            return Err(collision(first, path));
+        }
+        if let Some(first) = dirs.get(&lower) {
+            return Err(collision(first, path));
+        }
+        for (at, _) in lower.match_indices('/') {
+            let dir = &lower[..at];
+            if let Some(first) = files.get(dir) {
+                return Err(collision(first, path));
+            }
+            dirs.entry(dir.to_owned()).or_insert(path);
         }
     }
     Ok(())

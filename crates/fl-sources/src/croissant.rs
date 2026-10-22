@@ -59,11 +59,11 @@ impl Croissant {
             typed: true,
         };
         let (page, metadata) = record::json(&self.client, &request, raw).await?;
-        let objects = metadata
-            .get("distribution")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let objects = match metadata.get("distribution") {
+            Some(Value::Array(objects)) => objects.as_slice(),
+            Some(one @ Value::Object(_)) => std::slice::from_ref(one),
+            _ => &[],
+        };
         let mut entries = Vec::new();
         for object in objects.iter().filter(|object| typed(object, &FILE_OBJECT)) {
             if let Some(entry) = entry(object, &page.url)? {
@@ -131,11 +131,12 @@ fn entry(object: &Value, page: &SafeUrl) -> Result<Option<Entry>, SourceError> {
             url: page.clone(),
             problem: "no value",
         })?;
-    let path = DataPath::new(name.trim_start_matches('/')).map_err(|_| SourceError::Record {
-        path: "$.distribution[*].name".to_owned(),
-        url: page.clone(),
-        problem: "a value that is not a valid path",
-    })?;
+    let path =
+        DataPath::normalize(name.trim_start_matches('/')).map_err(|_| SourceError::Record {
+            path: "$.distribution[*].name".to_owned(),
+            url: page.clone(),
+            problem: "a value that is not a valid path",
+        })?;
     let size = match object.get("contentSize") {
         Some(Value::Number(number)) => number.as_u64(),
         Some(Value::String(size)) => size.trim().trim_end_matches('B').trim().parse().ok(),

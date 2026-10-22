@@ -310,6 +310,16 @@ impl Template {
                     let plain = plain(found).ok_or_else(|| {
                         Missing::Value(query.text.clone(), "a value that is not text or a number")
                     })?;
+                    if self.context == Context::Url
+                        && !alone
+                        && at_authority(&text)
+                        && !plain.starts_with('/')
+                    {
+                        return Err(Missing::Value(
+                            query.text.clone(),
+                            "a value that would change the host",
+                        ));
+                    }
                     if self.context == Context::Url && *single {
                         escape_segment(&plain, &mut text);
                     } else if self.context == Context::Url && !alone {
@@ -324,6 +334,12 @@ impl Template {
     }
 }
 
+/// Whether `text` so far ends inside a URL's scheme and authority, before its path.
+fn at_authority(text: &str) -> bool {
+    text.find("://")
+        .is_some_and(|start| !text[start + 3..].contains('/'))
+}
+
 /// A JSON string or number as text.
 pub(crate) fn plain(value: &Value) -> Option<String> {
     match value {
@@ -335,13 +351,11 @@ pub(crate) fn plain(value: &Value) -> Option<String> {
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Appends `text` to `out` with every byte but the unreserved ones and `/`, `:` and `@`
-/// percent encoded.
+/// Appends `text` to `out` with every byte but the unreserved ones and `/` and `:` percent
+/// encoded.
 pub(crate) fn escape(text: &str, out: &mut String) {
     for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':' | b'@')
-        {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':') {
             out.push(char::from(byte));
         } else {
             out.push('%');
@@ -416,6 +430,10 @@ mod tests {
         assert!(Pattern::parse("{id").is_err());
     }
 
+    fn json_path(path: &str) -> Value {
+        serde_json::json!({ "path": path })
+    }
+
     #[test]
     fn templates_escape_values_inside_urls_and_keep_whole_ones() {
         let value = serde_json::json!({"name": "a b&c.csv", "next": "https://x.org/p?page=2"});
@@ -435,6 +453,13 @@ mod tests {
             part.render(&parts(&[("doi", "doi:10.5/x")]), &nested)
                 .unwrap(),
             "https://x.org/d/doi:10.5%2Fx"
+        );
+        let hosted = Template::parse("https://x.org{$.path}", Context::Url).unwrap();
+        assert!(hosted.render(&Parts::new(), &json_path("/v/1")).is_ok());
+        assert!(
+            hosted
+                .render(&Parts::new(), &json_path("@evil.org/v"))
+                .is_err()
         );
         let whole = Template::parse("{$.next}", Context::Url).unwrap();
         assert_eq!(

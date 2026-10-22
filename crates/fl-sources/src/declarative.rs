@@ -2,7 +2,7 @@
 //! their records and file listings live, how listings page, and where in the JSON the files
 //! and metadata sit.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use fl_model::digest::{Algorithm, Digest};
@@ -213,6 +213,17 @@ impl Declarative {
     pub fn from_toml(text: &str, client: Arc<Client>) -> Result<Self, SourceError> {
         let File { adapter: spec } =
             toml::from_str(text).map_err(|error| adapter(error.message().to_owned()))?;
+        let own = format!("{}:", spec.scheme);
+        let foreign = std::iter::once(("resolved", &spec.resolved))
+            .chain(
+                spec.search
+                    .iter()
+                    .map(|search| ("search.ref", &search.reference)),
+            )
+            .find(|(_, text)| !text.starts_with(&own));
+        if let Some((key, text)) = foreign {
+            return Err(adapter(format!("`{key}` `{text}` must start with `{own}`")));
+        }
         let forms = forms(&spec)?;
         let patterns: Vec<&Pattern> = forms.iter().map(|form| &form.pattern).collect();
         let captured: Vec<&str> = spec.capture.keys().map(String::as_str).collect();
@@ -341,11 +352,12 @@ impl Declarative {
             })
     }
 
-    async fn listing(&self, reference: &Reference) -> Result<Listing, SourceError> {
+    async fn listing(&self, reference: &Reference, written: bool) -> Result<Listing, SourceError> {
         let raw = reference.as_str();
         let (form, mut parts) = self.form(reference)?;
-        let typed = form.pattern.has_host();
+        let typed = written && form.pattern.has_host();
         let location = locate(&form.record, &parts, &Value::Null, raw)?;
+        let trusted = location.origin().filter(|_| typed);
         let mut done = Listing {
             resolved: reference.clone(),
             meta: Meta::default(),
@@ -367,10 +379,12 @@ impl Declarative {
             }
         };
         let mut queue = VecDeque::from([start]);
-        let mut walked = 0;
+        let mut walked = HashSet::new();
         while let Some(url) = queue.pop_front() {
-            walked += 1;
-            if walked > FOLDERS {
+            if !walked.insert(url.clone()) {
+                continue;
+            }
+            if walked.len() > FOLDERS {
                 return Err(SourceError::Body {
                     url,
                     reason: format!("holds more than {FOLDERS} folders"),
@@ -379,7 +393,7 @@ impl Declarative {
             paging::walk(
                 &self.client,
                 &url,
-                typed,
+                trusted.as_ref(),
                 &self.paging,
                 raw,
                 |body, page| {
@@ -468,12 +482,19 @@ impl Declarative {
             problem,
         };
         let path = first(&self.paths, parts, file).map_err(|missing| shape(url, missing))?;
-        let path = DataPath::new(path.trim_start_matches('/'))
+        let path = DataPath::normalize(path.trim_start_matches('/'))
             .map_err(|_| fail(self.paths[0].text(), "a value that is not a valid path"))?;
         let location = first(&self.urls, parts, file).map_err(|missing| shape(url, missing))?;
         let location = url
             .join(&location)
-            .map_err(|_| fail(self.urls[0].text(), "a value that is not a URL"))?;
+            .ok()
+            .filter(|location| matches!(location.scheme(), "http" | "https"))
+            .ok_or_else(|| {
+                fail(
+                    self.urls[0].text(),
+                    "a value that is not an http or https URL",
+                )
+            })?;
         let mut size = None;
         for query in &self.sizes {
             match query
@@ -507,8 +528,9 @@ impl Declarative {
             else {
                 continue;
             };
-            let digest = Digest::from_hex(algorithm, &hex.to_ascii_lowercase())
-                .map_err(|_| fail(template.text(), "a value that is not a valid digest"))?;
+            let Ok(digest) = Digest::from_hex(algorithm, &hex.to_ascii_lowercase()) else {
+                continue;
+            };
             if !stated.contains(&digest) {
                 stated.push(digest);
             }
@@ -593,7 +615,14 @@ impl Source for Declarative {
         &'a self,
         reference: &'a Reference,
     ) -> BoxFuture<'a, Result<Listing, SourceError>> {
-        Box::pin(self.listing(reference))
+        Box::pin(self.listing(reference, true))
+    }
+
+    fn resolve_routed<'a>(
+        &'a self,
+        reference: &'a Reference,
+    ) -> BoxFuture<'a, Result<Listing, SourceError>> {
+        Box::pin(self.listing(reference, false))
     }
 
     fn credential(&self, read: Read) -> Option<Variable> {

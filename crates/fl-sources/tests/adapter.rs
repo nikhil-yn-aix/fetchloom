@@ -431,3 +431,161 @@ capture = { version = \"$.version\" }",
     assert!(error.to_string().contains("cannot hold"), "{error}");
     Ok(())
 }
+
+#[tokio::test]
+async fn a_record_naming_a_local_file_is_refused() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    let body = json!({"id": 7, "files": [{"name": "a", "href": "file:///etc/passwd"}]});
+    mount(
+        &server,
+        None,
+        ResponseTemplate::new(200).set_body_json(body),
+    )
+    .await;
+    let text = TOY
+        .replace("url = \"BASE/download/{id}/{%$.name}\"", "url = \"$.href\"")
+        .replace("BASE", &server.uri());
+    let client = support::client()?;
+    let adapter = Declarative::from_toml(&text, Arc::clone(&client))?;
+    client.trust(adapter.record_origin().ok_or("no record host")?);
+    let error = listed(&adapter, "toy:7").await.err().ok_or("listed")?;
+    assert!(error.to_string().contains("http or https"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn names_are_normalized_and_a_resolved_reference_keeps_its_scheme() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    mount(&server, None, page(&["e\u{301}.csv"], &json!({}))).await;
+    assert_eq!(listed(&toy(&server, "")?, "toy:7").await?, ["\u{e9}.csv"]);
+    let foreign = TOY
+        .replace("resolved = \"toy:{$.id}\"", "resolved = \"{$.ref}\"")
+        .replace("BASE", &server.uri());
+    let error = Declarative::from_toml(&foreign, support::client()?)
+        .err()
+        .ok_or("loaded")?;
+    assert!(
+        error.to_string().contains("must start with `toy:`"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_server_sending_the_same_page_again_is_stopped() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    mount(&server, None, page(&["a"], &json!({}))).await;
+    let adapter = toy(
+        &server,
+        "paginate = { kind = \"page\", param = \"page\" }\n",
+    )?;
+    let error = listed(&adapter, "toy:7").await.err().ok_or("listed")?;
+    assert!(error.to_string().contains("same page twice"), "{error}");
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        2
+    );
+    Ok(())
+}
+
+const HOSTED: &str = r#"
+[adapter]
+name = "lab"
+scheme = "lab"
+pattern = "{host}/{id}"
+record = "http://{host}/records/{id}"
+resolved = "lab:{host}/{id}"
+files = "$.files[*]"
+folders = "$.dirs[*]"
+descend = "$.href"
+path = "$.name"
+url = "$.href"
+"#;
+
+#[tokio::test]
+async fn a_folder_on_another_host_is_not_trusted_like_the_typed_one() -> Result<(), Failure> {
+    let typed = MockServer::start().await;
+    let other = MockServer::start().await;
+    let elsewhere = format!("{}/inner", other.uri());
+    Mock::given(method("GET"))
+        .and(path("/records/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "files": [],
+            "dirs": [{"href": elsewhere}],
+        })))
+        .mount(&typed)
+        .await;
+    let adapter = Declarative::from_toml(HOSTED, support::client()?)?;
+    let host = typed.uri().trim_start_matches("http://").to_owned();
+    let error = adapter
+        .resolve(&format!("lab:{host}/7").parse()?)
+        .await
+        .err()
+        .ok_or("listed")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkRefused);
+    assert!(
+        other
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_folder_that_leads_back_to_itself_is_walked_once() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    let again = format!("{}/records/7", server.uri());
+    mount(
+        &server,
+        None,
+        page(&["a"], &json!({"dirs": [{"href": again}]})),
+    )
+    .await;
+    let adapter = toy(&server, "folders = \"$.dirs[*]\"\ndescend = \"$.href\"\n")?;
+    assert_eq!(listed(&adapter, "toy:7").await?, ["a"]);
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_adapter_token_goes_to_its_record_host_only() -> Result<(), Failure> {
+    let home = MockServer::start().await;
+    let other = MockServer::start().await;
+    let next = format!("{}/more", other.uri());
+    mount(&home, None, page(&["a"], &json!({"next": next}))).await;
+    Mock::given(method("GET"))
+        .and(path("/more"))
+        .respond_with(page(&["b"], &json!({"next": null})))
+        .mount(&other)
+        .await;
+    let text = format!(
+        "{TOY}paginate = {{ kind = \"next\", field = \"$.next\" }}\nauth = {{ header = \"Authorization\", format = \"Bearer {{token}}\", env = \"LAB_TOKEN\" }}\n"
+    )
+    .replace("BASE", &home.uri().replace("http://", "https://"))
+    .replace("https://", "http://");
+    let chain = Arc::new(fl_transfer::credentials::Chain::new(Vec::new()));
+    let client = Arc::new(fl_transfer::client::Client::new(
+        fl_transfer::client::Config::default(),
+        chain.clone(),
+    )?);
+    let adapter = Declarative::from_toml(&text, Arc::clone(&client))?;
+    for server in [&home, &other] {
+        client.trust(
+            &fl_transfer::url::SafeUrl::parse(&server.uri())?
+                .origin()
+                .ok_or("origin")?,
+        );
+    }
+    let read: fl_sources::source::Read = Arc::new(|_: &str| Some("secret".to_owned()));
+    chain.add(Box::new(adapter.credential(read).ok_or("no credential")?));
+    assert_eq!(listed(&adapter, "toy:7").await?, ["a", "b"]);
+    let sent = other.received_requests().await.unwrap_or_default();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].headers.get("authorization").is_none());
+    Ok(())
+}

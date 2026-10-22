@@ -89,6 +89,7 @@ async fn no_secret_reaches_a_log_line_at_trace_level() -> TestResult {
         }))]),
         &Waits::default(),
     )?;
+    client.trust(&SafeUrl::parse(&other.url("/"))?.origin().ok_or("origin")?);
     let with_password = home
         .url("/file")
         .replace("https://", &format!("https://me:{SECRET}@"));

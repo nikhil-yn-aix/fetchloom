@@ -106,7 +106,7 @@ impl Adapter {
         let client = Arc::clone(client);
         Ok(match (&self.text, self.name.as_str()) {
             (Some(text), _) => Box::new(Declarative::from_toml(&self.local(text, server), client)?),
-            (None, "hf") => Box::new(HuggingFace::at(base, client)),
+            (None, "hf") => Box::new(HuggingFace::at(&base, client)),
             (None, "croissant") => Box::new(Croissant::new(client)),
             (None, other) => return Err(format!("no adapter named {other}").into()),
         })

@@ -42,14 +42,6 @@ impl Resolver {
         }
     }
 
-    /// Records a host the caller asked for, whose private addresses are allowed.
-    pub(crate) fn typed(&self, host: &str) {
-        self.typed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(lower(host));
-    }
-
     /// Records a host and port someone configured, whose private addresses are allowed on
     /// that port only.
     pub(crate) fn pin(&self, host: &str, port: u16) {
@@ -187,7 +179,7 @@ mod tests {
             resolver.choose("inside.lab", addresses(&["10.0.0.1", "127.0.0.1"])),
             Err(Refusal::Private("inside.lab".to_owned()))
         );
-        resolver.typed("Inside.Lab");
+        resolver.pin("Inside.Lab", 443);
         assert_eq!(
             resolver.choose("inside.lab", found.clone()),
             Ok(found.clone())

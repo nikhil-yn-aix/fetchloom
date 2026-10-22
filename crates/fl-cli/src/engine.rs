@@ -87,10 +87,7 @@ impl Engine {
             if let Some(origin) = endpoint.origin() {
                 client.trust(&origin);
             }
-            registry.add(Arc::new(HuggingFace::at(
-                endpoint.clone(),
-                Arc::clone(&client),
-            )));
+            registry.add(Arc::new(HuggingFace::at(endpoint, Arc::clone(&client))));
         }
         if let Some(dir) = &config.settings {
             for source in user_adapters(&dir.join("sources"), &client)? {
@@ -312,7 +309,9 @@ async fn download(
         let ingested = placing
             .ingest_partial(partial, blake3, size)
             .map_err(Failure::from)?;
-        placing.remember(&stated, blake3).map_err(Failure::from)?;
+        if let Err(error) = placing.remember(&stated, blake3) {
+            tracing::warn!("the stated digests of an object were not remembered: {error}");
+        }
         Ok(ingested)
     })
     .await?;

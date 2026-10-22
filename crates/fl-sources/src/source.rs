@@ -23,6 +23,15 @@ pub trait Source: Send + Sync {
         reference: &'a Reference,
     ) -> BoxFuture<'a, Result<Listing, SourceError>>;
 
+    /// Resolves `reference` when the user did not write it, such as one a DOI led to: no host
+    /// it names is trusted as one the user typed.
+    fn resolve_routed<'a>(
+        &'a self,
+        reference: &'a Reference,
+    ) -> BoxFuture<'a, Result<Listing, SourceError>> {
+        self.resolve(reference)
+    }
+
     /// The reference of this source that a landing page at `url` shows, such as the record a
     /// DOI resolves to. None when the page is not one of this source's.
     fn landing(&self, url: &str) -> Option<Reference> {
