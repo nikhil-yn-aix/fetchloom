@@ -117,6 +117,23 @@ test:
 live:
     FETCHLOOM_LIVE=1 cargo nextest run --workspace --locked --no-fail-fast --run-ignored only --no-tests=warn
 
+[doc("record one live response into fixtures/responses/ADAPTER/NAME, refusing one that holds the token")]
+[script]
+record adapter url name:
+    out="fixtures/responses/{{adapter}}/{{name}}"
+    mkdir -p "$(dirname "$out")"
+    auth=()
+    if [ -n "${FETCHLOOM_RECORD_TOKEN:-}" ]; then
+        auth=(-H "Authorization: $FETCHLOOM_RECORD_TOKEN")
+    fi
+    curl --silent --show-error --fail --location --proto '=https' --proto-redir '=https'         --user-agent "fetchloom-fixtures" "${auth[@]}" --output "$out" '{{url}}'
+    if [ -n "${FETCHLOOM_RECORD_TOKEN:-}" ] && grep -qF "$FETCHLOOM_RECORD_TOKEN" "$out"; then
+        rm -f "$out"
+        echo "the response holds the token, so it was not kept" >&2
+        exit 1
+    fi
+    echo "recorded $out ($(wc -c < "$out") bytes)"
+
 [doc("line coverage of the test suite, gated per crate")]
 cov:
     cargo llvm-cov nextest --workspace --locked --no-fail-fast --no-report
