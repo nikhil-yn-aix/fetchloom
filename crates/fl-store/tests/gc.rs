@@ -412,3 +412,34 @@ fn an_object_a_download_finds_again_is_kept_through_the_grace_period() -> TestRe
     assert!(store.collect(Duration::ZERO, false)?.removed.is_empty());
     Ok(())
 }
+
+#[test]
+fn the_index_entry_of_a_removed_object_goes_and_that_of_a_kept_one_stays() -> TestResult {
+    let store = Store::new()?;
+    let needed = store.object(b"needed")?;
+    let unneeded = store.object(b"unneeded")?;
+    let lock = Lock::new(
+        vec![dataset("a", &[entry("x", needed)?], true)?],
+        Vec::new(),
+    )?;
+    store.lock("project", &lock)?;
+    let (kept, gone) = (Digest::Md5([1; 16]), Digest::Md5([2; 16]));
+    store.tier.remember(&[kept], needed)?;
+    store.tier.remember(&[gone], unneeded)?;
+    assert!(store.collect(Duration::ZERO, false)?.removed.is_empty());
+    let collected = store.collect(2 * HOUR, false)?;
+    let entry_path = store
+        .path("index")
+        .join("md5")
+        .join("02")
+        .join("02".repeat(15));
+    assert!(
+        collected.removed.contains(&entry_path),
+        "{:?}",
+        collected.removed
+    );
+    assert!(!exists(&entry_path));
+    assert_eq!(store.tier.recall(&[kept], None), Some(needed));
+    assert_eq!(store.tier.recall(&[gone], None), None);
+    Ok(())
+}

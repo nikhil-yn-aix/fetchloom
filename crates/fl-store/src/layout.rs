@@ -8,7 +8,9 @@ use fl_model::digest::{Algorithm, Digest};
 use crate::error::{StoreError, io};
 
 /// The directories of a tier, all below `<tier>/v1`.
-pub(crate) const DIRECTORIES: [&str; 6] = ["objects", "tmp", "partial", "trees", "steps", "roots"];
+pub(crate) const DIRECTORIES: [&str; 7] = [
+    "objects", "tmp", "partial", "trees", "steps", "roots", "index",
+];
 
 const BLAKE3_PREFIX: &str = "blake3:";
 
@@ -42,6 +44,18 @@ impl Layout {
         let text = digest.to_string();
         let hex = text.split_once(':').map_or(text.as_str(), |(_, hex)| hex);
         self.dir(dir).join(hex)
+    }
+
+    /// Where the index entry for the stated `digest` lives: its algorithm, two hex characters of
+    /// fan out, then the rest. BLAKE3 digests name objects directly and have no entry.
+    pub(crate) fn indexed(&self, digest: &Digest) -> Option<PathBuf> {
+        if matches!(digest, Digest::Blake3(_)) {
+            return None;
+        }
+        let text = digest.to_string();
+        let (algorithm, hex) = text.split_once(':')?;
+        let (fan, rest) = hex.split_at(2);
+        Some(self.dir("index").join(algorithm).join(fan).join(rest))
     }
 
     /// Where the object with BLAKE3 digest `blake3` lives: two hex characters of fan out, then the
@@ -99,6 +113,19 @@ mod tests {
             .join("9f")
             .join("1".repeat(62));
         assert_eq!(layout.object(&blake3), expected);
+    }
+
+    #[test]
+    fn index_entries_fan_out_by_algorithm_and_first_two_hex_characters() {
+        let layout = Layout::new(Path::new("tier"));
+        let expected = Path::new("tier")
+            .join("v1")
+            .join("index")
+            .join("md5")
+            .join("ab")
+            .join("ab".repeat(15));
+        assert_eq!(layout.indexed(&Digest::Md5([0xab; 16])), Some(expected));
+        assert_eq!(layout.indexed(&Digest::Blake3([0xab; 32])), None);
     }
 
     #[test]
