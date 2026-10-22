@@ -1,0 +1,20 @@
+[adapter]
+name = "dryad"
+scheme = "dryad"
+pattern = "{doi...}"
+record = "https://datadryad.org/api/v2/datasets/{%doi}"
+resolved = "dryad:{doi}"
+landing = ["https://datadryad.org/dataset/{doi...}"]
+listing = "https://datadryad.org{$._links['stash:version'].href}/files"
+files = "$._embedded['stash:files'][*]"
+path = "$.path"
+size = "$.size"
+url = "$._links['stash:download'].href"
+digest = "{$.digestType}:{$.digest}"
+paginate = { kind = "next", field = "$._links.next.href" }
+search = { url = "https://datadryad.org/api/v2/search?q={query}&per_page={limit}", items = "$._embedded['stash:datasets'][*]", ref = "dryad:{$.identifier}", title = "$.title" }
+
+[adapter.meta]
+title = "$.title"
+version = "$.versionNumber"
+license = "$.license"

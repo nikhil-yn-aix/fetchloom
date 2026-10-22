@@ -370,3 +370,23 @@ async fn ckan() -> Result<(), Failure> {
 async fn inveniordm() -> Result<(), Failure> {
     conforms("inveniordm").await
 }
+
+#[tokio::test]
+async fn github() -> Result<(), Failure> {
+    conforms("github").await
+}
+
+#[tokio::test]
+async fn kaggle() -> Result<(), Failure> {
+    conforms("kaggle").await
+}
+
+#[tokio::test]
+async fn osf() -> Result<(), Failure> {
+    conforms("osf").await
+}
+
+#[tokio::test]
+async fn dryad() -> Result<(), Failure> {
+    conforms("dryad").await
+}
