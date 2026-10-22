@@ -1,0 +1,17 @@
+hosts = ["dataverse.harvard.edu"]
+
+[small]
+reference = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP"
+resolved = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP"
+files = 3
+requests = 1
+first = { path = "data/2026-06-24.tsv", size = 25314, digests = ["md5:0165275ec1437dd2bcb1c6b4b56ef233"] }
+serve = [{ path = "/api/datasets/:persistentId/", query = { persistentId = "doi:10.7910/DVN/TJCLKP" }, body = "TJCLKP/record.json" }]
+
+[unhashed]
+reference = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP"
+resolved = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP"
+files = 3
+requests = 1
+first = { path = "data/2026-06-24.tsv", size = 25314 }
+serve = [{ path = "/api/datasets/:persistentId/", query = { persistentId = "doi:10.7910/DVN/TJCLKP" }, body = "TJCLKP/record-unhashed.json" }]

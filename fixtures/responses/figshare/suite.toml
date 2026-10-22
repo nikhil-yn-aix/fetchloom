@@ -1,0 +1,17 @@
+hosts = ["api.figshare.com", "ndownloader.figshare.com"]
+
+[small]
+reference = "figshare:34433697"
+resolved = "figshare:34433697@1"
+files = 18
+requests = 1
+first = { path = "global_minmax.npz", size = 510, digests = ["md5:b92e7329587fb37e00a879eb2a602c65"] }
+serve = [{ path = "/v2/articles/34433697", body = "34433697/record.json" }]
+
+[unhashed]
+reference = "figshare:34433697"
+resolved = "figshare:34433697@1"
+files = 18
+requests = 1
+first = { path = "global_minmax.npz", size = 510 }
+serve = [{ path = "/v2/articles/34433697", body = "34433697/record-unhashed.json" }]

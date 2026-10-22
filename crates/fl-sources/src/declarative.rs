@@ -452,6 +452,7 @@ impl Declarative {
                 .map_err(|problem| fail(&query.text, problem))?
             {
                 None | Some(Value::Null) => {}
+                Some(Value::String(text)) if text.is_empty() => {}
                 Some(value) => {
                     let whole = value
                         .as_u64()
@@ -467,7 +468,7 @@ impl Declarative {
             let Ok(text) = template.render(parts, file) else {
                 continue;
             };
-            let Some((name, hex)) = text.split_once(':') else {
+            let Some((name, hex)) = text.split_once(':').filter(|(_, hex)| !hex.is_empty()) else {
                 continue;
             };
             let name = name.replace('-', "").to_ascii_lowercase();
