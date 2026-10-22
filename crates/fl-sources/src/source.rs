@@ -3,6 +3,9 @@
 use fl_model::error::ErrorKind;
 use fl_model::filter::Unmatched;
 use fl_model::reference::Reference;
+use std::sync::Arc;
+
+use fl_transfer::credentials::Variable;
 use fl_transfer::error::TransferError;
 use fl_transfer::url::SafeUrl;
 use futures_util::future::BoxFuture;
@@ -26,7 +29,16 @@ pub trait Source: Send + Sync {
         let _ = url;
         None
     }
+
+    /// The credential this source declares, its token read through `read`, if it declares one.
+    fn credential(&self, read: Read) -> Option<Variable> {
+        let _ = read;
+        None
+    }
 }
+
+/// Reads an environment variable by name.
+pub type Read = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// One record a search found.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +127,14 @@ pub enum SourceError {
         /// The second.
         second: String,
     },
+    /// The record is gated: its terms must be accepted, signed in, before its files are served.
+    #[error("{reference} is gated: accept its terms at {page} and give fetchloom a token")]
+    Terms {
+        /// The reference as written.
+        reference: String,
+        /// The page where the terms are accepted.
+        page: String,
+    },
     /// An adapter file cannot be used.
     #[error("the adapter is not valid: {reason}")]
     Adapter {
@@ -132,6 +152,7 @@ impl SourceError {
                 ErrorKind::ReferenceUnresolved
             }
             Self::Collision { .. } => ErrorKind::LocalUnrepresentable,
+            Self::Terms { .. } => ErrorKind::TermsRequired,
             Self::Invalid { .. } => ErrorKind::ReferenceInvalid,
             Self::Transfer(error) => error.kind(),
             Self::Selection(error) => error.kind(),

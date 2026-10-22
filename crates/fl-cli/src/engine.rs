@@ -87,7 +87,7 @@ impl Engine {
                 if let Some(origin) = source.record_origin() {
                     client.trust(origin);
                 }
-                registry.adapt(source);
+                registry.add(Arc::new(source));
             }
         }
         for credential in registry.credentials(|name| std::env::var(name).ok()) {

@@ -1,0 +1,12 @@
+hosts = ["huggingface.co"]
+
+[small]
+reference = "hf:datasets/rajpurkar/squad"
+resolved = "hf:datasets/rajpurkar/squad@7b6d24c440a36b6815f21b70d25016731768db1f"
+files = 4
+requests = 2
+first = { path = ".gitattributes", size = 1174 }
+serve = [
+    { path = "/api/datasets/rajpurkar/squad/revision/main", body = "squad/revision.json" },
+    { path = "/api/datasets/rajpurkar/squad/tree/7b6d24c440a36b6815f21b70d25016731768db1f", query = { recursive = "true" }, body = "squad/tree.json" },
+]

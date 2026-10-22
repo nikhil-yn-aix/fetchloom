@@ -12,9 +12,10 @@ use url::Url;
 
 use crate::declarative::Declarative;
 use crate::doi;
+use crate::hf::HuggingFace;
 use crate::http::Http;
 use crate::listing::Listing;
-use crate::source::{Source, SourceError};
+use crate::source::{Read, Source, SourceError};
 
 /// The declarative adapters built into fetchloom.
 const EMBEDDED: [&str; 1] = [include_str!("../../../sources/zenodo.toml")];
@@ -24,7 +25,6 @@ const DOI_RESOLVER: &str = "https://doi.org/";
 /// The sources, found by the scheme of a reference.
 pub struct Registry {
     sources: Vec<Arc<dyn Source>>,
-    adapters: Vec<Arc<Declarative>>,
     resolver: Url,
     client: Arc<Client>,
 }
@@ -35,14 +35,13 @@ impl Registry {
     pub fn new(client: Arc<Client>) -> Self {
         Self {
             sources: Vec::new(),
-            adapters: Vec::new(),
             resolver: Url::parse(DOI_RESOLVER).unwrap_or_else(|_| unreachable!()),
             client,
         }
     }
 
-    /// The built in sources: the http adapter for `http` and `https`, and every embedded
-    /// declarative adapter.
+    /// The built in sources: the http adapter for `http` and `https`, Hugging Face, and every
+    /// embedded declarative adapter.
     ///
     /// # Errors
     ///
@@ -50,8 +49,9 @@ impl Registry {
     pub fn builtin(client: &Arc<Client>) -> Result<Self, SourceError> {
         let mut registry = Self::new(Arc::clone(client));
         registry.add(Arc::new(Http::new(Arc::clone(client))));
+        registry.add(Arc::new(HuggingFace::new(Arc::clone(client))));
         for text in EMBEDDED {
-            registry.adapt(Declarative::from_toml(text, Arc::clone(client))?);
+            registry.add(Arc::new(Declarative::from_toml(text, Arc::clone(client))?));
         }
         Ok(registry)
     }
@@ -68,21 +68,15 @@ impl Registry {
         self.sources.push(source);
     }
 
-    /// Adds a declarative adapter, whose credential [`Registry::credentials`] then declares.
-    pub fn adapt(&mut self, adapter: Declarative) {
-        let adapter = Arc::new(adapter);
-        self.adapters.push(Arc::clone(&adapter));
-        self.sources.push(adapter);
-    }
-
-    /// The credentials the declarative adapters declare, their tokens read through `read`.
+    /// The credentials the sources declare, their tokens read through `read`.
     pub fn credentials(
         &self,
-        read: impl Fn(&str) -> Option<String> + Clone + Send + Sync + 'static,
+        read: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) -> Vec<Variable> {
-        self.adapters
+        let read: Read = Arc::new(read);
+        self.sources
             .iter()
-            .filter_map(|adapter| adapter.credential(read.clone()))
+            .filter_map(|source| source.credential(Arc::clone(&read)))
             .collect()
     }
 

@@ -2,6 +2,7 @@
 
 pub mod declarative;
 mod doi;
+pub mod hf;
 pub mod http;
 mod index;
 pub mod license;
@@ -13,6 +14,7 @@ pub mod source;
 mod template;
 
 pub use declarative::Declarative;
+pub use hf::HuggingFace;
 pub use http::Http;
 pub use listing::{Entry, Listing, Meta};
 pub use registry::Registry;

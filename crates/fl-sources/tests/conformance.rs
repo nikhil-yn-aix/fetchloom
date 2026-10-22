@@ -10,9 +10,10 @@ use std::sync::Arc;
 use fl_model::digest::Digest;
 use fl_model::error::ErrorKind;
 use fl_model::reference::Reference;
-use fl_sources::{Declarative, Listing, Source};
+use fl_sources::{Declarative, HuggingFace, Listing, Source};
 use fl_transfer::client::Client;
 use fl_transfer::download::Download;
+use fl_transfer::url::SafeUrl;
 use serde::Deserialize;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -63,7 +64,7 @@ struct Adapter {
     name: String,
     dir: PathBuf,
     suite: Suite,
-    text: String,
+    text: Option<String>,
 }
 
 impl Adapter {
@@ -71,7 +72,7 @@ impl Adapter {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root.join("fixtures/responses").join(name);
         let suite = toml::from_str(&fs::read_to_string(dir.join("suite.toml"))?)?;
-        let text = fs::read_to_string(root.join("sources").join(format!("{name}.toml")))?;
+        let text = fs::read_to_string(root.join("sources").join(format!("{name}.toml"))).ok();
         Ok(Self {
             name: name.to_owned(),
             dir,
@@ -95,12 +96,19 @@ impl Adapter {
         Ok(self.local(&case.reference, server).parse()?)
     }
 
-    fn source(&self, server: &MockServer, client: &Arc<Client>) -> Result<Declarative, Failure> {
-        let adapter = Declarative::from_toml(&self.local(&self.text, server), Arc::clone(client))?;
-        if let Some(origin) = adapter.record_origin() {
-            client.trust(origin);
-        }
-        Ok(adapter)
+    fn source(
+        &self,
+        server: &MockServer,
+        client: &Arc<Client>,
+    ) -> Result<Box<dyn Source>, Failure> {
+        let base = SafeUrl::parse(&server.uri())?;
+        client.trust(&base.origin().ok_or("the mock has no origin")?);
+        let client = Arc::clone(client);
+        Ok(match (&self.text, self.name.as_str()) {
+            (Some(text), _) => Box::new(Declarative::from_toml(&self.local(text, server), client)?),
+            (None, "hf") => Box::new(HuggingFace::at(base, client)),
+            (None, other) => return Err(format!("no adapter named {other}").into()),
+        })
     }
 
     async fn serve(&self, case: &Case, server: &MockServer) -> Result<(), Failure> {
@@ -241,11 +249,7 @@ async fn redirect_to_another_host_is_followed(adapter: &Adapter) -> Result<(), F
             .mount(&front)
             .await;
     }
-    client.trust(
-        &fl_transfer::url::SafeUrl::parse(&back.uri())?
-            .origin()
-            .ok_or("origin")?,
-    );
+    client.trust(&SafeUrl::parse(&back.uri())?.origin().ok_or("origin")?);
     let listing = source.resolve(&adapter.reference(case, &front)?).await?;
     assert_eq!(listing.entries.len(), case.files, "{}", adapter.name);
     Ok(())
@@ -313,7 +317,7 @@ async fn wrong_hashes_are_refused(adapter: &Adapter) -> Result<(), Failure> {
     Ok(())
 }
 
-fn download(url: fl_transfer::url::SafeUrl, stated: Vec<Digest>) -> Download {
+fn download(url: SafeUrl, stated: Vec<Digest>) -> Download {
     Download {
         url,
         length: None,
@@ -326,4 +330,9 @@ fn download(url: fl_transfer::url::SafeUrl, stated: Vec<Digest>) -> Download {
 #[tokio::test]
 async fn zenodo() -> Result<(), Failure> {
     conforms("zenodo").await
+}
+
+#[tokio::test]
+async fn hugging_face() -> Result<(), Failure> {
+    conforms("hf").await
 }

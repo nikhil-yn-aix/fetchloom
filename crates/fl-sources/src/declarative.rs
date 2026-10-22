@@ -20,7 +20,7 @@ use crate::license;
 use crate::listing::{Entry, Listing, Meta};
 use crate::paging::{self, Paging};
 use crate::record;
-use crate::source::{Hit, Searchable, Source, SourceError};
+use crate::source::{Hit, Read, Searchable, Source, SourceError};
 use crate::template::{Context, Missing, Parts, Pattern, Query, Template, escape, plain};
 
 /// The most folders one listing may walk into.
@@ -299,18 +299,6 @@ impl Declarative {
         self.origin.as_ref()
     }
 
-    /// The credential the adapter's `auth` declares, its token read from the variable it
-    /// names through `read`, sent to the record host only.
-    #[must_use]
-    pub fn credential(
-        &self,
-        read: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
-    ) -> Option<Variable> {
-        self.auth
-            .as_ref()
-            .map(|auth| Variable::new(&auth.authority, &auth.env, &auth.header, &auth.format, read))
-    }
-
     async fn listing(&self, reference: &Reference) -> Result<Listing, SourceError> {
         let Target::Scheme { body, .. } = reference.target() else {
             return Err(SourceError::Unresolved {
@@ -576,6 +564,18 @@ impl Source for Declarative {
         reference: &'a Reference,
     ) -> BoxFuture<'a, Result<Listing, SourceError>> {
         Box::pin(self.listing(reference))
+    }
+
+    fn credential(&self, read: Read) -> Option<Variable> {
+        self.auth.as_ref().map(|auth| {
+            Variable::new(
+                &auth.authority,
+                &auth.env,
+                &auth.header,
+                &auth.format,
+                move |name| read(name),
+            )
+        })
     }
 
     fn landing(&self, url: &str) -> Option<Reference> {
