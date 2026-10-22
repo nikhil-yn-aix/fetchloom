@@ -107,6 +107,17 @@ impl SafeUrl {
             .map_err(UrlError)
     }
 
+    /// This URL as a directory: its path ending in `/`, so a relative link joins below it.
+    #[must_use]
+    pub fn as_directory(&self) -> Self {
+        let mut url = (*self.0).clone();
+        if !url.path().ends_with('/') {
+            let path = format!("{}/", url.path());
+            url.set_path(&path);
+        }
+        Self(Box::new(url))
+    }
+
     /// This URL with the query parameter `name` set to `value`, replacing any it had.
     #[must_use]
     pub fn with_query(&self, name: &str, value: &str) -> Self {

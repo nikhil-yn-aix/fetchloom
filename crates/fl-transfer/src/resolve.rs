@@ -91,8 +91,8 @@ impl Resolver {
                 .is_some_and(|ports| ports.contains(&port))
     }
 
-    /// Whether `host` was configured on other ports only, and the address it last answered
-    /// from is not known to be public, so a request to `port` must not go out.
+    /// Whether `host` was configured on other ports only and nobody typed it, so a request to
+    /// `port` must not go out: its name may resolve to a private address at any time.
     pub(crate) fn pinned_elsewhere(&self, host: &str, port: u16) -> bool {
         let host = lower(host);
         let pinned = self
@@ -101,14 +101,7 @@ impl Resolver {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&host)
             .is_some_and(|ports| !ports.contains(&port));
-        pinned
-            && !self.allows(&host, port)
-            && !self
-                .answered
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&host)
-                .is_some_and(|ip| is_public(*ip))
+        pinned && !self.allows(&host, port)
     }
 
     /// Records that `address` answered for `host`, so later connections try it first.

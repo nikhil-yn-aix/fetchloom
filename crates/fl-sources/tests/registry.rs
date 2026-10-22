@@ -282,3 +282,30 @@ async fn dois_of_zenodo_figshare_and_dataverse_route_by_the_host_they_land_on()
     assert_eq!(client.counters().read().requests, 3);
     Ok(())
 }
+
+#[tokio::test]
+async fn an_index_reached_through_a_redirect_lists_links_under_where_it_landed()
+-> Result<(), Failure> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pub/"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/pub/v2/"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pub/v2/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<a href=\"a.csv\">a</a>"))
+        .mount(&server)
+        .await;
+    let registry = Registry::builtin(&support::client()?)?;
+    let reference: Reference = format!("{}/pub/", server.uri()).parse()?;
+    let listing = registry
+        .resolve(&reference, &support::no_filters()?)
+        .await?;
+    assert_eq!(listing.entries.len(), 1);
+    assert_eq!(
+        listing.entries[0].urls[0].to_string(),
+        format!("{}/pub/v2/a.csv", server.uri())
+    );
+    Ok(())
+}

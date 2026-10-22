@@ -101,17 +101,18 @@ impl HuggingFace {
         )
     }
 
-    /// The adapter for a hub served at `base`, such as a mirror.
+    /// The adapter for a hub served at `base`, such as a mirror, which may sit below a path.
     #[must_use]
     pub fn at(base: SafeUrl, client: Arc<Client>) -> Self {
         Self {
             schemes: vec!["hf".to_owned()],
-            base,
+            base: base.as_directory(),
             client,
         }
     }
 
     fn url(&self, path: &str) -> Result<SafeUrl, SourceError> {
+        let path = path.trim_start_matches('/');
         self.base.join(path).map_err(|_| SourceError::Body {
             url: self.base.clone(),
             reason: format!("cannot be joined with `{path}`"),
@@ -154,7 +155,9 @@ impl HuggingFace {
         if gated && !page.credentialed {
             return Err(SourceError::Terms {
                 reference: raw.to_owned(),
-                page: format!("{HUB}/{}{}", repo.kind.files(), repo.id),
+                page: self
+                    .url(&format!("{}{}", repo.kind.files(), repo.id))?
+                    .to_string(),
             });
         }
         let tree = self.url(&format!(

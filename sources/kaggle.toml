@@ -17,6 +17,5 @@ search = { url = "https://www.kaggle.com/api/v1/datasets/list?search={query}&pag
 
 [adapter.meta]
 title = "$.title"
-version = "$.currentVersionNumber"
 license = "$.licenseName"
 creators = "$.ownerName"

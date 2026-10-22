@@ -271,6 +271,12 @@ async fn download(
                 "an object is named by BLAKE3",
             ));
         };
+        if want.blake3.is_some_and(|pinned| pinned != blake3) {
+            return Err(Failure::new(
+                ErrorKind::IntegrityDrift,
+                format!("{} now holds other bytes than data.lock records", want.url),
+            ));
+        }
         let got = Got {
             blake3,
             size: ingested.bytes,

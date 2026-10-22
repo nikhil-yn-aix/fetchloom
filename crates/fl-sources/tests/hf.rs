@@ -17,7 +17,11 @@ const GPT2_TREE: &str = include_str!("../../../fixtures/responses/hf/gpt2/tree.j
 const GPT2_SHA: &str = "607a30d783dfa663caf39e06633721c8d4cfcd7e";
 
 fn hub(server: &MockServer) -> Result<HuggingFace, Failure> {
-    let base = SafeUrl::parse(&server.uri())?;
+    hub_at(server, "")
+}
+
+fn hub_at(server: &MockServer, prefix: &str) -> Result<HuggingFace, Failure> {
+    let base = SafeUrl::parse(&format!("{}{prefix}", server.uri()))?;
     let client = support::client()?;
     client.trust(&base.origin().ok_or("no origin")?);
     Ok(HuggingFace::at(base, client))
@@ -32,10 +36,15 @@ async fn serve(server: &MockServer, route: &str, body: &str) {
 }
 
 #[tokio::test]
-async fn a_gated_repository_names_the_page_to_accept_without_listing() -> Result<(), Failure> {
+async fn a_gated_repository_on_a_mirror_names_the_mirror_page_to_accept() -> Result<(), Failure> {
     let server = MockServer::start().await;
-    serve(&server, "/api/datasets/Idavidrein/gpqa/revision/main", GPQA).await;
-    let error = hub(&server)?
+    serve(
+        &server,
+        "/hub/api/datasets/Idavidrein/gpqa/revision/main",
+        GPQA,
+    )
+    .await;
+    let error = hub_at(&server, "/hub")?
         .resolve(&"hf:datasets/Idavidrein/gpqa".parse()?)
         .await
         .err()
@@ -44,7 +53,7 @@ async fn a_gated_repository_names_the_page_to_accept_without_listing() -> Result
     assert!(
         error
             .to_string()
-            .contains("https://huggingface.co/datasets/Idavidrein/gpqa"),
+            .contains(&format!("{}/hub/datasets/Idavidrein/gpqa", server.uri())),
         "{error}"
     );
     assert_eq!(
