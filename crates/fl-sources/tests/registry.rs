@@ -198,6 +198,14 @@ async fn a_doi_landing_on_an_unknown_host_names_host_and_page() -> Result<(), Fa
     let page = format!("{}/articles/s41597", landing.uri());
     doi(&resolver, "10.1038/s41597", &page).await;
     Mock::given(method("GET"))
+        .and(path("/articles/s41597"))
+        .respond_with(
+            ResponseTemplate::new(303).insert_header("location", "/articles/s41597?error=cookies"),
+        )
+        .with_priority(1)
+        .mount(&landing)
+        .await;
+    Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .mount(&landing)
         .await;
@@ -214,7 +222,7 @@ async fn a_doi_landing_on_an_unknown_host_names_host_and_page() -> Result<(), Fa
         .err()
         .ok_or("resolved")?;
     assert_eq!(error.kind(), ErrorKind::ReferenceUnresolved);
-    assert!(error.to_string().contains(&page), "{error}");
+    assert!(error.to_string().contains(&format!("{page},")), "{error}");
     assert!(error.to_string().contains("127.0.0.1"), "{error}");
     Ok(())
 }
