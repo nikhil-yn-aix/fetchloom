@@ -2,5 +2,6 @@
 
 mod adapter;
 mod conformance;
+mod live;
 mod registry;
 mod support;
