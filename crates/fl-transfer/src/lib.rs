@@ -6,6 +6,7 @@ pub mod counters;
 pub mod credentials;
 pub mod download;
 pub mod error;
+pub mod fetch;
 pub mod hash;
 pub mod hosts;
 mod resolve;

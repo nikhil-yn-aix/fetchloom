@@ -65,6 +65,12 @@ impl SafeUrl {
         })
     }
 
+    /// The port, stated or implied by the scheme.
+    #[must_use]
+    pub fn port(&self) -> Option<u16> {
+        self.0.port_or_known_default()
+    }
+
     /// The user name and password written into the URL, when there are any.
     pub(crate) fn user_info(&self) -> Option<(&str, Option<&str>)> {
         let user = self.0.username();
@@ -81,12 +87,32 @@ impl SafeUrl {
         url
     }
 
-    /// The location a redirect's `Location` header names, read against this one.
-    pub(crate) fn join(&self, location: &str) -> Result<Self, UrlError> {
+    /// The location a redirect's `Location` header or a link names, read against this one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UrlError`] when `location` is not a URL relative to this one.
+    pub fn join(&self, location: &str) -> Result<Self, UrlError> {
         self.0
             .join(location)
             .map(|url| Self(Box::new(url)))
             .map_err(UrlError)
+    }
+
+    /// This URL with the query parameter `name` set to `value`, replacing any it had.
+    #[must_use]
+    pub fn with_query(&self, name: &str, value: &str) -> Self {
+        let mut url = (*self.0).clone();
+        let kept: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != name)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.query_pairs_mut()
+            .clear()
+            .extend_pairs(kept)
+            .append_pair(name, value);
+        Self(Box::new(url))
     }
 
     /// The address the host is written as, when it is an IP literal.
@@ -160,6 +186,12 @@ impl Origin {
         &self.host
     }
 
+    /// The port, stated or implied by the scheme.
+    #[must_use]
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+
     /// The host, with `:port` after it when the port is not the scheme's default, as credentials
     /// are named.
     #[must_use]
@@ -184,6 +216,15 @@ mod tests {
 
     fn url(text: &str) -> SafeUrl {
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_query_parameter_is_replaced_and_the_rest_kept() {
+        let next = url("https://a.org/files?page=9&size=20").with_query("page", "2");
+        assert_eq!(
+            next.to_request().as_str(),
+            "https://a.org/files?size=20&page=2"
+        );
     }
 
     #[test]

@@ -1,0 +1,17 @@
+hosts = ["zenodo.org"]
+
+[small]
+reference = "zenodo:3608990"
+resolved = "zenodo:3608990"
+files = 1
+requests = 1
+first = { path = "iris.csv", size = 4177, digests = ["md5:395d6abd001abf3760a1a794ef4c453c"] }
+serve = [{ path = "/api/records/3608990", body = "3608990/record.json" }]
+
+[unhashed]
+reference = "zenodo:3608990"
+resolved = "zenodo:3608990"
+files = 1
+requests = 1
+first = { path = "iris.csv", size = 4177 }
+serve = [{ path = "/api/records/3608990", body = "3608990/unhashed.json" }]

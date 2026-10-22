@@ -19,6 +19,32 @@ pub trait Source: Send + Sync {
         &'a self,
         reference: &'a Reference,
     ) -> BoxFuture<'a, Result<Listing, SourceError>>;
+
+    /// The reference of this source that a landing page at `url` shows, such as the record a
+    /// DOI resolves to. None when the page is not one of this source's.
+    fn landing(&self, url: &str) -> Option<Reference> {
+        let _ = url;
+        None
+    }
+}
+
+/// One record a search found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hit {
+    /// The reference that resolves it.
+    pub reference: Reference,
+    /// Its title, when the source states one.
+    pub title: Option<String>,
+}
+
+/// A source that can search its records by text.
+pub trait Searchable: Send + Sync {
+    /// At most `limit` records matching `query`, best first.
+    fn search<'a>(
+        &'a self,
+        query: &'a str,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<Hit>, SourceError>>;
 }
 
 /// A failure to resolve a reference.
@@ -68,6 +94,27 @@ pub enum SourceError {
         /// What the parser said.
         reason: String,
     },
+    /// A DOI landed on a page no source serves.
+    #[error("{reference} lands on {landing}, and no source serves {host}")]
+    NoLanding {
+        /// The DOI reference as written.
+        reference: String,
+        /// The landing page's host.
+        host: String,
+        /// The landing page.
+        landing: String,
+    },
+    /// Two files of a listing have names that differ only by case, which one directory cannot
+    /// hold on every filesystem.
+    #[error(
+        "`{first}` and `{second}` differ only by case, which windows and macos cannot hold apart"
+    )]
+    Collision {
+        /// The first of the two paths.
+        first: String,
+        /// The second.
+        second: String,
+    },
     /// An adapter file cannot be used.
     #[error("the adapter is not valid: {reason}")]
     Adapter {
@@ -81,7 +128,10 @@ impl SourceError {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Unresolved { .. } | Self::NoSource { .. } => ErrorKind::ReferenceUnresolved,
+            Self::Unresolved { .. } | Self::NoSource { .. } | Self::NoLanding { .. } => {
+                ErrorKind::ReferenceUnresolved
+            }
+            Self::Collision { .. } => ErrorKind::LocalUnrepresentable,
             Self::Invalid { .. } => ErrorKind::ReferenceInvalid,
             Self::Transfer(error) => error.kind(),
             Self::Selection(error) => error.kind(),

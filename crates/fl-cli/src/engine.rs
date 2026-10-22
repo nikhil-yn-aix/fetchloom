@@ -79,18 +79,19 @@ impl Engine {
         if let Some(dir) = &config.settings {
             places.push(Box::new(CredentialsFile::new(dir.join("credentials.toml"))));
         }
-        let client = Arc::new(Client::new(
-            config.transfer.clone(),
-            Arc::new(Chain::new(places)),
-        )?);
-        let mut registry = Registry::builtin(Arc::clone(&client))?;
+        let chain = Arc::new(Chain::new(places));
+        let client = Arc::new(Client::new(config.transfer.clone(), chain.clone())?);
+        let mut registry = Registry::builtin(&client)?;
         if let Some(dir) = &config.settings {
             for source in user_adapters(&dir.join("sources"), &client)? {
-                if let Some(host) = source.record_host() {
-                    client.trust(host);
+                if let Some(origin) = source.record_origin() {
+                    client.trust(origin);
                 }
-                registry.add(Arc::new(source));
+                registry.adapt(source);
             }
+        }
+        for credential in registry.credentials(|name| std::env::var(name).ok()) {
+            chain.add(Box::new(credential));
         }
         let tier = Arc::new(Tier::open(&config.store, Sharing::Private)?);
         Ok(Self {
@@ -122,7 +123,11 @@ impl Engine {
         let mut results: Vec<Option<Result<Got, Failure>>> = Vec::with_capacity(wants.len());
         let mut queue = Vec::new();
         for (index, want) in wants.into_iter().enumerate() {
-            let held = want.blake3.and_then(|blake3| {
+            let known = want.blake3.or_else(|| {
+                want.size
+                    .and_then(|size| self.tier.recall(&want.stated, Some(size)))
+            });
+            let held = known.and_then(|blake3| {
                 let located = self.tier.locate(&Digest::Blake3(blake3))?;
                 let size = fs::metadata(&located.path).ok()?.len();
                 Some(Got {
@@ -270,10 +275,13 @@ async fn download(
     let (blake3, size) = (done.hashes.blake3, done.bytes);
     let placing = Arc::clone(tier);
     let partial = done.sink.0;
+    let stated = want.stated.clone();
     let ingested = blocking(move || {
-        placing
+        let ingested = placing
             .ingest_partial(partial, blake3, size)
-            .map_err(Failure::from)
+            .map_err(Failure::from)?;
+        placing.remember(&stated, blake3).map_err(Failure::from)?;
+        Ok(ingested)
     })
     .await?;
     Ok((

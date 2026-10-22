@@ -1,14 +1,19 @@
 //! Dataset sources of fetchloom: the source traits, adapters, the declarative engine and the plugin protocol that turn references into listings.
 
 pub mod declarative;
+mod doi;
 pub mod http;
+mod index;
+pub mod license;
 pub mod listing;
+mod paging;
 mod record;
 pub mod registry;
 pub mod source;
+mod template;
 
 pub use declarative::Declarative;
 pub use http::Http;
 pub use listing::{Entry, Listing, Meta};
 pub use registry::Registry;
-pub use source::{Source, SourceError};
+pub use source::{Hit, Searchable, Source, SourceError};

@@ -116,6 +116,7 @@ impl Split<'_> {
                 if_range: self.if_range,
                 attempt,
                 typed: self.typed,
+                follow: true,
             })
             .await?;
         let status = answer.response.status().as_u16();

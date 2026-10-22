@@ -30,6 +30,8 @@ pub struct Meta {
     pub license: Option<String>,
     /// The DOI.
     pub doi: Option<String>,
+    /// The people and organisations who made it, in the order the source lists them.
+    pub creators: Vec<String>,
 }
 
 /// A reference resolved to the files it names.
