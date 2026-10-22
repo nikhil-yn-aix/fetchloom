@@ -176,7 +176,7 @@ impl HuggingFace {
                     })?;
                 let count = items.len();
                 for item in items.into_iter().filter(|item| item.kind == "file") {
-                    entries.push(self.entry(&repo, &found.sha, item, url)?);
+                    entries.push(self.entry(&repo, &found.sha, &item, url)?);
                 }
                 Ok(count)
             },
@@ -203,7 +203,7 @@ impl HuggingFace {
         &self,
         repo: &Repo<'_>,
         sha: &str,
-        item: Item,
+        item: &Item,
         page: &SafeUrl,
     ) -> Result<Entry, SourceError> {
         let fail = |problem| SourceError::Record {
