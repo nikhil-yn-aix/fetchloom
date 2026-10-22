@@ -1,0 +1,19 @@
+[adapter]
+name = "inveniordm"
+scheme = "inveniordm"
+pattern = "{host}/{id}"
+record = "https://{host}/api/records/{id}"
+resolved = "inveniordm:{host}/{$.id}"
+listing = "https://{host}/api/records/{id}/files"
+files = "$.entries[*]"
+path = "$.key"
+size = "$.size"
+url = "$.links.content"
+digest = "$.checksum"
+
+[adapter.meta]
+title = "$.metadata.title"
+version = "$.metadata.version"
+license = "$.metadata.rights[0].id"
+doi = "$.pids.doi.identifier"
+creators = "$.metadata.creators[*].person_or_org.name"

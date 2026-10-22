@@ -1,11 +1,14 @@
 //! The registry: scheme lookup, DOI routing, the http adapter, filters and case collisions.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use fl_model::error::ErrorKind;
 use fl_model::filter::{Filters, Pattern};
 use fl_model::reference::Reference;
-use fl_sources::Registry;
+use fl_sources::{Listing, Meta, Registry, Source, SourceError};
+use fl_transfer::url::SafeUrl;
+use futures_util::future::BoxFuture;
 use serde_json::json;
 use url::Url;
 use wiremock::matchers::{method, path};
@@ -14,6 +17,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::support::{self, Failure};
 
 const APACHE: &str = include_str!("../../../fixtures/responses/http/apache.html");
+const LOCATIONS: &str = include_str!("../../../fixtures/responses/doi/locations.toml");
 
 #[tokio::test]
 async fn a_pattern_matching_nothing_is_an_empty_selection() -> Result<(), Failure> {
@@ -177,11 +181,7 @@ async fn a_doi_routes_to_the_source_of_its_landing_page() -> Result<(), Failure>
     let mut registry = Registry::new(Arc::clone(&client))
         .with_resolver(Url::parse(&format!("{}/", resolver.uri()))?);
     registry.add(Arc::new(support::declarative(&records, &client)?));
-    client.trust(
-        &fl_transfer::url::SafeUrl::parse(&resolver.uri())?
-            .origin()
-            .ok_or("origin")?,
-    );
+    client.trust(&SafeUrl::parse(&resolver.uri())?.origin().ok_or("origin")?);
     let reference: Reference = "doi:10.5281/zenodo.3608990".parse()?;
     let listing = registry
         .resolve(&reference, &support::no_filters()?)
@@ -205,11 +205,7 @@ async fn a_doi_landing_on_an_unknown_host_names_host_and_page() -> Result<(), Fa
     let registry =
         Registry::builtin(&client)?.with_resolver(Url::parse(&format!("{}/", resolver.uri()))?);
     for server in [&resolver, &landing] {
-        client.trust(
-            &fl_transfer::url::SafeUrl::parse(&server.uri())?
-                .origin()
-                .ok_or("origin")?,
-        );
+        client.trust(&SafeUrl::parse(&server.uri())?.origin().ok_or("origin")?);
     }
     let reference: Reference = "doi:10.1038/s41597".parse()?;
     let error = registry
@@ -220,5 +216,61 @@ async fn a_doi_landing_on_an_unknown_host_names_host_and_page() -> Result<(), Fa
     assert_eq!(error.kind(), ErrorKind::ReferenceUnresolved);
     assert!(error.to_string().contains(&page), "{error}");
     assert!(error.to_string().contains("127.0.0.1"), "{error}");
+    Ok(())
+}
+
+/// A source that lists nothing and answers with the reference it was asked for.
+struct Echo(Vec<String>);
+
+impl Source for Echo {
+    fn schemes(&self) -> &[String] {
+        &self.0
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        reference: &'a Reference,
+    ) -> BoxFuture<'a, Result<Listing, SourceError>> {
+        Box::pin(std::future::ready(Ok(Listing {
+            resolved: reference.clone(),
+            meta: Meta::default(),
+            entries: Vec::new(),
+        })))
+    }
+}
+
+#[tokio::test]
+async fn dois_of_zenodo_figshare_and_dataverse_route_by_the_host_they_land_on()
+-> Result<(), Failure> {
+    let recorded: BTreeMap<String, String> = toml::from_str(LOCATIONS)?;
+    let resolver = MockServer::start().await;
+    for (doi, location) in &recorded {
+        Mock::given(method("GET"))
+            .and(path(format!("/{doi}")))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", location.as_str()))
+            .mount(&resolver)
+            .await;
+    }
+    let client = support::client()?;
+    client.trust(&SafeUrl::parse(&resolver.uri())?.origin().ok_or("origin")?);
+    let mut registry =
+        Registry::builtin(&client)?.with_resolver(Url::parse(&format!("{}/", resolver.uri()))?);
+    let schemes = ["zenodo", "figshare", "dataverse"].map(str::to_owned);
+    registry.add(Arc::new(Echo(schemes.to_vec())));
+    let routes = [
+        ("10.5281/zenodo.3608990", "zenodo:3608990"),
+        ("10.6084/m9.figshare.34744689.v1", "figshare:34744689@1"),
+        (
+            "10.7910/DVN/TJCLKP",
+            "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
+        ),
+    ];
+    for (doi, routed) in routes {
+        let listing = registry
+            .resolve(&format!("doi:{doi}").parse()?, &support::no_filters()?)
+            .await?;
+        assert_eq!(listing.resolved.as_str(), routed, "{doi}");
+    }
+    assert_eq!(client.counters().read().requests, 3);
     Ok(())
 }
