@@ -1,0 +1,17 @@
+hosts = ["dataverse.harvard.edu"]
+
+[small]
+reference = "croissant:https://dataverse.harvard.edu/api/datasets/export?exporter=croissant&persistentId=doi:10.7910/DVN/TJCLKP"
+resolved = "croissant:https://dataverse.harvard.edu/api/datasets/export?exporter=croissant&persistentId=doi:10.7910/DVN/TJCLKP"
+files = 3
+requests = 1
+first = { path = "code/language.py", size = 590, digests = ["md5:9d61582bcf497c83bbd1ed0eed3c772e"] }
+serve = [{ path = "/api/datasets/export", query = { exporter = "croissant", persistentId = "doi:10.7910/DVN/TJCLKP" }, body = "tjclkp.json" }]
+
+[unhashed]
+reference = "croissant:https://dataverse.harvard.edu/api/datasets/export?exporter=croissant&persistentId=doi:10.7910/DVN/TJCLKP"
+resolved = "croissant:https://dataverse.harvard.edu/api/datasets/export?exporter=croissant&persistentId=doi:10.7910/DVN/TJCLKP"
+files = 3
+requests = 1
+first = { path = "code/language.py", size = 590 }
+serve = [{ path = "/api/datasets/export", query = { exporter = "croissant", persistentId = "doi:10.7910/DVN/TJCLKP" }, body = "tjclkp-unhashed.json" }]

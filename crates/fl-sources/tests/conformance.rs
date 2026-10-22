@@ -10,7 +10,7 @@ use std::sync::Arc;
 use fl_model::digest::Digest;
 use fl_model::error::ErrorKind;
 use fl_model::reference::Reference;
-use fl_sources::{Declarative, HuggingFace, Listing, Source};
+use fl_sources::{Croissant, Declarative, HuggingFace, Listing, Source};
 use fl_transfer::client::Client;
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
@@ -107,6 +107,7 @@ impl Adapter {
         Ok(match (&self.text, self.name.as_str()) {
             (Some(text), _) => Box::new(Declarative::from_toml(&self.local(text, server), client)?),
             (None, "hf") => Box::new(HuggingFace::at(base, client)),
+            (None, "croissant") => Box::new(Croissant::new(client)),
             (None, other) => return Err(format!("no adapter named {other}").into()),
         })
     }
@@ -335,4 +336,9 @@ async fn zenodo() -> Result<(), Failure> {
 #[tokio::test]
 async fn hugging_face() -> Result<(), Failure> {
     conforms("hf").await
+}
+
+#[tokio::test]
+async fn croissant() -> Result<(), Failure> {
+    conforms("croissant").await
 }

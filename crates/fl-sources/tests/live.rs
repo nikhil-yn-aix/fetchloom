@@ -58,3 +58,11 @@ async fn hugging_face() -> Result<(), Failure> {
     assert_eq!(smoke("hf:datasets/rajpurkar/squad").await?, 4);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "reaches dataverse.harvard.edu"]
+async fn croissant() -> Result<(), Failure> {
+    let reference = "croissant:https://dataverse.harvard.edu/api/datasets/export?exporter=croissant&persistentId=doi:10.7910/DVN/TJCLKP";
+    assert_eq!(smoke(reference).await?, 3);
+    Ok(())
+}
