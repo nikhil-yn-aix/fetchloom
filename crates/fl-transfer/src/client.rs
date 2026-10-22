@@ -266,9 +266,9 @@ impl Client {
             return Err(Failure::last(TransferError::Offline { url: first.clone() }));
         }
         if ask.typed
-            && let Some(host) = first.host()
+            && let (Some(host), Some(port)) = (first.host(), first.port())
         {
-            self.resolver.typed(host);
+            self.resolver.pin(host, port);
         }
         let home = first.origin();
         let mut url = first.clone();

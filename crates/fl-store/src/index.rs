@@ -53,18 +53,18 @@ impl Tier {
 
     /// The BLAKE3 digest of an object in this tier that one of the `stated` digests names.
     ///
-    /// SHA-256 is tried first, then SHA-1, then MD5. An entry counts only when its object is
-    /// present and, with a `size`, holds exactly that many bytes. An entry that is missing,
+    /// Only the strongest algorithm stated is tried: SHA-256, else SHA-1, else MD5, so a weak
+    /// digest never stands in for a strong one the source also states. An entry counts only
+    /// when its object is present and, with a `size`, holds exactly that many bytes. An entry that is missing,
     /// unreadable, malformed or names a missing object is passed over.
     #[must_use]
     pub fn recall(&self, stated: &[Digest], size: Option<u64>) -> Option<[u8; 32]> {
-        STRONGEST_FIRST
+        let strongest = STRONGEST_FIRST
             .into_iter()
-            .flat_map(|algorithm| {
-                stated
-                    .iter()
-                    .filter(move |digest| digest.algorithm() == algorithm)
-            })
+            .find(|algorithm| stated.iter().any(|digest| digest.algorithm() == *algorithm))?;
+        stated
+            .iter()
+            .filter(|digest| digest.algorithm() == strongest)
             .filter_map(|digest| self.layout().indexed(digest))
             .filter_map(|entry| named(&entry))
             .find(|blake3| {
@@ -192,6 +192,8 @@ mod tests {
         tier.remember(&[md5(1)], weak).unwrap();
         tier.remember(&[sha256], strong).unwrap();
         assert_eq!(tier.recall(&[md5(1), sha256], None), Some(strong));
+        let unknown = Digest::Sha256([4; 32]);
+        assert_eq!(tier.recall(&[md5(1), unknown], None), None);
     }
 
     #[test]

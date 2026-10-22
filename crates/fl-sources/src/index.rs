@@ -1,6 +1,8 @@
 //! Directory index pages as web servers write them: the entries a page lists directly under
 //! its own location, and nothing outside it.
 
+use std::collections::HashSet;
+
 use fl_transfer::url::SafeUrl;
 use url::Url;
 
@@ -22,9 +24,10 @@ pub(crate) fn links(base: &SafeUrl, html: &str) -> Vec<Link> {
         return Vec::new();
     };
     let mut found: Vec<Link> = Vec::new();
+    let mut names = HashSet::new();
     for href in hrefs(html) {
         if let Some(link) = entry(&base_url, &href)
-            && found.iter().all(|seen| seen.name != link.name)
+            && names.insert(link.name.clone())
         {
             found.push(link);
         }

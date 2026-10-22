@@ -431,6 +431,7 @@ async fn a_credential_reaches_its_origin_and_no_other() -> TestResult {
         Chain::new(vec![Box::new(tokens(&[&home]))]),
         &Waits::default(),
     )?;
+    client.trust(&SafeUrl::parse(&other.url("/"))?.origin().ok_or("origin")?);
     fetch(&client, &plain(&home.url("/file"))?).await?;
     fetch(&client, &plain(&home.url("/away"))?).await?;
     fetch(&client, &plain(&home.url("/near"))?).await?;

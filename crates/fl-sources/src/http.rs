@@ -53,7 +53,7 @@ impl Http {
                 .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
                 .ok_or_else(|| invalid("the path names no file"))?;
             let name = decode(segment).ok_or_else(|| invalid("the file name is not valid text"))?;
-            let path = DataPath::new(&name).map_err(|error| invalid(&error.to_string()))?;
+            let path = DataPath::normalize(&name).map_err(|error| invalid(&error.to_string()))?;
             vec![entry(path, url)]
         };
         Ok(Listing {
@@ -97,7 +97,7 @@ impl Http {
                 if link.dir {
                     queue.push_back((link.url, format!("{path}/")));
                 } else {
-                    let path = DataPath::new(&path).map_err(|_| SourceError::Body {
+                    let path = DataPath::normalize(&path).map_err(|_| SourceError::Body {
                         url: url.clone(),
                         reason: format!("lists `{path}`, which is not a valid path"),
                     })?;

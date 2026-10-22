@@ -96,14 +96,14 @@ impl HuggingFace {
     #[must_use]
     pub fn new(client: Arc<Client>) -> Self {
         Self::at(
-            SafeUrl::parse(HUB).unwrap_or_else(|_| unreachable!()),
+            &SafeUrl::parse(HUB).unwrap_or_else(|_| unreachable!()),
             client,
         )
     }
 
     /// The adapter for a hub served at `base`, such as a mirror, which may sit below a path.
     #[must_use]
-    pub fn at(base: SafeUrl, client: Arc<Client>) -> Self {
+    pub fn at(base: &SafeUrl, client: Arc<Client>) -> Self {
         Self {
             schemes: vec!["hf".to_owned()],
             base: base.as_directory(),
@@ -168,15 +168,14 @@ impl HuggingFace {
         paging::walk(
             &self.client,
             &tree,
-            false,
+            None,
             &Paging::Link,
             raw,
             |body, url| {
-                let items: Vec<Item> =
-                    serde_json::from_value(body.clone()).map_err(|error| SourceError::Body {
-                        url: url.clone(),
-                        reason: error.to_string(),
-                    })?;
+                let items = Vec::<Item>::deserialize(body).map_err(|error| SourceError::Body {
+                    url: url.clone(),
+                    reason: error.to_string(),
+                })?;
                 let count = items.len();
                 for item in items.into_iter().filter(|item| item.kind == "file") {
                     entries.push(self.entry(&repo, &found.sha, &item, url)?);
@@ -214,8 +213,8 @@ impl HuggingFace {
             url: page.clone(),
             problem,
         };
-        let path =
-            DataPath::new(&item.path).map_err(|_| fail("a value that is not a valid path"))?;
+        let path = DataPath::normalize(&item.path)
+            .map_err(|_| fail("a value that is not a valid path"))?;
         let mut escaped = String::new();
         escape(&item.path, &mut escaped);
         let url = self.url(&format!(

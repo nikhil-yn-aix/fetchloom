@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fl_transfer::client::Client;
 use fl_transfer::fetch::{Page, Request};
-use fl_transfer::url::SafeUrl;
+use fl_transfer::url::{Origin, SafeUrl};
 use serde_json::Value;
 
 use crate::record;
@@ -115,11 +115,12 @@ fn next_link(value: &str) -> Option<String> {
 }
 
 /// Asks for every page of the listing at `url`, one request each, and hands each page's JSON
-/// to `take`, which returns how many items it found there.
+/// to `take`, which returns how many items it found there. Only pages on the `trusted`
+/// origin, the one the user typed, may reach a private address.
 pub(crate) async fn walk(
     client: &Client,
     url: &SafeUrl,
-    typed: bool,
+    trusted: Option<&Origin>,
     paging: &Paging,
     reference: &str,
     mut take: impl FnMut(&Value, &SafeUrl) -> Result<usize, SourceError>,
@@ -129,8 +130,8 @@ pub(crate) async fn walk(
         reason,
     };
     let first = paging.first(url);
-    let home = first.origin();
     let mut seen = HashSet::new();
+    let mut previous: Option<Vec<u8>> = None;
     let mut next = Some(first.clone());
     let mut number = 0;
     while let Some(url) = next.take() {
@@ -144,13 +145,17 @@ pub(crate) async fn walk(
         let request = Request {
             url: &url,
             follow: true,
-            typed: typed && url.origin() == home,
+            typed: trusted.is_some_and(|trusted| url.origin().as_ref() == Some(trusted)),
         };
-        let (page, body) = record::json(client, &request, reference).await?;
+        let (mut page, body) = record::json(client, &request, reference).await?;
+        if previous.as_ref() == Some(&page.body) {
+            return Err(protocol(&page.url, "sent the same page twice".to_owned()));
+        }
         let items = take(&body, &page.url)?;
         next = paging
             .next(&first, number, &page, &body, items)
             .map_err(|reason| protocol(&page.url, reason))?;
+        previous = Some(std::mem::take(&mut page.body));
     }
     Ok(())
 }

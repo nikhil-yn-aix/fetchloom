@@ -62,6 +62,7 @@ impl Files {
         let mut entries = Vec::new();
         if metadata.is_dir() {
             walk(&root, "", &mut entries)?;
+            entries.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
         } else {
             let name = root
                 .file_name()
@@ -128,7 +129,7 @@ fn entry(path: &Path, inside: &str, size: u64) -> Result<Entry, SourceError> {
         .and_then(|url| SafeUrl::parse(url.as_str()).ok())
         .ok_or_else(|| fail("it has no file URL".to_owned()))?;
     Ok(Entry {
-        path: DataPath::new(inside).map_err(|error| fail(error.to_string()))?,
+        path: DataPath::normalize(inside).map_err(|error| fail(error.to_string()))?,
         size: Some(size),
         stated: Vec::new(),
         urls: vec![url],

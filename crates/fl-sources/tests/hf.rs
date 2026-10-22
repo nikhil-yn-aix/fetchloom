@@ -24,7 +24,7 @@ fn hub_at(server: &MockServer, prefix: &str) -> Result<HuggingFace, Failure> {
     let base = SafeUrl::parse(&format!("{}{prefix}", server.uri()))?;
     let client = support::client()?;
     client.trust(&base.origin().ok_or("no origin")?);
-    Ok(HuggingFace::at(base, client))
+    Ok(HuggingFace::at(&base, client))
 }
 
 async fn serve(server: &MockServer, route: &str, body: &str) {
