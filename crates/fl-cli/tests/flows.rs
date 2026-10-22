@@ -504,7 +504,9 @@ async fn an_invalid_user_adapter_is_named_with_the_key_at_fault() -> TestResult 
     assert_eq!(ran.code, Some(50), "{}", ran.stdout);
     let document = json(&ran)?;
     assert_eq!(document["errors"][0]["kind"], "local.invalid_config");
-    let message = document["errors"][0]["message"].as_str().unwrap_or_default();
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
     assert!(message.contains("broken.toml"), "{message}");
     assert!(message.contains("{nope}"), "{message}");
     assert_eq!(world.requests().await?, 0);
