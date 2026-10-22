@@ -3,6 +3,7 @@
 mod adapter;
 mod conformance;
 mod croissant;
+mod file;
 mod hf;
 mod live;
 mod registry;

@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use fl_model::error::ErrorKind;
+use fl_transfer::url::SafeUrl;
 
 use crate::args::Global;
 use crate::failure::Failure;
@@ -19,6 +20,8 @@ pub(crate) struct Config {
     pub(crate) settings: Option<PathBuf>,
     /// How to connect.
     pub(crate) transfer: fl_transfer::client::Config,
+    /// A Hugging Face Hub mirror from `HF_ENDPOINT`, used instead of huggingface.co.
+    pub(crate) hub: Option<SafeUrl>,
 }
 
 impl Config {
@@ -51,11 +54,23 @@ impl Config {
                     .unwrap_or_default()
             })
             .or_else(|| default_config(&env));
+        let hub = env("HF_ENDPOINT")
+            .map(|endpoint| {
+                SafeUrl::parse(&endpoint).map_err(|error| {
+                    Failure::new(
+                        ErrorKind::LocalInvalidConfig,
+                        format!("HF_ENDPOINT is {error}"),
+                    )
+                    .help("set HF_ENDPOINT to the URL of a Hugging Face Hub, or unset it")
+                })
+            })
+            .transpose()?;
         Ok(Self {
             cwd,
             store,
             settings: config_dir,
             transfer: fl_transfer::client::Config::default(),
+            hub,
         })
     }
 }

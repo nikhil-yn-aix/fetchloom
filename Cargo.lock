@@ -556,6 +556,7 @@ dependencies = [
  "serde_json",
  "serde_json_path",
  "spdx",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",

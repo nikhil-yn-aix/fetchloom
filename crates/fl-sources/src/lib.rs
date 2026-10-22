@@ -3,6 +3,7 @@
 pub mod croissant;
 pub mod declarative;
 mod doi;
+pub mod file;
 pub mod hf;
 pub mod http;
 mod index;
@@ -16,6 +17,7 @@ mod template;
 
 pub use croissant::Croissant;
 pub use declarative::Declarative;
+pub use file::Files;
 pub use hf::HuggingFace;
 pub use http::Http;
 pub use listing::{Entry, Listing, Meta};
