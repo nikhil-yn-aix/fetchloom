@@ -10,6 +10,7 @@ use fl_transfer::credentials::Variable;
 use tracing::Instrument;
 use url::Url;
 
+use crate::croissant::Croissant;
 use crate::declarative::Declarative;
 use crate::doi;
 use crate::hf::HuggingFace;
@@ -40,8 +41,8 @@ impl Registry {
         }
     }
 
-    /// The built in sources: the http adapter for `http` and `https`, Hugging Face, and every
-    /// embedded declarative adapter.
+    /// The built in sources: the http adapter for `http` and `https`, Hugging Face, Croissant,
+    /// and every embedded declarative adapter.
     ///
     /// # Errors
     ///
@@ -50,6 +51,7 @@ impl Registry {
         let mut registry = Self::new(Arc::clone(client));
         registry.add(Arc::new(Http::new(Arc::clone(client))));
         registry.add(Arc::new(HuggingFace::new(Arc::clone(client))));
+        registry.add(Arc::new(Croissant::new(Arc::clone(client))));
         for text in EMBEDDED {
             registry.add(Arc::new(Declarative::from_toml(text, Arc::clone(client))?));
         }

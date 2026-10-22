@@ -2,6 +2,7 @@
 
 mod adapter;
 mod conformance;
+mod croissant;
 mod hf;
 mod live;
 mod registry;

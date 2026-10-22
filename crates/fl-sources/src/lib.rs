@@ -1,5 +1,6 @@
 //! Dataset sources of fetchloom: the source traits, adapters, the declarative engine and the plugin protocol that turn references into listings.
 
+pub mod croissant;
 pub mod declarative;
 mod doi;
 pub mod hf;
@@ -13,6 +14,7 @@ pub mod registry;
 pub mod source;
 mod template;
 
+pub use croissant::Croissant;
 pub use declarative::Declarative;
 pub use hf::HuggingFace;
 pub use http::Http;
