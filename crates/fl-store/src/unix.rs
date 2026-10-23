@@ -71,6 +71,11 @@ pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
     fs::rename(staging, target)
 }
 
+/// Removes the placed file at `path`; unix needs no permission on the file itself.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    fs::remove_file(path)
+}
+
 /// Hard links `scratch` at `target`, which fails when the name exists, unlike a rename that
 /// would replace it, and says whether it renamed instead, on a filesystem without hard links.
 pub(crate) fn publish(scratch: &Path, target: &Path) -> io::Result<bool> {

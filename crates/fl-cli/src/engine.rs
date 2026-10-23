@@ -78,7 +78,12 @@ pub(crate) struct Engine {
 
 impl Engine {
     /// The client, the sources including the user's own adapters, and the local tier.
-    pub(crate) fn new(config: &Config, events: Arc<dyn Reporter>) -> Result<Self, Failure> {
+    /// Relative local paths in references are read against `base`, the project root.
+    pub(crate) fn new(
+        config: &Config,
+        base: &Path,
+        events: Arc<dyn Reporter>,
+    ) -> Result<Self, Failure> {
         let mut places: Vec<Box<dyn fl_transfer::credentials::Credentials>> =
             vec![Box::new(Environment::new(|name| std::env::var(name).ok()))];
         if let Some(dir) = &config.settings {
@@ -87,7 +92,7 @@ impl Engine {
         let chain = Arc::new(Chain::new(places));
         let client = Arc::new(Client::new(config.transfer(), chain.clone())?);
         let mut registry = Registry::builtin(&client)?;
-        registry.add(Arc::new(Files::new(config.cwd.clone())));
+        registry.add(Arc::new(Files::new(base.to_path_buf())));
         if let Some(endpoint) = &config.hub {
             if let Some(origin) = endpoint.origin() {
                 client.trust(&origin);
@@ -196,12 +201,43 @@ impl Engine {
             .collect()
     }
 
-    /// Places `files` of the dataset at `dir` inside the data directory at `root`.
+    fn holds(&self, blake3: &[u8; 32]) -> bool {
+        self.tier.locate(&Digest::Blake3(*blake3)).is_some()
+    }
+
+    /// Whether the store holds the object `blake3`, counted as a hit in its tier when it does.
+    pub(crate) fn reuse(&self, blake3: &[u8; 32]) -> bool {
+        let held = self.holds(blake3);
+        if held {
+            self.count(|work| *work.tier_hits.entry(LOCAL.to_owned()).or_default() += 1);
+        }
+        held
+    }
+
+    /// The bytes fetching `wants` would download: the known sizes of those the store does not
+    /// hold yet.
+    pub(crate) fn to_download(&self, wants: &[Want]) -> u64 {
+        wants
+            .iter()
+            .filter(|want| {
+                let known = want.blake3.or_else(|| {
+                    want.size
+                        .and_then(|size| self.tier.recall(&want.stated, Some(size)))
+                });
+                !known.is_some_and(|blake3| self.holds(&blake3))
+            })
+            .filter_map(|want| want.size)
+            .sum()
+    }
+
+    /// Places `files` of the dataset at `dir` inside the data directory at `root`, trying the
+    /// modes of `ladder`.
     pub(crate) fn link(
         &self,
         root: &Path,
         dir: &DataPath,
         files: &[(DataPath, [u8; 32])],
+        ladder: Ladder,
     ) -> Result<Vec<(Destination, Linked)>, Failure> {
         let started = Instant::now();
         let span = tracing::info_span!("link", dir = dir.as_str(), files = files.len());
@@ -211,7 +247,7 @@ impl Engine {
         for (path, blake3) in files {
             pairs.push((Digest::Blake3(*blake3), data.destination(dir, path)?));
         }
-        let results = Linker::new(&self.tier, Ladder::AUTO).link_all(&pairs);
+        let results = Linker::new(&self.tier, ladder).link_all(&pairs);
         let mut placed = Vec::with_capacity(pairs.len());
         for ((_, destination), result) in pairs.iter().zip(results) {
             let mode = result?;

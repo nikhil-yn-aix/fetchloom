@@ -9,7 +9,9 @@ expression: text
     "bytes_fetched": 0,
     "data_dir": "[PROJECT]/data",
     "datasets": 1,
-    "linked": 0
+    "failed": 0,
+    "linked": 0,
+    "removed": 0
   },
   "schema": 1,
   "status": "ok",

@@ -89,6 +89,27 @@ pub(crate) fn replace(staging: &Path, target: &Path) -> io::Result<()> {
     }
 }
 
+/// Removes the placed file at `path`. Windows refuses to delete a read only file, and a
+/// hardlinked file shares its read only attribute with the object, so the attribute is cleared
+/// through a handle, the file is removed, and the same handle sets it again on the object.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error)
+            if error.kind() == io::ErrorKind::PermissionDenied
+                && fs::symlink_metadata(path).is_ok_and(|m| m.permissions().readonly()) =>
+        {
+            let removed = fs::OpenOptions::new()
+                .access_mode(READ_ATTRIBUTES | WRITE_ATTRIBUTES)
+                .open(path)?;
+            set_handle_readonly(&removed, false)?;
+            let done = fs::remove_file(path);
+            set_handle_readonly(&removed, true)?;
+            done
+        }
+        done => done,
+    }
+}
+
 /// Renames `scratch` to `target` and says it renamed. Every object and record is read only
 /// before it is placed, and windows refuses to rename over a read only file, so of writers
 /// racing for one name exactly one places it, at the cost of one call instead of a link and a

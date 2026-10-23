@@ -3,5 +3,6 @@
 mod architecture;
 mod cli;
 mod flows;
+mod project;
 mod snapshots;
 mod support;

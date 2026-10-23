@@ -41,6 +41,13 @@ impl Ladder {
         writable: false,
     };
 
+    /// Reflink, then hardlink, then copy, never a symlink: for files no lock roots, which gc
+    /// could otherwise leave dangling. Every result is read only.
+    pub const LASTING: Self = Self {
+        modes: &[Mode::Reflink, Mode::Hardlink, Mode::Copy],
+        writable: false,
+    };
+
     /// Real copies the project may write to, for tools that open files for writing.
     pub const COPY: Self = Self {
         modes: &[Mode::Copy],
@@ -373,6 +380,31 @@ mod tests {
                 .unwrap();
             assert_eq!(tried(), [Mode::Hardlink, Mode::Symlink], "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_lasting_link_never_symlinks() {
+        HARDLINK_FAILS.with(|fails| fails.set(io::ErrorKind::TooManyLinks));
+        let fixture = fixture();
+        let linker = linker(&fixture, Ladder::LASTING, hardlink_failing);
+        let placed = linker
+            .link(&fixture.digest, &destination(&fixture, "a"))
+            .unwrap();
+        assert_eq!(placed.mode, Mode::Copy);
+        assert_eq!(tried(), [Mode::Reflink, Mode::Hardlink, Mode::Copy]);
+    }
+
+    #[test]
+    fn a_placed_read_only_file_is_removed_and_its_object_stays_read_only() {
+        let fixture = fixture();
+        let linker = Linker::new(&fixture.tier, Ladder::AUTO);
+        let place = destination(&fixture, "a");
+        linker.link(&fixture.digest, &place).unwrap();
+        crate::data_dir::remove(place.path()).unwrap();
+        assert!(!place.path().exists());
+        crate::data_dir::remove(place.path()).unwrap();
+        let object = fixture.tier.object_path(&fixture.digest).unwrap();
+        assert!(fs::metadata(object).unwrap().permissions().readonly());
     }
 
     #[test]

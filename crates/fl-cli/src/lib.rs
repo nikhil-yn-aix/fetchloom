@@ -1,6 +1,7 @@
 //! The `fl` command line of fetchloom: arguments, configuration, the order of work in each command, and rendering.
 
 mod args;
+mod ask;
 mod clock;
 mod commands;
 mod config;
@@ -22,33 +23,60 @@ use fl_model::error::ErrorKind;
 use fl_model::event::Event;
 
 use crate::args::{Cli, Command};
+use crate::ask::{Ask, Prompt, Refuse};
 use crate::commands::Context;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::failure::Failure;
 use crate::progress::Bars;
 use crate::report::{Human, Json, Outcome, Output};
-use crate::term::Terminal;
+use crate::term::{Style, Terminal, Tone};
 
 const WELCOME: &str = concat!(
     "fl ",
     env!("CARGO_PKG_VERSION"),
-    ", uv for research data\n",
-    "\n",
-    "  fl add zenodo:3608990     add a dataset, lock it and download it into data/\n",
-    "  fl sync                   make data/ match data.lock\n",
-    "  fl status                 see what differs from data.lock\n",
-    "  fl path NAME              print where a dataset is, for scripts\n",
-    "  fl get URL                fetch something once, without a project\n",
-    "\n",
-    "fetchloom by KairosLab\n"
+    ", uv for research data
+",
+    "
+",
+    "Get a first dataset into this folder with:
+",
+    "
+",
+    "  fl add zenodo:3608990
+",
+    "
+",
+    "The commands that matter:
+",
+    "  fl add REF      add a dataset, lock it and download it into data/
+",
+    "  fl sync         make data/ match data.lock
+",
+    "  fl status       see what differs from data.lock
+",
+    "  fl path NAME    print where a dataset is, for scripts
+",
+    "  fl get REF      fetch something once, without a project
+",
+    "
+",
+    "REF is a DOI, a link, zenodo:ID, hf:datasets/ORG/NAME, a folder, or search words.
+",
+    "`fl --help` lists every command.
+",
+    "
+",
 );
+
+const MAKER: &str = "fetchloom by KairosLab";
 
 /// Runs `fl` with the arguments of this process and returns its exit code.
 ///
 /// `--help` and `--version` print their text and give 0. A usage error prints the usage to stderr
-/// and gives 2. With no arguments the welcome is written to stdout. A command gives the exit code
-/// of its error's kind, or 0.
+/// and gives 2. With no arguments, inside a project it runs `fl status`, and elsewhere the welcome
+/// is written to stdout. A command gives the exit code of its error's kind, the code of the most
+/// severe failure when it did part of its work, or 0.
 #[must_use]
 pub fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -59,10 +87,15 @@ pub fn run() -> ExitCode {
                 .map_or(ExitCode::FAILURE, |()| exit_code(parse.exit_code()));
         }
     };
-    let Some(command) = cli.command else {
-        return welcome(&mut io::stdout().lock()).map_or(ExitCode::FAILURE, |()| ExitCode::SUCCESS);
-    };
     let global = cli.global;
+    let Some(command) = cli
+        .command
+        .or_else(|| in_project(&global).then(Command::status))
+    else {
+        let style = Terminal::detect(global.color).style;
+        let mut out = anstream::AutoStream::auto(io::stdout().lock());
+        return welcome(&mut out, style).map_or(ExitCode::FAILURE, |()| ExitCode::SUCCESS);
+    };
     let terminal = Terminal::detect(global.color);
     let output = if global.json {
         Output::Json(Arc::new(Json::default()))
@@ -92,42 +125,76 @@ pub fn run() -> ExitCode {
             return finish_failed(&output, name, failure, &Work::default());
         }
     };
-    let (result, work) = execute(&global, &command, &output);
+    let ask: Box<dyn Ask> = if terminal.stderr && terminal.stdin && !global.json {
+        Box::new(Prompt::new(output.shared()))
+    } else {
+        Box::new(Refuse)
+    };
+    let (result, work) = execute(&global, &command, &output, ask.as_ref());
     let code = match result {
-        Ok(outcome) => match output.finish(name, outcome, &work) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        },
+        Ok(outcome) => {
+            let code = outcome.exit.map_or(0, ErrorKind::exit_code);
+            match output.finish(name, outcome, &work) {
+                Ok(()) => ExitCode::from(code),
+                Err(_) => ExitCode::FAILURE,
+            }
+        }
         Err(failure) => finish_failed(&output, name, failure, &work),
     };
     drop(guard);
     code
 }
 
+/// Whether `fl` runs inside a project, so that `fl` alone shows its status.
+fn in_project(global: &args::Global) -> bool {
+    std::env::current_dir()
+        .map(|cwd| match &global.directory {
+            Some(dir) => cwd.join(dir),
+            None => cwd,
+        })
+        .is_ok_and(|dir| project::Project::find(&dir).is_ok())
+}
+
+fn settings(global: &args::Global) -> Result<Config, Failure> {
+    let cwd = std::env::current_dir().map_err(|error| {
+        Failure::new(
+            ErrorKind::LocalIo,
+            format!("the working directory cannot be read: {error}"),
+        )
+    })?;
+    Config::new(
+        global,
+        &cwd,
+        |name| std::env::var(name).ok(),
+        &config::read_optional,
+    )
+}
+
 fn execute(
     global: &args::Global,
     command: &Command,
     output: &Output,
+    ask: &dyn Ask,
 ) -> (Result<Outcome, Failure>, Work) {
     let span = tracing::info_span!("command", name = command_name(command));
     let _entered = span.enter();
-    let prepared = std::env::current_dir()
-        .map_err(|error| {
-            Failure::new(
-                ErrorKind::LocalIo,
-                format!("the working directory cannot be read: {error}"),
-            )
-        })
-        .and_then(|cwd| {
-            Config::new(
-                global,
-                &cwd,
-                |name| std::env::var(name).ok(),
-                &config::read_optional,
-            )
-        });
-    let config = match prepared {
-        Ok(config) => config,
+    let prepared = settings(global).and_then(|config| match command {
+        Command::Init {
+            interactive: true, ..
+        } => {
+            let answers = commands::init::interview(ask, &config.cwd, &config.store.value)?;
+            match (&answers.store, config.settings.as_ref()) {
+                (Some(store), Some(dir)) => {
+                    commands::init::save_store(&dir.join("config.toml"), store)?;
+                    Ok((settings(global)?, answers))
+                }
+                _ => Ok((config, answers)),
+            }
+        }
+        _ => Ok((config, commands::init::Answers::default())),
+    });
+    let (config, answers) = match prepared {
+        Ok(prepared) => prepared,
         Err(failure) => return (Err(failure), Work::default()),
     };
     for (key, value, from) in config.shown() {
@@ -149,7 +216,11 @@ fn execute(
             );
         }
     };
-    let engine = match runtime.block_on(async { Engine::new(&config, output.shared()) }) {
+    let base = project::Project::find(&config.cwd).map_or_else(
+        |_| config.cwd.clone(),
+        |project| project.root().to_path_buf(),
+    );
+    let engine = match runtime.block_on(async { Engine::new(&config, &base, output.shared()) }) {
         Ok(engine) => engine,
         Err(failure) => return (Err(failure), Work::default()),
     };
@@ -157,18 +228,27 @@ fn execute(
         engine: &engine,
         reporter: output.reporter(),
         cwd: &config.cwd,
+        ask,
+        yes: global.yes,
+        offline: config.offline.value,
+        link: config.link.value,
     };
     let result = runtime.block_on(async {
         match command {
-            Command::Init { name } => commands::init::run(&context, name.as_deref()),
-            Command::Add(add) => commands::add::run(&context, add).await,
-            Command::Lock => commands::lock(&context).await,
-            Command::Sync => commands::sync(&context).await,
-            Command::Get { reference, output } => {
-                commands::get::run(&context, reference, output.as_deref()).await
+            Command::Init { name, .. } => {
+                let name = answers.name.as_deref().or(name.as_deref());
+                commands::init::run(&context, name, answers.first.as_deref()).await
             }
+            Command::Add(add) => commands::add::run(&context, add).await,
+            Command::Remove { names } => commands::remove::run(&context, names).await,
+            Command::Lock { upgrade, check } => {
+                commands::lock::run(&context, upgrade.as_deref(), *check).await
+            }
+            Command::Sync(sync) => commands::sync::run(&context, sync).await,
+            Command::Status { names, check } => commands::status::run(&context, names, *check),
+            Command::Restore { paths } => commands::restore::run(&context, paths),
             Command::Path { name, no_sync } => commands::path::run(&context, name, *no_sync).await,
-            Command::Status => commands::status::run(&context),
+            Command::Get(get) => commands::get::run(&context, get).await,
         }
     });
     (result, engine.work())
@@ -184,11 +264,13 @@ const fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Init { .. } => "init",
         Command::Add(_) => "add",
-        Command::Lock => "lock",
-        Command::Sync => "sync",
-        Command::Get { .. } => "get",
+        Command::Remove { .. } => "remove",
+        Command::Lock { .. } => "lock",
+        Command::Sync(_) => "sync",
+        Command::Status { .. } => "status",
+        Command::Restore { .. } => "restore",
         Command::Path { .. } => "path",
-        Command::Status => "status",
+        Command::Get(_) => "get",
     }
 }
 
@@ -196,8 +278,9 @@ fn exit_code(code: i32) -> ExitCode {
     u8::try_from(code).map_or(ExitCode::FAILURE, ExitCode::from)
 }
 
-fn welcome(out: &mut impl Write) -> io::Result<()> {
+fn welcome(out: &mut impl Write, style: Style) -> io::Result<()> {
     out.write_all(WELCOME.as_bytes())?;
+    writeln!(out, "{}", style.paint(Tone::Dim, MAKER))?;
     out.flush()
 }
 
@@ -226,25 +309,29 @@ mod tests {
     #[test]
     fn welcome_writes_version_commands_and_maker() {
         let mut out = Vec::new();
-        welcome(&mut out).unwrap();
+        welcome(&mut out, Style::PLAIN).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with(&format!(
             "fl {}, uv for research data\n",
             env!("CARGO_PKG_VERSION")
         )));
-        assert!(text.contains("fl add zenodo:3608990"));
+        assert!(text.contains(
+            "
+  fl add zenodo:3608990
+"
+        ));
         assert!(text.ends_with("\nfetchloom by KairosLab\n"));
     }
 
     #[test]
     fn welcome_returns_the_write_error() {
-        let err = welcome(&mut Failing { on_write: true }).unwrap_err();
+        let err = welcome(&mut Failing { on_write: true }, Style::PLAIN).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]
     fn welcome_returns_the_flush_error() {
-        let err = welcome(&mut Failing { on_write: false }).unwrap_err();
+        let err = welcome(&mut Failing { on_write: false }, Style::PLAIN).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
