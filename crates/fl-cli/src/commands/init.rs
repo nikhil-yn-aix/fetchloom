@@ -97,7 +97,7 @@ pub(crate) fn save_store(file: &Path, store: &str) -> Result<(), Failure> {
             format!("{}: {}", file.display(), error.message()),
         )
     })?;
-    document["store"]["local"] = value(store);
+    document.entry("store").or_insert(table())["local"] = value(store);
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|error| Failure::io("create", parent, &error))?;
     }
@@ -205,5 +205,86 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             "target\ndata/\n.fetchloom/\n"
         );
+    }
+
+    struct Typed(std::sync::Mutex<Vec<&'static str>>);
+
+    impl Ask for Typed {
+        fn confirm(&self, _question: &str, refusal: Failure) -> Result<bool, Failure> {
+            Err(refusal)
+        }
+
+        fn pick(
+            &self,
+            _prompt: &str,
+            _items: &[String],
+            refusal: Failure,
+        ) -> Result<Option<usize>, Failure> {
+            Err(refusal)
+        }
+
+        fn text(&self, _prompt: &str, _refusal: Failure) -> Result<String, Failure> {
+            Ok(self.0.lock().unwrap().remove(0).to_owned())
+        }
+    }
+
+    #[test]
+    fn empty_answers_keep_every_default() {
+        let typed = Typed(std::sync::Mutex::new(vec!["", "", ""]));
+        let answers = interview(&typed, Path::new("survey"), Path::new("/store")).unwrap();
+        assert_eq!(answers, Answers::default());
+    }
+
+    #[test]
+    fn answers_are_taken_and_the_same_store_is_no_move() {
+        let typed = Typed(std::sync::Mutex::new(vec![
+            "birds",
+            "/elsewhere",
+            "zenodo:1",
+        ]));
+        let answers = interview(&typed, Path::new("survey"), Path::new("/store")).unwrap();
+        assert_eq!(
+            answers,
+            Answers {
+                name: Some("birds".to_owned()),
+                first: Some("zenodo:1".to_owned()),
+                store: Some("/elsewhere".to_owned()),
+            }
+        );
+        let typed = Typed(std::sync::Mutex::new(vec!["", "/store", ""]));
+        let answers = interview(&typed, Path::new("survey"), Path::new("/store")).unwrap();
+        assert_eq!(answers.store, None);
+    }
+
+    #[test]
+    fn without_a_terminal_the_interview_names_the_flags_instead() {
+        let error =
+            interview(&crate::ask::Refuse, Path::new("survey"), Path::new("/s")).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Usage);
+        assert!(error.to_string().contains("no terminal"), "{error}");
+    }
+
+    #[test]
+    fn saving_the_store_keeps_the_rest_of_the_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("fetchloom").join("config.toml");
+        save_store(&file, "/first").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "[store]\nlocal = \"/first\"\n"
+        );
+        fs::write(
+            &file,
+            "# mine\n[network]\njobs = 4\n\n[store]\nlocal = \"/first\"\n",
+        )
+        .unwrap();
+        save_store(&file, "/second").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "# mine\n[network]\njobs = 4\n\n[store]\nlocal = \"/second\"\n"
+        );
+        fs::write(&file, "[store\n").unwrap();
+        let error = save_store(&file, "/third").unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig);
     }
 }
