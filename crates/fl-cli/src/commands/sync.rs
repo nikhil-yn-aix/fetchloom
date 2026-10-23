@@ -12,6 +12,7 @@ use fl_model::lock::{Lock, LockedDataset};
 use fl_model::manifest::{Link, Manifest};
 use fl_model::name::Name;
 use fl_model::path::DataPath;
+use fl_model::reference::Target;
 use fl_store::fingerprint::Fingerprint;
 use fl_store::link::Ladder;
 use serde_json::json;
@@ -388,7 +389,12 @@ async fn place(
             );
         }
     } else {
-        let (got, failures) = fetch_from_any(context, name, &wanted).await?;
+        context.agree_to_download(name, wanted.iter().map(|slot| slot.file.size).sum())?;
+        let local = matches!(
+            placing.locked.reference.target(),
+            Target::File { .. } | Target::Path(_)
+        );
+        let (got, failures) = fetch_from_any(context, name, &wanted, local).await?;
         synced.fetched += got.iter().map(|(_, got)| got.fetched).sum::<u64>();
         ready.extend(got.into_iter().map(|(slot, _)| slot));
         synced.failures.extend(failures);
@@ -427,6 +433,7 @@ async fn fetch_from_any<'s, 'l>(
     context: &Context<'_>,
     name: &Name,
     slots: &[&'s Slot<'l>],
+    local: bool,
 ) -> Result<(Vec<(&'s Slot<'l>, Got)>, Vec<Failure>), Failure> {
     let mut got = Vec::new();
     let mut failures = Vec::new();
@@ -437,7 +444,7 @@ async fn fetch_from_any<'s, 'l>(
         let mut tried = Vec::new();
         let mut wants = Vec::new();
         for (slot, last) in pending {
-            match locked_want(slot.file, at)? {
+            match locked_want(slot.file, at, local)? {
                 Some(want) => {
                     wants.push(want);
                     tried.push((slot, last));
@@ -515,9 +522,17 @@ pub(crate) fn drop_removed(
         .cloned()
         .collect();
     let mut dirs = BTreeSet::new();
+    let mut removed = 0;
     for key in &gone {
         let path = root.join(key);
-        fl_store::data_dir::remove(&path)?;
+        if path.exists() && !state.untouched(key, &path)? {
+            context.emit(Event::Warning(format!(
+                "kept {shown_root}/{key}, which data.lock no longer lists, because it was changed by hand"
+            )));
+        } else {
+            fl_store::data_dir::remove(&path)?;
+            removed += 1;
+        }
         state.files.remove(key);
         if let Some((dir, _)) = key.split_once('/') {
             dirs.insert(dir.to_owned());
@@ -537,7 +552,7 @@ pub(crate) fn drop_removed(
             });
         }
     }
-    Ok(gone.len() as u64)
+    Ok(removed)
 }
 
 fn prune(root: &Path, mut dir: Option<&Path>) {

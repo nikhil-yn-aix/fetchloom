@@ -402,7 +402,7 @@ async fn download(
         };
         return Ok((got, ingested));
     }
-    let key = Digest::Blake3(*blake3::hash(want.url.to_string().as_bytes()).as_bytes());
+    let key = Digest::Blake3(*blake3::hash(want.url.written().as_bytes()).as_bytes());
     let opened = Arc::clone(tier);
     let partial = blocking(move || {
         opened

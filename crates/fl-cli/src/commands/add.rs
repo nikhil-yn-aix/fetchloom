@@ -36,7 +36,6 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         })?,
         None => name_for(&written)?,
     };
-    refuse_user_info(&written)?;
     let found = match written.target() {
         Target::Name(query) => Some(search(context, query).await?),
         _ => None,
@@ -153,7 +152,7 @@ fn refuse_user_info(reference: &Reference) -> Result<(), Failure> {
     if carries {
         return Err(Failure::new(
             ErrorKind::Usage,
-            "the link holds a name or password, which would be written into data.toml",
+            "the link holds a name or password, which fetchloom would print and keep in files",
         )
         .help("take it out of the link and give it as FETCHLOOM_TOKEN_ and the host, in capitals with `_` for dots"));
     }
@@ -281,11 +280,14 @@ pub(crate) fn parse(text: &str) -> Result<Reference, Failure> {
     } else {
         text.to_owned()
     };
-    text.parse()
+    let reference = text
+        .parse()
         .map_err(|error: fl_model::reference::ReferenceError| {
             Failure::new(error.kind(), error.to_string())
                 .help("references look like zenodo:3608990, 10.5281/zenodo.3608990 or https://host/file.csv")
-        })
+        })?;
+    refuse_user_info(&reference)?;
+    Ok(reference)
 }
 
 /// Asks for a reference when `fl add` was given none and a terminal can answer.

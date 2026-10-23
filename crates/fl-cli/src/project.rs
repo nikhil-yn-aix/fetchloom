@@ -228,6 +228,27 @@ impl State {
                 .get(key)
                 .is_some_and(|placed| placed.matches(blake3, print))
     }
+
+    /// Whether the file at `path`, which fetchloom placed and records under `key`, still holds
+    /// the object it placed there. The fingerprint decides when it can be trusted, the bytes
+    /// otherwise.
+    pub(crate) fn untouched(&self, key: &str, path: &Path) -> Result<bool, Failure> {
+        let Some(placed) = self.files.get(key) else {
+            return Ok(false);
+        };
+        let print = fl_store::fingerprint::Fingerprint::of(path)?;
+        if print.modified < self.written
+            && placed.size == print.size
+            && placed.modified == print.modified.to_string()
+            && placed.identity == print.identity.to_string()
+        {
+            return Ok(true);
+        }
+        Ok(matches!(
+            fl_store::fingerprint::hash_file(path)?,
+            fl_model::digest::Digest::Blake3(blake3) if hex(&blake3) == placed.blake3
+        ))
+    }
 }
 
 /// A placed file: the object it was placed from and its fingerprint then.

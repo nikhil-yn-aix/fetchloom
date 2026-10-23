@@ -737,3 +737,62 @@ async fn a_link_with_a_query_is_locked_whole_and_fetched_again_from_the_lock() -
     assert!(!ran.stderr.contains("secret"), "{}", ran.stderr);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_changed_by_hand_stays_when_its_dataset_leaves() -> TestResult {
+    let world = World::start().await?;
+    two_files(&world).await?;
+    ok(&world.here(&["add", "zenodo:3608990"])?)?;
+    edit(&data(&world, "ab/a.csv"), b"mine\n")?;
+    std::fs::write(
+        world.project.join("data.toml"),
+        "[project]\nname = \"project\"\n\n[datasets.3608990]\nref = \"zenodo:3608990\"\n",
+    )?;
+    let ran = world.here(&["sync"])?;
+    ok(&ran)?;
+    assert!(ran.stderr.contains("changed by hand"), "{}", ran.stderr);
+    assert_eq!(std::fs::read(data(&world, "ab/a.csv"))?, b"mine\n");
+    assert!(!data(&world, "ab/b.csv").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lock_that_points_a_remote_dataset_at_a_local_file_is_refused() -> TestResult {
+    let world = World::start().await?;
+    two_files(&world).await?;
+    let secret = world.temp.path().join("secret.txt");
+    std::fs::write(&secret, b"a,1\n")?;
+    let local = format!(
+        "file:///{}",
+        secret
+            .display()
+            .to_string()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+    );
+    let lock_path = world.project.join("data.lock");
+    let first = format!("{}/files/7/a.csv", world.server.uri());
+    let lock = std::fs::read_to_string(&lock_path)?.replace(&first, &local);
+    std::fs::write(&lock_path, lock)?;
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    let fresh = world.temp.path().join("fresh");
+    let ran = world.fl_with_store(&world.project, &fresh, &["sync", "--locked"])?;
+    assert_ne!(ran.code, Some(0), "{}", ran.stderr);
+    assert!(
+        ran.stderr.contains("a file on this machine"),
+        "{}",
+        ran.stderr
+    );
+    assert!(!data(&world, "ab/a.csv").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_refuses_a_link_with_a_password_and_never_prints_it() -> TestResult {
+    let world = World::start().await?;
+    let ran = world.here(&["get", "https://someone:hunter2@example.org/a.csv"])?;
+    assert_eq!(ran.code, Some(2), "{}", ran.stderr);
+    assert!(ran.stderr.contains("name or password"), "{}", ran.stderr);
+    assert!(!ran.stderr.contains("hunter2"), "{}", ran.stderr);
+    Ok(())
+}
