@@ -17,7 +17,7 @@ use fl_model::event::Event;
 use fl_model::filter::Filters;
 use fl_model::partial::PartialRecord;
 use fl_model::path::DataPath;
-use fl_model::reference::{Reference, Target};
+use fl_model::reference::Reference;
 use fl_sources::{Declarative, Files, Hit, HuggingFace, Listing, Registry, Source};
 use fl_store::data_dir::{DataDir, Destination};
 use fl_store::link::{Ladder, Linked, Linker};
@@ -142,7 +142,11 @@ impl Engine {
         filters: &Filters,
     ) -> Result<Listing, Failure> {
         let started = Instant::now();
-        self.events.emit(Event::Waiting(waiting_for(reference)));
+        self.events
+            .emit(Event::Waiting(match self.registry.host_of(reference) {
+                Some(host) => format!("Resolving {reference} at {host}"),
+                None => format!("Resolving {reference}"),
+            }));
         let listing = self.registry.resolve(reference, filters).await;
         self.spent("resolve", started);
         Ok(listing?)
@@ -440,21 +444,6 @@ async fn download(
         },
         ingested,
     ))
-}
-
-/// What a resolve waits on, naming the host when the reference names one.
-fn waiting_for(reference: &Reference) -> String {
-    match reference.target() {
-        Target::Url { .. } => match SafeUrl::parse(reference.as_str())
-            .ok()
-            .and_then(|url| url.host().map(str::to_owned))
-        {
-            Some(host) => format!("Resolving {reference} at {host}"),
-            None => format!("Resolving {reference}"),
-        },
-        Target::Doi { .. } => format!("Resolving {reference} at doi.org"),
-        _ => format!("Resolving {reference}"),
-    }
 }
 
 async fn blocking<T: Send + 'static>(

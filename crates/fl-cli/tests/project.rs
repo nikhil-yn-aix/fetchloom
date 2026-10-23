@@ -653,3 +653,44 @@ async fn add_with_nothing_outside_a_terminal_is_a_usage_error_with_examples() ->
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_fl_fetching_the_same_file_into_one_store_both_succeed() -> TestResult {
+    let world = World::start().await?;
+    let body = vec![7_u8; 256 * 1024];
+    Mock::given(method("GET"))
+        .and(path("/slow.bin"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(body.clone())
+                .set_delay(Duration::from_millis(500)),
+        )
+        .mount(&world.server)
+        .await;
+    let uri = format!("{}/slow.bin", world.server.uri());
+    let spawn = |out: &str| {
+        Command::new(env!("CARGO_BIN_EXE_fl"))
+            .args(["get", &uri, "-o", out])
+            .current_dir(&world.project)
+            .env("FETCHLOOM_STORE", &world.store)
+            .env("FETCHLOOM_CONFIG", world.config.join("config.toml"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    let first = spawn("a")?;
+    let second = spawn("b")?;
+    for (child, out) in [(first, "a"), (second, "b")] {
+        let done = child.wait_with_output()?;
+        assert!(
+            done.status.success(),
+            "{out}: {}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+        assert_eq!(
+            std::fs::read(world.project.join(out).join("slow.bin"))?,
+            body
+        );
+    }
+    Ok(())
+}

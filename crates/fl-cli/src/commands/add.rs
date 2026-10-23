@@ -210,7 +210,24 @@ fn totals(totals: Totals) -> String {
     )
 }
 
-fn parse(text: &str) -> Result<Reference, Failure> {
+/// `text` as a reference, a DOI pasted bare or as a doi.org link read as `doi:`.
+pub(crate) fn parse(text: &str) -> Result<Reference, Failure> {
+    let text = text.trim();
+    let bare = [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+    ]
+    .iter()
+    .find_map(|prefix| text.strip_prefix(prefix))
+    .unwrap_or(text);
+    let doi = bare.starts_with("10.") && bare.contains('/');
+    let text = if doi {
+        format!("doi:{bare}")
+    } else {
+        text.to_owned()
+    };
     text.parse()
         .map_err(|error: fl_model::reference::ReferenceError| {
             Failure::new(error.kind(), error.to_string())
@@ -684,6 +701,27 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_doi_pasted_bare_or_as_a_link_is_read_as_a_doi() {
+        for text in [
+            "10.5281/zenodo.3608990",
+            "https://doi.org/10.5281/zenodo.3608990",
+            "http://dx.doi.org/10.5281/zenodo.3608990",
+            " doi:10.5281/zenodo.3608990 ",
+        ] {
+            assert_eq!(
+                parse(text).unwrap().as_str(),
+                "doi:10.5281/zenodo.3608990",
+                "{text}"
+            );
+        }
+        assert_eq!(
+            parse("https://host/10.5/x").unwrap().as_str(),
+            "https://host/10.5/x"
+        );
+        assert_eq!(parse("./10.5/x").unwrap().as_str(), "./10.5/x");
     }
 
     #[test]
