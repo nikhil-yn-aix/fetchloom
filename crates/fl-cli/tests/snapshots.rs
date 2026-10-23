@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::support::{Failure, World, json};
+use crate::support::{Failure, World, found, json};
 
 type TestResult = Result<(), Failure>;
 
@@ -60,5 +60,157 @@ async fn the_document_of_a_second_sync() -> TestResult {
     assert_eq!(ran.code, Some(0), "{}", ran.stderr);
     let text = pretty(&world, &json(&ran)?)?;
     snapshot!("sync_json_stdout", text);
+    Ok(())
+}
+
+/// A sync that has work to do: the project's lock and an empty store, so every file is
+/// downloaded and placed.
+async fn fresh_sync(world: &World, args: &[&str]) -> Result<crate::support::Ran, Failure> {
+    world
+        .record(
+            "7",
+            "cc-by-4.0",
+            &[("a.csv", b"a,1\n", None), ("b.csv", b"b,2\n", None)],
+        )
+        .await;
+    let added = world.here(&["add", "zenodo:7", "--as", "ab"])?;
+    if added.code != Some(0) {
+        return Err(added.stderr.into());
+    }
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    std::fs::remove_dir_all(world.project.join(".fetchloom"))?;
+    let fresh = world.temp.path().join("fresh");
+    let mut every = vec!["sync"];
+    every.extend_from_slice(args);
+    world.fl_with_store(&world.project, &fresh, &every)
+}
+
+/// Debug log lines carry times and change with timing, so each run of them becomes one
+/// `[logs]` line that shows where they appear.
+fn logs_folded(text: &str) -> String {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let log = line.len() > 20
+            && line.as_bytes()[4] == b'-'
+            && line.contains('T')
+            && line.contains("  ");
+        if log {
+            if out.last() != Some(&"[logs]") {
+                out.push("[logs]");
+            }
+        } else {
+            out.push(line);
+        }
+    }
+    out.join("\n")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_with_work_at_every_loudness() -> TestResult {
+    for (name, args) in [
+        ("sync_quiet", vec!["-q"]),
+        ("sync_default", vec![]),
+        ("sync_verbose", vec!["-v"]),
+        ("sync_debug", vec!["-vv"]),
+    ] {
+        let world = World::start().await?;
+        let ran = fresh_sync(&world, &args).await?;
+        assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+        assert!(ran.stdout.is_empty(), "{name}: {}", ran.stdout);
+        snapshot!(name, logs_folded(&redact(&world, &ran.stderr)));
+    }
+    let world = World::start().await?;
+    let ran = fresh_sync(&world, &["--json"]).await?;
+    assert!(ran.stderr.is_empty(), "{}", ran.stderr);
+    let document = pretty(&world, &json(&ran)?)?;
+    snapshot!("sync_json", document);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quiet_never_prints_more_than_the_default() -> TestResult {
+    for command in [
+        vec!["add", "zenodo:3608990"],
+        vec!["sync"],
+        vec!["status"],
+        vec!["lock"],
+        vec!["path", "3608990"],
+        vec!["add", "zenodo:404"],
+    ] {
+        let world = World::start().await?;
+        if command[0] != "add" {
+            world.add()?;
+        }
+        let default = world.here(&command)?;
+        let other = World::start().await?;
+        if command[0] != "add" {
+            other.add()?;
+        }
+        let mut quiet = command.clone();
+        quiet.push("-q");
+        let quiet = other.here(&quiet)?;
+        assert!(
+            quiet.stderr.len() <= default.stderr.len()
+                && quiet.stdout.len() <= default.stdout.len(),
+            "{command:?}\n-q: {}{}\ndefault: {}{}",
+            quiet.stdout,
+            quiet.stderr,
+            default.stdout,
+            default.stderr
+        );
+        assert!(quiet.stderr.is_empty(), "{command:?}: {}", quiet.stderr);
+        let mut silent = command.clone();
+        silent.push("-qq");
+        let silent = other.here(&silent)?;
+        assert!(
+            silent.stdout.is_empty() && silent.stderr.is_empty(),
+            "{command:?}"
+        );
+    }
+    Ok(())
+}
+
+/// The first run of someone new to fetchloom: a fresh store and no project, then each thing
+/// they are likely to try. Every screen is kept in default loudness.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_run_walk() -> TestResult {
+    let world = World::start().await?;
+    found(&world, "iris", &[(1, "Iris flowers"), (2, "Iris images")]).await;
+    world
+        .record("10", "cc-by-4.0", &[("eeg.bin", b"x", Some(2 << 30))])
+        .await;
+    let mut screens = Vec::new();
+    let mut step = |title: &str, ran: &crate::support::Ran| {
+        screens.push(format!(
+            "$ {title}\n{}{}[exit {}]\n",
+            ran.stdout,
+            ran.stderr,
+            ran.code.unwrap_or(-1)
+        ));
+    };
+    step("fl", &world.here(&[])?);
+    step("fl snyc", &world.here(&["snyc"])?);
+    step("fl add", &world.here(&["add"])?);
+    step("fl add iris", &world.here(&["add", "iris"])?);
+    step("fl add zenodo:10", &world.here(&["add", "zenodo:10"])?);
+    step(
+        "fl add zenodo:3608990",
+        &world.here(&["add", "zenodo:3608990"])?,
+    );
+    step("fl", &world.here(&[])?);
+    let iris = world.iris();
+    fl_store::data_dir::remove(&iris)?;
+    std::fs::write(&iris, b"edited by hand\n")?;
+    step("fl sync", &world.here(&["sync"])?);
+    step("fl restore --yes", &world.here(&["restore", "--yes"])?);
+    step("fl add zenodo:404", &world.here(&["add", "zenodo:404"])?);
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    let fresh = world.temp.path().join("fresh");
+    step(
+        "fl sync --offline",
+        &world.fl_with_store(&world.project, &fresh, &["sync", "--offline"])?,
+    );
+    step("fl sync", &world.here(&["sync"])?);
+    snapshot!("first_run_walk", redact(&world, &screens.join("\n")));
     Ok(())
 }

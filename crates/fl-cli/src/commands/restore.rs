@@ -62,20 +62,7 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
         }
         plans.push((dir, files));
     }
-    if !replaced.is_empty() {
-        context.agree(
-            &format!(
-                "Replace {} you changed with the downloaded {}? ({})",
-                plural(replaced.len() as u64, "file", "files"),
-                if replaced.len() == 1 { "one" } else { "ones" },
-                some_of(&replaced, 3)
-            ),
-            &format!(
-                "replacing {}",
-                plural(replaced.len() as u64, "changed file", "changed files")
-            ),
-        )?;
-    }
+    agree_to_replace(context, &replaced)?;
     for (dir, files) in &plans {
         if files.is_empty() {
             continue;
@@ -104,7 +91,10 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
         0 if unavailable.is_empty() => {
             "Nothing to restore, every file matches data.lock.".to_owned()
         }
-        n => format!("Restored {} from the store.", plural(n, "file", "files")),
+        n => format!(
+            "Restored {} from the downloads kept on this machine.",
+            plural(n, "file", "files")
+        ),
     };
     if let Some(failure) = unavailable_failure(&unavailable) {
         if restored == 0 {
@@ -120,6 +110,29 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
     Ok(Outcome::ok(result, sentence))
 }
 
+/// Asks before files the user changed are replaced, when there are any.
+fn agree_to_replace(context: &Context<'_>, replaced: &[String]) -> Result<(), Failure> {
+    if replaced.is_empty() {
+        return Ok(());
+    }
+    context.agree(
+        &format!(
+            "Replace {} you changed with the downloaded {}? ({})",
+            plural(replaced.len() as u64, "file", "files"),
+            if replaced.len() == 1 { "one" } else { "ones" },
+            some_of(replaced, 3)
+        ),
+        &format!(
+            "{} you changed would be replaced",
+            plural(replaced.len() as u64, "file", "files")
+        ),
+        &format!(
+            "replacing {}",
+            plural(replaced.len() as u64, "changed file", "changed files")
+        ),
+    )
+}
+
 /// The failure of the files no store holds, which restore cannot put back.
 fn unavailable_failure(unavailable: &[(Name, String)]) -> Option<Failure> {
     let (name, _) = unavailable.first()?;
@@ -128,7 +141,7 @@ fn unavailable_failure(unavailable: &[(Name, String)]) -> Option<Failure> {
         Failure::new(
             ErrorKind::OfflineMissing,
             format!(
-                "{} {} not in the store, and restore never downloads: {}",
+                "{} {} not kept on this machine, and restore never downloads: {}",
                 plural(shown.len() as u64, "file", "files"),
                 if shown.len() == 1 { "is" } else { "are" },
                 some_of(&shown, 3)

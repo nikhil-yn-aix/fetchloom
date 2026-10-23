@@ -131,6 +131,13 @@ impl Project {
         Ok(self.root.join(manifest.project.data_dir.as_str()))
     }
 
+    /// Removes `.fetchloom/` and `data.lock`, for an add that failed in a folder that had no
+    /// project before it. Errors are ignored: what is left is only the start of a project.
+    pub(crate) fn discard_state(&self) {
+        let _ = fs::remove_file(self.lock_path());
+        let _ = fs::remove_dir_all(self.root.join(STATE_DIR));
+    }
+
     fn state_dir(&self) -> Result<PathBuf, Failure> {
         let dir = self.root.join(STATE_DIR);
         fs::create_dir_all(&dir).map_err(|error| Failure::io("create", &dir, &error))?;

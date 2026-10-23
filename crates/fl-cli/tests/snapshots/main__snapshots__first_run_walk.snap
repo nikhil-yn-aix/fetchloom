@@ -1,0 +1,93 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: "redact(&world, &screens.join(\"\\n\"))"
+---
+$ fl
+fl 0.1.0, uv for research data
+
+Get a first dataset into this folder with:
+
+  fl add zenodo:3608990
+
+The commands that matter:
+  fl add REF      add a dataset, lock it and download it into data/
+  fl sync         make data/ match data.lock
+  fl status       see what differs from data.lock
+  fl path NAME    print where a dataset is, for scripts
+  fl get REF      fetch something once, without a project
+
+REF is a DOI, a link, zenodo:ID, hf:datasets/ORG/NAME, a folder, or search words.
+`fl --help` lists every command.
+
+fetchloom by KairosLab
+[exit 0]
+
+$ fl snyc
+error: unrecognized subcommand 'snyc'
+
+  tip: a similar subcommand exists: 'sync'
+
+Usage: fl [OPTIONS] [COMMAND]
+
+For more information, try '--help'.
+[exit 2]
+
+$ fl add
+✗ error[usage]: fl add needs something to add
+  help: `fl add zenodo:3608990`, `fl add https://host/file.csv`, or `fl add search words`
+[exit 2]
+
+$ fl add iris
+  Candidate fl add zenodo:1  Iris flowers (zenodo)
+  Candidate fl add zenodo:2  Iris images (zenodo)
+✗ error[reference.ambiguous]: `iris` matches 2 records
+  help: run one of the `fl add` lines above
+[exit 11]
+
+$ fl add zenodo:10
+   Resolved zenodo:10 → "Record 10" · 1 file · 2.0 GiB · CC-BY-4.0
+✗ error[usage]: 10 is 2.0 GiB to download, and fetchloom asks first, but there is no terminal to ask on
+  help: run the same command with --yes to go ahead
+[exit 2]
+
+$ fl add zenodo:3608990
+   Resolved zenodo:3608990 → "DatasetIris" · 1 file · 4.1 KiB · CC-BY-4.0
+ Downloaded 1 file of 3608990, 4.1 KiB in [TIME]
+     Locked 1 file in data.lock
+    Created [PROJECT]/data.toml
+      Added 3608990 = zenodo:3608990 to data.toml
+     Linked data/3608990 in [TIME], 0 B extra disk
+✓ Added 3608990, its files are in [PROJECT]/data/3608990.
+       hint scripts find it with `fl path 3608990`
+[exit 0]
+
+$ fl
+✓ Everything matches data.lock.
+       hint `fl add REF` adds a dataset, `fl --help` lists every command
+[exit 0]
+
+$ fl sync
+✗ error[local.modified]: 1 file was changed by hand, and sync never overwrites them: data/3608990/iris.csv
+  help: `fl restore` puts the downloaded files back, or `fl sync --force` overwrites them
+[exit 50]
+
+$ fl restore --yes
+   Restored data/3608990/iris.csv
+✓ Restored 1 file from the downloads kept on this machine.
+[exit 0]
+
+$ fl add zenodo:404
+✗ error[reference.unresolved]: zenodo:404 names nothing the source knows
+  help: check the identifier on the repository's own site
+[exit 10]
+
+$ fl sync --offline
+error[offline.missing]: offline, and 1 file of 3608990 has not been downloaded on this machine: data/3608990/iris.csv
+  help: run `fl sync 3608990` with the network to download them
+✗ Nothing was placed: 1 problem stopped it.
+[exit 20]
+
+$ fl sync
+     Linked data/3608990 in [TIME], 0 B extra disk
+✓ Synced 1 file into [PROJECT]/data, 0 B downloaded.
+[exit 0]

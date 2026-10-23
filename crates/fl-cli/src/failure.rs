@@ -182,7 +182,7 @@ fn transfer_help(failure: Failure, error: &TransferError) -> Failure {
             "run the same command again; if it repeats, the source changed what it serves",
         ),
         TransferError::Sink { .. } => {
-            failure.help("check that the disk holding the store has free space")
+            failure.help("check that the disk where downloads are kept has free space")
         }
         TransferError::Setup(_) => failure.help("check the system's certificate store and proxy settings"),
         _ => failure.help("check the connection, then run the same command again"),

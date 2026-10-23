@@ -1,0 +1,7 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: "logs_folded(&redact(&world, &ran.stderr))"
+---
+ Downloaded 2 files of ab, 8 B in [TIME]
+     Linked data/ab in [TIME], 0 B extra disk
+✓ Synced 2 files into [PROJECT]/data, 8 B downloaded.

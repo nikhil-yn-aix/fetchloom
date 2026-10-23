@@ -1,0 +1,42 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: document
+---
+{
+  "command": "sync",
+  "errors": [],
+  "result": {
+    "bytes_fetched": 8,
+    "data_dir": "[PROJECT]/data",
+    "datasets": 1,
+    "failed": 0,
+    "linked": 2,
+    "removed": 0
+  },
+  "schema": 1,
+  "status": "ok",
+  "warnings": [],
+  "work": {
+    "bytes_copied": 0,
+    "bytes_down": 8,
+    "bytes_up": 0,
+    "bytes_written": 8,
+    "files_linked": 2,
+    "files_rehashed": 0,
+    "links": {
+      "copy": 0,
+      "hardlink": 2,
+      "reflink": 0,
+      "symlink": 0
+    },
+    "objects_ingested": 2,
+    "phase_ms": {
+      "link": 0,
+      "transfer": 0
+    },
+    "requests": 2,
+    "resumes": 0,
+    "retries": 0,
+    "tier_hits": {}
+  }
+}

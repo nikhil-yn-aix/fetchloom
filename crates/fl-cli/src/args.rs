@@ -15,7 +15,7 @@ Start a project:
 Keep data/ in line:
   sync     Make data/ match data.lock
   status   Show how data/ compares with data.lock
-  restore  Put changed or missing files back from the store
+  restore  Put changed or missing files back, without downloading
   lock     Bring data.lock in line with data.toml
   remove   Drop datasets from data.toml, data.lock and data/
 
@@ -150,7 +150,7 @@ pub(crate) enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// Put changed or missing files back from the store, without the network
+    /// Put changed or missing files back, without downloading
     Restore {
         /// Only these files or folders under data/
         #[arg(value_name = "PATH")]

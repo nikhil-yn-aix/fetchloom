@@ -28,17 +28,6 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         Some(reference) => reference.clone(),
         None => ask_for_reference(context)?,
     };
-    let project = match Project::find(context.cwd) {
-        Ok(project) => project,
-        Err(failure) if failure.kind() == ErrorKind::ProjectMissing => {
-            init::create(context, context.cwd, None)?;
-            Project::at(
-                std::path::absolute(context.cwd)
-                    .map_err(|error| Failure::io("resolve", context.cwd, &error))?,
-            )
-        }
-        Err(failure) => return Err(failure),
-    };
     let written = parse(&typed)?;
     let name = match &add.name {
         Some(name) => Name::new(name).map_err(|error| {
@@ -48,23 +37,63 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         None => name_for(&written)?,
     };
     refuse_user_info(&written)?;
-    let reference = match written.target() {
-        Target::Name(query) => search(context, query).await?,
-        _ => project_relative(&written, context.cwd, project.root())?,
+    let found = match written.target() {
+        Target::Name(query) => Some(search(context, query).await?),
+        _ => None,
     };
-    let _held = context.hold(&project)?;
-    let before = project.manifest_text()?;
-    let existed = Manifest::from_toml(&before)?.datasets.contains_key(&name);
-    let text = edit(&before, &name, &reference, add)?;
+    let (project, new) = match Project::find(context.cwd) {
+        Ok(project) => (project, false),
+        Err(failure) if failure.kind() == ErrorKind::ProjectMissing => (
+            Project::at(
+                std::path::absolute(context.cwd)
+                    .map_err(|error| Failure::io("resolve", context.cwd, &error))?,
+            ),
+            true,
+        ),
+        Err(failure) => return Err(failure),
+    };
+    let reference = match found {
+        Some(reference) => reference,
+        None => project_relative(&written, context.cwd, project.root())?,
+    };
+    let fresh = new && !project.root().join(".fetchloom").exists();
+    let added = add_to(context, add, &project, new, &name, &reference).await;
+    if added.is_err() && fresh {
+        project.discard_state();
+    }
+    added
+}
+
+/// Adds `reference` as `name` to `project`, which `new` says has no data.toml yet: one is
+/// created only once the dataset is locked, so a failed add leaves no project behind.
+async fn add_to(
+    context: &Context<'_>,
+    add: &Add,
+    project: &Project,
+    new: bool,
+    name: &Name,
+    reference: &Reference,
+) -> Result<Outcome, Failure> {
+    let _held = context.hold(project)?;
+    let before = if new {
+        init::minimal(project.root(), None)
+    } else {
+        project.manifest_text()?
+    };
+    let existed = Manifest::from_toml(&before)?.datasets.contains_key(name);
+    let text = edit(&before, name, reference, add)?;
     let manifest = Manifest::from_toml(&text)?;
     let data_dir = project.data_dir(&manifest)?;
     let how = Relock {
-        typed: Some(&reference),
+        typed: Some(reference),
         upgrade: None,
     };
-    let relocked = relock(context, &project, &manifest, &how).await?;
+    let relocked = relock(context, project, &manifest, &how).await?;
+    if new {
+        init::create(context, project.root(), None)?;
+    }
     project.write_manifest(&text)?;
-    let change = relocked.changes.iter().find(|change| change.name == name);
+    let change = relocked.changes.iter().find(|change| change.name == *name);
     match change.and_then(|change| change.before.map(|was| (was, change.after))) {
         Some((was, now)) => context.emit(Event::Note {
             label: "Updated".to_owned(),
@@ -92,7 +121,7 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
             only: &only,
             ..Options::default()
         };
-        let synced = sync_project(context, &project, &options)
+        let synced = sync_project(context, project, &options)
             .await?
             .finished(context)?;
         let mut synced_result = synced.result();
@@ -138,9 +167,16 @@ const SEARCH_BUDGET: Duration = Duration::from_secs(5);
 /// exactly the query, or the one the user picks. A name is never guessed.
 async fn search(context: &Context<'_>, query: &str) -> Result<Reference, Failure> {
     let searched = context.engine.search(query, SEARCH_BUDGET).await;
-    for source in &searched.silent {
+    if !searched.silent.is_empty() {
         context.emit(Event::Warning(format!(
-            "{source} could not be searched in time, so its records are not listed"
+            "{} did not answer within {}, so {} records are not listed",
+            searched.silent.join(", "),
+            fl_model::units::duration(SEARCH_BUDGET),
+            if searched.silent.len() == 1 {
+                "its"
+            } else {
+                "their"
+            }
         )));
     }
     let hits = searched.hits;

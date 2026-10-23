@@ -46,8 +46,10 @@ const SEARCH_LIMIT: usize = 5;
 pub(crate) struct Searched {
     /// The records found, each with the source that found it.
     pub(crate) hits: Vec<(String, Hit)>,
-    /// The sources that did not answer in time, or failed.
+    /// The sources that did not answer in time.
     pub(crate) silent: Vec<String>,
+    /// The sources whose search failed, such as one that needs a key.
+    pub(crate) failed: Vec<String>,
 }
 
 /// One file wanted in the store.
@@ -177,7 +179,7 @@ impl Engine {
                     .extend(hits.into_iter().map(|hit| (source.clone(), hit))),
                 Ok(Err(error)) => {
                     tracing::debug!("{source} could not search: {error}");
-                    searched.silent.push(source);
+                    searched.failed.push(source);
                 }
                 Err(_) => searched.silent.push(source),
             }
