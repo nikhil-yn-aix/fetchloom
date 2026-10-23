@@ -5,6 +5,7 @@
 pub mod disk;
 pub mod memory;
 
+use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,6 +24,48 @@ use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
 const MAX_HEAD: usize = 64 * 1024;
+
+/// How long a test waits for something that should take a moment.
+pub const LIMIT: Duration = Duration::from_secs(20);
+
+/// Awaits `future` for at most [`LIMIT`], so a download that loops fails its test instead of
+/// hanging it.
+pub async fn bounded<T>(future: impl Future<Output = T>) -> Result<T, Box<dyn std::error::Error>> {
+    Ok(tokio::time::timeout(LIMIT, future).await?)
+}
+
+#[derive(Clone, Default)]
+/// Everything a subscriber wrote, shared among its clones.
+pub struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    /// Forgets what was written.
+    pub fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// The text written so far.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
+    }
+}
 
 /// One request as the server received it.
 #[derive(Debug, Clone)]

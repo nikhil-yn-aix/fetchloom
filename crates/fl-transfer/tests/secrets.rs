@@ -2,42 +2,18 @@
 //! stack beneath it, is captured and searched for the secrets the downloads carried.
 
 use std::error::Error;
-use std::io;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use fl_transfer::credentials::{Chain, Environment};
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
 
 use crate::support::memory::{Memory, Waits, client_with, quick};
-use crate::support::{Reply, Server};
+use crate::support::{Captured, Reply, Server};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
 const SECRET: &str = "SECRET-7f3a";
-
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
-    }
-}
 
 fn plain(url: &str) -> Result<Download, Box<dyn Error>> {
     Ok(Download {

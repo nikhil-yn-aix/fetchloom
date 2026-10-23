@@ -250,5 +250,157 @@ mod tests {
         writer.write(0, vec![1; 8]).await.unwrap();
         let error = writer.hashes().await.unwrap_err();
         assert_eq!(error.to_string(), "the disk is full");
+        let later = writer.write(0, vec![1; 8]).await.unwrap_err();
+        assert_eq!(later.to_string(), "the writer thread stopped");
+        let again = writer.allocate(8).await.unwrap_err();
+        assert_eq!(again.to_string(), "the writer thread stopped");
+    }
+
+    #[derive(Default)]
+    struct Probe {
+        bytes: Vec<u8>,
+        allocated: Option<u64>,
+        saved: Option<PartialRecord>,
+    }
+
+    impl Sink for Probe {
+        fn record(&self) -> Option<PartialRecord> {
+            None
+        }
+
+        fn allocate(&mut self, length: u64) -> io::Result<()> {
+            self.allocated = Some(length);
+            Ok(())
+        }
+
+        fn write_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
+            let start = usize::try_from(offset).map_err(io::Error::other)?;
+            if self.bytes.len() < start + bytes.len() {
+                self.bytes.resize(start + bytes.len(), 0);
+            }
+            self.bytes[start..start + bytes.len()].copy_from_slice(bytes);
+            Ok(())
+        }
+
+        fn read_at(&mut self, _offset: u64, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn reset(&mut self) -> io::Result<()> {
+            self.bytes.clear();
+            Ok(())
+        }
+
+        fn save(&mut self, record: &PartialRecord) -> io::Result<()> {
+            self.saved = Some(record.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn every_command_reaches_the_sink_and_buffers_come_back_empty() {
+        let record = PartialRecord {
+            location: "http://a/b".to_owned(),
+            length: Some(8),
+            validator: fl_model::partial::Validator::None,
+            received: 4,
+        };
+        let mut writer = Writer::start(Probe::default(), Hasher::new(&[]), Hasher::new(&[]));
+        assert!(writer.buffer().capacity() >= 256 * 1024);
+        assert!(writer.feed().buffer().capacity() >= 256 * 1024);
+        writer.allocate(8).await.unwrap();
+        writer.write(0, vec![1; 4]).await.unwrap();
+        writer.save(record.clone()).await.unwrap();
+        writer.unhashed().await.unwrap();
+        writer.write(4, vec![2; 4]).await.unwrap();
+        let (sink, hashes) = writer.finish().await.unwrap();
+        assert_eq!(sink.allocated, Some(8));
+        assert_eq!(sink.saved, Some(record));
+        assert_eq!(sink.bytes, [1, 1, 1, 1, 2, 2, 2, 2]);
+        assert_eq!(hashes.blake3, *blake3::hash(&[1; 4]).as_bytes());
+    }
+
+    #[tokio::test]
+    async fn a_returned_buffer_is_reused() {
+        let mut writer = Writer::start(Probe::default(), Hasher::new(&[]), Hasher::new(&[]));
+        let mut buffer = writer.buffer();
+        buffer.extend_from_slice(&[9; 16]);
+        let address = buffer.as_ptr();
+        writer.write(0, buffer).await.unwrap();
+        writer.hashes().await.unwrap();
+        let back = writer.buffer();
+        assert!(back.is_empty());
+        assert_eq!(back.as_ptr(), address);
+    }
+
+    struct Script {
+        reads: std::collections::VecDeque<io::Result<usize>>,
+        asked: Vec<usize>,
+    }
+
+    impl Script {
+        fn new(reads: Vec<io::Result<usize>>) -> Self {
+            Self {
+                reads: reads.into(),
+                asked: Vec::new(),
+            }
+        }
+    }
+
+    impl Sink for Script {
+        fn record(&self) -> Option<PartialRecord> {
+            None
+        }
+
+        fn allocate(&mut self, _length: u64) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn read_at(&mut self, _offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
+            self.asked.push(buffer.len());
+            let read = self.reads.pop_front().unwrap_or(Ok(0))?;
+            buffer[..read].fill(1);
+            Ok(read)
+        }
+
+        fn reset(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn save(&mut self, _record: &PartialRecord) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rehash_reads_exactly_the_length_asked_for() {
+        let mut sink = Script::new(vec![Ok(7), Ok(3)]);
+        let mut hasher = Hasher::new(&[]);
+        assert_eq!(rehash(&mut sink, &mut hasher, 10).unwrap(), 10);
+        assert_eq!(sink.asked, [10, 3]);
+        assert_eq!(hasher.finish().blake3, *blake3::hash(&[1; 10]).as_bytes());
+
+        let mut sink = Script::new(vec![Ok(10), Ok(10)]);
+        assert_eq!(rehash(&mut sink, &mut Hasher::new(&[]), 10).unwrap(), 10);
+        assert_eq!(sink.asked, [10]);
+
+        let mut sink = Script::new(vec![Ok(4)]);
+        assert_eq!(rehash(&mut sink, &mut Hasher::new(&[]), 10).unwrap(), 4);
+        assert_eq!(rehash(&mut sink, &mut Hasher::new(&[]), 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn rehash_retries_an_interrupted_read_and_fails_on_any_other_error() {
+        let mut sink = Script::new(vec![Err(io::ErrorKind::Interrupted.into()), Ok(5)]);
+        assert_eq!(rehash(&mut sink, &mut Hasher::new(&[]), 5).unwrap(), 5);
+        assert_eq!(sink.asked, [5, 5]);
+
+        let mut sink = Script::new(vec![Err(io::ErrorKind::PermissionDenied.into()), Ok(5)]);
+        let error = rehash(&mut sink, &mut Hasher::new(&[]), 5).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 }

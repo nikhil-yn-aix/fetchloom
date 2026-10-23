@@ -191,6 +191,12 @@ mod tests {
 
     use super::*;
 
+    async fn bounded<T>(future: impl Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), future)
+            .await
+            .unwrap()
+    }
+
     fn queued(group: &str, host: &str, job: &'static str) -> Queued<&'static str> {
         Queued {
             group: group.to_owned(),
@@ -219,21 +225,20 @@ mod tests {
             .collect();
         let seen = gauge.clone();
         let scheduler = Scheduler::new(8, Hosts::new(2));
-        let results = scheduler
-            .run(queue, move |(host, index)| {
-                let gauge = seen.clone();
-                async move {
-                    let here = gauge.now[host].fetch_add(1, Ordering::SeqCst) + 1;
-                    gauge.most[host].fetch_max(here, Ordering::SeqCst);
-                    let all = gauge.all_now.fetch_add(1, Ordering::SeqCst) + 1;
-                    gauge.all_most.fetch_max(all, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(3)).await;
-                    gauge.now[host].fetch_sub(1, Ordering::SeqCst);
-                    gauge.all_now.fetch_sub(1, Ordering::SeqCst);
-                    index
-                }
-            })
-            .await;
+        let results = bounded(scheduler.run(queue, move |(host, index)| {
+            let gauge = seen.clone();
+            async move {
+                let here = gauge.now[host].fetch_add(1, Ordering::SeqCst) + 1;
+                gauge.most[host].fetch_max(here, Ordering::SeqCst);
+                let all = gauge.all_now.fetch_add(1, Ordering::SeqCst) + 1;
+                gauge.all_most.fetch_max(all, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(3)).await;
+                gauge.now[host].fetch_sub(1, Ordering::SeqCst);
+                gauge.all_now.fetch_sub(1, Ordering::SeqCst);
+                index
+            }
+        }))
+        .await;
         assert_eq!(results, (0..20).collect::<Vec<_>>());
         for host in 0..3 {
             assert_eq!(gauge.most[host].load(Ordering::SeqCst), 2);
@@ -254,14 +259,13 @@ mod tests {
         ];
         let seen = log.clone();
         let scheduler = Scheduler::new(1, Hosts::new(1));
-        scheduler
-            .run(queue, move |name| {
-                let log = seen.clone();
-                async move {
-                    lock(&log).push(name);
-                }
-            })
-            .await;
+        bounded(scheduler.run(queue, move |name| {
+            let log = seen.clone();
+            async move {
+                lock(&log).push(name);
+            }
+        }))
+        .await;
         assert_eq!(*lock(&log), ["A1", "B1", "A2", "B2", "A3", "A4"]);
     }
 
@@ -276,19 +280,18 @@ mod tests {
         ];
         let (seen, opens) = (log.clone(), gate.clone());
         let scheduler = Scheduler::new(2, Hosts::new(1));
-        scheduler
-            .run(queue, move |name| {
-                let (log, gate) = (seen.clone(), opens.clone());
-                async move {
-                    lock(&log).push(name);
-                    match name {
-                        "first" => gate.notified().await,
-                        "other" => gate.notify_one(),
-                        _ => {}
-                    }
+        bounded(scheduler.run(queue, move |name| {
+            let (log, gate) = (seen.clone(), opens.clone());
+            async move {
+                lock(&log).push(name);
+                match name {
+                    "first" => gate.notified().await,
+                    "other" => gate.notify_one(),
+                    _ => {}
                 }
-            })
-            .await;
+            }
+        }))
+        .await;
         assert_eq!(*lock(&log), ["first", "other", "second"]);
     }
 
@@ -305,15 +308,14 @@ mod tests {
                 .collect();
             let seen = tasks.clone();
             let scheduler = Scheduler::new(jobs, Hosts::new(1));
-            scheduler
-                .run(queue, move |_| {
-                    let tasks = seen.clone();
-                    async move {
-                        lock(&tasks).insert(tokio::task::id());
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                })
-                .await;
+            bounded(scheduler.run(queue, move |_| {
+                let tasks = seen.clone();
+                async move {
+                    lock(&tasks).insert(tokio::task::id());
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }))
+            .await;
             assert_eq!(lock(&tasks).len(), expected);
         }
     }
@@ -322,7 +324,7 @@ mod tests {
     async fn zero_limits_count_as_one() {
         let scheduler = Scheduler::new(0, Hosts::new(0));
         let queue = vec![queued("A", "h", "x"), queued("A", "h", "y")];
-        let results = scheduler.run(queue, |name| async move { name }).await;
+        let results = bounded(scheduler.run(queue, |name| async move { name })).await;
         assert_eq!(results, ["x", "y"]);
     }
 }

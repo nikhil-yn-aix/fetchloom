@@ -42,4 +42,6 @@ exclude_re = [
     'link\.rs:\d+:\d+: replace match guard error\.kind\(\) != io::ErrorKind::NotFound with false in Linker<.t>::place$',
     # after a rename the scratch name is gone, so removing it again finds nothing unless another host took the same name in a shared tmp
     'replace Scratch::keep with \(\)$',
+    # the cursor is only ever read modulo the group count, so adding the count to it picks the same group
+    'schedule\.rs:\d+:\d+: replace % with \+ in State<J>::pick$',
 ]

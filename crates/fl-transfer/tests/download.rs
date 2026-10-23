@@ -16,8 +16,8 @@ use md5::Digest as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-use crate::support::memory::{Memory, Waits, client, client_with, quick};
-use crate::support::{Body, Reply, Server};
+use crate::support::memory::{Broken, Memory, Waits, client, client_with, patient, quick};
+use crate::support::{Body, Reply, Server, bounded};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -174,8 +174,8 @@ async fn retry_after_over_a_minute_is_not_waited_out() -> TestResult {
 async fn a_busy_server_is_tried_five_times_then_given_up() -> TestResult {
     let server = serve(vec![ResponseTemplate::new(503)]).await;
     let client = client(&Waits::default())?;
-    let error = fetch(&client, &plain(&format!("{}/file", server.uri()))?)
-        .await
+    let error = bounded(fetch(&client, &plain(&format!("{}/file", server.uri()))?))
+        .await?
         .err()
         .ok_or("the download succeeded")?;
     assert_eq!(error.kind(), ErrorKind::NetworkStatus);
@@ -193,8 +193,8 @@ async fn final_statuses_are_not_retried() -> TestResult {
     ] {
         let server = serve(vec![ResponseTemplate::new(status)]).await;
         let client = client(&Waits::default())?;
-        let error = fetch(&client, &plain(&format!("{}/file", server.uri()))?)
-            .await
+        let error = bounded(fetch(&client, &plain(&format!("{}/file", server.uri()))?))
+            .await?
             .err()
             .ok_or("the download succeeded")?;
         assert_eq!(error.kind(), kind, "{status}");
@@ -211,8 +211,8 @@ async fn a_stated_hash_that_fails_is_not_retried() -> TestResult {
         stated: vec![Digest::Md5([0; 16])],
         ..plain(&format!("{}/file", server.uri()))?
     };
-    let error = fetch(&client, &download)
-        .await
+    let error = bounded(fetch(&client, &download))
+        .await?
         .err()
         .ok_or("the download succeeded")?;
     assert_eq!(error.kind(), ErrorKind::IntegrityMismatch);
@@ -345,8 +345,8 @@ async fn silence_mid_body_times_out_and_a_trickle_does_not() -> TestResult {
     })
     .await?;
     let client = client(&Waits::default())?;
-    let error = fetch(&client, &plain(&stalled.url("/"))?)
-        .await
+    let error = bounded(fetch(&client, &plain(&stalled.url("/"))?))
+        .await?
         .err()
         .ok_or("a stalled body finished")?;
     assert_eq!(error.kind(), ErrorKind::NetworkTimeout);
@@ -360,7 +360,7 @@ async fn silence_mid_body_times_out_and_a_trickle_does_not() -> TestResult {
         ..Reply::ok(Vec::new())
     })
     .await?;
-    let done = fetch(&client, &plain(&trickling.url("/"))?).await?;
+    let done = bounded(fetch(&client, &plain(&trickling.url("/"))?)).await??;
     assert_eq!(done.sink.bytes, bytes);
     Ok(())
 }
@@ -497,9 +497,8 @@ async fn a_failed_download_has_saved_its_progress_when_it_returns() -> TestResul
     };
     let client = client(&Waits::default())?;
     let sink = crate::support::disk::Disk::open(temp.path())?;
-    let error = client
-        .download(&download, sink)
-        .await
+    let error = bounded(client.download(&download, sink))
+        .await?
         .err()
         .ok_or("finished")?;
     assert_eq!(error.kind(), ErrorKind::NetworkTimeout);
@@ -508,34 +507,6 @@ async fn a_failed_download_has_saved_its_progress_when_it_returns() -> TestResul
     assert_eq!(record.received, 600);
     assert_eq!(client.counters().read().requests, 5);
     Ok(())
-}
-
-struct Broken;
-
-impl fl_transfer::sink::Sink for Broken {
-    fn record(&self) -> Option<fl_model::partial::PartialRecord> {
-        None
-    }
-
-    fn allocate(&mut self, _length: u64) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> std::io::Result<()> {
-        Err(std::io::Error::other("the disk is full"))
-    }
-
-    fn read_at(&mut self, _offset: u64, _buffer: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0)
-    }
-
-    fn reset(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn save(&mut self, _record: &fl_model::partial::PartialRecord) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 #[tokio::test]
@@ -549,9 +520,8 @@ async fn a_sink_that_fails_is_reported_as_itself_and_not_retried() -> TestResult
         stable: true,
         ..plain(&format!("{}/file", server.uri()))?
     };
-    let error = client
-        .download(&download, Broken)
-        .await
+    let error = bounded(client.download(&download, Broken))
+        .await?
         .err()
         .ok_or("a broken sink took the bytes")?;
     assert_eq!(error.kind(), ErrorKind::LocalIo);
@@ -578,5 +548,91 @@ async fn an_untrusted_certificate_is_refused_and_says_why() -> TestResult {
         .err()
         .ok_or("an untrusted server was downloaded from")?;
     assert!(error.to_string().contains("certificate"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_cold_download_is_not_a_restart_and_saves_progress_every_64_mib_only() -> TestResult {
+    const MIB: usize = 1 << 20;
+    let mut bytes = vec![0xab; 64 * MIB + 300_000];
+    bytes[..251].copy_from_slice(&body(251));
+    let payload = bytes.clone();
+    let server = Server::plain(move |_| Reply::ok(payload.clone())).await?;
+    let client = client_with(
+        patient(Duration::from_secs(5)),
+        Chain::new(Vec::new()),
+        &Waits::default(),
+    )?;
+    let done = bounded(fetch(&client, &plain(&server.url("/file"))?)).await??;
+    assert_eq!(blake3::hash(&done.sink.bytes), blake3::hash(&bytes));
+    assert!(!done.restarted);
+    assert!(!done.resumed);
+    assert_eq!(done.sink.resets, 1);
+    assert_eq!(done.sink.reads, 0);
+    let (last, full) = done.sink.writes.split_last().ok_or("nothing was written")?;
+    assert!(full.iter().all(|write| *write == 256 * 1024));
+    assert_eq!(full.len() * 256 * 1024 + last, bytes.len());
+    let record = done.sink.record.ok_or("no record was saved")?;
+    assert_eq!(record.received, 64 * MIB as u64);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failure_before_any_byte_is_kept_does_not_restart_or_save() -> TestResult {
+    for stable in [false, true] {
+        let server = serve(vec![
+            ResponseTemplate::new(503),
+            ResponseTemplate::new(200).set_body_bytes(body(100)),
+        ])
+        .await;
+        let download = Download {
+            stable,
+            ..plain(&format!("{}/file", server.uri()))?
+        };
+        let waits = Waits::default();
+        let done = bounded(fetch(&client(&waits)?, &download)).await??;
+        assert_eq!(done.sink.bytes, body(100));
+        assert!(!done.restarted, "{stable}");
+        assert_eq!(done.sink.resets, 1, "{stable}");
+        assert!(done.sink.record.is_none(), "{stable}");
+        assert_eq!(waits.taken().len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_partial_answer_nobody_asked_for_is_a_status() -> TestResult {
+    let server = Server::plain(|_| {
+        Reply {
+            status: 206,
+            ..Reply::ok(body(10))
+        }
+        .header("content-range", "bytes 0-9/10")
+    })
+    .await?;
+    let client = client(&Waits::default())?;
+    let error = bounded(fetch(&client, &plain(&server.url("/file"))?))
+        .await?
+        .err()
+        .ok_or("a partial answer was taken")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkStatus);
+    assert_eq!(client.counters().read().requests, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_refused_credential_is_told_from_a_missing_one() -> TestResult {
+    let server = Server::tls(|_| Reply::status(401)).await?;
+    let client = client_with(
+        trusting(&[&server]),
+        Chain::new(vec![Box::new(tokens(&[&server]))]),
+        &Waits::default(),
+    )?;
+    let error = bounded(fetch(&client, &plain(&server.url("/file"))?))
+        .await?
+        .err()
+        .ok_or("a refused credential downloaded")?;
+    assert_eq!(error.kind(), ErrorKind::AuthRejected);
+    assert_eq!(client.counters().read().requests, 1);
     Ok(())
 }
