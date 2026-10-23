@@ -499,3 +499,25 @@ async fn an_index_walk_visits_ten_thousand_directories_and_refuses_one_more() ->
     }
     Ok(())
 }
+
+#[test]
+fn a_wait_names_the_host_each_kind_of_reference_asks_first() -> Result<(), Failure> {
+    let registry = Registry::builtin(&support::client()?)?;
+    let host =
+        |text: &str| -> Result<Option<String>, Failure> { Ok(registry.host_of(&text.parse()?)) };
+    assert_eq!(host("zenodo:3608990")?.as_deref(), Some("zenodo.org"));
+    assert_eq!(
+        host("hf:datasets/org/set")?.as_deref(),
+        Some("huggingface.co")
+    );
+    assert_eq!(
+        host("https://example.com/a.csv")?.as_deref(),
+        Some("example.com")
+    );
+    assert_eq!(
+        host("doi:10.5281/zenodo.3608990")?.as_deref(),
+        Some("doi.org")
+    );
+    assert_eq!(host("ham10000")?, None);
+    Ok(())
+}

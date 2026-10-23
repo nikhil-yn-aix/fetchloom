@@ -637,6 +637,10 @@ impl Source for Declarative {
         })
     }
 
+    fn host(&self) -> Option<String> {
+        self.origin.as_ref().map(|origin| origin.host().to_owned())
+    }
+
     fn searchable(&self) -> Option<&dyn Searchable> {
         self.search.as_ref().map(|_| self as &dyn Searchable)
     }

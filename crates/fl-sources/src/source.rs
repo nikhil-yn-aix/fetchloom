@@ -39,6 +39,12 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// The host this source asks about its records, when it always asks the same one, so a
+    /// wait on it can name it.
+    fn host(&self) -> Option<String> {
+        None
+    }
+
     /// The search this source offers over its records, if it offers one.
     fn searchable(&self) -> Option<&dyn Searchable> {
         None

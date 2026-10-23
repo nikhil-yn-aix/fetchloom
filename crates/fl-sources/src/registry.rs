@@ -102,6 +102,26 @@ impl Registry {
             .collect()
     }
 
+    /// The host a resolve of `reference` asks first: the URL's own host, doi.org for a DOI, or
+    /// the host of the source that serves its scheme, when that source always asks one host.
+    #[must_use]
+    pub fn host_of(&self, reference: &Reference) -> Option<String> {
+        match reference.target() {
+            Target::Url { .. } => url::Url::parse(reference.as_str())
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned)),
+            Target::Doi { .. } => self.resolver.host_str().map(str::to_owned),
+            _ => {
+                let scheme = scheme_of(reference);
+                self.sources
+                    .iter()
+                    .rev()
+                    .find(|source| source.schemes().iter().any(|served| served == scheme))
+                    .and_then(|source| source.host())
+            }
+        }
+    }
+
     /// One search of `query`, for at most `limit` records, per source that can search, in the
     /// order the sources were added. Of several sources serving the same first scheme only the
     /// last added counts, as when resolving. Nothing runs until the caller awaits the hits, so

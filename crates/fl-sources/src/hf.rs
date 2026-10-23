@@ -239,6 +239,10 @@ impl HuggingFace {
 }
 
 impl Source for HuggingFace {
+    fn host(&self) -> Option<String> {
+        self.base.host().map(str::to_owned)
+    }
+
     fn schemes(&self) -> &[String] {
         &self.schemes
     }

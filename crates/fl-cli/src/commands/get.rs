@@ -21,12 +21,7 @@ use crate::report::Outcome;
 
 /// `fl get`.
 pub(crate) async fn run(context: &Context<'_>, get: &Get) -> Result<Outcome, Failure> {
-    let reference: Reference =
-        get.reference
-            .parse()
-            .map_err(|error: fl_model::reference::ReferenceError| {
-                Failure::new(error.kind(), error.to_string())
-            })?;
+    let reference: Reference = super::add::parse(&get.reference)?;
     let name = super::add::name_for(&reference)?;
     let target = match &get.output {
         Some(dir) => context.cwd.join(dir),
