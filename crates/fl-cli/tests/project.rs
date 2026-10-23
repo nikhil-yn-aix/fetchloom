@@ -134,6 +134,25 @@ async fn a_restrictive_license_is_a_warning() -> TestResult {
     Ok(())
 }
 
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_windows_cannot_hold_is_refused_before_anything_is_written() -> TestResult {
+    let world = World::start().await?;
+    world
+        .record("11", "cc-by-4.0", &[("notes: draft.txt", b"a", None)])
+        .await;
+    let ran = world.here(&["add", "zenodo:11"])?;
+    assert_ne!(ran.code, Some(0), "{}", ran.stderr);
+    assert!(
+        ran.stderr.contains("local.unrepresentable"),
+        "{}",
+        ran.stderr
+    );
+    assert!(!world.project.join("data.toml").exists());
+    assert!(!world.project.join("data.lock").exists());
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_large_record_needs_a_yes_and_writes_nothing_without_one() -> TestResult {
     let world = World::start().await?;
