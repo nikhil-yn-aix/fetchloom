@@ -1,0 +1,17 @@
+hosts = ["www.openml.org"]
+
+[small]
+reference = "openml:61"
+resolved = "openml:61"
+files = 1
+requests = 1
+first = { path = "iris.arff", digests = ["md5:ad484452702105cbf3d30f8deaba39a9"] }
+serve = [{ path = "/api/v1/json/data/61", body = "61/record.json" }]
+
+[unhashed]
+reference = "openml:61"
+resolved = "openml:61"
+files = 1
+requests = 1
+first = { path = "iris.arff" }
+serve = [{ path = "/api/v1/json/data/61", body = "61/record-unhashed.json" }]

@@ -15,10 +15,11 @@ pub const RECORD: &str = include_str!("../../../fixtures/responses/zenodo/360899
 pub const ADAPTER: &str = include_str!("../../../sources/zenodo.toml");
 
 /// The other built in adapters that can search, which a test must not let reach the internet.
-const SEARCHING: [(&str, &str); 4] = [
+const SEARCHING: [(&str, &str); 5] = [
     ("dryad", include_str!("../../../sources/dryad.toml")),
     ("github", include_str!("../../../sources/github.toml")),
     ("kaggle", include_str!("../../../sources/kaggle.toml")),
+    ("openml", include_str!("../../../sources/openml.toml")),
     ("osf", include_str!("../../../sources/osf.toml")),
 ];
 pub const IRIS: &[u8] = include_bytes!("../../../fixtures/responses/zenodo/3608990/iris.csv");

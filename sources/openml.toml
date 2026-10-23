@@ -1,0 +1,17 @@
+[adapter]
+name = "openml"
+scheme = "openml"
+pattern = "{id}"
+record = "https://www.openml.org/api/v1/json/data/{id}"
+resolved = "openml:{id}"
+landing = ["https://www.openml.org/d/{id}", "https://www.openml.org/search?type=data&id={id}"]
+files = "$.data_set_description"
+path = "{$.name}.arff"
+url = "https://www.openml.org/data/v1/download/{$.file_id}"
+digest = "md5:{$.md5_checksum}"
+search = { url = "https://www.openml.org/api/v1/json/data/list/data_name/{query}/limit/{limit}", items = "$.data.dataset[*]", ref = "openml:{$.did}", title = "$.name" }
+
+[adapter.meta]
+title = "$.data_set_description.name"
+version = "$.data_set_description.version"
+license = "$.data_set_description.licence"

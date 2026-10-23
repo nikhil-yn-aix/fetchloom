@@ -74,6 +74,13 @@ async fn croissant() -> Result<(), Failure> {
 }
 
 #[tokio::test]
+#[ignore = "reaches www.openml.org"]
+async fn openml() -> Result<(), Failure> {
+    assert_eq!(smoke("openml:61").await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "reaches api.figshare.com and ndownloader.figshare.com"]
 async fn figshare() -> Result<(), Failure> {
     assert_eq!(smoke("figshare:34433697").await?, 18);
