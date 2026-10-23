@@ -170,7 +170,8 @@ pub(crate) struct Survey<'l> {
     /// Files in the directory that the lock does not list and fetchloom did not place, by
     /// their path relative to the data directory.
     pub(crate) extras: Vec<String>,
-    /// Files fetchloom placed that the lock no longer lists, by the same paths.
+    /// Files fetchloom placed, unchanged since, that the lock no longer lists, by the same
+    /// paths. A placed file changed by hand counts as an extra.
     pub(crate) stale: Vec<String>,
     /// How many files were rehashed because their fingerprint could not be trusted, and found
     /// unchanged.
@@ -220,14 +221,20 @@ pub(crate) fn survey<'l>(
             print,
         });
     }
-    let (unlisted, extras) = present
-        .into_keys()
-        .map(|path| format!("{dir}/{path}"))
-        .partition(|key| state.files.contains_key(key));
+    let mut dropped = Vec::new();
+    let mut extras = Vec::new();
+    for path in present.into_keys() {
+        let key = format!("{dir}/{path}");
+        if state.files.contains_key(&key) && state.untouched(&key, &on_disk.join(&path))? {
+            dropped.push(key);
+        } else {
+            extras.push(key);
+        }
+    }
     Ok(Survey {
         slots,
         extras,
-        stale: unlisted,
+        stale: dropped,
         confirmed,
     })
 }
@@ -278,7 +285,11 @@ pub(crate) fn want(
 }
 
 /// The locked file as wanted in the store, from its location number `at` in the lock.
-pub(crate) fn locked_want(file: &LockedFile, at: usize) -> Result<Option<Want>, Failure> {
+pub(crate) fn locked_want(
+    file: &LockedFile,
+    at: usize,
+    local: bool,
+) -> Result<Option<Want>, Failure> {
     let Some(location) = file.at.get(at) else {
         return Ok(None);
     };
@@ -288,6 +299,16 @@ pub(crate) fn locked_want(file: &LockedFile, at: usize) -> Result<Option<Want>, 
             format!("data.lock holds `{location}` for `{}`: {error}", file.path),
         )
     })?;
+    if !local && url.to_file_path().is_some() {
+        return Err(Failure::new(
+            ErrorKind::ProjectInvalidLock,
+            format!(
+                "data.lock points `{}` at a file on this machine, `{location}`, but its dataset is not a local folder",
+                file.path
+            ),
+        )
+        .help("run `fl lock --upgrade` to resolve the dataset again"));
+    }
     let mut stated = Vec::new();
     if let Some(md5) = file.md5 {
         stated.push(Digest::Md5(md5));
