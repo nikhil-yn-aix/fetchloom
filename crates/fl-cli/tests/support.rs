@@ -75,6 +75,45 @@ impl World {
         })
     }
 
+    /// Serves `body` at `route` on the fake server.
+    pub async fn serve(&self, route: &str, body: &[u8]) {
+        Mock::given(method("GET"))
+            .and(path(route.to_owned()))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// A zenodo record `id` under `license` whose files are `files`, each a name, its bytes and
+    /// the size the record states, which is the length of the bytes unless given.
+    pub async fn record(&self, id: &str, license: &str, files: &[(&str, &[u8], Option<u64>)]) {
+        let uri = self.server.uri();
+        let entries: Vec<Value> = files
+            .iter()
+            .map(|(name, bytes, stated)| {
+                serde_json::json!({
+                    "key": name,
+                    "size": stated.unwrap_or(bytes.len() as u64),
+                    "links": { "self": format!("{uri}/files/{id}/{name}") },
+                })
+            })
+            .collect();
+        let record = serde_json::json!({
+            "id": id.parse::<u64>().unwrap_or(1),
+            "doi": format!("10.5281/zenodo.{id}"),
+            "metadata": { "title": format!("Record {id}"), "license": { "id": license } },
+            "files": entries,
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("/api/records/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(record))
+            .mount(&self.server)
+            .await;
+        for (name, bytes, _) in files {
+            self.serve(&format!("/files/{id}/{name}"), bytes).await;
+        }
+    }
+
     pub fn fl(&self, dir: &Path, args: &[&str]) -> Result<Ran, Failure> {
         self.fl_with_store(dir, &self.store, args)
     }

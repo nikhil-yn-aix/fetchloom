@@ -4,12 +4,13 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use fl_model::document::Status;
 use fl_model::error::ErrorKind;
 use fl_model::event::Event;
 use serde_json::json;
 use toml_edit::{DocumentMut, table, value};
 
+use crate::args::Add;
+use crate::ask::Ask;
 use crate::commands::Context;
 use crate::failure::Failure;
 use crate::project::MANIFEST;
@@ -17,15 +18,90 @@ use crate::report::Outcome;
 
 const IGNORED: [&str; 2] = ["data/", ".fetchloom/"];
 
-/// `fl init`.
-pub(crate) fn run(context: &Context<'_>, name: Option<&str>) -> Result<Outcome, Failure> {
+/// `fl init`, then `fl add` of `first` when the walk through `-i` named a first dataset.
+pub(crate) async fn run(
+    context: &Context<'_>,
+    name: Option<&str>,
+    first: Option<&str>,
+) -> Result<Outcome, Failure> {
     let path = create(context, context.cwd, name)?;
-    Ok(Outcome {
-        status: Status::Ok,
-        result: json!({ "manifest": path.display().to_string() }),
-        answer: None,
-        sentence: format!("Started a project in {}.", context.cwd.display()),
+    if let Some(first) = first {
+        let add = Add {
+            reference: Some(first.to_owned()),
+            ..Add::default()
+        };
+        return super::add::run(context, &add).await;
+    }
+    Ok(Outcome::ok(
+        json!({ "manifest": path.display().to_string() }),
+        format!("Started a project in {}.", context.cwd.display()),
+    ))
+}
+
+/// What the walk of `fl init -i` asked for.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Answers {
+    /// The project's name.
+    pub(crate) name: Option<String>,
+    /// A first dataset to add.
+    pub(crate) first: Option<String>,
+    /// Where the store should live from now on, when it should move.
+    pub(crate) store: Option<String>,
+}
+
+/// Asks for the project's name, a first dataset and where the store lives. Empty answers keep
+/// the defaults: the folder's name, no dataset, the store at `store`.
+pub(crate) fn interview(ask: &dyn Ask, dir: &Path, store: &Path) -> Result<Answers, Failure> {
+    let refusal = || {
+        Failure::new(
+            ErrorKind::Usage,
+            "fl init -i asks questions, and there is no terminal to ask on",
+        )
+        .help("run `fl init --name NAME`, then `fl add REF`")
+    };
+    let given = |text: String| (!text.is_empty()).then_some(text);
+    let name = given(ask.text(
+        &format!("Project name (empty for {})", default_name(dir)),
+        refusal(),
+    )?);
+    let store_answer = given(ask.text(
+        &format!(
+            "Where should downloads be kept? (empty for {})",
+            store.display()
+        ),
+        refusal(),
+    )?)
+    .filter(|answer| Path::new(answer) != store);
+    let first = given(ask.text(
+        "A first dataset: a DOI, a link, or search words (empty to skip)",
+        refusal(),
+    )?);
+    Ok(Answers {
+        name,
+        first,
+        store: store_answer,
     })
+}
+
+/// Sets `[store] local` to `store` in the user configuration file at `file`, keeping the rest
+/// of it as written.
+pub(crate) fn save_store(file: &Path, store: &str) -> Result<(), Failure> {
+    let old = match fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Failure::io("read", file, &error)),
+    };
+    let mut document: DocumentMut = old.parse().map_err(|error: toml_edit::TomlError| {
+        Failure::new(
+            ErrorKind::LocalInvalidConfig,
+            format!("{}: {}", file.display(), error.message()),
+        )
+    })?;
+    document["store"]["local"] = value(store);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|error| Failure::io("create", parent, &error))?;
+    }
+    fs::write(file, document.to_string()).map_err(|error| Failure::io("write", file, &error))
 }
 
 /// Writes a new `data.toml` in `dir`, and in a git repository keeps the data directory and

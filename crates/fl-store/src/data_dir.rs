@@ -53,21 +53,12 @@ impl DataDir {
     /// [`StoreError::NotADirectory`] when a parent below the root exists as something other than
     /// a real directory, such as a symlink, and [`StoreError::Io`] when a parent cannot be made.
     pub fn destination(&self, dir: &DataPath, file: &DataPath) -> Result<Destination, StoreError> {
+        representable(dir, file)?;
         let components: Vec<&str> = dir
             .as_str()
             .split('/')
             .chain(file.as_str().split('/'))
             .collect();
-        if cfg!(windows) {
-            for component in &components {
-                if let Some(reason) = windows_refusal(component) {
-                    return Err(StoreError::Unrepresentable {
-                        path: format!("{dir}/{file}"),
-                        reason,
-                    });
-                }
-            }
-        }
         self.make(&self.root)?;
         let mut path = self.root.clone();
         let (name, parents) = components.split_last().unwrap_or((&"", &[]));
@@ -118,6 +109,39 @@ impl DataDir {
             .unwrap_or_else(PoisonError::into_inner)
             .contains(path)
     }
+}
+
+/// Removes the file fetchloom placed at `path`, read only as it is, without making the object
+/// it was linked from writable. A file that is not there is not an error.
+///
+/// # Errors
+///
+/// Returns [`StoreError::Io`] when the file cannot be removed.
+pub fn remove(path: &Path) -> Result<(), StoreError> {
+    match crate::platform::remove(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(io("remove", path)(error)),
+        _ => Ok(()),
+    }
+}
+
+/// Refuses `file` of the dataset directory `dir` when this platform cannot hold one of its
+/// components, so a listing can be checked before anything is written.
+///
+/// # Errors
+///
+/// Returns [`StoreError::Unrepresentable`] naming the path and the reason.
+pub fn representable(dir: &DataPath, file: &DataPath) -> Result<(), StoreError> {
+    if cfg!(windows) {
+        for component in dir.as_str().split('/').chain(file.as_str().split('/')) {
+            if let Some(reason) = windows_refusal(component) {
+                return Err(StoreError::Unrepresentable {
+                    path: format!("{dir}/{file}"),
+                    reason,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 const RESERVED: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];

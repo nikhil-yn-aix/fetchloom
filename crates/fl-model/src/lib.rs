@@ -8,6 +8,7 @@ pub mod error;
 pub mod event;
 pub mod filter;
 mod hex;
+pub mod license;
 pub mod lock;
 pub mod manifest;
 pub mod name;

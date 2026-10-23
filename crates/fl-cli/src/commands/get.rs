@@ -1,62 +1,60 @@
 //! `fl get`: one reference fetched into a directory, through the store, without a project.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fl_model::digest::Digest;
-use fl_model::document::Status;
 use fl_model::error::ErrorKind;
 use fl_model::event::Event;
 use fl_model::path::DataPath;
 use fl_model::reference::Reference;
 use fl_store::fingerprint;
+use fl_store::link::Ladder;
 use serde_json::json;
 
-use crate::commands::{Context, everything, fetch_reported, is_typed_url, plural, want};
+use crate::args::Get;
+use crate::commands::add::Chosen;
+use crate::commands::{Context, fetch_every, is_typed_url, plural, want};
 use crate::failure::Failure;
 use crate::report::Outcome;
 
 /// `fl get`.
-pub(crate) async fn run(
-    context: &Context<'_>,
-    reference: &str,
-    output: Option<&Path>,
-) -> Result<Outcome, Failure> {
+pub(crate) async fn run(context: &Context<'_>, get: &Get) -> Result<Outcome, Failure> {
     let reference: Reference =
-        reference
+        get.reference
             .parse()
             .map_err(|error: fl_model::reference::ReferenceError| {
                 Failure::new(error.kind(), error.to_string())
             })?;
     let name = super::add::name_for(&reference)?;
-    let target = match output {
+    let target = match &get.output {
         Some(dir) => context.cwd.join(dir),
         None => context.cwd.join(name.as_str()),
     };
     let target =
         std::path::absolute(&target).map_err(|error| Failure::io("resolve", &target, &error))?;
     let (root, dir) = split(&target)?;
-    let listing = context.engine.resolve(&reference, &everything()?).await?;
+    let listing = context
+        .engine
+        .resolve(&reference, &Chosen::new(&get.filters)?.filters()?)
+        .await?;
+    let bytes = listing.entries.iter().filter_map(|entry| entry.size).sum();
     context.emit(Event::Resolved {
         dataset: name.clone(),
         resolved: listing.resolved.clone(),
         title: listing.meta.title.clone(),
         files: listing.entries.len() as u64,
-        bytes: listing.entries.iter().filter_map(|entry| entry.size).sum(),
+        bytes,
         license: listing.meta.license.clone(),
     });
     let wants = listing
         .entries
         .iter()
-        .map(|entry| {
-            want(
-                entry,
-                &std::collections::HashMap::new(),
-                is_typed_url(&reference),
-            )
-        })
+        .map(|entry| want(entry, &HashMap::new(), is_typed_url(&reference)))
         .collect::<Result<Vec<_>, _>>()?;
-    let gots = fetch_reported(context, &name, wants).await?;
+    context.agree_to_download(&name, context.engine.to_download(&wants))?;
+    let gots = fetch_every(context, &name, wants).await?;
     let started = Instant::now();
     let files: Vec<(DataPath, [u8; 32])> = listing
         .entries
@@ -64,41 +62,70 @@ pub(crate) async fn run(
         .zip(&gots)
         .map(|(entry, got)| (entry.path.clone(), got.blake3))
         .collect();
-    refuse_others(&target, &files)?;
-    let placed = context.engine.link(&root, &dir, &files)?;
+    let shown = target.display().to_string();
+    let differing = differing(&target, &files)?;
+    if differing.is_empty()
+        && files
+            .iter()
+            .all(|(path, _)| target.join(path.as_str()).exists())
+    {
+        context.emit(Event::Unchanged {
+            dataset: name.clone(),
+        });
+        return Ok(Outcome {
+            answer: Some(shown.clone()),
+            ..Outcome::ok(
+                json!({ "path": shown, "files": files.len(), "unchanged": true }),
+                format!("{shown} already holds these files, unchanged."),
+            )
+        });
+    }
+    if !differing.is_empty() && !get.force {
+        let first = &differing[0];
+        return Err(Failure::new(
+            ErrorKind::LocalModified,
+            format!(
+                "`{}` already holds other bytes{}",
+                first.display(),
+                if differing.len() > 1 {
+                    format!(", and {} more files do", differing.len() - 1)
+                } else {
+                    String::new()
+                }
+            ),
+        )
+        .subject(first.display().to_string())
+        .help("fetch into another directory with `-o DIR`, or replace them with `--force`"));
+    }
+    let placed = context.engine.link(&root, &dir, &files, Ladder::LASTING)?;
     context.emit(Event::Linked {
         dataset: name.clone(),
-        path: target.display().to_string(),
+        path: shown.clone(),
         elapsed: started.elapsed(),
         extra_bytes: placed.iter().map(|(_, linked)| linked.bytes_copied).sum(),
     });
-    let shown = target.display().to_string();
     Ok(Outcome {
-        status: Status::Ok,
-        result: json!({ "path": shown, "files": placed.len() }),
         answer: Some(shown.clone()),
-        sentence: format!(
-            "Got {} into {shown}.",
-            plural(placed.len() as u64, "file", "files")
-        ),
+        ..Outcome::ok(
+            json!({ "path": shown, "files": placed.len(), "unchanged": false }),
+            format!(
+                "Got {} into {shown}.",
+                plural(placed.len() as u64, "file", "files")
+            ),
+        )
     })
 }
 
-/// Refuses a target directory that already holds other bytes at any of the files' paths, so
-/// `get` never overwrites what is there.
-fn refuse_others(target: &Path, files: &[(DataPath, [u8; 32])]) -> Result<(), Failure> {
+/// The files of `files` that already sit in `target` with other bytes.
+fn differing(target: &Path, files: &[(DataPath, [u8; 32])]) -> Result<Vec<PathBuf>, Failure> {
+    let mut differing = Vec::new();
     for (path, blake3) in files {
         let place = target.join(path.as_str());
         if place.exists() && fingerprint::hash_file(&place)? != Digest::Blake3(*blake3) {
-            return Err(Failure::new(
-                ErrorKind::LocalModified,
-                format!("`{}` already holds other bytes", place.display()),
-            )
-            .subject(place.display().to_string())
-            .help("move it away or fetch into another directory with `-o DIR`"));
+            differing.push(place);
         }
     }
-    Ok(())
+    Ok(differing)
 }
 
 fn split(target: &Path) -> Result<(PathBuf, DataPath), Failure> {

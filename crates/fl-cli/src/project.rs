@@ -51,6 +51,11 @@ impl Project {
             })
     }
 
+    /// The directory holding `data.toml`.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The path of `data.toml`.
     pub(crate) fn manifest_path(&self) -> PathBuf {
         self.root.join(MANIFEST)
@@ -154,22 +159,34 @@ impl Project {
         Ok(Held { _file: file })
     }
 
-    /// The fingerprints recorded when files were placed.
+    /// The fingerprints recorded when files were placed, and when they were recorded.
     pub(crate) fn state(&self) -> Result<State, Failure> {
         let path = self.root.join(STATE_DIR).join("state");
-        match fs::read(&path) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(State::default()),
-            Err(error) => Err(Failure::io("read", &path, &error)),
-        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
+            Err(error) => return Err(Failure::io("read", &path, &error)),
+        };
+        let mut state: State = serde_json::from_slice(&bytes).unwrap_or_default();
+        state.written = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_nanos());
+        Ok(state)
     }
 
-    /// Records the fingerprints of placed files.
-    pub(crate) fn write_state(&self, state: &State) -> Result<(), Failure> {
+    /// Records the fingerprints of placed files. With `touch`, the file is written even when
+    /// its text did not change, so its time moves past the files it vouches for.
+    pub(crate) fn write_state(&self, state: &State, touch: bool) -> Result<(), Failure> {
         let path = self.state_dir()?.join("state");
         let text = serde_json::to_string(state)
             .map_err(|error| Failure::new(ErrorKind::LocalIo, error.to_string()))?;
-        write_if_changed(&path, &text).map(|_| ())
+        if touch {
+            write(&path, &text)
+        } else {
+            write_if_changed(&path, &text).map(|_| ())
+        }
     }
 }
 
@@ -183,6 +200,27 @@ pub(crate) struct Held {
 pub(crate) struct State {
     /// The files.
     pub(crate) files: BTreeMap<String, Placed>,
+    /// When the state was written, in nanoseconds since the unix epoch by the file's own time.
+    #[serde(skip)]
+    pub(crate) written: u128,
+}
+
+impl State {
+    /// Whether the file at `key`, holding `blake3` by the lock, can be taken as unchanged from
+    /// its fingerprint `print` alone. A file modified in the same clock tick as the state was
+    /// written, or later, may have changed after it was recorded, so it is not trusted.
+    pub(crate) fn trusts(
+        &self,
+        key: &str,
+        blake3: &[u8; 32],
+        print: &fl_store::fingerprint::Fingerprint,
+    ) -> bool {
+        print.modified < self.written
+            && self
+                .files
+                .get(key)
+                .is_some_and(|placed| placed.matches(blake3, print))
+    }
 }
 
 /// A placed file: the object it was placed from and its fingerprint then.
@@ -234,10 +272,14 @@ fn write_if_changed(path: &Path, text: &str) -> Result<bool, Failure> {
     if fs::read_to_string(path).is_ok_and(|old| old == text) {
         return Ok(false);
     }
+    write(path, text)?;
+    Ok(true)
+}
+
+fn write(path: &Path, text: &str) -> Result<(), Failure> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, text).map_err(|error| Failure::io("write", &tmp, &error))?;
-    fs::rename(&tmp, path).map_err(|error| Failure::io("replace", path, &error))?;
-    Ok(true)
+    fs::rename(&tmp, path).map_err(|error| Failure::io("replace", path, &error))
 }
 
 #[cfg(test)]
@@ -291,10 +333,34 @@ mod tests {
                 identity: "7".to_owned(),
             },
         );
-        project.write_state(&state).unwrap();
-        assert_eq!(project.state().unwrap(), state);
+        project.write_state(&state, false).unwrap();
+        let read = project.state().unwrap();
+        assert_eq!(read.files, state.files);
+        assert!(read.written > 0);
         fs::write(temp.path().join(STATE_DIR).join("state"), "{").unwrap();
-        assert_eq!(project.state().unwrap(), State::default());
+        assert!(project.state().unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn a_file_changed_in_the_tick_the_state_was_written_is_not_trusted() {
+        let print = |modified| fl_store::fingerprint::Fingerprint {
+            size: 3,
+            modified,
+            identity: 9,
+        };
+        let blake3 = [7; 32];
+        let mut state = State::default();
+        state
+            .files
+            .insert("a/x".to_owned(), Placed::new(&blake3, &print(100)));
+        state.written = 101;
+        assert!(state.trusts("a/x", &blake3, &print(100)));
+        assert!(!state.trusts("a/x", &[8; 32], &print(100)));
+        assert!(!state.trusts("a/y", &blake3, &print(100)));
+        state.written = 100;
+        assert!(!state.trusts("a/x", &blake3, &print(100)));
+        state.written = 99;
+        assert!(!state.trusts("a/x", &blake3, &print(100)));
     }
 
     #[test]

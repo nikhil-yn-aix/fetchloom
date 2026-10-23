@@ -9,3 +9,4 @@ expression: "redact(&world, &ran.stderr)"
       Added 3608990 = zenodo:3608990 to data.toml
      Linked data/3608990 in [TIME], 0 B extra disk
 ✓ Added 3608990, its files are in [PROJECT]/data/3608990.
+       hint scripts find it with `fl path 3608990`

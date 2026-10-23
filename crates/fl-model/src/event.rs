@@ -109,6 +109,13 @@ pub enum Event {
     Warning(String),
     /// A tip teaching something the user has not done yet.
     Hint(String),
+    /// A fact that gets a line of its own, such as a file added or removed.
+    Note {
+        /// The word the line starts with, such as `Removed`.
+        label: String,
+        /// The rest of the line.
+        text: String,
+    },
     /// The run waits on something slow, such as a host, named in the text.
     Waiting(String),
     /// A line of detail, shown from `-v` on.

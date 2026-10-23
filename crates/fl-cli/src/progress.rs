@@ -58,6 +58,11 @@ impl Bars {
         let _ignored = self.multi.println(text.strip_suffix('\n').unwrap_or(text));
     }
 
+    /// Runs `work` with the bars cleared from the terminal, drawing them again after.
+    pub(crate) fn suspend(&self, work: &mut dyn FnMut()) {
+        self.multi.suspend(work);
+    }
+
     /// Shows the spinner with `text`, saying what the run waits for.
     pub(crate) fn wait(&self, text: &str) {
         let mut drawn = self.drawn();

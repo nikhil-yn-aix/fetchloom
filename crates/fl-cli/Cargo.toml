@@ -18,6 +18,7 @@ anstyle.workspace = true
 blake3.workspace = true
 clap.workspace = true
 console.workspace = true
+dialoguer.workspace = true
 fl-model.workspace = true
 fl-sources.workspace = true
 fl-store.workspace = true

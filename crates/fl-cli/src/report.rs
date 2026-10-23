@@ -3,10 +3,10 @@
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use fl_model::document::{Document, Status, Work};
+use fl_model::error::ErrorKind;
 use fl_model::event::{Event, Problem};
 use fl_model::units::{count, duration, size};
 use serde_json::Value;
@@ -19,6 +19,11 @@ use crate::term::{Style, Tone};
 pub(crate) trait Reporter: Send + Sync {
     /// Takes one event.
     fn emit(&self, event: Event);
+
+    /// Runs `work` with nothing drawn on the terminal, such as while a question waits.
+    fn suspend(&self, work: &mut dyn FnMut()) {
+        work();
+    }
 }
 
 /// How a command ended, for the reporter that closes the run.
@@ -31,6 +36,21 @@ pub(crate) struct Outcome {
     pub(crate) answer: Option<String>,
     /// The sentence that says what happened.
     pub(crate) sentence: String,
+    /// The kind whose exit code ends a run that did part of its work.
+    pub(crate) exit: Option<ErrorKind>,
+}
+
+impl Outcome {
+    /// A command that did all it was asked: its `result` and the `sentence` saying so.
+    pub(crate) fn ok(result: Value, sentence: String) -> Self {
+        Self {
+            status: Status::Ok,
+            result,
+            answer: None,
+            sentence,
+            exit: None,
+        }
+    }
 }
 
 /// The reporter of a run, chosen by `--json`.
@@ -89,6 +109,7 @@ impl Outcome {
             result: Value::Object(serde_json::Map::new()),
             answer: None,
             sentence: String::new(),
+            exit: None,
         }
     }
 }
@@ -98,7 +119,7 @@ pub(crate) struct Human {
     loudness: i8,
     style: Style,
     bars: Option<Bars>,
-    hinted: AtomicBool,
+    hint: Mutex<Option<String>>,
 }
 
 impl Human {
@@ -111,7 +132,7 @@ impl Human {
             loudness,
             style,
             bars,
-            hinted: AtomicBool::new(false),
+            hint: Mutex::new(None),
         }
     }
 
@@ -136,6 +157,14 @@ impl Human {
                 self.style.paint(tone, mark),
                 outcome.sentence
             ));
+        }
+        let hint = self
+            .hint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(hint) = hint.filter(|_| self.loudness >= 0 && outcome.status == Status::Ok) {
+            self.write(&self.style.verb("hint", Tone::Dim, &hint));
         }
         if self.loudness >= 1 {
             self.write(&summary(self.style, work));
@@ -178,6 +207,13 @@ impl Human {
 }
 
 impl Reporter for Human {
+    fn suspend(&self, work: &mut dyn FnMut()) {
+        match &self.bars {
+            Some(bars) => bars.suspend(work),
+            None => work(),
+        }
+    }
+
     fn emit(&self, event: Event) {
         if self.loudness < 0 {
             return;
@@ -190,7 +226,13 @@ impl Reporter for Human {
                 }
                 return;
             }
-            Event::Hint(_) if self.hinted.swap(true, Ordering::Relaxed) => return,
+            Event::Hint(text) => {
+                self.hint
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_or_insert_with(|| text.clone());
+                return;
+            }
             Event::Waiting(text) => {
                 if let Some(bars) = bars {
                     bars.wait(text);
@@ -325,7 +367,7 @@ fn line(style: Style, event: &Event) -> Option<String> {
         Event::Missing { path } => style.verb("Missing", Tone::Warn, path),
         Event::Modified { path } => style.verb("Modified", Tone::Warn, path),
         Event::Warning(text) => format!("{} {text}\n", style.paint(Tone::Warn, "warning:")),
-        Event::Hint(text) => style.verb("hint", Tone::Dim, text),
+        Event::Note { label, text } => done(label, text),
         Event::Failed(problem) => {
             let mut text = format!(
                 "{} {}\n",
@@ -338,6 +380,7 @@ fn line(style: Style, event: &Event) -> Option<String> {
             text
         }
         Event::Detail { .. }
+        | Event::Hint(_)
         | Event::Waiting(_)
         | Event::TransferStarted { .. }
         | Event::TransferAdvanced { .. }
@@ -432,7 +475,6 @@ impl Reporter for Json {
 mod tests {
     use std::time::Duration;
 
-    use fl_model::error::ErrorKind;
     use fl_model::name::Name;
 
     use super::*;

@@ -1,12 +1,11 @@
 //! `fl path`: the absolute path of a dataset or of something inside it, synced first.
 
-use fl_model::document::Status;
 use fl_model::error::ErrorKind;
-use fl_model::name::Name;
 use fl_model::path::DataPath;
 use serde_json::json;
 
-use crate::commands::{Context, dataset_dir, sync_project};
+use crate::commands::sync::{Options, sync_project};
+use crate::commands::{Context, dataset_dir, dataset_named};
 use crate::failure::Failure;
 use crate::project::Project;
 use crate::report::Outcome;
@@ -36,21 +35,7 @@ pub(crate) async fn run(
         Some(context.hold(&project)?)
     };
     let manifest = project.manifest()?;
-    let name = Name::new(name)
-        .ok()
-        .filter(|name| manifest.datasets.contains_key(name))
-        .ok_or_else(|| {
-            let known: Vec<&str> = manifest.datasets.keys().map(Name::as_str).collect();
-            Failure::new(
-                ErrorKind::Usage,
-                format!("data.toml has no dataset `{name}`"),
-            )
-            .help(if known.is_empty() {
-                "add one with `fl add REF`".to_owned()
-            } else {
-                format!("datasets here: {}", known.join(", "))
-            })
-        })?;
+    let name = dataset_named(&manifest, name)?;
     let mut path = project
         .data_dir(&manifest)?
         .join(dataset_dir(&manifest, &name)?.as_str());
@@ -58,7 +43,14 @@ pub(crate) async fn run(
         path = path.join(inside.as_str());
     }
     if held.is_some() {
-        sync_project(context, &project, Some(&name)).await?;
+        let only = [name.clone()];
+        let options = Options {
+            only: &only,
+            ..Options::default()
+        };
+        sync_project(context, &project, &options)
+            .await?
+            .finished(context)?;
     }
     drop(held);
     if !path.exists() {
@@ -79,9 +71,10 @@ pub(crate) async fn run(
     }
     let shown = path.display().to_string();
     Ok(Outcome {
-        status: Status::Ok,
-        result: json!({ "dataset": name.as_str(), "path": shown }),
-        answer: Some(shown),
-        sentence: String::new(),
+        answer: Some(shown.clone()),
+        ..Outcome::ok(
+            json!({ "dataset": name.as_str(), "path": shown }),
+            String::new(),
+        )
     })
 }
