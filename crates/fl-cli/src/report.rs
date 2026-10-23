@@ -103,6 +103,12 @@ impl Reporter for Human {
         if self.loudness < 0 {
             return;
         }
+        if let Event::Detail { label, text } = &event {
+            if self.loudness >= 1 {
+                write_err(&verb(label, text));
+            }
+            return;
+        }
         if let Some(text) = line(&event) {
             write_err(&text);
         }
@@ -188,7 +194,8 @@ fn line(event: &Event) -> Option<String> {
             }
             text
         }
-        Event::TransferStarted { .. }
+        Event::Detail { .. }
+        | Event::TransferStarted { .. }
         | Event::TransferAdvanced { .. }
         | Event::TransferFinished { .. } => return None,
     })

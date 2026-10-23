@@ -80,7 +80,7 @@ impl Engine {
             places.push(Box::new(CredentialsFile::new(dir.join("credentials.toml"))));
         }
         let chain = Arc::new(Chain::new(places));
-        let client = Arc::new(Client::new(config.transfer.clone(), chain.clone())?);
+        let client = Arc::new(Client::new(config.transfer(), chain.clone())?);
         let mut registry = Registry::builtin(&client)?;
         registry.add(Arc::new(Files::new(config.cwd.clone())));
         if let Some(endpoint) = &config.hub {
@@ -100,12 +100,12 @@ impl Engine {
         for credential in registry.credentials(|name| std::env::var(name).ok()) {
             chain.add(Box::new(credential));
         }
-        let tier = Arc::new(Tier::open(&config.store, Sharing::Private)?);
+        let tier = Arc::new(Tier::open(&config.store.value, Sharing::Private)?);
         Ok(Self {
             client,
             registry,
             tier,
-            jobs: config.transfer.jobs,
+            jobs: config.jobs.value,
             work: Mutex::new(Work::default()),
             phases: Mutex::new(BTreeMap::new()),
         })

@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::manifest::DATA_DIR_OUTSIDE;
+use crate::suggest::distance;
 
 /// A TOML reading error in fetchloom's words: a message, where it points and what may help.
 pub(crate) struct Explained {
@@ -52,20 +53,6 @@ pub(crate) fn unknown_key(key: &str, valid: &[&str]) -> (String, String) {
     (format!("unknown key `{key}`"), help)
 }
 
-fn distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    for (i, a_char) in a.chars().enumerate() {
-        let mut current = vec![i + 1];
-        for (j, b_char) in b.iter().enumerate() {
-            let substitution = previous[j] + usize::from(a_char != *b_char);
-            current.push(substitution.min(previous[j + 1] + 1).min(current[j] + 1));
-        }
-        previous = current;
-    }
-    previous[b.len()]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,15 +84,5 @@ mod tests {
         let (message, help) = explain("duplicate key");
         assert_eq!(message, "duplicate key");
         assert!(help.is_none());
-    }
-
-    #[test]
-    fn edit_distance_counts_insertions_deletions_and_substitutions() {
-        assert_eq!(distance("select", "select"), 0);
-        assert_eq!(distance("selct", "select"), 1);
-        assert_eq!(distance("sealect", "select"), 1);
-        assert_eq!(distance("salect", "select"), 1);
-        assert_eq!(distance("", "abc"), 3);
-        assert_eq!(distance("kitten", "sitting"), 3);
     }
 }

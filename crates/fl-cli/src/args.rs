@@ -40,6 +40,36 @@ pub(crate) struct Global {
     /// Write every span to PATH as a Chrome trace that opens in Perfetto
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) trace_file: Option<PathBuf>,
+    /// When to color the output: auto, always or never
+    #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
+    pub(crate) color: Color,
+    /// Make no network request at all, not even a DNS lookup
+    #[arg(long, global = true)]
+    pub(crate) offline: bool,
+    /// Use DIR as the store for this run
+    #[arg(long, global = true, value_name = "DIR")]
+    pub(crate) store: Option<PathBuf>,
+    /// Transfers running at once
+    #[arg(long, global = true, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
+    pub(crate) jobs: Option<u16>,
+    /// The longest silence tolerated on a connection, in seconds
+    #[arg(long, global = true, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) timeout: Option<u64>,
+    /// Draw no progress bars, even on a terminal
+    #[arg(long, global = true)]
+    pub(crate) no_progress: bool,
+}
+
+/// When output is colored.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Color {
+    /// When the stream is a terminal and `NO_COLOR` is not set.
+    #[default]
+    Auto,
+    /// Always.
+    Always,
+    /// Never.
+    Never,
 }
 
 /// The commands.
