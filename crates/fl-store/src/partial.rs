@@ -318,6 +318,14 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_is_named_by_the_hex_of_its_key() {
+        let (_temp, tier) = tier();
+        let partial = tier.partial(&KEY, SystemTime::now()).unwrap();
+        let name = partial.path().file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(&format!("{}.", "07".repeat(32))), "{name}");
+    }
+
+    #[test]
     fn allocating_sizes_the_file() {
         let (_temp, tier) = tier();
         let mut partial = tier.partial(&KEY, SystemTime::now()).unwrap();

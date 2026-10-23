@@ -7,7 +7,7 @@ use fl_model::error::ErrorKind;
 use fl_model::reference::Reference;
 use fl_sources::{Declarative, Searchable, Source};
 use serde_json::json;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{self, Failure, RECORD};
@@ -317,6 +317,84 @@ async fn folders_are_walked_into_and_their_files_listed() -> Result<(), Failure>
 }
 
 #[tokio::test]
+async fn a_page_of_only_folders_does_not_end_the_paging() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    let sub = format!("{}/records/7/sub", server.uri());
+    mount(
+        &server,
+        Some(("page", "1")),
+        page(&[], &json!({"dirs": [{"href": sub}]})),
+    )
+    .await;
+    mount(&server, Some(("page", "2")), page(&["a"], &json!({}))).await;
+    mount(&server, Some(("page", "3")), page(&[], &json!({}))).await;
+    Mock::given(method("GET"))
+        .and(path("/records/7/sub"))
+        .respond_with(page(&[], &json!({})))
+        .mount(&server)
+        .await;
+    let adapter = toy(
+        &server,
+        "folders = \"$.dirs[*]\"\ndescend = \"$.href\"\npaginate = { kind = \"page\", param = \"page\" }\n",
+    )?;
+    assert_eq!(listed(&adapter, "toy:7").await?, ["a"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_listing_walks_ten_thousand_folders_and_refuses_one_more() -> Result<(), Failure> {
+    for (dirs, walked) in [(9_999, true), (10_000, false)] {
+        let server = MockServer::start().await;
+        let hrefs: Vec<_> = (0..dirs)
+            .map(|index| json!({"href": format!("{}/d/{index}", server.uri())}))
+            .collect();
+        mount(&server, None, page(&[], &json!({"dirs": hrefs}))).await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/d/"))
+            .respond_with(page(&[], &json!({})))
+            .mount(&server)
+            .await;
+        let adapter = toy(&server, "folders = \"$.dirs[*]\"\ndescend = \"$.href\"\n")?;
+        let outcome = listed(&adapter, "toy:7").await;
+        assert_eq!(outcome.is_ok(), walked, "{dirs}");
+        if let Err(error) = outcome {
+            assert!(
+                error.to_string().contains("more than 10000 folders"),
+                "{error}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_record_without_a_fixed_path_names_no_record_host() -> Result<(), Failure> {
+    let text = TOY
+        .replace("BASE/records/{id}", "BASE{id}")
+        .replace("BASE", "http://127.0.0.1:1");
+    let adapter = Declarative::from_toml(&text, support::client()?)?;
+    assert!(adapter.record_origin().is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_adapter_needs_both_a_path_and_a_url() -> Result<(), Failure> {
+    for (line, empty) in [
+        ("path = \"$.name\"\n", "path = []\n"),
+        ("url = \"BASE/download/{id}/{%$.name}\"\n", "url = []\n"),
+    ] {
+        let text = TOY
+            .replace(line, empty)
+            .replace("BASE", "http://127.0.0.1:1");
+        let error = Declarative::from_toml(&text, support::client()?)
+            .err()
+            .ok_or(line)?;
+        assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig, "{line}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn digests_name_their_algorithm_and_urls_may_be_relative() -> Result<(), Failure> {
     let server = MockServer::start().await;
     let body = json!({"id": 7, "files": [
@@ -400,6 +478,7 @@ async fn a_search_returns_references_and_titles() -> Result<(), Failure> {
         .await;
     let client = support::client()?;
     let adapter = support::declarative(&server, &client)?;
+    assert_eq!(adapter.name(), "zenodo");
     let hits = adapter.search("iris data", 2).await?;
     let found: Vec<(&str, Option<&str>)> = hits
         .iter()

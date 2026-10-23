@@ -133,18 +133,11 @@ impl Source for Http {
 
 /// `segment` with its percent escapes decoded, when they are whole and the result is UTF-8.
 pub(crate) fn decode(segment: &str) -> Option<String> {
-    let bytes = segment.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while let Some(&byte) = bytes.get(index) {
-        if byte == b'%' {
-            let pair = segment.get(index + 1..index + 3)?;
-            out.push(u8::from_str_radix(pair, 16).ok()?);
-            index += 3;
-        } else {
-            out.push(byte);
-            index += 1;
-        }
+    let mut parts = segment.split('%');
+    let mut out = parts.next().unwrap_or_default().as_bytes().to_vec();
+    for part in parts {
+        out.push(u8::from_str_radix(part.get(..2)?, 16).ok()?);
+        out.extend_from_slice(part.get(2..)?.as_bytes());
     }
     String::from_utf8(out).ok()
 }

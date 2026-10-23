@@ -39,6 +39,11 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// The search this source offers over its records, if it offers one.
+    fn searchable(&self) -> Option<&dyn Searchable> {
+        None
+    }
+
     /// The credential this source declares, its token read through `read`, if it declares one.
     fn credential(&self, read: Read) -> Option<Variable> {
         let _ = read;
