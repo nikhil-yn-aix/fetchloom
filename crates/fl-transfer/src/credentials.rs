@@ -373,10 +373,21 @@ mod tests {
     }
 
     #[test]
+    fn a_place_added_later_is_tried_after_the_earlier_ones() {
+        let chain = Chain::new(Vec::new());
+        assert!(chain.find(&origin("https://a.org/")).unwrap().is_none());
+        chain.add(Box::new(environment(&[("FETCHLOOM_TOKEN_A_ORG", "one")])));
+        chain.add(Box::new(environment(&[("FETCHLOOM_TOKEN_A_ORG", "two")])));
+        let found = header(chain.find(&origin("https://a.org/")).unwrap());
+        assert_eq!(found.unwrap().1, "Bearer one");
+    }
+
+    #[test]
     fn secrets_never_show() {
         let credential = Credential::token("abc");
         assert!(!format!("{credential:?} {}", credential.value).contains("abc"));
         assert_eq!(credential.value.to_string(), "***");
+        assert_eq!(format!("{:?}", credential.value), "***");
     }
 
     #[test]

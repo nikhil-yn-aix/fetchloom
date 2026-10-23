@@ -20,6 +20,10 @@ pub struct Memory {
     pub record: Option<PartialRecord>,
     /// How many times the download reset it.
     pub resets: usize,
+    /// How many times it was read back.
+    pub reads: usize,
+    /// The length of every write, in order.
+    pub writes: Vec<usize>,
 }
 
 impl Memory {
@@ -29,6 +33,8 @@ impl Memory {
             bytes: bytes.to_vec(),
             record: Some(record),
             resets: 0,
+            reads: 0,
+            writes: Vec::new(),
         }
     }
 }
@@ -43,6 +49,7 @@ impl Sink for Memory {
     }
 
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
+        self.writes.push(bytes.len());
         let start = usize::try_from(offset).map_err(io::Error::other)?;
         let end = start + bytes.len();
         if self.bytes.len() < end {
@@ -53,6 +60,7 @@ impl Sink for Memory {
     }
 
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
         let start = usize::try_from(offset).map_err(io::Error::other)?;
         let held = self.bytes.get(start..).unwrap_or_default();
         let count = held.len().min(buffer.len());
@@ -69,6 +77,36 @@ impl Sink for Memory {
 
     fn save(&mut self, record: &PartialRecord) -> io::Result<()> {
         self.record = Some(record.clone());
+        Ok(())
+    }
+}
+
+/// A sink whose every write fails with a full disk.
+#[derive(Debug)]
+pub struct Broken;
+
+impl Sink for Broken {
+    fn record(&self) -> Option<PartialRecord> {
+        None
+    }
+
+    fn allocate(&mut self, _length: u64) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> io::Result<()> {
+        Err(io::Error::other("the disk is full"))
+    }
+
+    fn read_at(&mut self, _offset: u64, _buffer: &mut [u8]) -> io::Result<usize> {
+        Ok(0)
+    }
+
+    fn reset(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn save(&mut self, _record: &PartialRecord) -> io::Result<()> {
         Ok(())
     }
 }
@@ -107,6 +145,16 @@ pub fn quick() -> Config {
         connect: Duration::from_millis(250),
         response: Duration::from_millis(250),
         idle: Duration::from_millis(250),
+        ..Config::default()
+    }
+}
+
+/// Timeouts long enough for a loaded machine, with `idle` as the silence a body may keep.
+pub fn patient(idle: Duration) -> Config {
+    Config {
+        connect: Duration::from_secs(5),
+        response: Duration::from_secs(5),
+        idle,
         ..Config::default()
     }
 }

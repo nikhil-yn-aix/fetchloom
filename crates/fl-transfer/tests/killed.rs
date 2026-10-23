@@ -5,6 +5,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use fl_transfer::url::SafeUrl;
 
 use crate::support::disk::{Disk, read_record};
 use crate::support::memory::{Waits, client_with, quick};
-use crate::support::{Body, Recorded, Reply, Server};
+use crate::support::{Body, Recorded, Reply, Server, bounded};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -25,7 +26,7 @@ const DIR: &str = "FL_TRANSFER_DIR";
 const MIB: usize = 1 << 20;
 const LENGTH: usize = 192 * MIB;
 const STALL_AT: usize = 140 * MIB;
-const WAIT: Duration = Duration::from_secs(120);
+const WAIT: Duration = Duration::from_secs(12);
 
 fn pattern(length: usize) -> Vec<u8> {
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
@@ -84,6 +85,7 @@ fn from(request: &Recorded) -> Option<usize> {
 async fn a_killed_download_continues_with_only_the_missing_bytes() -> TestResult {
     let bytes = Arc::new(pattern(LENGTH));
     let source = Arc::clone(&bytes);
+    let first = AtomicBool::new(true);
     let server = Server::plain(move |request| match from(request) {
         Some(start) => Reply {
             status: 206,
@@ -93,13 +95,14 @@ async fn a_killed_download_continues_with_only_the_missing_bytes() -> TestResult
             "Content-Range",
             &format!("bytes {start}-{}/{LENGTH}", LENGTH - 1),
         ),
-        None => Reply {
+        None if first.swap(false, Ordering::SeqCst) => Reply {
             body: Body::Stall {
                 bytes: source.to_vec(),
                 after: STALL_AT,
             },
             ..Reply::ok(Vec::new())
         },
+        None => Reply::ok(source.to_vec()),
     })
     .await?;
     let temp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
@@ -126,9 +129,7 @@ async fn a_killed_download_continues_with_only_the_missing_bytes() -> TestResult
     child.kill()?;
     child.wait()?;
     let client = client_with(patient(), Chain::new(Vec::new()), &Waits::default())?;
-    let done = client
-        .download(&job(&url)?, Disk::open(temp.path())?)
-        .await?;
+    let done = bounded(client.download(&job(&url)?, Disk::open(temp.path())?)).await??;
     let counted = client.counters().read();
     assert_eq!(counted.requests, 1);
     assert_eq!(counted.resumes, 1);

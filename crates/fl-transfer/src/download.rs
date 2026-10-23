@@ -362,7 +362,7 @@ impl<'a, S: Sink> Run<'a, S> {
             .headers()
             .get(header::ACCEPT_RANGES)
             .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"bytes"));
-        if self.offset > 0 || !stable || !ranges || self.length? <= SPLIT_ABOVE {
+        if !stable || !ranges || self.length? <= SPLIT_ABOVE {
             return None;
         }
         let hosts = self.client.hosts();

@@ -214,6 +214,11 @@ mod tests {
     }
 
     #[test]
+    fn nothing_is_planned_for_an_empty_file() {
+        assert!(plan(0, 4).is_empty());
+    }
+
+    #[test]
     fn the_prefix_stops_at_the_first_unfinished_part() {
         let mut parts = plan(200 * MIB, 4);
         assert_eq!(prefix(&parts), 0);

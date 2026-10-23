@@ -1,13 +1,15 @@
 //! Resuming a download: which requests are sent for bytes already kept, and what is done with
 //! each answer.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use fl_model::error::ErrorKind;
 use fl_model::partial::{PartialRecord, Validator};
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
 
 use crate::support::memory::{Memory, Waits, client};
-use crate::support::{Recorded, Reply, Server};
+use crate::support::{Body, Recorded, Reply, Server, bounded};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -407,5 +409,93 @@ async fn a_record_claiming_more_than_the_sink_holds_starts_again() -> TestResult
     assert!(downloaded.sink.resets >= 1);
     assert!(!downloaded.resumed);
     assert_eq!(downloaded.sink.bytes, body);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_download_cut_off_midway_continues_only_when_the_bytes_are_known_to_hold() -> TestResult {
+    for etag in [true, false] {
+        let body = pattern(1000);
+        let payload = body.clone();
+        let first = AtomicBool::new(true);
+        let server = Server::plain(move |request| {
+            let tagged = |reply: Reply| {
+                if etag {
+                    reply.header("etag", "\"v1\"")
+                } else {
+                    reply
+                }
+            };
+            if ranged(request) {
+                tagged(partial(&payload, 600))
+            } else if first.swap(false, Ordering::SeqCst) {
+                tagged(Reply {
+                    body: Body::Stall {
+                        bytes: payload.clone(),
+                        after: 600,
+                    },
+                    ..Reply::ok(Vec::new())
+                })
+            } else {
+                tagged(Reply::ok(payload.clone()))
+            }
+        })
+        .await?;
+        let job = job(&server)?;
+        let waits = Waits::default();
+        let client = client(&waits)?;
+        let done = bounded(client.download(&job, Memory::default())).await??;
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2, "{etag}");
+        assert_eq!(done.sink.bytes, body, "{etag}");
+        assert_eq!(client.counters().read().retries, 1, "{etag}");
+        if etag {
+            assert_eq!(requests[1].header("range"), Some("bytes=600-"));
+            assert_eq!(requests[1].header("if-range"), Some("\"v1\""));
+            assert!(done.resumed);
+            assert!(!done.restarted);
+        } else {
+            assert_eq!(requests[1].header("range"), None);
+            assert!(done.restarted);
+            assert!(!done.resumed);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_resumed_body_that_ends_short_of_the_total_is_asked_for_again() -> TestResult {
+    let payload = pattern(1000);
+    let server = Server::plain(move |request| {
+        let from: usize = request
+            .header("range")
+            .and_then(|range| range.strip_prefix("bytes="))
+            .and_then(|range| range.strip_suffix('-'))
+            .and_then(|from| from.parse().ok())
+            .unwrap_or(0);
+        Reply {
+            status: 206,
+            ..Reply::ok(payload[from..from + 100].to_vec())
+        }
+        .header("content-range", &format!("bytes {from}-999/1000"))
+    })
+    .await?;
+    let job = job(&server)?;
+    let body = pattern(1000);
+    let sink = kept(
+        &job,
+        &body,
+        400,
+        1000,
+        Validator::StrongEtag("\"v1\"".to_owned()),
+    );
+    let client = client(&Waits::default())?;
+    let error = bounded(client.download(&job, sink))
+        .await?
+        .err()
+        .ok_or("a body shorter than its total was taken")?;
+    assert_eq!(error.kind(), ErrorKind::NetworkUnreachable);
+    assert_eq!(server.requests().len(), 5);
+    assert_eq!(client.counters().read().retries, 4);
     Ok(())
 }
