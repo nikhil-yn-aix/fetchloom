@@ -1,17 +1,19 @@
 //! The registry: scheme lookup, DOI routing, the http adapter, filters and case collisions.
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use fl_model::error::ErrorKind;
 use fl_model::filter::{Filters, Pattern};
 use fl_model::reference::Reference;
-use fl_sources::{Listing, Meta, Registry, Source, SourceError};
+use fl_sources::{Declarative, Http, Listing, Meta, Registry, Source, SourceError};
+use fl_transfer::client::Client;
 use fl_transfer::url::SafeUrl;
 use futures_util::future::BoxFuture;
 use serde_json::json;
 use url::Url;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{self, Failure};
@@ -351,5 +353,149 @@ async fn a_doi_landing_on_a_private_host_is_not_trusted() -> Result<(), Failure>
         .err()
         .ok_or("resolved")?;
     assert_eq!(error.kind(), ErrorKind::NetworkRefused, "{error}");
+    Ok(())
+}
+
+const SEARCHING: &str = r#"
+[adapter]
+name = "NAME"
+scheme = "NAME"
+pattern = "{id}"
+record = "BASE/records/{id}"
+resolved = "NAME:{$.id}"
+files = "$.files[*]"
+path = "$.name"
+url = "BASE/download/{id}/{%$.name}"
+"#;
+
+const SEARCH: &str = r#"search = { url = "BASE/find?q={query}&n={limit}", items = "$.items[*]", ref = "NAME:{$.id}", title = "$.title" }"#;
+
+fn toy(
+    server: &MockServer,
+    client: &Arc<Client>,
+    name: &str,
+    search: bool,
+) -> Result<Declarative, Failure> {
+    let search = if search { SEARCH } else { "" };
+    let text = format!("{SEARCHING}{search}")
+        .replace("NAME", name)
+        .replace("BASE", &server.uri());
+    let adapter = Declarative::from_toml(&text, Arc::clone(client))?;
+    client.trust(adapter.record_origin().ok_or("no record host")?);
+    Ok(adapter)
+}
+
+async fn found(server: &MockServer, id: u32, title: &str) {
+    Mock::given(method("GET"))
+        .and(path("/find"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"items": [{"id": id, "title": title}]})),
+        )
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn every_source_that_searches_is_searched_once_in_the_order_added() -> Result<(), Failure> {
+    let (first, second, third) = (
+        MockServer::start().await,
+        MockServer::start().await,
+        MockServer::start().await,
+    );
+    found(&first, 1, "One").await;
+    found(&second, 2, "Two").await;
+    found(&third, 9, "Silent").await;
+    let client = support::client()?;
+    let mut registry = Registry::new(Arc::clone(&client));
+    registry.add(Arc::new(Http::new(Arc::clone(&client))));
+    registry.add(Arc::new(toy(&first, &client, "alpha", true)?));
+    registry.add(Arc::new(toy(&second, &client, "beta", true)?));
+    registry.add(Arc::new(toy(&third, &client, "gamma", false)?));
+    let mut seen = Vec::new();
+    for search in registry.searches("iris data", 3) {
+        let hits = search.hits.await?;
+        let hits: Vec<(String, Option<String>)> = hits
+            .into_iter()
+            .map(|hit| (hit.reference.as_str().to_owned(), hit.title))
+            .collect();
+        seen.push((search.source, hits));
+    }
+    let expected = |name: &str, id: u32, title: &str| {
+        (
+            name.to_owned(),
+            vec![(format!("{name}:{id}"), Some(title.to_owned()))],
+        )
+    };
+    assert_eq!(
+        seen,
+        [expected("alpha", 1, "One"), expected("beta", 2, "Two")]
+    );
+    let queries: Vec<String> = first
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|request| request.url.query().map(str::to_owned))
+        .collect();
+    assert_eq!(queries, ["q=iris%20data&n=3"]);
+    assert!(
+        third
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_later_source_of_the_same_scheme_replaces_an_earlier_one_in_search() -> Result<(), Failure>
+{
+    let (old, new) = (MockServer::start().await, MockServer::start().await);
+    found(&old, 1, "Old").await;
+    found(&new, 2, "New").await;
+    let client = support::client()?;
+    let mut registry = Registry::new(Arc::clone(&client));
+    registry.add(Arc::new(toy(&old, &client, "alpha", true)?));
+    registry.add(Arc::new(toy(&new, &client, "alpha", true)?));
+    let mut searches = registry.searches("x", 1);
+    assert_eq!(searches.len(), 1);
+    let hits = searches.remove(0).hits.await?;
+    assert_eq!(hits[0].reference.as_str(), "alpha:2");
+    assert!(old.received_requests().await.unwrap_or_default().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_index_walk_visits_ten_thousand_directories_and_refuses_one_more() -> Result<(), Failure>
+{
+    for (dirs, walked) in [(9_999, true), (10_000, false)] {
+        let server = MockServer::start().await;
+        let mut links = String::new();
+        for index in 0..dirs {
+            write!(links, "<a href=\"d{index}/\">d{index}/</a> ")?;
+        }
+        Mock::given(method("GET"))
+            .and(path("/big/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(links))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/big/d"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<p>empty</p>"))
+            .mount(&server)
+            .await;
+        let registry = Registry::builtin(&support::client()?)?;
+        let reference: Reference = format!("{}/big/", server.uri()).parse()?;
+        let outcome = registry.resolve(&reference, &support::no_filters()?).await;
+        assert_eq!(outcome.is_ok(), walked, "{dirs}");
+        if let Err(error) = outcome {
+            assert!(
+                error.to_string().contains("more than 10000 directories"),
+                "{error}"
+            );
+        }
+    }
     Ok(())
 }

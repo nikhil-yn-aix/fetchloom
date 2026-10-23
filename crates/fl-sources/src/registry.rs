@@ -7,6 +7,7 @@ use fl_model::filter::Filters;
 use fl_model::reference::{Reference, Target};
 use fl_transfer::client::Client;
 use fl_transfer::credentials::Variable;
+use futures_util::future::BoxFuture;
 use tracing::Instrument;
 use url::Url;
 
@@ -16,7 +17,7 @@ use crate::doi;
 use crate::hf::HuggingFace;
 use crate::http::Http;
 use crate::listing::Listing;
-use crate::source::{Read, Source, SourceError};
+use crate::source::{Hit, Read, Source, SourceError};
 
 /// The declarative adapters built into fetchloom.
 const EMBEDDED: [&str; 9] = [
@@ -32,6 +33,14 @@ const EMBEDDED: [&str; 9] = [
 ];
 
 const DOI_RESOLVER: &str = "https://doi.org/";
+
+/// The search one source runs for a query, not yet awaited.
+pub struct Searching<'a> {
+    /// The first scheme of the source that searches, such as `zenodo`.
+    pub source: String,
+    /// The records the source found, best first, once awaited.
+    pub hits: BoxFuture<'a, Result<Vec<Hit>, SourceError>>,
+}
 
 /// The sources, found by the scheme of a reference.
 pub struct Registry {
@@ -90,6 +99,32 @@ impl Registry {
         self.sources
             .iter()
             .filter_map(|source| source.credential(Arc::clone(&read)))
+            .collect()
+    }
+
+    /// One search of `query`, for at most `limit` records, per source that can search, in the
+    /// order the sources were added. Of several sources serving the same first scheme only the
+    /// last added counts, as when resolving. Nothing runs until the caller awaits the hits, so
+    /// the caller decides how the searches overlap and how long each may take.
+    #[must_use]
+    pub fn searches<'a>(&'a self, query: &'a str, limit: usize) -> Vec<Searching<'a>> {
+        self.sources
+            .iter()
+            .enumerate()
+            .filter_map(|(at, source)| {
+                let first = source.schemes().first()?;
+                let shadowed = self.sources[at + 1..]
+                    .iter()
+                    .any(|later| later.schemes().contains(first));
+                if shadowed {
+                    return None;
+                }
+                let searchable = source.searchable()?;
+                Some(Searching {
+                    source: first.clone(),
+                    hits: searchable.search(query, limit),
+                })
+            })
             .collect()
     }
 

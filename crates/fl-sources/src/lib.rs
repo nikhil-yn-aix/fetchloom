@@ -21,5 +21,5 @@ pub use file::Files;
 pub use hf::HuggingFace;
 pub use http::Http;
 pub use listing::{Entry, Listing, Meta};
-pub use registry::Registry;
+pub use registry::{Registry, Searching};
 pub use source::{Hit, Searchable, Source, SourceError};

@@ -637,6 +637,10 @@ impl Source for Declarative {
         })
     }
 
+    fn searchable(&self) -> Option<&dyn Searchable> {
+        self.search.as_ref().map(|_| self as &dyn Searchable)
+    }
+
     fn landing(&self, url: &str) -> Option<Reference> {
         let parts = self
             .landing
