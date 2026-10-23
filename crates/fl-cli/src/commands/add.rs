@@ -1,6 +1,7 @@
 //! `fl add`: write a dataset into `data.toml`, lock it and sync it.
 
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use fl_model::error::ErrorKind;
 use fl_model::event::Event;
@@ -9,6 +10,7 @@ use fl_model::manifest::Manifest;
 use fl_model::name::Name;
 use fl_model::reference::{Reference, Target};
 use fl_model::units::{Size, size};
+use fl_sources::Hit;
 use serde_json::json;
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, value};
 
@@ -37,14 +39,17 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         }
         Err(failure) => return Err(failure),
     };
-    let reference = parse(&typed)?;
-    let reference = project_relative(&reference, context.cwd, project.root())?;
+    let written = parse(&typed)?;
     let name = match &add.name {
         Some(name) => Name::new(name).map_err(|error| {
             Failure::new(ErrorKind::Usage, error.to_string())
                 .help("names use a-z, 0-9, `-` and `_`")
         })?,
-        None => name_for(&reference)?,
+        None => name_for(&written)?,
+    };
+    let reference = match written.target() {
+        Target::Name(query) => search(context, query).await?,
+        _ => project_relative(&written, context.cwd, project.root())?,
     };
     let _held = context.hold(&project)?;
     let before = project.manifest_text()?;
@@ -107,6 +112,94 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         )));
     }
     Ok(Outcome::ok(result, sentence))
+}
+
+/// How long each source may take to answer a search.
+const SEARCH_BUDGET: Duration = Duration::from_secs(5);
+
+/// The one record `query` names: the only record found, the only one whose title or name is
+/// exactly the query, or the one the user picks. A name is never guessed.
+async fn search(context: &Context<'_>, query: &str) -> Result<Reference, Failure> {
+    let searched = context.engine.search(query, SEARCH_BUDGET).await;
+    for source in &searched.silent {
+        context.emit(Event::Warning(format!(
+            "{source} could not be searched in time, so its records are not listed"
+        )));
+    }
+    let hits = searched.hits;
+    if hits.is_empty() {
+        return Err(Failure::new(
+            ErrorKind::ReferenceUnresolved,
+            format!("nothing was found for `{query}`"),
+        )
+        .help("try other words, or paste the dataset's DOI or link"));
+    }
+    let exact: Vec<&(String, Hit)> = hits.iter().filter(|(_, hit)| names(hit, query)).collect();
+    let chosen = match (hits.len(), exact.as_slice()) {
+        (1, _) => Some(&hits[0]),
+        (_, [only]) => Some(*only),
+        _ => None,
+    };
+    let (_, hit) = match chosen {
+        Some(hit) => hit,
+        None => &hits[pick(context, query, &hits)?],
+    };
+    context.emit(Event::Note {
+        label: "Found".to_owned(),
+        text: match &hit.title {
+            Some(title) => format!("\"{title}\" as {}", hit.reference),
+            None => hit.reference.to_string(),
+        },
+    });
+    Ok(hit.reference.clone())
+}
+
+/// Whether `hit` is exactly what `query` asks for, by its title or the last part of its
+/// reference, ignoring case.
+fn names(hit: &Hit, query: &str) -> bool {
+    let query = query.to_lowercase();
+    hit.title
+        .as_deref()
+        .is_some_and(|title| title.to_lowercase() == query)
+        || last_segment(hit.reference.as_str()).to_lowercase() == query
+}
+
+/// The record the user picks among `hits`; without a terminal, each with its `fl add` line.
+fn pick(context: &Context<'_>, query: &str, hits: &[(String, Hit)]) -> Result<usize, Failure> {
+    let lines: Vec<String> = hits
+        .iter()
+        .map(|(source, hit)| match &hit.title {
+            Some(title) => format!("{title}  ({}, {source})", hit.reference),
+            None => format!("{}  ({source})", hit.reference),
+        })
+        .collect();
+    let ambiguous = Failure::new(
+        ErrorKind::ReferenceAmbiguous,
+        format!("`{query}` matches {} records", hits.len()),
+    )
+    .help("run one of the `fl add` lines above");
+    let prompt = format!("Several records match \"{query}\". Which one?");
+    match context.ask.pick(&prompt, &lines, ambiguous) {
+        Ok(Some(index)) => Ok(index),
+        Ok(None) => Err(
+            Failure::new(ErrorKind::Usage, "nothing was picked, so nothing was added")
+                .help("run `fl add` again with the record's DOI or link"),
+        ),
+        Err(failure) if failure.kind() == ErrorKind::ReferenceAmbiguous => {
+            for (source, hit) in hits {
+                let title = hit
+                    .title
+                    .as_deref()
+                    .map_or_else(String::new, |title| format!("  {title}"));
+                context.emit(Event::Note {
+                    label: "Candidate".to_owned(),
+                    text: format!("fl add {}{title} ({source})", hit.reference),
+                });
+            }
+            Err(failure)
+        }
+        Err(failure) => Err(failure),
+    }
 }
 
 fn totals(totals: Totals) -> String {

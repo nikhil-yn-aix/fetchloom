@@ -18,7 +18,7 @@ use fl_model::filter::Filters;
 use fl_model::partial::PartialRecord;
 use fl_model::path::DataPath;
 use fl_model::reference::{Reference, Target};
-use fl_sources::{Declarative, Files, HuggingFace, Listing, Registry, Source};
+use fl_sources::{Declarative, Files, Hit, HuggingFace, Listing, Registry, Source};
 use fl_store::data_dir::{DataDir, Destination};
 use fl_store::link::{Ladder, Linked, Linker};
 use fl_store::partial::Partial;
@@ -37,6 +37,18 @@ use crate::report::Reporter;
 
 /// The tier name work counters report hits under.
 const LOCAL: &str = "local";
+
+/// The most records one source is asked for in a search.
+const SEARCH_LIMIT: usize = 5;
+
+/// What a search across the sources found.
+#[derive(Default)]
+pub(crate) struct Searched {
+    /// The records found, each with the source that found it.
+    pub(crate) hits: Vec<(String, Hit)>,
+    /// The sources that did not answer in time, or failed.
+    pub(crate) silent: Vec<String>,
+}
 
 /// One file wanted in the store.
 #[derive(Clone, Debug)]
@@ -134,6 +146,40 @@ impl Engine {
         let listing = self.registry.resolve(reference, filters).await;
         self.spent("resolve", started);
         Ok(listing?)
+    }
+
+    /// Searches every source that can search for `query`, all at once, each for at most
+    /// `budget`. Returns the hits by source in registry order, and the sources that did not
+    /// answer in time or failed.
+    pub(crate) async fn search(&self, query: &str, budget: Duration) -> Searched {
+        let started = Instant::now();
+        let asked = self.registry.searches(query, SEARCH_LIMIT);
+        let names: Vec<String> = asked.iter().map(|search| search.source.clone()).collect();
+        self.events.emit(Event::Waiting(format!(
+            "Searching {} for \"{query}\"",
+            names.join(", ")
+        )));
+        let answers = futures_util::future::join_all(
+            asked
+                .into_iter()
+                .map(|search| tokio::time::timeout(budget, search.hits)),
+        )
+        .await;
+        let mut searched = Searched::default();
+        for (source, answer) in names.into_iter().zip(answers) {
+            match answer {
+                Ok(Ok(hits)) => searched
+                    .hits
+                    .extend(hits.into_iter().map(|hit| (source.clone(), hit))),
+                Ok(Err(error)) => {
+                    tracing::debug!("{source} could not search: {error}");
+                    searched.silent.push(source);
+                }
+                Err(_) => searched.silent.push(source),
+            }
+        }
+        self.spent("search", started);
+        searched
     }
 
     /// Makes the store hold every wanted file: a file whose object is already there costs

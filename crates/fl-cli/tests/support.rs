@@ -13,6 +13,14 @@ pub type Failure = Box<dyn Error>;
 
 pub const RECORD: &str = include_str!("../../../fixtures/responses/zenodo/3608990/record.json");
 pub const ADAPTER: &str = include_str!("../../../sources/zenodo.toml");
+
+/// The other built in adapters that can search, which a test must not let reach the internet.
+const SEARCHING: [(&str, &str); 4] = [
+    ("dryad", include_str!("../../../sources/dryad.toml")),
+    ("github", include_str!("../../../sources/github.toml")),
+    ("kaggle", include_str!("../../../sources/kaggle.toml")),
+    ("osf", include_str!("../../../sources/osf.toml")),
+];
 pub const IRIS: &[u8] = include_bytes!("../../../fixtures/responses/zenodo/3608990/iris.csv");
 pub const IRIS_MD5: &str = "395d6abd001abf3760a1a794ef4c453c";
 pub const NOT_FOUND: &str =
@@ -45,6 +53,12 @@ impl World {
             config.join("sources").join("zenodo.toml"),
             ADAPTER.replace("https://zenodo.org", &server.uri()),
         )?;
+        for (name, adapter) in SEARCHING {
+            std::fs::write(
+                config.join("sources").join(format!("{name}.toml")),
+                on_server(adapter, &server.uri()),
+            )?;
+        }
         let record = RECORD.replace("https://zenodo.org", &server.uri());
         Mock::given(method("GET"))
             .and(path("/api/records/3608990"))
@@ -191,6 +205,38 @@ impl World {
         }
         text.replace("\\\\", "/").replace('\\', "/")
     }
+}
+
+/// `adapter` with every https host it names replaced by the fake server at `uri`.
+fn on_server(adapter: &str, uri: &str) -> String {
+    let mut out = String::with_capacity(adapter.len());
+    let mut rest = adapter;
+    while let Some(at) = rest.find("https://") {
+        out.push_str(&rest[..at]);
+        out.push_str(uri);
+        let after = &rest[at + "https://".len()..];
+        let host_end = after.find(['/', '"']).unwrap_or(after.len());
+        rest = &after[host_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Answers a zenodo search for `query` with `hits`, each an id and a title.
+pub async fn found(world: &World, query: &str, hits: &[(u64, &str)]) {
+    let items: Vec<Value> = hits
+        .iter()
+        .map(|(id, title)| serde_json::json!({ "id": id, "metadata": { "title": title } }))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/api/records"))
+        .and(wiremock::matchers::query_param("q", query))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "hits": { "hits": items } })),
+        )
+        .mount(&world.server)
+        .await;
 }
 
 pub fn json(ran: &Ran) -> Result<Value, Failure> {
