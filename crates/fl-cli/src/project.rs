@@ -69,7 +69,15 @@ impl Project {
 
     /// `data.toml`, read and checked.
     pub(crate) fn manifest(&self) -> Result<Manifest, Failure> {
-        Ok(Manifest::from_toml(&self.manifest_text()?)?)
+        let text = self.manifest_text()?;
+        Manifest::from_toml(&text).map_err(|error| {
+            let span = error.span.clone();
+            let failure = Failure::from(error);
+            match span {
+                Some(span) => failure.snippet(MANIFEST, &text, span),
+                None => failure,
+            }
+        })
     }
 
     /// `data.lock`, or `None` when there is none yet.

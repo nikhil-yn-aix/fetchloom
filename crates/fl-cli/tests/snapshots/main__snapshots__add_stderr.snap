@@ -4,8 +4,8 @@ expression: "redact(&world, &ran.stderr)"
 ---
     Created [PROJECT]/data.toml
    Resolved zenodo:3608990 → "DatasetIris" · 1 file · 4.1 KiB · CC-BY-4.0
-    Fetched 1 file of 3608990, 4.1 KiB in [TIME]
+ Downloaded 1 file of 3608990, 4.1 KiB in [TIME]
      Locked 1 file in data.lock
       Added 3608990 = zenodo:3608990 to data.toml
      Linked data/3608990 in [TIME], 0 B extra disk
-Added 3608990, its files are in [PROJECT]/data/3608990.
+✓ Added 3608990, its files are in [PROJECT]/data/3608990.

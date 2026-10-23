@@ -6,16 +6,18 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use fl_model::digest::Digest;
 use fl_model::document::Work;
 use fl_model::error::ErrorKind;
+use fl_model::event::Event;
 use fl_model::filter::Filters;
 use fl_model::partial::PartialRecord;
 use fl_model::path::DataPath;
-use fl_model::reference::Reference;
+use fl_model::reference::{Reference, Target};
 use fl_sources::{Declarative, Files, HuggingFace, Listing, Registry, Source};
 use fl_store::data_dir::{DataDir, Destination};
 use fl_store::link::{Ladder, Linked, Linker};
@@ -31,6 +33,7 @@ use tracing::Instrument;
 
 use crate::config::Config;
 use crate::failure::Failure;
+use crate::report::Reporter;
 
 /// The tier name work counters report hits under.
 const LOCAL: &str = "local";
@@ -69,11 +72,13 @@ pub(crate) struct Engine {
     jobs: usize,
     work: Mutex<Work>,
     phases: Mutex<BTreeMap<&'static str, Duration>>,
+    events: Arc<dyn Reporter>,
+    transfers: Arc<AtomicU64>,
 }
 
 impl Engine {
     /// The client, the sources including the user's own adapters, and the local tier.
-    pub(crate) fn new(config: &Config) -> Result<Self, Failure> {
+    pub(crate) fn new(config: &Config, events: Arc<dyn Reporter>) -> Result<Self, Failure> {
         let mut places: Vec<Box<dyn fl_transfer::credentials::Credentials>> =
             vec![Box::new(Environment::new(|name| std::env::var(name).ok()))];
         if let Some(dir) = &config.settings {
@@ -108,6 +113,8 @@ impl Engine {
             jobs: config.jobs.value,
             work: Mutex::new(Work::default()),
             phases: Mutex::new(BTreeMap::new()),
+            events,
+            transfers: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -118,6 +125,7 @@ impl Engine {
         filters: &Filters,
     ) -> Result<Listing, Failure> {
         let started = Instant::now();
+        self.events.emit(Event::Waiting(waiting_for(reference)));
         let listing = self.registry.resolve(reference, filters).await;
         self.spent("resolve", started);
         Ok(listing?)
@@ -157,12 +165,18 @@ impl Engine {
         }
         let client = Arc::clone(&self.client);
         let tier = Arc::clone(&self.tier);
+        let events = Arc::clone(&self.events);
+        let ids = Arc::clone(&self.transfers);
         let span = tracing::info_span!("transfer", group, files = queue.len());
         let done = Scheduler::new(self.jobs, self.client.hosts())
             .run(queue, move |(index, want): (usize, Want)| {
                 let client = Arc::clone(&client);
                 let tier = Arc::clone(&tier);
-                async move { (index, download(&client, &tier, &want).await) }
+                let shown = Shown {
+                    id: ids.fetch_add(1, Ordering::Relaxed),
+                    events: Arc::clone(&events),
+                };
+                async move { (index, download(&client, &tier, &want, shown).await) }
             })
             .instrument(span)
             .await;
@@ -258,6 +272,7 @@ async fn download(
     client: &Client,
     tier: &Arc<Tier>,
     want: &Want,
+    shown: Shown,
 ) -> Result<(Got, Ingested), Failure> {
     if let Some(path) = want.url.to_file_path() {
         let copying = Arc::clone(tier);
@@ -300,10 +315,30 @@ async fn download(
         stated,
         typed: want.typed,
     };
-    let done = client.download(&download, Landing(partial)).await?;
+    shown.events.emit(Event::TransferStarted {
+        id: shown.id,
+        host: want.url.host().unwrap_or_default().to_owned(),
+        bytes: want.size,
+    });
+    let began = Instant::now();
+    let landing = Landing {
+        partial,
+        shown,
+        received: 0,
+    };
+    let done = client.download(&download, landing).await;
+    let done = match done {
+        Ok(done) => done,
+        Err(error) => return Err(error.into()),
+    };
+    done.sink.shown.events.emit(Event::TransferFinished {
+        id: done.sink.shown.id,
+        bytes: done.bytes,
+        elapsed: began.elapsed(),
+    });
     let (blake3, size) = (done.hashes.blake3, done.bytes);
     let placing = Arc::clone(tier);
-    let partial = done.sink.0;
+    let partial = done.sink.partial;
     let stated = want.stated.clone();
     let ingested = blocking(move || {
         let ingested = placing
@@ -323,6 +358,21 @@ async fn download(
         },
         ingested,
     ))
+}
+
+/// What a resolve waits on, naming the host when the reference names one.
+fn waiting_for(reference: &Reference) -> String {
+    match reference.target() {
+        Target::Url { .. } => match SafeUrl::parse(reference.as_str())
+            .ok()
+            .and_then(|url| url.host().map(str::to_owned))
+        {
+            Some(host) => format!("Resolving {reference} at {host}"),
+            None => format!("Resolving {reference}"),
+        },
+        Target::Doi { .. } => format!("Resolving {reference} at doi.org"),
+        _ => format!("Resolving {reference}"),
+    }
 }
 
 async fn blocking<T: Send + 'static>(
@@ -374,31 +424,48 @@ fn user_adapters(dir: &Path, client: &Arc<Client>) -> Result<Vec<Declarative>, F
         .collect()
 }
 
-/// A store partial as the transfer engine writes into it.
-struct Landing(Partial);
+/// Which transfer this is and where its progress goes.
+struct Shown {
+    id: u64,
+    events: Arc<dyn Reporter>,
+}
+
+/// A store partial as the transfer engine writes into it, reporting what it received.
+struct Landing {
+    partial: Partial,
+    shown: Shown,
+    received: u64,
+}
 
 impl Sink for Landing {
     fn record(&self) -> Option<PartialRecord> {
-        self.0.record().cloned()
+        self.partial.record().cloned()
     }
 
     fn allocate(&mut self, length: u64) -> io::Result<()> {
-        self.0.allocate(length)
+        self.partial.allocate(length)
     }
 
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
-        self.0.write_at(offset, bytes)
+        self.partial.write_at(offset, bytes)?;
+        self.received += bytes.len() as u64;
+        self.shown.events.emit(Event::TransferAdvanced {
+            id: self.shown.id,
+            bytes: self.received,
+        });
+        Ok(())
     }
 
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
-        self.0.read_at(offset, buffer)
+        self.partial.read_at(offset, buffer)
     }
 
     fn reset(&mut self) -> io::Result<()> {
-        self.0.reset()
+        self.received = 0;
+        self.partial.reset()
     }
 
     fn save(&mut self, record: &PartialRecord) -> io::Result<()> {
-        self.0.save(record)
+        self.partial.save(record)
     }
 }

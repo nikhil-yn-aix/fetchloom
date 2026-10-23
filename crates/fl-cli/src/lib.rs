@@ -7,11 +7,14 @@ mod config;
 mod engine;
 mod failure;
 mod observe;
+mod progress;
 mod project;
 mod report;
+mod term;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::Parser;
 use fl_model::document::Work;
@@ -23,7 +26,9 @@ use crate::commands::Context;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::failure::Failure;
+use crate::progress::Bars;
 use crate::report::{Human, Json, Outcome, Output};
+use crate::term::Terminal;
 
 const WELCOME: &str = concat!(
     "fl ",
@@ -58,10 +63,19 @@ pub fn run() -> ExitCode {
         return welcome(&mut io::stdout().lock()).map_or(ExitCode::FAILURE, |()| ExitCode::SUCCESS);
     };
     let global = cli.global;
+    let terminal = Terminal::detect(global.color);
     let output = if global.json {
-        Output::Json(Json::default())
+        Output::Json(Arc::new(Json::default()))
     } else {
-        Output::Human(Human::new(global.verbose, global.quiet))
+        let style = terminal.style;
+        let bars = (terminal.stderr && !global.no_progress && global.verbose < 2)
+            .then(|| Bars::stderr(style, usize::from(console::Term::stderr().size().0)));
+        Output::Human(Arc::new(Human::new(
+            global.verbose,
+            global.quiet,
+            style,
+            bars,
+        )))
     };
     let name = command_name(&command);
     observe::panic_hook(global.log_file.clone());
@@ -135,7 +149,7 @@ fn execute(
             );
         }
     };
-    let engine = match runtime.block_on(async { Engine::new(&config) }) {
+    let engine = match runtime.block_on(async { Engine::new(&config, output.shared()) }) {
         Ok(engine) => engine,
         Err(failure) => return (Err(failure), Work::default()),
     };
@@ -162,7 +176,7 @@ fn execute(
 
 fn finish_failed(output: &Output, name: &str, failure: Failure, work: &Work) -> ExitCode {
     let code = failure.kind().exit_code();
-    let _ignored = output.fail(name, failure.0, work);
+    let _ignored = output.fail(name, failure, work);
     ExitCode::from(code)
 }
 

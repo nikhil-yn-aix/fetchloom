@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::io;
+use std::ops::Range;
 use std::path::Path;
 
 use fl_model::error::ErrorKind;
@@ -12,19 +13,44 @@ use fl_sources::SourceError;
 use fl_store::error::StoreError;
 use fl_transfer::error::TransferError;
 
-/// A failure as a command reports it.
+/// A failure as a command reports it, and the place in a file that caused it, when one did.
 #[derive(Clone, Debug)]
-pub(crate) struct Failure(pub(crate) Problem);
+pub(crate) struct Failure(pub(crate) Problem, pub(crate) Option<Box<Snippet>>);
+
+/// A place in a file, shown under an error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Snippet {
+    /// The file as the user knows it, such as `data.toml`.
+    pub(crate) file: String,
+    /// Its text.
+    pub(crate) text: String,
+    /// The bytes of `text` at fault.
+    pub(crate) span: Range<usize>,
+}
 
 impl Failure {
     /// A failure of `kind` saying `message`.
     pub(crate) fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self(Problem {
-            kind,
-            message: message.into(),
-            help: None,
-            subject: None,
-        })
+        Self(
+            Problem {
+                kind,
+                message: message.into(),
+                help: None,
+                subject: None,
+            },
+            None,
+        )
+    }
+
+    /// Points at `span` of `text`, the file the user knows as `file`.
+    #[must_use]
+    pub(crate) fn snippet(mut self, file: &str, text: &str, span: Range<usize>) -> Self {
+        self.1 = Some(Box::new(Snippet {
+            file: file.to_owned(),
+            text: text.to_owned(),
+            span,
+        }));
+        self
     }
 
     /// Adds the next step to take.

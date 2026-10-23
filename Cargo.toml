@@ -28,7 +28,10 @@ unimplemented = "deny"
 unwrap_used = "deny"
 
 [workspace.dependencies]
+anstream = "1.0.0"
+anstyle = "1.0.14"
 blake3 = "1.8.7"
+console = { version = "0.16.6", default-features = false, features = ["ansi-parsing", "std"] }
 clap = { version = "4.6.7", features = ["derive"] }
 divan = "0.1.21"
 fastrand = "2.5.0"
@@ -38,6 +41,7 @@ fl-store = { path = "crates/fl-store" }
 fl-transfer = { path = "crates/fl-transfer" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
+indicatif = { version = "0.18.6", default-features = false, features = ["unicode-width"] }
 httpdate = "1.0.3"
 insta = { version = "1.49.0", default-features = false }
 md5 = { package = "md-5", version = "0.11.0" }

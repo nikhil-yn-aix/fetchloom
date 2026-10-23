@@ -168,7 +168,8 @@ async fn an_unknown_record_is_reference_unresolved() -> TestResult {
     let ran = world.here(&["add", "zenodo:404"])?;
     assert_eq!(ran.code, Some(10), "{}", ran.stderr);
     assert!(
-        ran.stderr.contains("\nerror[reference.unresolved]"),
+        ran.stderr
+            .contains("\n\u{2717} error[reference.unresolved]"),
         "{}",
         ran.stderr
     );
