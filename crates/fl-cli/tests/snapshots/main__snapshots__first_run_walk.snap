@@ -46,7 +46,7 @@ $ fl add iris
 
 $ fl add zenodo:10
    Resolved zenodo:10 → "Record 10" · 1 file · 2.0 GiB · CC-BY-4.0
-✗ error[usage]: 10 is 2.0 GiB to download, and fetchloom asks first, but there is no terminal to ask on
+✗ error[usage]: dataset `10` is 2.0 GiB to download, and fetchloom asks first, but there is no terminal to ask on
   help: run the same command with --yes to go ahead
 [exit 2]
 
