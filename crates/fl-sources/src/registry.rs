@@ -20,7 +20,7 @@ use crate::listing::Listing;
 use crate::source::{Hit, Read, Source, SourceError};
 
 /// The declarative adapters built into fetchloom.
-const EMBEDDED: [&str; 9] = [
+const EMBEDDED: [&str; 10] = [
     include_str!("../../../sources/zenodo.toml"),
     include_str!("../../../sources/figshare.toml"),
     include_str!("../../../sources/dataverse.toml"),
@@ -30,6 +30,7 @@ const EMBEDDED: [&str; 9] = [
     include_str!("../../../sources/kaggle.toml"),
     include_str!("../../../sources/osf.toml"),
     include_str!("../../../sources/dryad.toml"),
+    include_str!("../../../sources/openml.toml"),
 ];
 
 const DOI_RESOLVER: &str = "https://doi.org/";

@@ -357,6 +357,11 @@ async fn figshare() -> Result<(), Failure> {
 }
 
 #[tokio::test]
+async fn openml() -> Result<(), Failure> {
+    conforms("openml").await
+}
+
+#[tokio::test]
 async fn dataverse() -> Result<(), Failure> {
     conforms("dataverse").await
 }
