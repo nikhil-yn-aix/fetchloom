@@ -322,14 +322,14 @@ fn line(style: Style, event: &Event) -> Option<String> {
         } => {
             let mut text = resolved.to_string();
             if let Some(title) = title {
-                let _ = write!(text, " {} \"{title}\"", style.arrow());
+                let _ = write!(text, " {} \"{}\"", style.arrow(), printable(title));
             }
             let _ = write!(text, " {dot} {}", count(*files, "file", "files"));
             if *bytes > 0 {
                 let _ = write!(text, " {dot} {}", size(*bytes));
             }
             if let Some(license) = license {
-                let _ = write!(text, " {dot} {license}");
+                let _ = write!(text, " {dot} {}", printable(license));
             }
             done("Resolved", &text)
         }
@@ -472,6 +472,12 @@ impl Reporter for Json {
     }
 }
 
+/// `text` from a remote record with every control character left out, so a title cannot move
+/// the cursor, recolor the terminal or forge a line.
+pub(crate) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -512,6 +518,11 @@ mod tests {
             line(Style::PLAIN, &event).unwrap(),
             "error[project.missing]: no data.toml\n  help: run `fl init`\n"
         );
+    }
+
+    #[test]
+    fn remote_text_loses_its_control_characters() {
+        assert_eq!(printable("Iris\u{1b}[2J\r\nflowers\u{7}"), "Iris[2Jflowers");
     }
 
     #[test]

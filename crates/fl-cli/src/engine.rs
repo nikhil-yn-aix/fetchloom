@@ -427,15 +427,22 @@ async fn download(
         bytes: want.size,
     });
     let began = Instant::now();
+    let (id, events) = (shown.id, Arc::clone(&shown.events));
     let landing = Landing {
         partial,
         shown,
         received: 0,
     };
-    let done = client.download(&download, landing).await;
-    let done = match done {
+    let done = match client.download(&download, landing).await {
         Ok(done) => done,
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            events.emit(Event::TransferFinished {
+                id,
+                bytes: 0,
+                elapsed: began.elapsed(),
+            });
+            return Err(error.into());
+        }
     };
     done.sink.shown.finished(
         want.url.host().unwrap_or_default(),

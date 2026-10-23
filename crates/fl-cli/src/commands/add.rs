@@ -17,10 +17,10 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, value};
 use crate::args::{Add, FilterArgs, LinkMode};
 use crate::commands::lock::{Relock, Totals, relock};
 use crate::commands::sync::{Options, sync_project};
-use crate::commands::{Context, init, plural};
+use crate::commands::{Context, dataset_dir, init, plural};
 use crate::failure::Failure;
 use crate::project::Project;
-use crate::report::Outcome;
+use crate::report::{Outcome, printable};
 
 /// `fl add`.
 pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Failure> {
@@ -55,9 +55,9 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         Some(reference) => reference,
         None => project_relative(&written, context.cwd, project.root())?,
     };
-    let fresh = new && !project.root().join(".fetchloom").exists();
+    let fresh = new && !project.root().join(".fetchloom").exists() && !project.lock_path().exists();
     let added = add_to(context, add, &project, new, &name, &reference).await;
-    if added.is_err() && fresh {
+    if added.is_err() && fresh && !project.manifest_path().exists() {
         project.discard_state();
     }
     added
@@ -111,7 +111,7 @@ async fn add_to(
         "locked": relocked.written,
         "changed": !unchanged,
     });
-    let dir = data_dir.join(name.as_str());
+    let dir = data_dir.join(dataset_dir(&manifest, name)?.as_str());
     let sentence = if add.no_sync {
         format!("Added {name} to data.toml and data.lock, not downloaded.")
     } else {
@@ -221,7 +221,7 @@ fn pick(context: &Context<'_>, query: &str, hits: &[(String, Hit)]) -> Result<us
     let lines: Vec<String> = hits
         .iter()
         .map(|(source, hit)| match &hit.title {
-            Some(title) => format!("{title}  ({}, {source})", hit.reference),
+            Some(title) => format!("{}  ({}, {source})", printable(title), hit.reference),
             None => format!("{}  ({source})", hit.reference),
         })
         .collect();
@@ -242,7 +242,7 @@ fn pick(context: &Context<'_>, query: &str, hits: &[(String, Hit)]) -> Result<us
                 let title = hit
                     .title
                     .as_deref()
-                    .map_or_else(String::new, |title| format!("  {title}"));
+                    .map_or_else(String::new, |title| format!("  {}", printable(title)));
                 context.emit(Event::Note {
                     label: "Candidate".to_owned(),
                     text: format!("fl add {}{title} ({source})", hit.reference),

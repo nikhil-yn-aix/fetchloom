@@ -44,9 +44,7 @@ pub(crate) fn run(
         if !only.is_empty() && !only.contains(&locked.name) {
             continue;
         }
-        let Ok(dir) = dataset_dir(&manifest, &locked.name) else {
-            continue;
-        };
+        let dir = dataset_dir(&manifest, &locked.name)?;
         let found = survey(context, &root, &shown_root, &dir, locked, &state)?;
         for slot in found.slots {
             match slot.found {

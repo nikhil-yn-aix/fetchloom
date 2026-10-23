@@ -24,7 +24,7 @@ use crate::commands::{
 use crate::engine::Got;
 use crate::failure::Failure;
 use crate::project::Project;
-use crate::report::Outcome;
+use crate::report::{Outcome, printable};
 
 /// `fl lock`.
 pub(crate) async fn run(
@@ -352,7 +352,8 @@ async fn resolve_dataset(
         .filter(|license| restricts(license))
     {
         context.emit(Event::Warning(format!(
-            "{name} is licensed {license}, which limits how it may be used; read its terms first"
+            "{name} is licensed {}, which limits how it may be used; read its terms first",
+            printable(license)
         )));
     }
     let known: HashMap<&str, [u8; 32]> = trusted

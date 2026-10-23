@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::io;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -129,16 +130,21 @@ impl Config {
                 .map(|local| expand(&local, home.as_deref()));
             store.over(local.map(Some), layer.clone());
             link.over(machine.store.link, layer.clone());
-            jobs.over(machine.network.jobs, layer.clone());
-            per_host.over(machine.network.per_host, layer.clone());
-            timeout.over(machine.network.timeout, layer);
+            jobs.over(machine.network.jobs.map(NonZeroUsize::get), layer.clone());
+            per_host.over(
+                machine.network.per_host.map(NonZeroUsize::get),
+                layer.clone(),
+            );
+            timeout.over(machine.network.timeout.map(NonZeroU64::get), layer);
         }
         store.over(
             env("FETCHLOOM_STORE").map(|dir| Some(PathBuf::from(dir))),
             Layer::Environment("FETCHLOOM_STORE"),
         );
         offline.over(
-            env("FETCHLOOM_OFFLINE").map(|value| value == "1"),
+            env("FETCHLOOM_OFFLINE")
+                .map(|value| offline_value(&value))
+                .transpose()?,
             Layer::Environment("FETCHLOOM_OFFLINE"),
         );
         store.over(global.store.clone().map(Some), Layer::Flag("--store"));
@@ -302,6 +308,20 @@ impl MachineDefaults {
     }
 }
 
+/// Reads `FETCHLOOM_OFFLINE`: `1`, `true`, `yes` or `on` mean offline, `0`, `false`, `no`,
+/// `off` or nothing mean online, in any case.
+fn offline_value(value: &str) -> Result<bool, Failure> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(Failure::new(
+            ErrorKind::LocalInvalidConfig,
+            format!("FETCHLOOM_OFFLINE is `{value}`, which is neither on nor off"),
+        )
+        .help("set FETCHLOOM_OFFLINE=1 to work offline, or unset it")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -400,6 +420,41 @@ mod tests {
             Config::new(&Global::default(), Path::new("/work"), with(&[]), NO_FILES).unwrap_err();
         assert_eq!(failure.kind(), ErrorKind::LocalInvalidConfig);
         assert!(failure.0.help.unwrap().contains("FETCHLOOM_STORE"));
+    }
+
+    #[test]
+    fn offline_reads_common_words_and_refuses_the_rest() {
+        for (value, offline) in [
+            ("1", true),
+            ("TRUE", true),
+            ("yes", true),
+            ("0", false),
+            ("off", false),
+            ("", false),
+        ] {
+            assert_eq!(offline_value(value).unwrap(), offline, "{value}");
+        }
+        let error = offline_value("maybe").unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig);
+    }
+
+    #[test]
+    fn a_zero_in_a_config_file_is_refused() {
+        let read = |_: &Path| {
+            Ok(Some(
+                "[network]
+timeout = 0
+"
+                .to_owned(),
+            ))
+        };
+        let env = with(&[
+            ("FETCHLOOM_CONFIG", "/u/config.toml"),
+            ("HOME", "/home/a"),
+            ("USERPROFILE", "/home/a"),
+        ]);
+        let error = Config::new(&Global::default(), Path::new("/w"), &env, &read).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig);
     }
 
     #[test]

@@ -188,6 +188,7 @@ fn execute(
         Command::Init {
             interactive: true, ..
         } => {
+            commands::init::refuse_existing(&config.cwd)?;
             let answers = commands::init::interview(ask, &config.cwd, &config.store.value)?;
             match (&answers.store, config.settings.as_ref()) {
                 (Some(store), Some(dir)) => {
