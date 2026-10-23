@@ -3,6 +3,7 @@
 use std::fs;
 
 use fl_model::error::ErrorKind;
+use fl_model::reference::Reference;
 use fl_sources::{Files, Source};
 
 use crate::support::Failure;
@@ -43,5 +44,26 @@ async fn a_file_url_is_one_file_and_a_missing_path_is_unresolved() -> Result<(),
         .err()
         .ok_or("resolved")?;
     assert_eq!(error.kind(), ErrorKind::ReferenceUnresolved);
+    Ok(())
+}
+
+#[test]
+fn files_serve_the_file_scheme() {
+    assert_eq!(Files::new(".".into()).schemes(), ["file"]);
+}
+
+#[tokio::test]
+async fn a_path_that_cannot_be_read_is_a_local_error_not_a_missing_one() -> Result<(), Failure> {
+    let temp = tempfile::tempdir()?;
+    fs::write(temp.path().join("one.csv"), b"x")?;
+    let files = Files::new(temp.path().to_owned());
+    let unreadable = if cfg!(windows) {
+        "./a*b"
+    } else {
+        "./one.csv/inside"
+    };
+    let reference: Reference = unreadable.parse()?;
+    let error = files.resolve(&reference).await.err().ok_or("resolved")?;
+    assert_eq!(error.kind(), ErrorKind::LocalIo);
     Ok(())
 }

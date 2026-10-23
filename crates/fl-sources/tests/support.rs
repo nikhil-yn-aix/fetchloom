@@ -34,10 +34,15 @@ impl Timer for Instant {
 }
 
 pub fn client() -> Result<Arc<Client>, Failure> {
+    client_trusting(Vec::new())
+}
+
+pub fn client_trusting(ca: Vec<u8>) -> Result<Arc<Client>, Failure> {
     let config = Config {
         connect: Duration::from_secs(5),
         response: Duration::from_secs(5),
         idle: Duration::from_secs(5),
+        trust_only: if ca.is_empty() { Vec::new() } else { vec![ca] },
         ..Config::default()
     };
     Ok(Arc::new(Client::with_timer(

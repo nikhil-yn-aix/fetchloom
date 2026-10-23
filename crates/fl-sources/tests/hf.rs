@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use fl_model::error::ErrorKind;
 use fl_sources::{HuggingFace, Source};
+use fl_transfer::credentials::{Credential, Credentials};
 use fl_transfer::url::SafeUrl;
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
@@ -144,5 +145,94 @@ async fn a_tree_over_several_pages_follows_its_links_once_each() -> Result<(), F
         server.received_requests().await.unwrap_or_default().len(),
         3
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revision_whose_sha_is_not_a_commit_is_refused() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    for (revision, sha) in [("short", "a".repeat(39)), ("letters", "g".repeat(40))] {
+        serve(
+            &server,
+            &format!("/api/models/o/n/revision/{revision}"),
+            &json!({"sha": sha}).to_string(),
+        )
+        .await;
+        let error = hub(&server)?
+            .resolve(&format!("hf:o/n@{revision}").parse()?)
+            .await
+            .err()
+            .ok_or("resolved")?;
+        assert_eq!(error.kind(), ErrorKind::NetworkProtocol, "{revision}");
+    }
+    Ok(())
+}
+
+async fn license_of(card: serde_json::Value, tags: &[&str]) -> Result<Option<String>, Failure> {
+    let server = MockServer::start().await;
+    let sha = "b".repeat(40);
+    serve(
+        &server,
+        "/api/models/o/n/revision/main",
+        &json!({"sha": sha, "cardData": card, "tags": tags}).to_string(),
+    )
+    .await;
+    serve(&server, &format!("/api/models/o/n/tree/{sha}"), "[]").await;
+    let listing = hub(&server)?.resolve(&"hf:o/n".parse()?).await?;
+    Ok(listing.meta.license)
+}
+
+#[tokio::test]
+async fn the_license_is_the_cards_string_or_list_before_the_tags() -> Result<(), Failure> {
+    let tags = ["license:mit"];
+    assert_eq!(
+        license_of(json!({"license": "apache-2.0"}), &tags)
+            .await?
+            .as_deref(),
+        Some("Apache-2.0")
+    );
+    assert_eq!(
+        license_of(json!({"license": ["bsd-3-clause", "isc"]}), &tags)
+            .await?
+            .as_deref(),
+        Some("BSD-3-Clause")
+    );
+    assert_eq!(
+        license_of(json!({"license": 5}), &tags).await?.as_deref(),
+        Some("MIT")
+    );
+    assert_eq!(license_of(json!({}), &[]).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_hub_serves_hf_and_names_its_host_and_landing_pages() -> Result<(), Failure> {
+    let source = HuggingFace::new(support::client()?);
+    assert_eq!(source.schemes(), ["hf"]);
+    assert_eq!(source.host().as_deref(), Some("huggingface.co"));
+    let landing = |url: &str| source.landing(url).map(|found| found.as_str().to_owned());
+    assert_eq!(
+        landing("https://huggingface.co/datasets/org/name").as_deref(),
+        Some("hf:datasets/org/name")
+    );
+    assert_eq!(
+        landing("https://huggingface.co/org/name/?tab=card#x").as_deref(),
+        Some("hf:models/org/name")
+    );
+    assert_eq!(landing("https://example.org/datasets/org/name"), None);
+    assert_eq!(landing("https://huggingface.co/a/b/c"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_hub_declares_a_token_for_its_own_host() -> Result<(), Failure> {
+    let source = HuggingFace::new(support::client()?);
+    let variable = source
+        .credential(Arc::new(|_: &str| Some("secret".to_owned())))
+        .ok_or("no credential")?;
+    let origin = SafeUrl::parse("https://huggingface.co/")?
+        .origin()
+        .ok_or("no origin")?;
+    assert_eq!(variable.find(&origin)?, Some(Credential::token("secret")));
     Ok(())
 }

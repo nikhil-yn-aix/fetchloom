@@ -179,5 +179,9 @@ mod tests {
             Some("https://a/2")
         );
         assert_eq!(next_link("garbage"), None);
+        assert_eq!(
+            next_link("<https://a/2>rel=next").as_deref(),
+            Some("https://a/2")
+        );
     }
 }
