@@ -9,6 +9,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use fl_model::error::ErrorKind;
+
+use crate::failure::ISSUES;
 use tracing::Subscriber;
 use tracing::level_filters::LevelFilter;
 use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
@@ -25,8 +27,6 @@ const OWN_TARGETS: [&str; 5] = [
     "fl_store",
     "fl_model",
 ];
-
-const ISSUES_URL: &str = "https://github.com/nikhil-yn-aix/fetchloom/issues";
 
 /// What the user asked to observe: the repeat count of `-v`, the files to write and the filter
 /// taken from `FETCHLOOM_LOG`.
@@ -229,7 +229,7 @@ fn location_of(info: &PanicHookInfo<'_>) -> String {
 fn apology(version: &str, message: &str, location: &str, log: Option<&Path>) -> String {
     let log_line = log.map_or_else(String::new, |path| format!("  log: {}\n", path.display()));
     format!(
-        "fl {version} stopped on an internal error, sorry.\n  what: {message} at {location}\n{log_line}  report it at {ISSUES_URL}\n"
+        "fl {version} stopped on an internal error, sorry.\n  what: {message} at {location}\n{log_line}  report it at {ISSUES}\n"
     )
 }
 
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "fl 1.2.3 stopped on an internal error, sorry.\n  what: boom at src/a.rs:7\n  report it at {ISSUES_URL}\n"
+                "fl 1.2.3 stopped on an internal error, sorry.\n  what: boom at src/a.rs:7\n  report it at {ISSUES}\n"
             )
         );
     }

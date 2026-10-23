@@ -117,7 +117,7 @@ impl Synced {
         match worst(context, std::mem::take(&mut self.failures)) {
             Some(failure) => {
                 let kind = failure.kind();
-                context.emit(Event::Failed(failure.0));
+                context.emit(Event::Failed(failure.into_problem()));
                 Outcome {
                     status: Status::Partial,
                     result,

@@ -360,7 +360,7 @@ pub(crate) fn worst(context: &Context<'_>, failures: Vec<Failure>) -> Option<Fai
     let mut failures = failures;
     let first = failures.remove(index);
     for failure in failures {
-        context.emit(Event::Failed(failure.0));
+        context.emit(Event::Failed(failure.into_problem()));
     }
     Some(first)
 }

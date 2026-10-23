@@ -110,7 +110,7 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
         if restored == 0 {
             return Err(failure);
         }
-        context.emit(Event::Failed(failure.0));
+        context.emit(Event::Failed(failure.into_problem()));
         return Ok(Outcome {
             status: Status::Partial,
             exit: Some(ErrorKind::OfflineMissing),

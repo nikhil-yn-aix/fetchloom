@@ -95,7 +95,7 @@ impl Output {
                 human.finish(&Outcome::failed(), work)
             }
             Self::Json(json) => {
-                json.emit(Event::Failed(failure.0));
+                json.emit(Event::Failed(failure.into_problem()));
                 json.finish(command, Outcome::failed(), work)
             }
         }
@@ -187,7 +187,8 @@ impl Human {
             bars.clear();
         }
         let style = self.style;
-        let problem = &failure.0;
+        let snippet = failure.1.clone();
+        let problem = &failure.clone().into_problem();
         let mut text = format!(
             "{} {}\n",
             style.paint(
@@ -196,7 +197,7 @@ impl Human {
             ),
             problem.message
         );
-        if let Some(snippet) = &failure.1 {
+        if let Some(snippet) = &snippet {
             text.push_str(&show(style, snippet));
         }
         if let Some(help) = &problem.help {
