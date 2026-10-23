@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use crate::support::{Failure, IRIS, World, json};
+use crate::support::{Failure, IRIS, World, found, json};
 
 type TestResult = Result<(), Failure>;
 
@@ -579,4 +579,77 @@ fn held(lock: &Path) -> bool {
         .write(true)
         .open(lock)
         .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bare_name_with_one_exact_match_is_added_and_says_what_it_found() -> TestResult {
+    let world = World::start().await?;
+    found(
+        &world,
+        "datasetiris",
+        &[(3_608_990, "DatasetIris"), (5, "Iris, again")],
+    )
+    .await;
+    let ran = world.here(&["add", "datasetiris"])?;
+    ok(&ran)?;
+    assert!(
+        ran.stderr
+            .contains("Found \"DatasetIris\" as zenodo:3608990"),
+        "{}",
+        ran.stderr
+    );
+    let manifest = std::fs::read_to_string(world.project.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.datasetiris]\nref = \"zenodo:3608990\""),
+        "{manifest}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn several_matches_without_a_terminal_list_their_add_lines_and_exit_11() -> TestResult {
+    let world = World::start().await?;
+    found(&world, "iris", &[(1, "Iris flowers"), (2, "Iris images")]).await;
+    let ran = world.here(&["add", "iris"])?;
+    assert_eq!(ran.code, Some(11), "{}", ran.stderr);
+    for line in [
+        "fl add zenodo:1  Iris flowers (zenodo)",
+        "fl add zenodo:2  Iris images (zenodo)",
+    ] {
+        assert!(ran.stderr.contains(line), "{line}\n{}", ran.stderr);
+    }
+    assert!(
+        ran.stderr.contains("error[reference.ambiguous]"),
+        "{}",
+        ran.stderr
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_found_exits_10_and_a_name_is_never_guessed() -> TestResult {
+    let world = World::start().await?;
+    found(&world, "nothing", &[]).await;
+    let ran = world.here(&["add", "nothing"])?;
+    assert_eq!(ran.code, Some(10), "{}", ran.stderr);
+    assert!(
+        ran.stderr.contains("nothing was found for `nothing`"),
+        "{}",
+        ran.stderr
+    );
+    assert!(!world.project.join("data.lock").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_with_nothing_outside_a_terminal_is_a_usage_error_with_examples() -> TestResult {
+    let world = World::start().await?;
+    let ran = world.here(&["add"])?;
+    assert_eq!(ran.code, Some(2), "{}", ran.stderr);
+    assert!(
+        ran.stderr.contains("fl add zenodo:3608990"),
+        "{}",
+        ran.stderr
+    );
+    Ok(())
 }

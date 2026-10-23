@@ -283,7 +283,7 @@ async fn a_lock_pointing_at_loopback_is_refused_and_a_typed_url_is_not() -> Test
     let ran = world.here(&["add", &uri, "--as", "iris"])?;
     assert_eq!(ran.code, Some(0), "{}", ran.stderr);
     assert_eq!(world.requests().await?, 1);
-    std::fs::remove_file(world.config.join("sources").join("zenodo.toml"))?;
+    std::fs::remove_dir_all(world.config.join("sources"))?;
     let other = world.temp.path().join("other");
     std::fs::create_dir_all(&other)?;
     for name in ["data.toml", "data.lock"] {

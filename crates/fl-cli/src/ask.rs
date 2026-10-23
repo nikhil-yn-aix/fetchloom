@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use console::Term;
-use dialoguer::{Confirm, Input};
+use dialoguer::{Confirm, Input, Select};
 use fl_model::error::ErrorKind;
 
 use crate::failure::Failure;
@@ -15,6 +15,15 @@ use crate::report::Reporter;
 pub(crate) trait Ask: Send + Sync {
     /// Whether the user agrees to `question`. Without a terminal, `refusal` is the error.
     fn confirm(&self, question: &str, refusal: Failure) -> Result<bool, Failure>;
+
+    /// The index of the item of `items` the user picks, `None` when they pick nothing.
+    /// Without a terminal, `refusal` is the error.
+    fn pick(
+        &self,
+        prompt: &str,
+        items: &[String],
+        refusal: Failure,
+    ) -> Result<Option<usize>, Failure>;
 
     /// A line the user types, trimmed; empty when they type nothing. Without a terminal,
     /// `refusal` is the error.
@@ -58,6 +67,21 @@ impl Ask for Prompt {
         })
     }
 
+    fn pick(
+        &self,
+        prompt: &str,
+        items: &[String],
+        _refusal: Failure,
+    ) -> Result<Option<usize>, Failure> {
+        self.paused(|term| {
+            Select::new()
+                .with_prompt(prompt)
+                .items(items)
+                .default(0)
+                .interact_on_opt(term)
+        })
+    }
+
     fn text(&self, prompt: &str, _refusal: Failure) -> Result<String, Failure> {
         self.paused(|term| {
             Input::<String>::new()
@@ -77,6 +101,15 @@ impl Ask for Refuse {
         Err(refusal)
     }
 
+    fn pick(
+        &self,
+        _prompt: &str,
+        _items: &[String],
+        refusal: Failure,
+    ) -> Result<Option<usize>, Failure> {
+        Err(refusal)
+    }
+
     fn text(&self, _prompt: &str, refusal: Failure) -> Result<String, Failure> {
         Err(refusal)
     }
@@ -91,6 +124,7 @@ mod tests {
         let refusal = || Failure::new(ErrorKind::Usage, "pass --yes");
         let confirm = Refuse.confirm("go?", refusal()).unwrap_err();
         assert_eq!(confirm.to_string(), "pass --yes");
+        assert!(Refuse.pick("which?", &["a".to_owned()], refusal()).is_err());
         assert!(Refuse.text("what?", refusal()).is_err());
     }
 }

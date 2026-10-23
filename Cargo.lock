@@ -547,6 +547,7 @@ dependencies = [
  "fl-sources",
  "fl-store",
  "fl-transfer",
+ "futures-util",
  "indicatif",
  "insta",
  "serde",
