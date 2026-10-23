@@ -257,6 +257,17 @@ fn execute(
             Command::Get(get) => commands::get::run(&context, get).await,
         }
     });
+    for (host, done) in engine.slowest(3) {
+        output.reporter().emit(Event::Detail {
+            label: "Host".to_owned(),
+            text: format!(
+                "{host}: {}, {} in {}",
+                fl_model::units::count(done.files, "file", "files"),
+                fl_model::units::size(done.bytes),
+                fl_model::units::duration(done.spent)
+            ),
+        });
+    }
     (result, engine.work())
 }
 

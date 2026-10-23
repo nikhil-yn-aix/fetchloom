@@ -1,6 +1,6 @@
 ---
 source: crates/fl-cli/tests/snapshots.rs
-expression: "logs_folded(&redact(&world, &ran.stderr))"
+expression: "logs_dropped(&redact(&world, &ran.stderr))"
 ---
     Setting store = [TEMP]/fresh from $FETCHLOOM_STORE
     Setting link = auto from default
@@ -8,9 +8,10 @@ expression: "logs_folded(&redact(&world, &ran.stderr))"
     Setting per_host = 4 from default
     Setting timeout = [TIME] from default
     Setting offline = false from default
+    Dataset ab: 2 files locked, 0 in place, 2 to place
  Downloaded 2 files of ab, 8 B in [TIME]
-2026-10-23T10:31:26.133327Z DEBUG command{name="sync"}:link{dir="ab" files=2}:link{digest=blake3:2f127cc0d22915102b3a6a4e9bec4df4fa2fa82d42df8921fdf6bb828e8fa22f target=[PROJECT]/data/ab/a.csv}: fl_store::link: mode refused, next mode from now on mode=Reflink error=unsupported
      Linked data/ab in [TIME], 0 B extra disk
+       Host 127.0.0.1: 2 files, 8 B in [TIME]
 ✓ Synced 2 files into [PROJECT]/data, 8 B downloaded.
-       Work 2 requests · 8 B down · 2 objects ingested · 8 B written · 2 files linked · 2 by hardlink
+       Work 2 requests · 8 B down · 2 objects ingested · 8 B written · 2 files linked · 2 by [MODE]
        Time link [TIME] · transfer [TIME]

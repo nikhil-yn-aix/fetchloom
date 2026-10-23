@@ -23,12 +23,7 @@ expression: text
     "bytes_written": 0,
     "files_linked": 0,
     "files_rehashed": 0,
-    "links": {
-      "copy": 0,
-      "hardlink": 0,
-      "reflink": 0,
-      "symlink": 0
-    },
+    "links": "[BY PLATFORM]",
     "objects_ingested": 0,
     "phase_ms": {},
     "requests": 0,
