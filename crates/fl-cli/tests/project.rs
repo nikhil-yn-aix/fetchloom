@@ -694,3 +694,28 @@ async fn two_fl_fetching_the_same_file_into_one_store_both_succeed() -> TestResu
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_with_a_query_is_locked_whole_and_fetched_again_from_the_lock() -> TestResult {
+    let world = World::start().await?;
+    Mock::given(method("GET"))
+        .and(path("/q.csv"))
+        .and(wiremock::matchers::query_param("version", "9"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"q,9\n".to_vec()))
+        .mount(&world.server)
+        .await;
+    let uri = format!("{}/q.csv?version=9", world.server.uri());
+    ok(&world.here(&["add", &uri, "--as", "q"])?)?;
+    let lock = std::fs::read_to_string(world.project.join("data.lock"))?;
+    assert!(lock.contains("q.csv?version=9"), "{lock}");
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    let fresh = world.temp.path().join("fresh");
+    let ran = world.fl_with_store(&world.project, &fresh, &["sync"])?;
+    ok(&ran)?;
+    assert!(!ran.stderr.contains("version=9"), "{}", ran.stderr);
+    let password = format!("http://me:secret@{}/q.csv", world.server.address());
+    let ran = world.here(&["add", &password, "--as", "p"])?;
+    assert_eq!(ran.code, Some(2), "{}", ran.stderr);
+    assert!(!ran.stderr.contains("secret"), "{}", ran.stderr);
+    Ok(())
+}
