@@ -8,3 +8,4 @@ mod hf;
 mod live;
 mod registry;
 mod support;
+mod tls;

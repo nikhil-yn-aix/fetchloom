@@ -424,6 +424,24 @@ mod tests {
     }
 
     #[test]
+    fn only_a_host_part_makes_a_pattern_name_a_host() {
+        assert!(Pattern::parse("{host}/{id}").unwrap().has_host());
+        assert!(!Pattern::parse("{owner}/{id}").unwrap().has_host());
+        assert!(!Pattern::parse("{id}").unwrap().has_host());
+    }
+
+    #[test]
+    fn a_template_keeps_its_text_and_knows_whether_it_reads_values() {
+        let reading = Template::parse("https://x.org/{id}/{$.name}", Context::Url).unwrap();
+        assert_eq!(reading.text(), "https://x.org/{id}/{$.name}");
+        assert!(reading.reads());
+        let plain = Template::parse("https://x.org/{id}", Context::Url).unwrap();
+        assert_eq!(plain.text(), "https://x.org/{id}");
+        assert!(!plain.reads());
+        assert!(!Template::parse("literal", Context::Text).unwrap().reads());
+    }
+
+    #[test]
     fn patterns_without_separators_or_names_are_refused() {
         assert!(Pattern::parse("{a}{b}").is_err());
         assert!(Pattern::parse("{Id}").is_err());

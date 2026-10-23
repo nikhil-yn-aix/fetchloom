@@ -201,6 +201,26 @@ async fn adapter_files_that_cannot_work_name_the_key_at_fault() -> Result<(), Fa
 }
 
 #[tokio::test]
+async fn an_adapter_needs_a_path_template_and_a_url_template() -> Result<(), Failure> {
+    let server = MockServer::start().await;
+    for (from, to) in [
+        ("path = \"$.name\"", "path = []"),
+        ("url = \"BASE/download/{id}/{%$.name}\"", "url = []"),
+    ] {
+        let text = TOY.replace(from, to).replace("BASE", &server.uri());
+        let error = Declarative::from_toml(&text, support::client()?)
+            .err()
+            .ok_or(to)?;
+        assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig);
+        assert!(
+            error.to_string().contains("each need a template"),
+            "{error}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn every_kind_of_paging_asks_for_each_page_once() -> Result<(), Failure> {
     let kinds = [
         ("{ kind = \"page\", param = \"page\", size = 2 }", 2),
@@ -608,6 +628,36 @@ async fn a_folder_on_another_host_is_not_trusted_like_the_typed_one() -> Result<
             .await
             .unwrap_or_default()
             .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_folder_on_the_typed_host_is_walked_like_the_record() -> Result<(), Failure> {
+    let typed = MockServer::start().await;
+    let inner = format!("{}/inner", typed.uri());
+    let file = |name: &str| json!({"name": name, "href": format!("{}/{name}", typed.uri())});
+    Mock::given(method("GET"))
+        .and(path("/records/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "files": [file("top.csv")],
+            "dirs": [{"href": inner}],
+        })))
+        .mount(&typed)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/inner"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "files": [file("deep.csv")],
+            "dirs": [],
+        })))
+        .mount(&typed)
+        .await;
+    let adapter = Declarative::from_toml(HOSTED, support::client()?)?;
+    let host = typed.uri().trim_start_matches("http://").to_owned();
+    assert_eq!(
+        listed(&adapter, &format!("lab:{host}/7")).await?,
+        ["top.csv", "deep.csv"]
     );
     Ok(())
 }

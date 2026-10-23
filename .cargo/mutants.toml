@@ -40,6 +40,10 @@ exclude_re = [
     'unix\.rs:\d+:\d+: replace match guard matches!\( error\.kind\(\), io::ErrorKind::AlreadyExists \| io::ErrorKind::NotFound \) with true in publish$',
     # a staging name that cannot be removed cannot be created either, so linking fails the same way one step later
     'link\.rs:\d+:\d+: replace match guard error\.kind\(\) != io::ErrorKind::NotFound with false in Linker<.t>::place$',
+    # a comment is resumed from three characters earlier, which only rereads text that cannot start an anchor with an href
+    'index\.rs:\d+:72: replace \+ with - in hrefs$',
+    # the default of a method a source may leave out is the answer of a source that leaves it out
+    'source\.rs:\d+:\d+: replace Source::(landing|credential) -> Option<.*> with None$',
     # after a rename the scratch name is gone, so removing it again finds nothing unless another host took the same name in a shared tmp
     'replace Scratch::keep with \(\)$',
     # the cursor is only ever read modulo the group count, so adding the count to it picks the same group

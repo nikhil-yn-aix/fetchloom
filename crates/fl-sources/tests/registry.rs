@@ -41,6 +41,14 @@ async fn a_pattern_matching_nothing_is_an_empty_selection() -> Result<(), Failur
 }
 
 #[tokio::test]
+async fn the_builtin_sources_declare_their_credentials() -> Result<(), Failure> {
+    let registry = Registry::builtin(&support::client()?)?;
+    let declared = registry.credentials(|_| Some("secret".to_owned()));
+    assert!(declared.len() > 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_unknown_scheme_is_unresolved_and_names_the_scheme() -> Result<(), Failure> {
     let registry = Registry::builtin(&support::client()?)?;
     let reference: Reference = "nowhere:12345".parse()?;
@@ -519,5 +527,6 @@ fn a_wait_names_the_host_each_kind_of_reference_asks_first() -> Result<(), Failu
         Some("doi.org")
     );
     assert_eq!(host("ham10000")?, None);
+    assert_eq!(host("croissant:https://example.com/meta.json")?, None);
     Ok(())
 }
