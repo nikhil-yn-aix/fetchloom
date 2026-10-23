@@ -72,16 +72,16 @@ impl Context<'_> {
     }
 
     /// Goes on when the user agrees to `question`, or gave `--yes`. Without a terminal and
-    /// without `--yes` it stops, saying what `doing` would have done.
-    pub(crate) fn agree(&self, question: &str, doing: &str) -> Result<(), Failure> {
+    /// without `--yes` it stops, saying `why` it would have asked.
+    pub(crate) fn agree(&self, question: &str, why: &str, doing: &str) -> Result<(), Failure> {
         if self.yes {
             return Ok(());
         }
         let refusal = Failure::new(
             ErrorKind::Usage,
-            format!("{doing} needs a yes, and there is no terminal to ask on"),
+            format!("{why}, and fetchloom asks first, but there is no terminal to ask on"),
         )
-        .help("run the same command with --yes");
+        .help("run the same command with --yes to go ahead");
         if self.ask.confirm(question, refusal)? {
             Ok(())
         } else {
@@ -100,6 +100,7 @@ impl Context<'_> {
         }
         self.agree(
             &format!("{dataset} is {} to download. Download it?", size(bytes)),
+            &format!("{dataset} is {} to download", size(bytes)),
             &format!("downloading {} of {dataset}", size(bytes)),
         )
     }

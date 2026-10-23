@@ -124,16 +124,13 @@ pub(crate) fn create(
         .help("add datasets to it with `fl add REF`"));
     }
     fs::create_dir_all(dir).map_err(|error| Failure::io("create", dir, &error))?;
-    let name = name.map_or_else(|| default_name(dir), str::to_owned);
-    let mut document = DocumentMut::new();
-    document["project"] = table();
-    document["project"]["name"] = value(name);
+    let text = minimal(dir, name);
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&path)
         .map_err(|error| Failure::io("create", &path, &error))?;
-    file.write_all(document.to_string().as_bytes())
+    file.write_all(text.as_bytes())
         .map_err(|error| Failure::io("write", &path, &error))?;
     context.emit(Event::Initialized {
         path: path.display().to_string(),
@@ -148,6 +145,15 @@ pub(crate) fn create(
         });
     }
     Ok(path)
+}
+
+/// The text of a new `data.toml` in `dir`: the project's name, the folder's when none is given.
+pub(crate) fn minimal(dir: &Path, name: Option<&str>) -> String {
+    let name = name.map_or_else(|| default_name(dir), str::to_owned);
+    let mut document = DocumentMut::new();
+    document["project"] = table();
+    document["project"]["name"] = value(name);
+    document.to_string()
 }
 
 fn default_name(dir: &Path) -> String {

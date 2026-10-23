@@ -1,0 +1,15 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: "logs_folded(&redact(&world, &ran.stderr))"
+---
+    Setting store = [TEMP]/fresh from $FETCHLOOM_STORE
+    Setting link = auto from default
+    Setting jobs = 8 from default
+    Setting per_host = 4 from default
+    Setting timeout = [TIME] from default
+    Setting offline = false from default
+ Downloaded 2 files of ab, 8 B in [TIME]
+     Linked data/ab in [TIME], 0 B extra disk
+✓ Synced 2 files into [PROJECT]/data, 8 B downloaded.
+       Work 2 requests · 8 B down · 2 objects ingested · 8 B written · 2 files linked · 2 by hardlink
+       Time link [TIME] · transfer [TIME]

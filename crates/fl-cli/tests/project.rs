@@ -144,8 +144,7 @@ async fn a_large_record_needs_a_yes_and_writes_nothing_without_one() -> TestResu
     assert_eq!(ran.code, Some(2), "{}", ran.stderr);
     assert!(ran.stderr.contains("2.0 GiB"), "{}", ran.stderr);
     assert!(ran.stderr.contains("--yes"), "{}", ran.stderr);
-    let manifest = std::fs::read_to_string(world.project.join("data.toml"))?;
-    assert!(!manifest.contains("zenodo:10"), "{manifest}");
+    assert!(!world.project.join("data.toml").exists());
     assert!(!world.project.join("data.lock").exists());
     let downloads = world
         .server

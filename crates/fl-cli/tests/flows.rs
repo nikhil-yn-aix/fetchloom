@@ -169,13 +169,13 @@ async fn an_unknown_record_is_reference_unresolved() -> TestResult {
     assert_eq!(ran.code, Some(10), "{}", ran.stderr);
     assert!(
         ran.stderr
-            .contains("\n\u{2717} error[reference.unresolved]"),
+            .starts_with("\u{2717} error[reference.unresolved]"),
         "{}",
         ran.stderr
     );
     assert!(ran.stderr.contains("help:"), "{}", ran.stderr);
-    let manifest = std::fs::read_to_string(world.project.join("data.toml"))?;
-    assert!(!manifest.contains("zenodo:404"), "{manifest}");
+    assert!(!world.project.join("data.toml").exists());
+    assert!(!world.project.join(".fetchloom").exists());
     Ok(())
 }
 
@@ -343,8 +343,7 @@ async fn a_record_whose_file_link_points_at_loopback_is_refused() -> TestResult 
         .map(|request| request.url.path().to_owned())
         .collect();
     assert_eq!(reached, ["/api/records/77"]);
-    let manifest = std::fs::read_to_string(world.project.join("data.toml"))?;
-    assert!(!manifest.contains("zenodo:77"), "{manifest}");
+    assert!(!world.project.join("data.toml").exists());
     Ok(())
 }
 

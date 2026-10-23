@@ -88,6 +88,7 @@ pub fn run() -> ExitCode {
         }
     };
     let global = cli.global;
+    let alone = cli.command.is_none();
     let Some(command) = cli
         .command
         .or_else(|| in_project(&global).then(Command::status))
@@ -131,6 +132,11 @@ pub fn run() -> ExitCode {
         Box::new(Refuse)
     };
     let (result, work) = execute(&global, &command, &output, ask.as_ref());
+    if alone && result.as_ref().is_ok_and(|outcome| outcome.exit.is_none()) {
+        output.reporter().emit(Event::Hint(
+            "`fl add REF` adds a dataset, `fl --help` lists every command".to_owned(),
+        ));
+    }
     let code = match result {
         Ok(outcome) => {
             let code = outcome.exit.map_or(0, ErrorKind::exit_code);

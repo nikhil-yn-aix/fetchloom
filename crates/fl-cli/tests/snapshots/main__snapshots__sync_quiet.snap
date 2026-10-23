@@ -1,0 +1,5 @@
+---
+source: crates/fl-cli/tests/snapshots.rs
+expression: "logs_folded(&redact(&world, &ran.stderr))"
+---
+

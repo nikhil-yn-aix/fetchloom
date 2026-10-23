@@ -97,11 +97,19 @@ impl Synced {
         let result = self.result();
         let fetched = fl_model::units::size(self.fetched);
         let sentence = match (self.linked, self.removed) {
+            (0, _) if !self.failures.is_empty() => format!(
+                "Nothing was placed: {}.",
+                plural(
+                    self.failures.len() as u64,
+                    "problem stopped it",
+                    "problems stopped it"
+                )
+            ),
             _ if !self.failures.is_empty() => format!(
-                "Placed {} into {}, and {} failed; the rest are in place.",
+                "Placed {} into {}; {} stopped the rest.",
                 plural(self.linked, "file", "files"),
                 self.root.display(),
-                plural(self.failures.len() as u64, "file", "files")
+                plural(self.failures.len() as u64, "problem", "problems")
             ),
             (0, 0) => "Everything already matches data.lock, nothing to do.".to_owned(),
             (0, removed) => format!(
@@ -358,9 +366,9 @@ async fn place(
                 Failure::new(
                     ErrorKind::OfflineMissing,
                     format!(
-                        "offline, and {} of {name} {} in no local store: {}",
+                        "offline, and {} of {name} {} not been downloaded on this machine: {}",
                         plural(shown.len() as u64, "file", "files"),
-                        if shown.len() == 1 { "is" } else { "are" },
+                        if shown.len() == 1 { "has" } else { "have" },
                         some_of(&shown, 3)
                     ),
                 )
