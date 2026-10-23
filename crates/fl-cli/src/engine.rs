@@ -88,6 +88,7 @@ pub(crate) struct Engine {
     phases: Mutex<BTreeMap<&'static str, Duration>>,
     events: Arc<dyn Reporter>,
     transfers: Arc<AtomicU64>,
+    hosts: Arc<Mutex<BTreeMap<String, Host>>>,
 }
 
 impl Engine {
@@ -134,6 +135,7 @@ impl Engine {
             phases: Mutex::new(BTreeMap::new()),
             events,
             transfers: Arc::new(AtomicU64::new(0)),
+            hosts: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -224,6 +226,7 @@ impl Engine {
         let tier = Arc::clone(&self.tier);
         let events = Arc::clone(&self.events);
         let ids = Arc::clone(&self.transfers);
+        let hosts = Arc::clone(&self.hosts);
         let span = tracing::info_span!("transfer", group, files = queue.len());
         let done = Scheduler::new(self.jobs, self.client.hosts())
             .run(queue, move |(index, want): (usize, Want)| {
@@ -232,6 +235,7 @@ impl Engine {
                 let shown = Shown {
                     id: ids.fetch_add(1, Ordering::Relaxed),
                     events: Arc::clone(&events),
+                    hosts: Arc::clone(&hosts),
                 };
                 async move { (index, download(&client, &tier, &want, shown).await) }
             })
@@ -318,6 +322,20 @@ impl Engine {
     /// Counts a file read again to check its hash.
     pub(crate) fn rehashed(&self) {
         self.count(|work| work.files_rehashed += 1);
+    }
+
+    /// The hosts downloaded from, the slowest first, at most `n` of them.
+    pub(crate) fn slowest(&self, n: usize) -> Vec<(String, Host)> {
+        let mut hosts: Vec<(String, Host)> = self
+            .hosts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(name, host)| (name.clone(), *host))
+            .collect();
+        hosts.sort_by(|a, b| b.1.spent.cmp(&a.1.spent).then_with(|| a.0.cmp(&b.0)));
+        hosts.truncate(n);
+        hosts
     }
 
     /// Everything counted so far, network included.
@@ -419,11 +437,11 @@ async fn download(
         Ok(done) => done,
         Err(error) => return Err(error.into()),
     };
-    done.sink.shown.events.emit(Event::TransferFinished {
-        id: done.sink.shown.id,
-        bytes: done.bytes,
-        elapsed: began.elapsed(),
-    });
+    done.sink.shown.finished(
+        want.url.host().unwrap_or_default(),
+        done.bytes,
+        began.elapsed(),
+    );
     let (blake3, size) = (done.hashes.blake3, done.bytes);
     let placing = Arc::clone(tier);
     let partial = done.sink.partial;
@@ -501,6 +519,33 @@ fn user_adapters(dir: &Path, client: &Arc<Client>) -> Result<Vec<Declarative>, F
 struct Shown {
     id: u64,
     events: Arc<dyn Reporter>,
+    hosts: Arc<Mutex<BTreeMap<String, Host>>>,
+}
+
+impl Shown {
+    fn finished(&self, host: &str, bytes: u64, spent: Duration) {
+        self.events.emit(Event::TransferFinished {
+            id: self.id,
+            bytes,
+            elapsed: spent,
+        });
+        let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+        let host = hosts.entry(host.to_owned()).or_default();
+        host.files += 1;
+        host.bytes += bytes;
+        host.spent += spent;
+    }
+}
+
+/// What the downloads from one host came to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Host {
+    /// Files downloaded.
+    pub(crate) files: u64,
+    /// Bytes downloaded.
+    pub(crate) bytes: u64,
+    /// Time spent on them, summed over files that ran at once.
+    pub(crate) spent: Duration,
 }
 
 /// A store partial as the transfer engine writes into it, reporting what it received.

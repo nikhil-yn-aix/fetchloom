@@ -8,6 +8,7 @@ expression: "redact(&world, &ran.stderr)"
     Setting per_host = 4 from default
     Setting timeout = [TIME] from default
     Setting offline = false from default
+    Dataset 3608990: 1 file locked, 1 in place, 0 to place
   Unchanged 3608990
 ✓ Everything already matches data.lock, nothing to do.
        Work 0 requests · 0 B down · 0 objects ingested · 0 B written · 0 files linked

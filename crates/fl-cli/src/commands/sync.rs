@@ -348,6 +348,15 @@ async fn place(
             slot.found == Found::Missing || (placing.force && slot.found == Found::Modified)
         })
         .collect();
+    context.emit(Event::Detail {
+        label: "Dataset".to_owned(),
+        text: format!(
+            "{name}: {} locked, {} in place, {} to place",
+            plural(found.slots.len() as u64, "file", "files"),
+            found.slots.len() - needed.len(),
+            needed.len()
+        ),
+    });
     if needed.is_empty() {
         context.emit(Event::Unchanged {
             dataset: name.clone(),

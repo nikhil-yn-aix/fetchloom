@@ -427,12 +427,14 @@ fn the_index_entry_of_a_removed_object_goes_and_that_of_a_kept_one_stays() -> Te
     store.tier.remember(&[kept], needed)?;
     store.tier.remember(&[gone], unneeded)?;
     assert!(store.collect(Duration::ZERO, false)?.removed.is_empty());
-    let collected = store.collect(2 * HOUR, false)?;
     let entry_path = store
         .path("index")
         .join("md5")
         .join("02")
         .join("02".repeat(15));
+    let entry_bytes = std::fs::metadata(&entry_path)?.len();
+    let collected = store.collect(2 * HOUR, false)?;
+    assert_eq!(collected.bytes, b"unneeded".len() as u64 + entry_bytes);
     assert!(
         collected.removed.contains(&entry_path),
         "{:?}",

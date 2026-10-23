@@ -17,6 +17,9 @@ fn pretty(world: &World, document: &Value) -> Result<String, Failure> {
             *value = Value::from(0);
         }
     }
+    if let Some(links) = document["work"].get_mut("links") {
+        *links = Value::from("[BY PLATFORM]");
+    }
     Ok(redact(world, &serde_json::to_string_pretty(&document)?))
 }
 
@@ -26,6 +29,7 @@ macro_rules! snapshot {
             filters => vec![
                 (r"127\.0\.0\.1:\d+", "[SERVER]"),
                 (r"\d+(\.\d+)?(ms|s)\b", "[TIME]"),
+                (r"by (reflink|hardlink|copy|symlink)\b", "by [MODE]"),
             ],
         }, {
             insta::assert_snapshot!($name, $text);
@@ -85,24 +89,18 @@ async fn fresh_sync(world: &World, args: &[&str]) -> Result<crate::support::Ran,
     world.fl_with_store(&world.project, &fresh, &every)
 }
 
-/// Debug log lines carry times and change with timing, so each run of them becomes one
-/// `[logs]` line that shows where they appear.
-fn logs_folded(text: &str) -> String {
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let log = line.len() > 20
-            && line.as_bytes()[4] == b'-'
-            && line.contains('T')
-            && line.contains("  ");
-        if log {
-            if out.last() != Some(&"[logs]") {
-                out.push("[logs]");
-            }
-        } else {
-            out.push(line);
-        }
-    }
-    out.join("\n")
+/// Debug log lines carry times and differ by platform, such as a reflink refused on one
+/// file system and taken on another, so they are left out.
+fn logs_dropped(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            !(line.len() > 20 && line.as_bytes()[4] == b'-' && line.as_bytes()[10] == b'T')
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -117,7 +115,7 @@ async fn a_sync_with_work_at_every_loudness() -> TestResult {
         let ran = fresh_sync(&world, &args).await?;
         assert_eq!(ran.code, Some(0), "{}", ran.stderr);
         assert!(ran.stdout.is_empty(), "{name}: {}", ran.stdout);
-        snapshot!(name, logs_folded(&redact(&world, &ran.stderr)));
+        snapshot!(name, logs_dropped(&redact(&world, &ran.stderr)));
     }
     let world = World::start().await?;
     let ran = fresh_sync(&world, &["--json"]).await?;
