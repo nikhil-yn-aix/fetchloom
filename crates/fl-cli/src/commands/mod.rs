@@ -268,7 +268,7 @@ pub(crate) fn want(
         url: url.clone(),
         size: entry.size,
         stated: entry.stated.clone(),
-        blake3: known.get(url.to_string().as_str()).copied(),
+        blake3: known.get(url.written().as_str()).copied(),
         typed,
     })
 }

@@ -47,6 +47,7 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         })?,
         None => name_for(&written)?,
     };
+    refuse_user_info(&written)?;
     let reference = match written.target() {
         Target::Name(query) => search(context, query).await?,
         _ => project_relative(&written, context.cwd, project.root())?,
@@ -112,6 +113,22 @@ pub(crate) async fn run(context: &Context<'_>, add: &Add) -> Result<Outcome, Fai
         )));
     }
     Ok(Outcome::ok(result, sentence))
+}
+
+/// Refuses a link that carries a name or password, which would land in data.toml for
+/// everyone who clones the project.
+fn refuse_user_info(reference: &Reference) -> Result<(), Failure> {
+    let carries = matches!(reference.target(), Target::Url { .. })
+        && fl_transfer::url::SafeUrl::parse(reference.as_str())
+            .is_ok_and(|url| url.has_user_info());
+    if carries {
+        return Err(Failure::new(
+            ErrorKind::Usage,
+            "the link holds a name or password, which would be written into data.toml",
+        )
+        .help("take it out of the link and give it as FETCHLOOM_TOKEN_ and the host, in capitals with `_` for dots"));
+    }
+    Ok(())
 }
 
 /// How long each source may take to answer a search.

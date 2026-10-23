@@ -42,6 +42,20 @@ impl SafeUrl {
             .map_err(UrlError)
     }
 
+    /// The URL as fetchloom writes it into its own files, such as a lock: the query kept, since
+    /// it addresses the file, and user info and fragment left out, since they never travel.
+    /// Lines meant for people print the [`Display`](fmt::Display) form instead.
+    #[must_use]
+    pub fn written(&self) -> String {
+        self.to_request().to_string()
+    }
+
+    /// Whether the URL carries user info: a name or password written into the address.
+    #[must_use]
+    pub fn has_user_info(&self) -> bool {
+        self.user_info().is_some()
+    }
+
     /// The scheme, such as `https`.
     #[must_use]
     pub fn scheme(&self) -> &str {
@@ -232,6 +246,19 @@ impl fmt::Display for Origin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_written_form_keeps_the_query_and_drops_what_never_travels() {
+        let url = SafeUrl::parse("https://me:secret@host/a.csv?version=9&x=1#part").unwrap();
+        assert_eq!(url.written(), "https://host/a.csv?version=9&x=1");
+        assert!(url.has_user_info());
+        assert!(
+            !SafeUrl::parse("https://host/a.csv?v=1")
+                .unwrap()
+                .has_user_info()
+        );
+        assert!(!url.to_string().contains("version=9"));
+    }
 
     fn url(text: &str) -> SafeUrl {
         text.parse().unwrap()

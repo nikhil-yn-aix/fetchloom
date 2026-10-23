@@ -410,7 +410,7 @@ fn locked_file(entry: &Entry, got: &Got) -> LockedFile {
         sha256: None,
         sha1: None,
         md5: None,
-        at: entry.urls.iter().map(SafeUrl::to_string).collect(),
+        at: entry.urls.iter().map(SafeUrl::written).collect(),
         from: None,
         role: None,
     };
