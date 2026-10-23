@@ -99,8 +99,11 @@ impl Context<'_> {
             return Ok(());
         }
         self.agree(
-            &format!("{dataset} is {} to download. Download it?", size(bytes)),
-            &format!("{dataset} is {} to download", size(bytes)),
+            &format!(
+                "Dataset `{dataset}` is {} to download. Download it?",
+                size(bytes)
+            ),
+            &format!("dataset `{dataset}` is {} to download", size(bytes)),
             &format!("downloading {} of {dataset}", size(bytes)),
         )
     }
