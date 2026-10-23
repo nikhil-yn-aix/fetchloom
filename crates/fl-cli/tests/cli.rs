@@ -65,7 +65,7 @@ fn a_bad_log_filter_is_a_usage_error() -> TestResult {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8(out.stderr)?;
-    assert!(stderr.starts_with("error[usage]: "), "{stderr}");
+    assert!(stderr.starts_with("\u{2717} error[usage]: "), "{stderr}");
     Ok(())
 }
 
@@ -79,7 +79,10 @@ fn a_good_log_filter_lets_the_command_run() -> TestResult {
         .output()?;
     assert_eq!(out.status.code(), Some(50));
     let stderr = String::from_utf8(out.stderr)?;
-    assert!(stderr.starts_with("error[project.missing]: "), "{stderr}");
+    assert!(
+        stderr.starts_with("\u{2717} error[project.missing]: "),
+        "{stderr}"
+    );
     Ok(())
 }
 

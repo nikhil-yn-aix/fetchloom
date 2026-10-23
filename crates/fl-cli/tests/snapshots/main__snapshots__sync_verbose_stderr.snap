@@ -9,5 +9,5 @@ expression: "redact(&world, &ran.stderr)"
     Setting timeout = [TIME] from default
     Setting offline = false from default
   Unchanged 3608990
-Everything already matches data.lock, nothing to do.
+✓ Everything already matches data.lock, nothing to do.
        Work 0 requests · 0 B down · 0 objects ingested · 0 B written · 0 files linked

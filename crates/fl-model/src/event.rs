@@ -109,6 +109,8 @@ pub enum Event {
     Warning(String),
     /// A tip teaching something the user has not done yet.
     Hint(String),
+    /// The run waits on something slow, such as a host, named in the text.
+    Waiting(String),
     /// A line of detail, shown from `-v` on.
     Detail {
         /// The word the line starts with, such as `Setting`.
