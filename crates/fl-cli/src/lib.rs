@@ -16,6 +16,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use fl_model::document::Work;
 use fl_model::error::ErrorKind;
+use fl_model::event::Event;
 
 use crate::args::{Cli, Command};
 use crate::commands::Context;
@@ -103,11 +104,24 @@ fn execute(
                 format!("the working directory cannot be read: {error}"),
             )
         })
-        .and_then(|cwd| Config::new(global, &cwd, |name| std::env::var(name).ok()));
+        .and_then(|cwd| {
+            Config::new(
+                global,
+                &cwd,
+                |name| std::env::var(name).ok(),
+                &config::read_optional,
+            )
+        });
     let config = match prepared {
         Ok(config) => config,
         Err(failure) => return (Err(failure), Work::default()),
     };
+    for (key, value, from) in config.shown() {
+        output.reporter().emit(Event::Detail {
+            label: "Setting".to_owned(),
+            text: format!("{key} = {value} from {from}"),
+        });
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .thread_name("fl-worker")
         .enable_all()

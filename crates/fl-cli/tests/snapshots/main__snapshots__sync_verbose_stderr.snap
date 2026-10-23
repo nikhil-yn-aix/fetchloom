@@ -2,6 +2,12 @@
 source: crates/fl-cli/tests/snapshots.rs
 expression: "redact(&world, &ran.stderr)"
 ---
+    Setting store = [STORE] from $FETCHLOOM_STORE
+    Setting link = auto from default
+    Setting jobs = 8 from default
+    Setting per_host = 4 from default
+    Setting timeout = [TIME] from default
+    Setting offline = false from default
   Unchanged 3608990
 Everything already matches data.lock, nothing to do.
        Work 0 requests · 0 B down · 0 objects ingested · 0 B written · 0 files linked

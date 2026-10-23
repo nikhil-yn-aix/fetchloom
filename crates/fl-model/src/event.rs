@@ -109,6 +109,13 @@ pub enum Event {
     Warning(String),
     /// A tip teaching something the user has not done yet.
     Hint(String),
+    /// A line of detail, shown from `-v` on.
+    Detail {
+        /// The word the line starts with, such as `Setting`.
+        label: String,
+        /// The rest of the line.
+        text: String,
+    },
     /// Something that stopped part or all of the command.
     Failed(Problem),
 }
