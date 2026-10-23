@@ -28,6 +28,7 @@ use fl_model::suggest::closest;
 use fl_model::units::size;
 use fl_sources::Entry;
 use fl_store::fingerprint::{self, Fingerprint};
+use fl_store::link::Ladder;
 use fl_transfer::url::SafeUrl;
 
 use crate::ask::Ask;
@@ -237,6 +238,17 @@ pub(crate) fn survey<'l>(
         stale: dropped,
         confirmed,
     })
+}
+
+/// How the files of dataset `name` are placed: copies when the dataset or the machine asks
+/// for them, the cheapest link otherwise.
+pub(crate) fn ladder(manifest: &Manifest, name: &Name, machine: Link) -> Ladder {
+    let dataset = manifest.datasets.get(name).map(|spec| spec.link);
+    if machine == Link::Copy || dataset == Some(Link::Copy) {
+        Ladder::COPY
+    } else {
+        Ladder::AUTO
+    }
 }
 
 /// The directory a dataset lands in under the data directory.

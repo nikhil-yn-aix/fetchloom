@@ -304,9 +304,22 @@ fn write_if_changed(path: &Path, text: &str) -> Result<bool, Failure> {
     Ok(true)
 }
 
-fn write(path: &Path, text: &str) -> Result<(), Failure> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, text).map_err(|error| Failure::io("write", &tmp, &error))?;
+/// Replaces the file at `path` with `text` in one step: written beside it under a name only
+/// this process uses, flushed to disk, then renamed over it.
+pub(crate) fn write(path: &Path, text: &str) -> Result<(), Failure> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    let written = File::create(&tmp).and_then(|mut file| {
+        io::Write::write_all(&mut file, text.as_bytes())?;
+        file.sync_all()
+    });
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(Failure::io("write", &tmp, &error));
+    }
     fs::rename(&tmp, path).map_err(|error| Failure::io("replace", path, &error))
 }
 

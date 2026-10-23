@@ -8,10 +8,9 @@ use fl_model::event::Event;
 use fl_model::name::Name;
 use fl_model::path::DataPath;
 use fl_store::fingerprint::Fingerprint;
-use fl_store::link::Ladder;
 use serde_json::json;
 
-use crate::commands::{Context, Found, dataset_dir, plural, some_of, survey};
+use crate::commands::{Context, Found, dataset_dir, ladder, plural, some_of, survey};
 use crate::failure::Failure;
 use crate::project::{Placed, Project};
 use crate::report::Outcome;
@@ -60,10 +59,10 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
             }
             files.push((slot.key.clone(), slot.file.path.clone(), slot.file.blake3));
         }
-        plans.push((dir, files));
+        plans.push((dir, ladder(&manifest, &locked.name, context.link), files));
     }
     agree_to_replace(context, &replaced)?;
-    for (dir, files) in &plans {
+    for (dir, ladder, files) in &plans {
         if files.is_empty() {
             continue;
         }
@@ -71,7 +70,7 @@ pub(crate) fn run(context: &Context<'_>, paths: &[PathBuf]) -> Result<Outcome, F
             .iter()
             .map(|(_, path, blake3)| (path.clone(), *blake3))
             .collect();
-        let placed = context.engine.link(&root, dir, &pairs, Ladder::AUTO)?;
+        let placed = context.engine.link(&root, dir, &pairs, *ladder)?;
         for ((destination, _), (key, path, blake3)) in placed.iter().zip(files) {
             let print = Fingerprint::of(destination.path())?;
             state.files.insert(key.clone(), Placed::new(blake3, &print));

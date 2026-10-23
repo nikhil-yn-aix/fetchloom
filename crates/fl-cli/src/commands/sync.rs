@@ -9,7 +9,7 @@ use fl_model::document::Status;
 use fl_model::error::ErrorKind;
 use fl_model::event::Event;
 use fl_model::lock::{Lock, LockedDataset};
-use fl_model::manifest::{Link, Manifest};
+use fl_model::manifest::Manifest;
 use fl_model::name::Name;
 use fl_model::path::DataPath;
 use fl_model::reference::Target;
@@ -20,8 +20,8 @@ use serde_json::json;
 use crate::args;
 use crate::commands::lock::{Relock, is_current, relock, stale};
 use crate::commands::{
-    Context, Found, Slot, Survey, dataset_dir, datasets_named, fetch_all, locked_want, plural,
-    some_of, survey, worst,
+    Context, Found, Slot, Survey, dataset_dir, datasets_named, fetch_all, ladder, locked_want,
+    plural, some_of, survey, worst,
 };
 use crate::engine::Got;
 use crate::failure::Failure;
@@ -269,15 +269,6 @@ async fn current_lock(
 }
 
 /// The ladder a dataset is placed with: copies when the dataset or the machine says so.
-fn ladder(manifest: &Manifest, name: &Name, machine: Link) -> Ladder {
-    let dataset = manifest.datasets.get(name).map(|spec| spec.link);
-    if machine == Link::Copy || dataset == Some(Link::Copy) {
-        Ladder::COPY
-    } else {
-        Ladder::AUTO
-    }
-}
-
 fn tidy_extras(
     context: &Context<'_>,
     root: &Path,

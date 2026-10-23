@@ -1,6 +1,7 @@
 //! The machine configuration, `config.toml`: settings of one machine, user level or system
 //! level, never shared through git.
 
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::ops::Range;
 
 use serde::Deserialize;
@@ -36,11 +37,11 @@ pub struct StoreConfig {
 #[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
     /// Transfers running at once.
-    pub jobs: Option<usize>,
+    pub jobs: Option<NonZeroUsize>,
     /// Transfers running at once against one host.
-    pub per_host: Option<usize>,
+    pub per_host: Option<NonZeroUsize>,
     /// The longest silence tolerated on a connection, in seconds.
-    pub timeout: Option<u64>,
+    pub timeout: Option<NonZeroU64>,
 }
 
 impl MachineConfig {
@@ -88,6 +89,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_zero_count_or_timeout_is_refused_in_plain_words() {
+        for key in ["jobs", "per_host", "timeout"] {
+            let err = MachineConfig::from_toml(&format!(
+                "[network]
+{key} = 0
+"
+            ))
+            .unwrap_err();
+            assert_eq!(
+                err.message, "this value is 0, and it must be at least 1",
+                "{key}"
+            );
+            assert!(err.span.is_some());
+        }
+    }
+
+    #[test]
     fn every_documented_key_is_read() {
         let config = MachineConfig::from_toml(
             "\u{feff}[store]\nlocal = \"~/cache\"\nlink = \"copy\"\n[network]\njobs = 2\nper_host = 1\ntimeout = 9\n",
@@ -95,9 +113,9 @@ mod tests {
         .unwrap();
         assert_eq!(config.store.local.as_deref(), Some("~/cache"));
         assert_eq!(config.store.link, Some(Link::Copy));
-        assert_eq!(config.network.jobs, Some(2));
-        assert_eq!(config.network.per_host, Some(1));
-        assert_eq!(config.network.timeout, Some(9));
+        assert_eq!(config.network.jobs, NonZeroUsize::new(2));
+        assert_eq!(config.network.per_host, NonZeroUsize::new(1));
+        assert_eq!(config.network.timeout, NonZeroU64::new(9));
         assert_eq!(
             MachineConfig::from_toml("").unwrap(),
             MachineConfig::default()

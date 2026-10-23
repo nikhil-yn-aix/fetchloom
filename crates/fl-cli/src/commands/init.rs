@@ -71,6 +71,13 @@ pub(crate) fn interview(ask: &dyn Ask, dir: &Path, store: &Path) -> Result<Answe
         ),
         refusal(),
     )?)
+    .map(|answer| {
+        if answer.starts_with('~') {
+            answer
+        } else {
+            dir.join(&answer).display().to_string()
+        }
+    })
     .filter(|answer| Path::new(answer) != store);
     let first = given(ask.text(
         "A first dataset: a DOI, a link, or search words (empty to skip)",
@@ -101,7 +108,7 @@ pub(crate) fn save_store(file: &Path, store: &str) -> Result<(), Failure> {
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|error| Failure::io("create", parent, &error))?;
     }
-    fs::write(file, document.to_string()).map_err(|error| Failure::io("write", file, &error))
+    crate::project::write(file, &document.to_string())
 }
 
 /// Writes a new `data.toml` in `dir`, and in a git repository keeps the data directory and
@@ -111,18 +118,8 @@ pub(crate) fn create(
     dir: &Path,
     name: Option<&str>,
 ) -> Result<std::path::PathBuf, Failure> {
+    refuse_existing(dir)?;
     let path = dir.join(MANIFEST);
-    if path.exists() {
-        return Err(Failure::new(
-            ErrorKind::ProjectExists,
-            format!(
-                "`{}` already exists and init never overwrites it",
-                path.display()
-            ),
-        )
-        .subject(path.display().to_string())
-        .help("add datasets to it with `fl add REF`"));
-    }
     fs::create_dir_all(dir).map_err(|error| Failure::io("create", dir, &error))?;
     let text = minimal(dir, name);
     let mut file = fs::OpenOptions::new()
@@ -145,6 +142,23 @@ pub(crate) fn create(
         });
     }
     Ok(path)
+}
+
+/// Fails when `dir` already holds a `data.toml`, which init never overwrites.
+pub(crate) fn refuse_existing(dir: &Path) -> Result<(), Failure> {
+    let path = dir.join(MANIFEST);
+    if path.exists() {
+        return Err(Failure::new(
+            ErrorKind::ProjectExists,
+            format!(
+                "`{}` already exists and init never overwrites it",
+                path.display()
+            ),
+        )
+        .subject(path.display().to_string())
+        .help("add datasets to it with `fl add REF`"));
+    }
+    Ok(())
 }
 
 /// The text of a new `data.toml` in `dir`: the project's name, the folder's when none is given.

@@ -27,6 +27,12 @@ fn explain(message: &str) -> (String, Option<String>) {
             Some("write a relative path without `..`, like `data` or `cache/data`".to_owned()),
         );
     }
+    if message.starts_with("invalid value: integer `0`, expected a nonzero") {
+        return (
+            "this value is 0, and it must be at least 1".to_owned(),
+            Some("write 1 or more, or remove the key to use the default".to_owned()),
+        );
+    }
     if let Some(key) = message.strip_prefix("missing field ") {
         return (format!("missing key {key}"), None);
     }
