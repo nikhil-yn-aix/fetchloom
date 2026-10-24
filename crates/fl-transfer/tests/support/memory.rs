@@ -8,8 +8,10 @@ use std::time::{Duration, SystemTime};
 
 use fl_model::partial::PartialRecord;
 use fl_transfer::client::{Client, Config, Timer};
-use fl_transfer::credentials::{Chain, Credentials};
+use fl_transfer::credentials::{Chain, Credentials, Environment};
 use fl_transfer::sink::Sink;
+
+use super::Server;
 
 /// Bytes and a record held in memory, with a count of every reset.
 #[derive(Debug, Default)]
@@ -157,6 +159,34 @@ pub fn patient(idle: Duration) -> Config {
         idle,
         ..Config::default()
     }
+}
+
+/// Short timeouts that trust only the certificates of `servers`.
+pub fn trusting(servers: &[&Server]) -> Config {
+    Config {
+        trust_only: servers
+            .iter()
+            .filter_map(|server| server.ca_der())
+            .collect(),
+        ..quick()
+    }
+}
+
+/// Credentials that give every one of `servers` the token `s3cret`.
+pub fn tokens(servers: &[&Server]) -> Environment {
+    let names: Vec<String> = servers
+        .iter()
+        .map(|server| {
+            let authority = server.authority().replace(['.', ':'], "_");
+            format!("FETCHLOOM_TOKEN_{authority}")
+        })
+        .collect();
+    Environment::new(move |name| {
+        names
+            .iter()
+            .any(|known| known == name)
+            .then(|| "s3cret".to_owned())
+    })
 }
 
 /// A client with `config` and `credentials`, whose waits go to `waits`.

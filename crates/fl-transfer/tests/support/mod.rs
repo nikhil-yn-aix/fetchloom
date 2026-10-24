@@ -34,6 +34,19 @@ pub async fn bounded<T>(future: impl Future<Output = T>) -> Result<T, Box<dyn st
     Ok(tokio::time::timeout(LIMIT, future).await?)
 }
 
+/// `chunks` framed as an HTTP/1.1 chunked body, each slice one chunk, so a client sees the
+/// body in pieces of exactly those sizes.
+pub fn chunked<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
+    let mut framed = Vec::new();
+    for chunk in chunks {
+        framed.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+        framed.extend_from_slice(chunk);
+        framed.extend_from_slice(b"\r\n");
+    }
+    framed.extend_from_slice(b"0\r\n\r\n");
+    framed
+}
+
 #[derive(Clone, Default)]
 /// Everything a subscriber wrote, shared among its clones.
 pub struct Captured(Arc<Mutex<Vec<u8>>>);
@@ -167,10 +180,10 @@ impl Reply {
     fn head(&self) -> Vec<u8> {
         let reason = if self.status == 200 { "OK" } else { "Status" };
         let mut lines = vec![format!("HTTP/1.1 {} {reason}", self.status)];
-        let sets_length = self
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        let sets_length = self.headers.iter().any(|(name, _)| {
+            name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding")
+        });
         if !sets_length {
             lines.push(format!("Content-Length: {}", self.body.len()));
         }
