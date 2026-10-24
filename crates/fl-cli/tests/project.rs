@@ -473,6 +473,15 @@ async fn a_file_that_fails_does_not_stop_the_rest_and_the_worst_code_wins() -> T
     assert_eq!(document["result"]["linked"], 1);
     assert_eq!(document["errors"][0]["kind"], "network.status");
     assert!(data(&world, "ab/b.csv").exists());
+    std::fs::remove_dir_all(world.project.join("data"))?;
+    let again = world.temp.path().join("again");
+    let ran = world.fl_with_store(&world.project, &again, &["sync"])?;
+    assert!(
+        ran.stderr.contains("Placed 1 file into ")
+            && ran.stderr.contains("1 problem stopped the rest."),
+        "{}",
+        ran.stderr
+    );
     Ok(())
 }
 

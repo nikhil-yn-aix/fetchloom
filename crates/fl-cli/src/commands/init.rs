@@ -354,4 +354,22 @@ mod tests {
         let error = save_store(&folder, "/fourth").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::LocalIo);
     }
+
+    #[test]
+    fn a_file_that_cannot_be_read_as_text_is_never_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config.toml");
+        let ignored = temp.path().join(".gitignore");
+        for file in [&config, &ignored] {
+            fs::write(file, [0xff, 0xfe]).unwrap();
+        }
+        assert_eq!(
+            save_store(&config, "/s").unwrap_err().kind(),
+            ErrorKind::LocalIo
+        );
+        assert_eq!(ignore(temp.path()).unwrap_err().kind(), ErrorKind::LocalIo);
+        for file in [&config, &ignored] {
+            assert_eq!(fs::read(file).unwrap(), [0xff, 0xfe]);
+        }
+    }
 }

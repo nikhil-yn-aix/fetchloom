@@ -346,6 +346,60 @@ mod tests {
     }
 
     #[test]
+    fn a_placed_file_is_trusted_by_its_whole_fingerprint_and_otherwise_by_its_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("a.csv");
+        fs::write(&path, b"a,b").unwrap();
+        let print = fl_store::fingerprint::Fingerprint::of(&path).unwrap();
+        let other = [9; 32];
+        let state = |placed: Placed, written: u128| State {
+            files: BTreeMap::from([("d/a.csv".to_owned(), placed)]),
+            written,
+        };
+        let trusted = Placed::new(&other, &print);
+        let later = print.modified + 1;
+        assert!(
+            state(trusted.clone(), later)
+                .untouched("d/a.csv", &path)
+                .unwrap()
+        );
+        let changed = [
+            (trusted.clone(), print.modified),
+            (
+                Placed {
+                    size: print.size + 1,
+                    ..trusted.clone()
+                },
+                later,
+            ),
+            (
+                Placed {
+                    modified: (print.modified + 1).to_string(),
+                    ..trusted.clone()
+                },
+                later + 1,
+            ),
+            (
+                Placed {
+                    identity: (print.identity + 1).to_string(),
+                    ..trusted.clone()
+                },
+                later,
+            ),
+        ];
+        for (placed, written) in changed {
+            assert!(!state(placed, written).untouched("d/a.csv", &path).unwrap());
+        }
+        let bytes = *blake3::hash(b"a,b").as_bytes();
+        let rehashed = Placed {
+            size: 0,
+            ..Placed::new(&bytes, &print)
+        };
+        assert!(state(rehashed, later).untouched("d/a.csv", &path).unwrap());
+        assert!(!State::default().untouched("d/a.csv", &path).unwrap());
+    }
+
+    #[test]
     fn a_lock_or_state_that_cannot_be_read_fails_instead_of_reading_as_none() {
         let temp = tempfile::tempdir().unwrap();
         let project = Project::at(temp.path().to_owned());

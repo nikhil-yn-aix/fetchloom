@@ -363,6 +363,28 @@ async fn a_lock_pointing_at_loopback_is_refused_and_a_typed_url_is_not() -> Test
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn only_the_url_typed_on_this_command_may_reach_loopback() -> TestResult {
+    let world = World::start().await?;
+    world.serve("/files/a.csv", b"a\n").await;
+    world.serve("/files/b.csv", b"b\n").await;
+    let first = format!("{}/files/a.csv", world.server.uri());
+    let second = format!("{}/files/b.csv", world.server.uri());
+    std::fs::remove_dir_all(world.config.join("sources"))?;
+    std::fs::write(
+        world.project.join("data.toml"),
+        format!("[project]\nname = \"p\"\n\n[datasets.first]\nref = \"{first}\"\n"),
+    )?;
+    let ran = world.here(&["add", &second, "--as", "second", "--json"])?;
+    let document = json(&ran)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "network.refused",
+        "{document}"
+    );
+    assert_eq!(document["errors"][0]["subject"], "first", "{document}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_record_whose_file_link_points_at_loopback_is_refused() -> TestResult {
     let world = World::start().await?;
     let port = world.server.address().port();
