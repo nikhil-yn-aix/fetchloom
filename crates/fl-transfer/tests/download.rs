@@ -9,14 +9,16 @@ use std::time::Duration;
 use fl_model::digest::Digest;
 use fl_model::error::ErrorKind;
 use fl_transfer::client::Config;
-use fl_transfer::credentials::{Chain, Environment};
+use fl_transfer::credentials::Chain;
 use fl_transfer::download::{Download, Downloaded};
 use fl_transfer::url::SafeUrl;
 use md5::Digest as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-use crate::support::memory::{Broken, Memory, Waits, client, client_with, patient, quick};
+use crate::support::memory::{
+    Broken, Memory, Waits, client, client_with, patient, quick, tokens, trusting,
+};
 use crate::support::{Body, Reply, Server, bounded};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -384,32 +386,6 @@ async fn slow_headers_time_out_and_are_asked_for_again() -> TestResult {
     assert_eq!(client.counters().read().requests, 2);
     assert_eq!(waits.taken().len(), 1);
     Ok(())
-}
-
-fn tokens(servers: &[&Server]) -> Environment {
-    let names: Vec<String> = servers
-        .iter()
-        .map(|server| {
-            let authority = server.authority().replace(['.', ':'], "_");
-            format!("FETCHLOOM_TOKEN_{authority}")
-        })
-        .collect();
-    Environment::new(move |name| {
-        names
-            .iter()
-            .any(|known| known == name)
-            .then(|| "s3cret".to_owned())
-    })
-}
-
-fn trusting(servers: &[&Server]) -> Config {
-    Config {
-        trust_only: servers
-            .iter()
-            .filter_map(|server| server.ca_der())
-            .collect(),
-        ..quick()
-    }
 }
 
 #[tokio::test]

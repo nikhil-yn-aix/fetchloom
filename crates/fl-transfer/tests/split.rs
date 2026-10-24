@@ -7,14 +7,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use fl_model::error::ErrorKind;
-use fl_transfer::client::Client;
+use fl_transfer::client::{Client, Config};
 use fl_transfer::credentials::Chain;
 use fl_transfer::download::Download;
 use fl_transfer::url::SafeUrl;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::support::memory::{Broken, Memory, Waits, client_with, patient};
-use crate::support::{Body, Captured, Recorded, Reply, Server, bounded};
+use crate::support::{Body, Captured, Recorded, Reply, Server, bounded, chunked};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -125,6 +125,61 @@ async fn a_large_file_with_a_strong_etag_is_fetched_in_parts_once() -> TestResul
                 .skip(1)
                 .all(|request| request.header("if-range") == Some("\"v1\""))
         );
+        Ok(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn as_many_parts_as_streams_the_host_allows_are_asked_for() -> TestResult {
+    bounded(async {
+        let bytes = Arc::new(body(BIG));
+        let server = serve(Arc::clone(&bytes), ETAG, true).await?;
+        let config = Config {
+            per_host: 2,
+            ..patient(CALM)
+        };
+        let client = client_with(config, Chain::new(Vec::new()), &Waits::default())?;
+        let done = client
+            .download(&download(&server)?, Memory::default())
+            .await?;
+        assert_eq!(blake3::hash(&done.sink.bytes), blake3::hash(&bytes));
+        let asked: Vec<_> = server.requests().iter().filter_map(range).collect();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(client.counters().read().requests, 2);
+        Ok(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn a_part_is_written_in_full_buffers_whatever_size_its_pieces_arrive_in() -> TestResult {
+    bounded(async {
+        let bytes = Arc::new(body(BIG));
+        let source = Arc::clone(&bytes);
+        let server = Server::plain(move |request| match range(request) {
+            Some((from, to)) => Reply {
+                body: Body::Bytes(chunked(source[from..=to].chunks(1000))),
+                ..slice(&source, from, to, ETAG)
+            }
+            .header("Transfer-Encoding", "chunked"),
+            None => Reply {
+                body: Body::Bytes(chunked(source.chunks(1000))),
+                ..whole(&source, true, ETAG)
+            }
+            .header("Transfer-Encoding", "chunked"),
+        })
+        .await?;
+        let job = Download {
+            length: Some(BIG as u64),
+            ..download(&server)?
+        };
+        let client = client(CALM, &Waits::default())?;
+        let done = client.download(&job, Memory::default()).await?;
+        assert_eq!(blake3::hash(&done.sink.bytes), blake3::hash(&bytes));
+        assert_eq!(server.requests().len(), 3);
+        let short = done.sink.writes.iter().filter(|write| **write != BUFFER);
+        assert!(short.count() <= 3, "{:?}", done.sink.writes.len());
         Ok(())
     })
     .await?

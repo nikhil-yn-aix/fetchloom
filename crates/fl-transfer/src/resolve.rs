@@ -188,6 +188,17 @@ mod tests {
     }
 
     #[test]
+    fn a_host_configured_on_other_ports_only_is_refused_on_this_one() {
+        let resolver = Resolver::new(false, ["Proxy.Lab".to_owned()]);
+        assert!(!resolver.pinned_elsewhere("unknown.org", 443));
+        resolver.pin("Inside.Lab", 8443);
+        assert!(resolver.pinned_elsewhere("inside.lab", 443));
+        assert!(!resolver.pinned_elsewhere("INSIDE.lab", 8443));
+        resolver.pin("proxy.lab", 8443);
+        assert!(!resolver.pinned_elsewhere("proxy.lab", 443));
+    }
+
+    #[test]
     fn the_address_that_answered_last_is_tried_first() {
         let resolver = Resolver::new(false, []);
         let found = addresses(&["1.1.1.1", "1.0.0.1", "8.8.8.8"]);

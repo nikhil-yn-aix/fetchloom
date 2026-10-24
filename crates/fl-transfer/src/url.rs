@@ -339,6 +339,32 @@ mod tests {
     }
 
     #[test]
+    fn only_a_file_url_names_a_local_path() {
+        let (text, path) = if cfg!(windows) {
+            ("file:///C:/data/a.csv", "C:\\data\\a.csv")
+        } else {
+            ("file:///srv/data/a.csv", "/srv/data/a.csv")
+        };
+        assert_eq!(
+            url(text).to_file_path(),
+            Some(std::path::PathBuf::from(path))
+        );
+        assert_eq!(url("https://host.org/srv/data/a.csv").to_file_path(), None);
+    }
+
+    #[test]
+    fn a_directory_ends_in_one_slash() {
+        assert_eq!(
+            url("https://a.org/x/y").as_directory().to_string(),
+            "https://a.org/x/y/"
+        );
+        assert_eq!(
+            url("https://a.org/x/").as_directory().to_string(),
+            "https://a.org/x/"
+        );
+    }
+
+    #[test]
     fn a_bad_url_is_refused_without_repeating_it() {
         let error = SafeUrl::parse("secret-token-123").unwrap_err();
         assert!(!error.to_string().contains("secret"), "{error}");
