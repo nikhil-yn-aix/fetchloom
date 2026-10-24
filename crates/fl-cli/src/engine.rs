@@ -410,17 +410,7 @@ async fn download(
             .map_err(Failure::from)
     })
     .await?;
-    let mut stated = want.stated.clone();
-    if let Some(blake3) = want.blake3 {
-        stated.push(Digest::Blake3(blake3));
-    }
-    let download = Download {
-        url: want.url.clone(),
-        length: want.size,
-        stable: !stated.is_empty(),
-        stated,
-        typed: want.typed,
-    };
+    let download = request(want);
     shown.events.emit(Event::TransferStarted {
         id: shown.id,
         host: want.url.host().unwrap_or_default().to_owned(),
@@ -522,6 +512,21 @@ fn user_adapters(dir: &Path, client: &Arc<Client>) -> Result<Vec<Declarative>, F
         .collect()
 }
 
+/// The download of `want`, stable when a digest pins its bytes, so a partial of it can resume.
+fn request(want: &Want) -> Download {
+    let mut stated = want.stated.clone();
+    if let Some(blake3) = want.blake3 {
+        stated.push(Digest::Blake3(blake3));
+    }
+    Download {
+        url: want.url.clone(),
+        length: want.size,
+        stable: !stated.is_empty(),
+        stated,
+        typed: want.typed,
+    }
+}
+
 /// Which transfer this is and where its progress goes.
 struct Shown {
     id: u64,
@@ -592,5 +597,82 @@ impl Sink for Landing {
 
     fn save(&mut self, record: &PartialRecord) -> io::Result<()> {
         self.partial.save(record)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fl_model::partial::Validator;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Advances(Mutex<Vec<u64>>);
+
+    impl Reporter for Advances {
+        fn emit(&self, event: Event) {
+            if let Event::TransferAdvanced { bytes, .. } = event {
+                self.0.lock().unwrap().push(bytes);
+            }
+        }
+    }
+
+    fn landing(tier: &Tier, events: &Arc<Advances>) -> Landing {
+        let key = Digest::Blake3([7; 32]);
+        Landing {
+            partial: tier.partial(&key, SystemTime::now()).unwrap(),
+            shown: Shown {
+                id: 1,
+                events: Arc::clone(events) as Arc<dyn Reporter>,
+                hosts: Arc::default(),
+            },
+            received: 0,
+        }
+    }
+
+    #[test]
+    fn a_download_is_stable_only_when_a_digest_pins_it() {
+        let want = |stated: Vec<Digest>, blake3| Want {
+            url: SafeUrl::parse("https://h/x").unwrap(),
+            size: Some(1),
+            stated,
+            blake3,
+            typed: false,
+        };
+        assert!(!request(&want(Vec::new(), None)).stable);
+        let pinned = request(&want(Vec::new(), Some([1; 32])));
+        assert!(pinned.stable);
+        assert_eq!(pinned.stated, [Digest::Blake3([1; 32])]);
+        assert!(request(&want(vec![Digest::Blake3([2; 32])], None)).stable);
+    }
+
+    #[test]
+    fn a_landing_writes_reads_saves_and_resets_its_partial() {
+        let temp = tempfile::tempdir().unwrap();
+        let tier = Tier::open(temp.path(), Sharing::Private).unwrap();
+        let events = Arc::new(Advances::default());
+        let mut sink = landing(&tier, &events);
+        assert!(sink.record().is_none());
+        sink.allocate(64).unwrap();
+        assert!(fs::metadata(sink.partial.path()).unwrap().len() >= 64);
+        sink.write_at(0, b"abc").unwrap();
+        sink.write_at(3, b"de").unwrap();
+        assert_eq!(*events.0.lock().unwrap(), [3, 5]);
+        let mut buffer = [0; 5];
+        assert_eq!(sink.read_at(0, &mut buffer).unwrap(), 5);
+        assert_eq!(&buffer, b"abcde");
+        let record = PartialRecord {
+            location: "https://h/x".to_owned(),
+            length: Some(5),
+            validator: Validator::None,
+            received: 5,
+        };
+        sink.save(&record).unwrap();
+        assert_eq!(sink.record(), Some(record));
+        sink.reset().unwrap();
+        assert!(sink.record().is_none());
+        sink.write_at(0, b"z").unwrap();
+        assert_eq!(events.0.lock().unwrap().last(), Some(&1));
+        assert_eq!(fs::metadata(sink.partial.path()).unwrap().len(), 1);
     }
 }
