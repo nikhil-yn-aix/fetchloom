@@ -49,6 +49,10 @@ mod tests {
         assert_eq!(distance("snyc", "sync"), 1);
         assert_eq!(distance("", "abc"), 3);
         assert_eq!(distance("kitten", "sitting"), 3);
+        assert_eq!(distance("ab", "ba"), 1);
+        assert_eq!(distance("bacdef", "abcdef"), 1);
+        assert_eq!(distance("abcdfe", "abcdef"), 1);
+        assert_eq!(distance("abcdefhg", "abcdefgh"), 1);
     }
 
     #[test]
@@ -62,5 +66,7 @@ mod tests {
             Some("motor-imagery")
         );
         assert_eq!(closest("x", []), None);
+        assert_eq!(closest("abcd", ["abxy"]), None);
+        assert_eq!(closest("abcde", ["abxye"]), Some("abxye"));
     }
 }

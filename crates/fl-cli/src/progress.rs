@@ -203,7 +203,7 @@ fn per_second(rate: f64) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn bars(rows: usize) -> Bars {
@@ -257,5 +257,93 @@ mod tests {
         assert_eq!(amount(5, None), "5 B");
         assert_eq!(per_second(-3.0), 0);
         assert_eq!(per_second(2.9), 2);
+    }
+
+    /// A terminal that keeps what is written to it.
+    #[derive(Debug, Clone, Default)]
+    pub(crate) struct Screen(pub(crate) std::sync::Arc<Mutex<String>>);
+
+    impl indicatif::TermLike for Screen {
+        fn width(&self) -> u16 {
+            80
+        }
+
+        fn move_cursor_up(&self, _n: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_down(&self, _n: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_right(&self, _n: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_left(&self, _n: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn write_line(&self, s: &str) -> std::io::Result<()> {
+            self.write_str(&format!("{s}\n"))
+        }
+
+        fn write_str(&self, s: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push_str(s);
+            Ok(())
+        }
+
+        fn clear_line(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn flush(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Bars drawn on `screen`.
+    pub(crate) fn drawn_on(screen: &Screen) -> Bars {
+        Bars::new(
+            ProgressDrawTarget::term_like(Box::new(screen.clone())),
+            Style::PLAIN,
+            10,
+        )
+    }
+
+    /// Whether the spinner shows, how many transfers have bars, and the total's position.
+    pub(crate) fn shown(bars: &Bars) -> (bool, usize, Option<u64>) {
+        let drawn = bars.drawn();
+        (
+            drawn.spinner.is_some(),
+            drawn.transfers.len(),
+            drawn.total.as_ref().map(ProgressBar::position),
+        )
+    }
+
+    #[test]
+    fn lines_printed_meanwhile_reach_the_terminal() {
+        let screen = Screen::default();
+        drawn_on(&screen).println("Downloaded 1 file\n");
+        assert!(screen.0.lock().unwrap().contains("Downloaded 1 file"));
+    }
+
+    #[test]
+    fn suspended_work_runs() {
+        let mut ran = false;
+        bars(10).suspend(&mut || ran = true);
+        assert!(ran);
+    }
+
+    #[test]
+    fn a_fresh_bar_shows_no_speed_yet() {
+        let screen = Screen::default();
+        let bars = drawn_on(&screen);
+        bars.start(1, "zenodo.org", Some(4096));
+        bars.advance(1, 1024);
+        bars.drawn().transfers[&1].tick();
+        let shown = screen.0.lock().unwrap().clone();
+        assert!(shown.contains("1.0 KiB/4.0 KiB"), "{shown}");
+        assert!(!shown.contains("/s"), "{shown}");
     }
 }

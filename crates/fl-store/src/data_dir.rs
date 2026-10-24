@@ -274,6 +274,18 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_missing_file_is_fine_and_a_directory_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        remove(&temp.path().join("gone")).unwrap();
+        let dir = temp.path().join("dir");
+        fs::create_dir(&dir).unwrap();
+        assert!(matches!(
+            remove(&dir).unwrap_err(),
+            StoreError::Io { op: "remove", .. }
+        ));
+    }
+
+    #[test]
     fn a_parent_replaced_by_a_regular_file_reports_the_failed_create() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("data");

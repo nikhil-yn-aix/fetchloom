@@ -346,6 +346,36 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_or_state_that_cannot_be_read_fails_instead_of_reading_as_none() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::at(temp.path().to_owned());
+        assert!(project.lock().unwrap().is_none());
+        assert!(project.state().unwrap().files.is_empty());
+        fs::create_dir(temp.path().join("data.lock")).unwrap();
+        fs::create_dir_all(temp.path().join(STATE_DIR).join("state")).unwrap();
+        assert_eq!(project.lock().unwrap_err().kind(), ErrorKind::LocalIo);
+        assert_eq!(project.state().unwrap_err().kind(), ErrorKind::LocalIo);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_data_dir_under_a_file_fails_instead_of_reading_as_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join(MANIFEST),
+            "[project]\nname = \"p\"\ndata_dir = \"blocker/data\"\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("blocker"), "").unwrap();
+        let project = Project::at(temp.path().to_owned());
+        let manifest = project.manifest().unwrap();
+        assert_eq!(
+            project.data_dir(&manifest).unwrap_err().kind(),
+            ErrorKind::LocalIo
+        );
+    }
+
+    #[test]
     fn a_second_holder_waits_and_is_told_first() {
         let temp = tempfile::tempdir().unwrap();
         let project = Project::at(temp.path().to_owned());

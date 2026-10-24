@@ -564,6 +564,114 @@ mod tests {
     }
 
     #[test]
+    fn the_summary_names_copies_rehashes_retries_and_resumes_when_there_are_some() {
+        let work = Work {
+            bytes_copied: 2048,
+            files_rehashed: 3,
+            retries: 1,
+            resumes: 2,
+            ..Work::default()
+        };
+        let text = summary(Style::PLAIN, &work);
+        for part in ["2.0 KiB copied", "3 files rehashed", "1 retry", "2 resumes"] {
+            assert!(text.contains(part), "{text}");
+        }
+        let mut work = Work::default();
+        work.links.copy = 1;
+        assert!(summary(Style::PLAIN, &work).contains("1 by copy"));
+    }
+
+    #[test]
+    fn an_empty_record_shows_no_size() {
+        let event = Event::Resolved {
+            dataset: Name::new("iris").unwrap(),
+            resolved: "zenodo:1".parse().unwrap(),
+            title: None,
+            files: 0,
+            bytes: 0,
+            license: None,
+        };
+        assert_eq!(
+            line(Style::PLAIN, &event).unwrap(),
+            "   Resolved zenodo:1 - 0 files\n"
+        );
+    }
+
+    #[test]
+    fn waits_and_transfers_move_the_bars_and_print_nothing() {
+        use crate::progress::tests::{Screen, drawn_on, shown};
+        let screen = Screen::default();
+        let human = Human::new(0, 0, Style::PLAIN, Some(drawn_on(&screen)));
+        let bars = || human.bars.as_ref().unwrap();
+        human.emit(Event::Waiting("Resolving zenodo:1".to_owned()));
+        assert_eq!(shown(bars()), (true, 0, None));
+        human.emit(Event::TransferStarted {
+            id: 1,
+            host: "zenodo.org".to_owned(),
+            bytes: Some(10),
+        });
+        assert_eq!(shown(bars()), (true, 1, Some(0)));
+        human.emit(Event::TransferAdvanced { id: 1, bytes: 5 });
+        assert_eq!(shown(bars()), (true, 1, Some(5)));
+        human.emit(Event::TransferFinished {
+            id: 1,
+            bytes: 10,
+            elapsed: Duration::from_millis(1),
+        });
+        assert_eq!(shown(bars()), (true, 0, Some(5)));
+        human.emit(Event::Warning("slow".to_owned()));
+        assert_eq!(shown(bars()), (false, 0, Some(5)));
+        assert!(screen.0.lock().unwrap().contains("warning: slow"));
+    }
+
+    #[test]
+    fn a_hint_is_shown_only_after_a_command_that_went_well() {
+        use crate::progress::tests::{Screen, drawn_on};
+        let screen = Screen::default();
+        let human = Human::new(0, 0, Style::PLAIN, Some(drawn_on(&screen)));
+        human.emit(Event::Hint("try `fl status`".to_owned()));
+        let outcome = Outcome {
+            status: Status::Partial,
+            ..Outcome::ok(Value::Null, "Synced part.".to_owned())
+        };
+        human.finish(&outcome, &Work::default()).unwrap();
+        let shown = screen.0.lock().unwrap().clone();
+        assert!(shown.contains("Synced part."), "{shown}");
+        assert!(!shown.contains("fl status"), "{shown}");
+    }
+
+    #[test]
+    fn suspended_work_runs_for_every_reporter() {
+        let reporters: [Box<dyn Reporter>; 3] = [
+            Box::new(Json::default()),
+            Box::new(Human::new(0, 0, Style::PLAIN, None)),
+            Box::new(Human::new(
+                0,
+                0,
+                Style::PLAIN,
+                Some(crate::progress::tests::drawn_on(
+                    &crate::progress::tests::Screen::default(),
+                )),
+            )),
+        ];
+        for reporter in reporters {
+            let mut ran = false;
+            reporter.suspend(&mut || ran = true);
+            assert!(ran);
+        }
+    }
+
+    #[test]
+    fn json_keeps_warnings_and_errors_for_the_document() {
+        let json = Json::default();
+        json.emit(Event::Warning("slow".to_owned()));
+        json.emit(Event::Hint("ignored".to_owned()));
+        let raised = json.raised.lock().unwrap();
+        assert_eq!(raised.0, ["slow"]);
+        assert!(raised.1.is_empty());
+    }
+
+    #[test]
     fn loudness_is_verbose_minus_quiet() {
         assert_eq!(Human::new(2, 0, Style::PLAIN, None).loudness, 2);
         assert_eq!(Human::new(0, 2, Style::PLAIN, None).loudness, -2);

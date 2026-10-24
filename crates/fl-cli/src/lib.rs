@@ -102,7 +102,7 @@ pub fn run() -> ExitCode {
         Output::Json(Arc::new(Json::default()))
     } else {
         let style = terminal.style;
-        let bars = (terminal.stderr && !global.no_progress && global.verbose < 2)
+        let bars = draws_progress(terminal, &global)
             .then(|| Bars::stderr(style, usize::from(console::Term::stderr().size().0)));
         Output::Human(Arc::new(Human::new(
             global.verbose,
@@ -126,7 +126,7 @@ pub fn run() -> ExitCode {
             return finish_failed(&output, name, failure, &Work::default());
         }
     };
-    let ask: Box<dyn Ask> = if terminal.stderr && terminal.stdin && !global.json {
+    let ask: Box<dyn Ask> = if asks(terminal, &global) {
         Box::new(Prompt::new(output.shared()))
     } else {
         Box::new(Refuse)
@@ -149,6 +149,16 @@ pub fn run() -> ExitCode {
     };
     drop(guard);
     code
+}
+
+/// Whether progress is drawn: on a terminal, unless turned off or `-vv` debug lines would tear it.
+fn draws_progress(terminal: Terminal, global: &args::Global) -> bool {
+    terminal.stderr && !global.no_progress && global.verbose < 2
+}
+
+/// Whether questions are asked: only of someone at a terminal, and never with `--json`.
+fn asks(terminal: Terminal, global: &args::Global) -> bool {
+    terminal.stderr && terminal.stdin && !global.json
 }
 
 /// Whether `fl` runs inside a project, so that `fl` alone shows its status.
@@ -351,6 +361,44 @@ mod tests {
     fn welcome_returns_the_flush_error() {
         let err = welcome(&mut Failing { on_write: false }, Style::PLAIN).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn progress_is_drawn_on_a_terminal_unless_turned_off_or_at_debug() {
+        let at = |stderr| Terminal {
+            stderr,
+            stdin: false,
+            style: Style::PLAIN,
+        };
+        let global = |verbose, no_progress| args::Global {
+            verbose,
+            no_progress,
+            ..args::Global::default()
+        };
+        assert!(draws_progress(at(true), &global(0, false)));
+        assert!(draws_progress(at(true), &global(1, false)));
+        assert!(!draws_progress(at(true), &global(2, false)));
+        assert!(!draws_progress(at(true), &global(3, false)));
+        assert!(!draws_progress(at(true), &global(0, true)));
+        assert!(!draws_progress(at(false), &global(0, false)));
+    }
+
+    #[test]
+    fn questions_are_asked_only_at_a_terminal_without_json() {
+        let at = |stderr, stdin| Terminal {
+            stderr,
+            stdin,
+            style: Style::PLAIN,
+        };
+        let json = args::Global {
+            json: true,
+            ..args::Global::default()
+        };
+        let plain = args::Global::default();
+        assert!(asks(at(true, true), &plain));
+        assert!(!asks(at(true, true), &json));
+        assert!(!asks(at(true, false), &plain));
+        assert!(!asks(at(false, true), &plain));
     }
 
     #[test]

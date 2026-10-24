@@ -48,4 +48,12 @@ exclude_re = [
     'replace Scratch::keep with \(\)$',
     # the cursor is only ever read modulo the group count, so adding the count to it picks the same group
     'schedule\.rs:\d+:\d+: replace % with \+ in State<J>::pick$',
+    # only windows refuses these names, the linux mutation run cannot tell, and the windows test job checks it
+    'data_dir\.rs:\d+:\d+: replace representable -> Result<\(\), StoreError> with Ok\(\(\)\)$',
+    # the prompt draws on a terminal, which no test has; its callers are tested with typed answers
+    'ask\.rs:\d+:\d+: replace <impl Ask for Prompt>::',
+    # the hook only changes what a crash prints, and no command can be made to crash
+    'observe\.rs:\d+:\d+: replace panic_hook with \(\)$',
+    # a store answer comes only from someone typing at a terminal; interview and save_store are tested on their own
+    'lib\.rs:\d+:\d+: delete match arm \(Some\(store\), Some\(dir\)\) in execute$',
 ]
