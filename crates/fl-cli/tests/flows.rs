@@ -49,6 +49,56 @@ async fn a_second_sync_makes_no_request_and_links_nothing() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn adding_a_dataset_the_store_already_holds_counts_its_local_hits() -> TestResult {
+    let world = World::start().await?;
+    world.add()?;
+    let other = world.temp.path().join("fresh");
+    std::fs::create_dir_all(&other)?;
+    let ran = world.fl(&other, &["add", "zenodo:3608990", "--json"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    let document = json(&ran)?;
+    assert_eq!(work(&document, "objects_ingested")?, 0);
+    assert_eq!(document["work"]["tier_hits"]["local"], 2);
+    Ok(())
+}
+
+fn roots_under(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            match (path.is_dir(), entry.file_name() == "roots") {
+                (true, true) => std::fs::read_dir(&path).map_or(0, Iterator::count),
+                (true, false) => roots_under(&path),
+                _ => 0,
+            }
+        })
+        .sum()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lock_is_registered_as_a_root_of_the_store() -> TestResult {
+    let world = World::start().await?;
+    world.add()?;
+    assert_eq!(roots_under(&world.store), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_whose_fingerprint_changed_is_counted_as_rehashed() -> TestResult {
+    let world = World::start().await?;
+    world.add()?;
+    make_writable(&world.iris())?;
+    std::fs::write(world.iris(), b"changed")?;
+    let ran = world.here(&["status", "--json"])?;
+    let document = json(&ran)?;
+    assert_eq!(work(&document, "files_rehashed")?, 1, "{}", ran.stdout);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_second_project_with_the_same_lock_transfers_nothing_and_links_every_file() -> TestResult
 {
     let world = World::start().await?;
@@ -509,6 +559,30 @@ async fn an_invalid_user_adapter_is_named_with_the_key_at_fault() -> TestResult 
         .unwrap_or_default();
     assert!(message.contains("broken.toml"), "{message}");
     assert!(message.contains("{nope}"), "{message}");
+    assert_eq!(world.requests().await?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_toml_files_in_the_sources_folder_are_adapters() -> TestResult {
+    let world = World::start().await?;
+    std::fs::write(
+        world.config.join("sources").join("notes.md"),
+        "not an adapter",
+    )?;
+    world.add()?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sources_folder_that_cannot_be_listed_is_an_error() -> TestResult {
+    let world = World::start().await?;
+    let sources = world.config.join("sources");
+    std::fs::remove_dir_all(&sources)?;
+    std::fs::write(&sources, "")?;
+    let ran = world.here(&["add", "zenodo:3608990", "--json"])?;
+    let document = json(&ran)?;
+    assert_eq!(document["errors"][0]["kind"], "local.io", "{}", ran.stdout);
     assert_eq!(world.requests().await?, 0);
     Ok(())
 }
