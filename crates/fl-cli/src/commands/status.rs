@@ -130,3 +130,57 @@ fn sentence(differ: u64, current: bool, extra: u64, none_modified: bool) -> Stri
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_project_says_everything_matches() {
+        assert_eq!(sentence(0, true, 0, true), "Everything matches data.lock.");
+    }
+
+    #[test]
+    fn files_the_user_added_are_said_to_be_kept() {
+        assert_eq!(
+            sentence(0, true, 1, true),
+            "The downloaded files match data.lock; 1 file you added is kept as it is."
+        );
+        assert_eq!(
+            sentence(0, true, 2, true),
+            "The downloaded files match data.lock; 2 files you added are kept as they are."
+        );
+    }
+
+    #[test]
+    fn matching_files_under_a_stale_lock_say_so() {
+        assert_eq!(
+            sentence(0, false, 0, true),
+            "The files match data.lock, but data.lock is out of date."
+        );
+        assert_eq!(
+            sentence(0, false, 3, true),
+            "The files match data.lock, but data.lock is out of date."
+        );
+    }
+
+    #[test]
+    fn missing_files_point_at_sync_and_changed_ones_at_restore() {
+        assert_eq!(
+            sentence(1, true, 0, true),
+            "1 file is missing, `fl sync` downloads it."
+        );
+        assert_eq!(
+            sentence(2, false, 0, true),
+            "2 files are missing, `fl sync` downloads them."
+        );
+        assert_eq!(
+            sentence(1, true, 0, false),
+            "1 file differs from data.lock; `fl restore` puts the downloaded one back."
+        );
+        assert_eq!(
+            sentence(2, true, 0, false),
+            "2 files differ from data.lock; `fl restore` puts the downloaded ones back."
+        );
+    }
+}

@@ -221,6 +221,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_new_manifest_is_named_for_its_folder_or_project_when_it_has_none() {
+        assert_eq!(
+            minimal(Path::new("work").join("survey").as_path(), None),
+            "[project]\nname = \"survey\"\n"
+        );
+        assert_eq!(
+            minimal(Path::new("/"), None),
+            "[project]\nname = \"project\"\n"
+        );
+        assert_eq!(
+            minimal(Path::new("survey"), Some("birds")),
+            "[project]\nname = \"birds\"\n"
+        );
+    }
+
+    #[test]
+    fn a_gitignore_that_cannot_be_read_is_an_error_and_a_missing_one_is_made() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join(".gitignore")).unwrap();
+        let error = ignore(temp.path()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::LocalIo);
+        let other = tempfile::tempdir().unwrap();
+        ignore(other.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(other.path().join(".gitignore")).unwrap(),
+            "data/\n.fetchloom/\n"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_first_dataset_from_the_walk_is_added_to_the_new_project() {
+        let fixture = crate::commands::harness::Fixture::new();
+        let raw = fixture.cwd.join("raw");
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(raw.join("a.txt"), b"hello").unwrap();
+        let context = fixture.context(&crate::ask::Refuse);
+        let outcome = run(&context, Some("demo"), Some("./raw")).await.unwrap();
+        let manifest = fs::read_to_string(fixture.cwd.join(MANIFEST)).unwrap();
+        assert!(manifest.contains("name = \"demo\""), "{manifest}");
+        assert!(manifest.contains("[datasets.raw]"), "{manifest}");
+        assert!(manifest.contains("ref = \"./raw\""), "{manifest}");
+        assert!(
+            outcome.sentence.contains("Added raw"),
+            "{}",
+            outcome.sentence
+        );
+    }
+
     struct Typed(std::sync::Mutex<Vec<&'static str>>);
 
     impl Ask for Typed {
@@ -300,5 +349,9 @@ mod tests {
         fs::write(&file, "[store\n").unwrap();
         let error = save_store(&file, "/third").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::LocalInvalidConfig);
+        let folder = temp.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let error = save_store(&folder, "/fourth").unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::LocalIo);
     }
 }

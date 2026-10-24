@@ -168,7 +168,6 @@ fn key_of(root: &Path, path: &Path) -> Result<String, Failure> {
     for component in inside.components() {
         match component {
             Component::Normal(part) => parts.push(part.to_str().ok_or_else(outside)?.to_owned()),
-            Component::CurDir => {}
             _ => return Err(outside()),
         }
     }

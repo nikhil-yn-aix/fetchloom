@@ -120,6 +120,17 @@ mod tests {
     }
 
     #[test]
+    fn a_step_that_lists_a_dataset_as_an_input_keeps_it() {
+        let manifest = Manifest::from_toml(
+            "[datasets.eeg]\nref = \"zenodo:1\"\n[datasets.ecg]\nref = \"zenodo:2\"\n[steps.fit]\nrun = \"fit\"\ninputs = [\"eeg\"]\n",
+        )
+        .unwrap();
+        let used = step_using(&manifest, &Name::new("eeg").unwrap());
+        assert_eq!(used.unwrap().as_str(), "fit");
+        assert!(step_using(&manifest, &Name::new("ecg").unwrap()).is_none());
+    }
+
+    #[test]
     fn a_step_that_reads_a_dataset_keeps_it() {
         let manifest = Manifest::from_toml(
             "[datasets.eeg]\nref = \"zenodo:1\"\n[steps.filter]\nforeach = \"eeg:sub-*/\"\nrun = [\"x\"]\n[steps.other]\nrun = \"y {in.eeg}\"\n",

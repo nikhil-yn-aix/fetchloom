@@ -780,6 +780,24 @@ mod tests {
     }
 
     #[test]
+    fn a_path_is_found_from_a_root_above_it_below_it_or_beside_it() {
+        let root = std::path::absolute("/p/q").unwrap();
+        let above = std::path::absolute("/p").unwrap();
+        assert_eq!(relative_to(&above, &root).unwrap(), Path::new(".."));
+        assert_eq!(relative_to(&root, &root).unwrap(), PathBuf::new());
+        let below = root.join("r").join("s");
+        assert_eq!(
+            relative_to(&below, &root).unwrap(),
+            Path::new("r").join("s")
+        );
+        let beside = std::path::absolute("/p/t").unwrap();
+        assert_eq!(
+            relative_to(&beside, &root).unwrap(),
+            Path::new("..").join("t")
+        );
+    }
+
+    #[test]
     fn a_relative_path_is_made_relative_to_the_project_root() {
         let root = std::path::absolute("/p").unwrap();
         let below = root.join("sub");
