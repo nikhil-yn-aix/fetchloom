@@ -175,16 +175,13 @@ fn parse_filter(text: &str) -> Result<Targets, ObserveError> {
 }
 
 fn create_file(path: &Path) -> Result<File, ObserveError> {
-    let created = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => {
-            fs::create_dir_all(parent).and_then(|()| File::create(path))
-        }
-        _ => File::create(path),
-    };
-    created.map_err(|source| ObserveError::File {
-        path: path.to_path_buf(),
-        source,
-    })
+    path.parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| File::create(path))
+        .map_err(|source| ObserveError::File {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// Replaces the panic hook with one that tells the user the program stopped on an internal
@@ -193,21 +190,25 @@ fn create_file(path: &Path) -> Result<File, ObserveError> {
 pub(crate) fn panic_hook(log_file: Option<PathBuf>) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if backtrace_requested() {
+        if backtrace_requested(std::env::var_os("RUST_BACKTRACE").as_deref()) {
             previous(info);
         }
-        let text = apology(
-            env!("CARGO_PKG_VERSION"),
-            &message_of(info),
-            &location_of(info),
-            log_file.as_deref(),
-        );
+        let text = told(info, log_file.as_deref());
         let _ignored = io::stderr().write_all(text.as_bytes());
     }));
 }
 
-fn backtrace_requested() -> bool {
-    std::env::var_os("RUST_BACKTRACE").is_some_and(|value| value != "0")
+fn backtrace_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value != "0")
+}
+
+fn told(info: &PanicHookInfo<'_>, log: Option<&Path>) -> String {
+    apology(
+        env!("CARGO_PKG_VERSION"),
+        &message_of(info),
+        &location_of(info),
+        log,
+    )
 }
 
 fn message_of(info: &PanicHookInfo<'_>) -> String {
@@ -263,6 +264,43 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[2], "  log: run.log");
         assert!(lines[3].starts_with("  report it at "));
+    }
+
+    #[test]
+    fn a_panic_is_told_with_its_message_and_place() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = Arc::clone(&seen);
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            kept.lock().unwrap().push(told(info, None));
+        }));
+        let _ = std::panic::catch_unwind(|| panic!("boom"));
+        let _ = std::panic::catch_unwind(|| panic!("boom {}", 7));
+        let _ = std::panic::catch_unwind(|| std::panic::panic_any(3_u8));
+        std::panic::set_hook(previous);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen[0].contains("what: boom at "), "{}", seen[0]);
+        assert!(seen[1].contains("what: boom 7 at "), "{}", seen[1]);
+        assert!(seen[2].contains("what: unknown at "), "{}", seen[2]);
+        assert!(seen[0].contains("observe.rs:"), "{}", seen[0]);
+    }
+
+    #[test]
+    fn a_backtrace_is_asked_for_by_any_value_but_zero() {
+        assert!(!backtrace_requested(None));
+        assert!(!backtrace_requested(Some("0".as_ref())));
+        assert!(backtrace_requested(Some("1".as_ref())));
+        assert!(backtrace_requested(Some("full".as_ref())));
+    }
+
+    #[test]
+    fn a_log_file_gets_the_folders_it_needs() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let nested = dir.path().join("logs").join("run.log");
+        create_file(&nested)?;
+        assert!(nested.is_file());
+        Ok(())
     }
 
     #[test]

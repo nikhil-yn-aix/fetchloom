@@ -65,6 +65,17 @@ async fn init_writes_a_minimal_manifest_and_never_overwrites_it() -> TestResult 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn init_i_without_a_terminal_names_the_flags_and_writes_nothing() -> TestResult {
+    let world = World::start().await?;
+    let ran = world.here(&["init", "-i"])?;
+    assert_eq!(ran.code, Some(2), "{}", ran.stderr);
+    assert!(ran.stderr.contains("no terminal"), "{}", ran.stderr);
+    assert!(ran.stderr.contains("fl init --name NAME"), "{}", ran.stderr);
+    assert!(!world.project.join("data.toml").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn adding_again_with_other_filters_says_what_changed_and_the_same_is_a_no_op() -> TestResult {
     let world = World::start().await?;
     two_files(&world).await?;

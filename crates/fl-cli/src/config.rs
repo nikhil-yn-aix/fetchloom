@@ -496,6 +496,7 @@ timeout = 0
         assert_eq!(transfer.jobs, 3);
         assert_eq!(transfer.per_host, 1);
         assert_eq!(transfer.idle, Duration::from_secs(5));
+        assert_eq!(transfer.response, Duration::from_secs(5));
         assert!(transfer.offline);
 
         let global = Global {
@@ -559,5 +560,18 @@ timeout = 0
         );
         assert_eq!(Layer::Flag("--jobs").to_string(), "--jobs");
         assert_eq!(Layer::User(PathBuf::from("c.toml")).to_string(), "c.toml");
+    }
+
+    #[test]
+    fn a_missing_file_reads_as_none_and_other_errors_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        assert_eq!(read_optional(&file).unwrap(), None);
+        std::fs::write(&file, "[network]\n").unwrap();
+        assert_eq!(
+            read_optional(&file).unwrap().as_deref(),
+            Some("[network]\n")
+        );
+        assert!(read_optional(dir.path()).is_err());
     }
 }

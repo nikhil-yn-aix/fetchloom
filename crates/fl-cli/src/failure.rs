@@ -278,6 +278,82 @@ mod tests {
     }
 
     #[test]
+    fn every_transfer_and_store_error_has_its_own_help() {
+        let url = || fl_transfer::url::SafeUrl::parse("https://h/x").unwrap();
+        let help = |failure: Failure| failure.0.help.unwrap();
+        let transfers = [
+            TransferError::Status {
+                url: url(),
+                status: 500,
+            },
+            TransferError::RateLimited {
+                host: "h".to_owned(),
+                wait: std::time::Duration::from_secs(1),
+            },
+            TransferError::Refused { url: url() },
+            TransferError::Insecure {
+                url: url(),
+                reason: "plain",
+            },
+            TransferError::Protocol {
+                url: url(),
+                reason: "bad".to_owned(),
+            },
+            TransferError::AuthRequired {
+                url: url(),
+                status: 401,
+            },
+            TransferError::AuthRejected {
+                url: url(),
+                status: 403,
+            },
+            TransferError::Credentials(fl_transfer::credentials::CredentialError {
+                path: "c".into(),
+                reason: "bad".to_owned(),
+            }),
+            TransferError::Length {
+                url: url(),
+                expected: 2,
+                received: 1,
+            },
+            TransferError::Sink {
+                url: url(),
+                source: io::Error::other("full"),
+            },
+            TransferError::Setup("tls".to_owned()),
+            TransferError::Unreachable {
+                host: "h".to_owned(),
+                reason: "down".to_owned(),
+            },
+        ];
+        let count = transfers.len();
+        let helps: std::collections::BTreeSet<String> = transfers
+            .into_iter()
+            .map(|error| help(error.into()))
+            .collect();
+        assert_eq!(helps.len(), count);
+        let stores = [
+            StoreError::Unrepresentable {
+                path: "a:b".to_owned(),
+                reason: "colon",
+            },
+            StoreError::NotADirectory { path: "d".into() },
+            StoreError::Missing {
+                digest: fl_model::digest::Digest::Blake3([0; 32]),
+            },
+            StoreError::Io {
+                op: "read",
+                path: "p".into(),
+                source: io::Error::other("x"),
+            },
+        ];
+        let count = stores.len();
+        let helps: std::collections::BTreeSet<String> =
+            stores.into_iter().map(|error| help(error.into())).collect();
+        assert_eq!(helps.len(), count);
+    }
+
+    #[test]
     fn a_failure_carries_kind_message_help_and_subject() {
         let failure = Failure::new(ErrorKind::Usage, "no such dataset")
             .help("run `fl status`")

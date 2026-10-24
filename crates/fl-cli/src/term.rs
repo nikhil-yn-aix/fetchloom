@@ -50,7 +50,7 @@ impl Terminal {
                         && env("CLICOLOR").is_none_or(|value| value != "0"))
             }
         };
-        let unicode = !set("NO_COLOR") && !dumb && (!stderr || shows_unicode(&env));
+        let unicode = !set("NO_COLOR") && !dumb && (!stderr || shows_unicode(&env, cfg!(windows)));
         Self {
             stderr,
             stdin,
@@ -59,8 +59,8 @@ impl Terminal {
     }
 }
 
-fn shows_unicode(env: &impl Fn(&str) -> Option<String>) -> bool {
-    if cfg!(windows) {
+fn shows_unicode(env: &impl Fn(&str) -> Option<String>, windows: bool) -> bool {
+    if windows {
         env("WT_SESSION").is_some()
             || env("TERM_PROGRAM").is_some()
             || env("ConEmuANSI").is_some_and(|value| value == "ON")
@@ -232,14 +232,29 @@ mod tests {
         assert!(!unicode(&[], true));
         assert!(!unicode(&[("NO_COLOR", "1"), ("WT_SESSION", "1")], false));
         assert!(!unicode(&[("TERM", "dumb"), ("LANG", "C.UTF-8")], false));
-        if cfg!(windows) {
-            assert!(unicode(&[("TERM_PROGRAM", "vscode")], true));
-            assert!(unicode(&[("ConEmuANSI", "ON")], true));
-            assert!(unicode(&[("TERM", "xterm-256color")], true));
-        } else {
-            assert!(unicode(&[("LC_ALL", "C.utf8")], true));
-            assert!(!unicode(&[("LC_ALL", "C"), ("LANG", "en_US.UTF-8")], true));
-        }
+    }
+
+    #[test]
+    fn a_windows_terminal_shows_unicode_when_it_names_itself() {
+        let windows = |pairs: &[(&str, &str)]| shows_unicode(&with(pairs), true);
+        assert!(windows(&[("WT_SESSION", "1")]));
+        assert!(windows(&[("TERM_PROGRAM", "vscode")]));
+        assert!(windows(&[("ConEmuANSI", "ON")]));
+        assert!(!windows(&[("ConEmuANSI", "OFF")]));
+        assert!(windows(&[("TERM", "xterm-256color")]));
+        assert!(windows(&[("TERM", "alacritty")]));
+        assert!(!windows(&[("TERM", "vt100")]));
+        assert!(!windows(&[("LANG", "en_US.UTF-8")]));
+    }
+
+    #[test]
+    fn elsewhere_the_first_locale_set_decides() {
+        let unix = |pairs: &[(&str, &str)]| shows_unicode(&with(pairs), false);
+        assert!(unix(&[("LC_ALL", "C.utf8")]));
+        assert!(unix(&[("LC_CTYPE", "en_US.UTF-8")]));
+        assert!(unix(&[("LC_ALL", ""), ("LANG", "en_US.UTF-8")]));
+        assert!(!unix(&[("LC_ALL", "C"), ("LANG", "en_US.UTF-8")]));
+        assert!(!unix(&[("WT_SESSION", "1")]));
     }
 
     #[test]
