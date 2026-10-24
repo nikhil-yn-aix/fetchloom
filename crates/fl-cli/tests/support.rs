@@ -1,8 +1,11 @@
 //! A fake zenodo, a scratch machine for `fl` to run on, and a way to run it.
 
 use std::error::Error;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -144,7 +147,7 @@ impl World {
         args: &[&str],
         env: &[(&str, &str)],
     ) -> Result<Ran, Failure> {
-        let out = Command::new(env!("CARGO_BIN_EXE_fl"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fl"))
             .args(args)
             .current_dir(dir)
             .env_remove("FETCHLOOM_LOG")
@@ -153,11 +156,28 @@ impl World {
             .env("FETCHLOOM_STORE", store)
             .env("FETCHLOOM_CONFIG", self.config.join("config.toml"))
             .envs(env.iter().copied())
-            .output()?;
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stdout = drain(child.stdout.take());
+        let stderr = drain(child.stderr.take());
+        let deadline = Instant::now() + LIMIT;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() > deadline {
+                child.kill()?;
+                child.wait()?;
+                return Err(format!("fl {args:?} did not finish within {LIMIT:?}").into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
         Ok(Ran {
-            code: out.status.code(),
-            stdout: String::from_utf8(out.stdout)?,
-            stderr: String::from_utf8(out.stderr)?,
+            code: status.code(),
+            stdout: String::from_utf8(stdout.join().map_err(|_| "stdout reader panicked")?)?,
+            stderr: String::from_utf8(stderr.join().map_err(|_| "stderr reader panicked")?)?,
         })
     }
 
@@ -206,6 +226,20 @@ impl World {
         }
         text.replace("\\\\", "/").replace('\\', "/")
     }
+}
+
+/// How long a run of `fl` may take before the test fails instead of waiting for it.
+const LIMIT: Duration = Duration::from_secs(20);
+
+/// A thread reading `pipe` to its end, so that a full pipe never stalls the child.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
 }
 
 /// `adapter` with every https host it names replaced by the fake server at `uri`.

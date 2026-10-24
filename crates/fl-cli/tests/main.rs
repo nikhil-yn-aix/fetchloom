@@ -2,6 +2,7 @@
 
 mod architecture;
 mod cli;
+mod commands;
 mod flows;
 mod project;
 mod snapshots;

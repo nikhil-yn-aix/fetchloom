@@ -422,6 +422,71 @@ pub(crate) fn some_of(items: &[String], shown: usize) -> String {
 }
 
 #[cfg(test)]
+pub(crate) mod harness {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use super::*;
+    use crate::args::Global;
+    use crate::config::Config;
+
+    pub(crate) struct Recorder(Mutex<Vec<Event>>);
+
+    impl Reporter for Recorder {
+        fn emit(&self, event: Event) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(event);
+        }
+    }
+
+    /// An engine on a scratch store, a project folder to run in, and the events it reports.
+    pub(crate) struct Fixture {
+        _temp: tempfile::TempDir,
+        pub(crate) cwd: PathBuf,
+        events: Arc<Recorder>,
+        engine: Engine,
+    }
+
+    impl Fixture {
+        pub(crate) fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let cwd = temp.path().join("project");
+            std::fs::create_dir_all(&cwd).unwrap();
+            let store = temp.path().join("store");
+            let config_file = temp.path().join("config").join("config.toml");
+            let env = move |name: &str| match name {
+                "FETCHLOOM_STORE" => Some(store.display().to_string()),
+                "FETCHLOOM_CONFIG" => Some(config_file.display().to_string()),
+                _ => None,
+            };
+            let config = Config::new(&Global::default(), &cwd, env, &|_| Ok(None)).unwrap();
+            let events = Arc::new(Recorder(Mutex::new(Vec::new())));
+            let engine = Engine::new(&config, &cwd, events.clone()).unwrap();
+            Self {
+                _temp: temp,
+                cwd,
+                events,
+                engine,
+            }
+        }
+
+        pub(crate) fn context<'a>(&'a self, ask: &'a dyn Ask) -> Context<'a> {
+            Context {
+                engine: &self.engine,
+                reporter: self.events.as_ref(),
+                cwd: &self.cwd,
+                ask,
+                yes: false,
+                offline: false,
+                link: Link::Auto,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -429,6 +494,7 @@ mod tests {
     fn some_of_names_a_few_and_counts_the_rest() {
         let items: Vec<String> = ["a", "b", "c"].iter().map(|s| (*s).to_owned()).collect();
         assert_eq!(some_of(&items, 5), "a, b, c");
+        assert_eq!(some_of(&items, 3), "a, b, c");
         assert_eq!(some_of(&items, 2), "a, b and 1 more");
         assert_eq!(some_of(&[], 2), "");
     }

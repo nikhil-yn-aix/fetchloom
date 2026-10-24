@@ -56,4 +56,14 @@ exclude_re = [
     'observe\.rs:\d+:\d+: replace panic_hook with \(\)$',
     # a store answer comes only from someone typing at a terminal; interview and save_store are tested on their own
     'lib\.rs:\d+:\d+: delete match arm \(Some\(store\), Some\(dir\)\) in execute$',
+    # Project::find fails only with project missing, so every other error is never seen here
+    'add\.rs:\d+:\d+: replace match guard failure\.kind\(\) == ErrorKind::ProjectMissing with true in run$',
+    # a project that was found has a data.toml, so a state cleanup that also fired for it would stop at the manifest check
+    'add\.rs:\d+:21: replace && with \|\| in run$',
+    # a pick fails for another reason only when the terminal itself breaks, which no test machine provokes
+    'add\.rs:\d+:\d+: replace match guard failure\.kind\(\) == ErrorKind::ReferenceAmbiguous with true in pick$',
+    # the loop never ends when the shared count stays at zero, which a unit test cannot bound
+    'add\.rs:\d+:\d+: replace \+= with \*= in relative_to$',
+    # with files unavailable and nothing restored the sentence is dropped for the failure
+    'restore\.rs:\d+:\d+: replace match guard unavailable\.is_empty\(\) with true in run$',
 ]

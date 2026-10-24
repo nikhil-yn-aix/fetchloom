@@ -12,7 +12,7 @@ use crate::support::{Failure, IRIS, World, found, json};
 
 type TestResult = Result<(), Failure>;
 
-fn ok(ran: &crate::support::Ran) -> Result<(), Failure> {
+pub(crate) fn ok(ran: &crate::support::Ran) -> Result<(), Failure> {
     if ran.code == Some(0) {
         Ok(())
     } else {
@@ -20,18 +20,18 @@ fn ok(ran: &crate::support::Ran) -> Result<(), Failure> {
     }
 }
 
-fn data(world: &World, rest: &str) -> std::path::PathBuf {
+pub(crate) fn data(world: &World, rest: &str) -> std::path::PathBuf {
     world.project.join("data").join(rest)
 }
 
 /// Replaces a placed file with new bytes the way an editor saves, leaving the store alone.
-fn edit(file: &Path, bytes: &[u8]) -> TestResult {
+pub(crate) fn edit(file: &Path, bytes: &[u8]) -> TestResult {
     fl_store::data_dir::remove(file)?;
     std::fs::write(file, bytes)?;
     Ok(())
 }
 
-async fn two_files(world: &World) -> TestResult {
+pub(crate) async fn two_files(world: &World) -> TestResult {
     world
         .record(
             "7",
@@ -495,7 +495,12 @@ async fn a_second_location_rescues_a_file_whose_first_one_is_gone() -> TestResul
     let fresh = world.temp.path().join("fresh");
     let ran = world.fl_with_store(&world.project, &fresh, &["sync"])?;
     ok(&ran)?;
-    assert!(ran.stderr.contains("so it came from"), "{}", ran.stderr);
+    assert!(
+        ran.stderr
+            .contains("127.0.0.1 failed for data/ab/a.csv, so it came from 127.0.0.1"),
+        "{}",
+        ran.stderr
+    );
     assert_eq!(std::fs::read(data(&world, "ab/a.csv"))?, b"a,1\n");
     Ok(())
 }

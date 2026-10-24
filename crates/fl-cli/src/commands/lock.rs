@@ -438,6 +438,40 @@ pub(crate) fn lock_files(lock: &Lock) -> u64 {
 mod tests {
     use super::*;
 
+    fn change(added: usize, removed: usize, changed: usize) -> Change {
+        let path = || DataPath::new("a.csv").unwrap();
+        Change {
+            name: Name::new("ab").unwrap(),
+            before: None,
+            after: Totals::default(),
+            added: vec![(path(), 1); added],
+            removed: vec![(path(), 2); removed],
+            changed: vec![(path(), 3, 4); changed],
+        }
+    }
+
+    #[test]
+    fn a_change_is_empty_only_when_nothing_was_added_removed_or_changed() {
+        assert!(change(0, 0, 0).is_empty());
+        assert!(!change(1, 0, 0).is_empty());
+        assert!(!change(0, 1, 0).is_empty());
+        assert!(!change(0, 0, 1).is_empty());
+        assert!(!change(1, 1, 1).is_empty());
+    }
+
+    #[test]
+    fn a_change_is_written_as_json_with_each_file_and_its_sizes() {
+        assert_eq!(
+            change(1, 1, 1).to_json(),
+            json!({
+                "dataset": "ab",
+                "added": [{ "path": "a.csv", "size": 1 }],
+                "removed": [{ "path": "a.csv", "size": 2 }],
+                "changed": [{ "path": "a.csv", "size_before": 3, "size": 4 }],
+            })
+        );
+    }
+
     #[test]
     fn only_a_revision_after_an_at_pins_a_reference() {
         let pin = |text: &str| pinned(&text.parse().unwrap()).map(str::to_owned);
