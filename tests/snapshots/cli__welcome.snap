@@ -1,0 +1,9 @@
+---
+source: tests/cli.rs
+expression: "String::from_utf8(output).unwrap()"
+---
+fetchloom 0.1.0
+
+put the exact data a project needs onto any machine with one command.
+
+`fetchloom --help` lists every option.

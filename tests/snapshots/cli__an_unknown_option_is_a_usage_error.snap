@@ -1,0 +1,6 @@
+---
+source: tests/cli.rs
+expression: "String::from_utf8(output).unwrap()"
+---
+✗ there is no option called "--verison"
+  help: did you mean `--version`?
