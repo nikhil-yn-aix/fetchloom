@@ -11,7 +11,21 @@ research code needs data, and the data lives everywhere: zenodo, figshare, datav
 - google drive refuses popular files with "too many users" and answers large ones with a virus scan page instead of the file.
 - every project, labmate and cluster node downloads its own copy.
 
-downloading is already solved. gdown, zenodo_get, datahugger, huggingface_hub and kagglehub fetch from one place or many. none of them pins what you got across all those hosts, or tells a second machine exactly which bytes to fetch.
+downloading is already solved, one host at a time. what no tool does end to end is pin what you got across all those hosts and tell a second machine exactly which bytes to fetch.
+
+## what exists today
+
+| tool | good at | what it leaves to you |
+|---|---|---|
+| gdown, zenodo_get, kagglehub | fetching from one host | other hosts, pinning, one copy shared across projects |
+| huggingface_hub | a pinned, cached copy of a hugging face repository | every other host. on windows without admin rights its cache keeps a full copy of every file |
+| datahugger | downloading from many repositories by DOI | pinning, a shared cache, a lock another machine can follow |
+| pooch | one file by URL and hash, inside a python library | whole datasets, other languages, hosts without stable URLs |
+| dvc | versioning data you produce, with its pipelines | published data needs a git repository and import commands first |
+| datalad | version control of data through git-annex | a heavy setup that is weak on windows |
+| quilt, lakefs, oxen | data platforms and versioned lakes for teams | they are services to run, not a command a reader runs once |
+
+fetchloom does the one job none of them do: one lock and one cache across every host, every file verified, for whoever runs the code next. where a tool above fits better, use it: dvc for data you produce, datalad for full provenance, a host's own client when you only ever use that host.
 
 ## who it is for
 

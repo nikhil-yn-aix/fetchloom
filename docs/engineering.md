@@ -17,6 +17,7 @@
 - a pure core with IO at the edges. parsing, planning and comparing are plain functions over data, tested without a network or a disk.
 - parse, don't validate. a reference, a digest, a dataset path or a URL becomes a type once, where it enters, and stays valid after.
 - a trait only where there are two real implementations or a test needs a seam: the clock and the network.
+- every third-party crate is used inside one module, behind our own types, so replacing it touches one module.
 - one way to do each thing, and no option without a user who needs it.
 
 ## tests

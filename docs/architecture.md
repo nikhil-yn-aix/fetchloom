@@ -137,6 +137,18 @@ every error has a kind such as `network.timeout`, `integrity.mismatch` or `refer
 - macos: reflink on APFS. icloud drive folders get copies and a warning, since "optimize mac storage" can remove local files.
 - linux and clusters: safe on NFS, lustre and GPFS without file locks in the cache. in v0.1 a cache is shared safely by one user's processes; sharing one between people comes with the lab features.
 
+## room to grow
+
+v0.1 is small, and nothing in it blocks what comes after.
+
+- `data.lock` and the JSON document carry versions. new keys may appear, and existing keys keep their meaning.
+- a new source is one new module and one enum variant. nothing else changes.
+- the cache keeps its layout version in a `layout` file at its root, so a future layout can migrate in place or start beside the old one.
+- a cache for a whole lab builds on the same lock-free objects. group permissions and gc across users add rules, not a new store.
+- `cite` reads the DOI, title and license that `data.lock` already records.
+- an R package or an fsspec filesystem calls the binary with `--json`, the way the python package does.
+- no hard dependencies. every third-party crate is used inside one module, behind our own types: reqwest in `net`, zip and tar in `archive`, clap in `cli`, toml_edit in `project`. replacing one touches one module. no feature relies on a single outside service, and a source that is down never stops the others.
+
 ## security
 
 - `sync` never runs code from a project.

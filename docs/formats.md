@@ -108,6 +108,7 @@ one per machine by default, any folder when `FETCHLOOM_CACHE` points elsewhere.
 ```
 <cache>/
   CACHEDIR.TAG          tells backup tools to skip this folder
+  layout                the cache layout version
   objects/ab/cdef...    one read-only file per object, named by its SHA-256
   partial/              unfinished downloads and what they need to resume
   unpacked/             the file list each archive unpacked to
