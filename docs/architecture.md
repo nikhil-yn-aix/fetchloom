@@ -1,49 +1,55 @@
 # architecture
 
-one binary. a pure core decides what to do, and a thin shell does the IO.
-
-## the path every command takes
-
-```
-data.toml -> resolve -> lock -> plan -> fetch -> unpack -> place -> report
-```
-
-1. read. `data.toml`, `data.lock` and the project state become plain types.
-2. resolve. for each dataset whose entry changed, its source turns the reference into a listing: every file's path, size, stated checksum and URL, plus title, version, license and DOI. sources never download file bodies.
-3. lock. the filtered listing becomes `data.lock` entries. a file whose SHA-256 is still unknown is fetched first, because its hash comes from its bytes.
-4. plan. the lock is compared with the cache and with `data/`, and the result is a list of actions: fetch, unpack, place, replace, skip, report. every destination path in the project goes into one map first, and two files on one path, a file where a folder must be, or two datasets with overlapping paths are refused, comparing names the way a case-insensitive disk would. the plan is a plain value, so tests and `--json` can inspect it before anything happens.
-5. fetch. the network layer streams each missing file into the cache, hashing as it writes.
-6. unpack. archives unpack member by member into the cache.
-7. place. files appear under `data/` by reflink, else hardlink, else copy.
-8. report. one stream of events feeds both the human renderer and the JSON renderer.
+one rust crate builds `fetchloom` and `fl`. both call the same library entry point.
 
 ## modules
 
-| module | owns | never touches |
-|---|---|---|
-| `model` | references, digests, dataset paths, the `data.toml` and `data.lock` types, filters, the plan | files, sockets, clocks |
-| `source` | one module per source, the DOI router, listings | the cache, `data/` |
-| `net` | the HTTP client, retries, resume, rate limits, credentials, address rules, offline mode | where the bytes end up |
-| `cache` | objects, partial downloads, the stated checksum index, unpack records, project registrations, gc and verify | HTTP, sources |
-| `archive` | reading zip and tar, every safety limit | the network |
-| `project` | finding the project, editing `data.toml`, writing `data.lock`, the state file, the project lock, placing and removing files under `data/` | HTTP |
-| `cli` | arguments, environment, the order of work in each command, rendering, prompts, exit codes | protocol details |
+| module | owns |
+|---|---|
+| `cli` | argument parsing, settings, command orchestration and final reports |
+| `cli/sync` | relocking, download selection, archive work and placement decisions |
+| `project` | manifest, lock and state types, project discovery, metadata writes and project locking |
+| `source` | reference parsing, DOI routing and source listings |
+| `net` | HTTP, retries, partial-download streaming, credentials and address checks |
+| `cache` | objects, partials, indexes, project registrations, gc and verification |
+| `archive` | format readers, member checks, limits and staged member writes |
+| `plan` | destination expansion and collision checks |
+| `place` | reflinks, hardlinks, copies, directory checks and synced-folder detection |
+| `output` | human rendering, progress, warnings and the JSON envelope |
+| `digest`, `name`, `glob`, `units`, `stop`, `work` | hashes, paths, patterns, formatting, cancellation and counters |
 
-dependencies point inward. `cli` uses every module, `model` uses none, and no module reaches into another's internals. the python package is a few lines that run the binary with `--json`.
+there is no separate model crate or python wrapper. core types live with their owners. `net` writes through `cache`; `cli/sync/place` combines the plan, state and filesystem. dependencies such as `url::Url` cross module boundaries.
+
+## the project loop
+
+1. read the manifest, lock and local state. keep lock entries whose spec hashes match, unless an upgrade requests them again.
+2. resolve changed entries and filter their source listings. known hashes may come from the source, the old lock or the MD5 index. download unknown hashes and unpack new archives to learn their tree hashes.
+3. write `data.lock` if its contents changed. standalone `lock` does no placement and need not fill the cache with already pinned files.
+4. expand the lock into destination targets. an archive without a usable member record is unpacked before its destinations can be planned. compare targets with state and disk metadata to choose keep, adopt, place, replace or leave.
+5. fetch only the bytes needed by place and replace actions. a missing archive member requires the original archive again when it is not cached. check pinned size, SHA-256 and any stated MD5 on downloads.
+6. remove unwanted unchanged tracked files, place the targets, and write state. drop unneeded packed objects and register the project for cache retention.
+
+`add` first resolves its new reference, sometimes downloading a single file to learn its name. it writes the manifest before syncing and attempts to restore that manifest on sync failure. `remove` changes the manifest and lock, then removes unwanted tracked files without downloading.
+
+planning produces target paths, not a serialized dry-run action plan. JSON contains the completed command's report. resolving, downloading unknown hashes and writing the lock can precede detection of a destination clash.
+
+`get` builds temporary locked-file values and uses the same archive expansion, but writes no project metadata. `status`, `path` and cache commands have their own read paths. see [CLI](cli.md) for their effects.
 
 ## concurrency
 
-network work runs as tokio tasks. disk work (writing, hashing, unpacking, placing) runs on a bounded pool of blocking threads, fed through bounded channels, so disk calls never block network tasks and memory stays flat. async file IO is slower than plain threads for this kind of load.
+the async command runtime uses up to four worker threads. file-download tasks are queued at up to twice `FETCHLOOM_JOBS`; network permits bound active metadata requests and downloads. each response streams through a 16-slot channel to a blocking writer that hashes and writes it. prefix hashing and final flushes also use blocking tasks.
+
+archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
+
+placement, project metadata and many cache-index operations run synchronously on command futures. large fallback copies overlap reading and writing with three reusable 1 MiB buffers. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
 
 ## sources
 
-the set of sources is closed and lives in this repository, so a source is an enum variant with its own module, not a trait object or a plugin.
+`Reference` is a closed enum. each source returns a listing of paths, optional sizes and checksums, download URLs, and available metadata. credentials are collected by the command context, not stored on each file.
 
-- a listing holds each file's path, its size and checksum when stated, a stable URL and any headers that URL needs.
-- every source passes the same conformance cases against recorded responses kept beside its tests.
-- a pasted link is matched by host: google drive, dropbox, zenodo, figshare, hugging face, kaggle, osf, dataverse, doi.org, or a plain URL.
-- a DOI is resolved at doi.org without following the redirect. the host it lands on picks the source. a DOI that lands on an unknown host fails and names that host.
-- what each source writes into `data.lock` is listed in [formats](formats.md#what-each-source-records).
+DOIs use `https://doi.org/api/handles/<doi>`. the JSON handle's URL value selects a source. an unknown host or another DOI is refused; the landing page is not downloaded to discover its type.
+
+source tests implement `Api` with in-memory recorded responses from `tests/fixtures/sources`. they are source-specific tests, not a shared conformance suite. current adapter coverage is in [scope](scope.md#sources), and recorded references are in [formats](formats.md#what-each-source-records).
 
 | source | how | notes |
 |---|---|---|
@@ -59,100 +65,95 @@ the set of sources is closed and lives in this repository, so a source is an enu
 
 ## the cache
 
-- objects are named by SHA-256, one read-only file each, under a two-character fan-out.
-- writes need no locks. a download streams into `tmp/`, is hashed, flushed to disk, sealed read-only, then put in place by an operation that fails when the name already exists. of two processes racing for one object, exactly one places it and the other finds it there. this stays safe on NFS, lustre and GPFS, where file locks cannot be trusted.
-- flushes run in parallel batches, never one blocking flush at a time. before an object is used, its size is checked against `data.lock`, which catches a file cut short by a crash. `cache verify` hashes every object again.
-- an unfinished download lives in `partial/` beside a small record of its URL, validators, the bytes received and their SHA-256, saved every second. one process owns it at a time, by holding a lock beside it, and a later run continues it once the bytes kept still hash to the record.
-- every sync registers its project under `projects/`. `cache gc` keeps every object that a registered project's `data.lock` needs, following archives to the members they unpacked into. it removes the rest only when older than a day, and never touches an unfinished download younger than a day.
-- removing an object never breaks a project. placed files are links or copies, so they keep their bytes when the cache's name for them goes. at worst, a later project downloads that object again.
-- a cache several people share trusts all of them: anyone who can write to it can change its objects, and `cache verify` finds that. no one can make fetchloom write outside it: it opens nothing in the cache through a link, keeps only real folders, and on unix continues only downloads its own user started.
-- `CACHEDIR.TAG` tells backup tools to skip the folder.
+objects are read-only files named by SHA-256. an ordinary download writes to a partial file, computes its hash, flushes and seals it, then publishes under that hash. the caller checks expected size and checksums after publication; a rejected transfer can leave an unreferenced object for gc.
+
+publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee.
+
+partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and are saved about once a second. resuming rehashes that prefix before appending.
+
+cache lookup checks file type and known size, not content. `cache verify` rehashes objects. the [layout and records](formats.md#the-cache) separate objects from URL history, MD5 mappings, archive trees and project registrations.
+
+successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable lock stops gc. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
 
 ## placing files
 
-- the first placement from the cache into a folder tries reflink, then hardlink, then copy, and remembers what worked for that volume for the rest of the run.
-- a reflink shares blocks but is its own file, so editing it is safe. APFS, btrfs, XFS, ReFS and dev drives support it.
-- a hardlink costs no space and no extra inode, but it is the cached file itself, so objects are read-only. a file can carry about 1,000 hardlinks on NTFS and 65,000 on ext4. past that, the file falls back to the next method.
-- when a placed file turns out to have changed, its object is hashed before anything uses it again. an object that changed is deleted and fetched again.
-- inside a folder that onedrive, dropbox or icloud drive syncs, files are copied, never hardlinked, because those tools break hardlinks or upload every link as a full file.
-- a copy is said out loud, with the bytes it cost and how to avoid it.
-- a dataset with `copy = true` gets writable copies, for tools that write into their inputs.
-- no symlinks. windows needs admin rights for them, and a cleared cache would leave them dangling.
+new placements try reflink, then hardlink, then copy. a `Placer` remembers unsupported methods for its destination tree during the run, not in a persistent per-volume map. `copy = true` still allows a writable reflink, but skips hardlinks.
+
+reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space.
+
+never make a hardlinked input writable to edit it. that edits the cached object too. before a project sync, changed hardlinks recorded in that project's state cause the associated objects to be hashed and removed if damaged. another project's reuse is not protected by that audit. cache writers must be trusted.
+
+`plan` rejects overlapping dataset folders, file/folder clashes and folded-name collisions. its fold is ASCII lowercase, or NFC followed by uppercase then lowercase for unicode. path components longer than 255 UTF-8 bytes are refused on every platform. windows additionally rejects device names, trailing dots or spaces, and forbidden characters.
+
+manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; deletion rechecks its parent chain. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
+
+metadata files use a sibling file, flush and rename. data-file replacement is different: the old file is removed first, and copies write directly to their destination. a hard interruption can leave a missing or partial destination. a later sync may preserve a partial copy as an edit, so inspect `status` before forcing replacement.
+
+state stores hash, method, size and modification time, with no file id. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
 
 ## the network
 
-- reqwest on tokio, with rustls verifying against the operating system's certificate store, so institutional certificates work. HTTP/2 and the system proxy are on.
-- 8 downloads at a time, at most 4 per host.
-- timeouts limit silence: 45 s to connect across all of a host's addresses, 30 s waiting for headers, 30 s between bytes. a slow 100 GB download finishes and a stalled one fails.
-- retries cover connection errors, timeouts, 408, 429 and 5xx, with jittered backoff up to 60 s and at most 5 attempts. `Retry-After` is a floor. when a host asks for more than 60 s, the next known location is tried, or the error says how long the host asked for.
-- resume is a range request from the last verified byte, used only when the file's identity is fixed by a pinned hash, an immutable version or a strong ETag. otherwise the download starts over.
-- credentials attach only to their own scheme, host and port, only over https, and are dropped on any redirect to another origin.
-- a URL that did not come from the command line may not reach a private, loopback or link-local address. the check runs on the address each connection actually uses, for the first request and every redirect, so a hostile `data.lock` cannot reach into a local network. fetchloom follows redirects itself, so each hop is checked before it goes out.
-- behind a proxy, which resolves names itself, a host nobody wrote is looked up here first and refused when any of its addresses is private. a name this machine cannot resolve is left to the proxy, and the proxy itself is trusted, since a person set it up.
-- URLs live in a type that hides tokens and signed query values whenever they are displayed or logged.
-- offline mode is enforced inside the client, so no source can forget it.
-- the user agent is `fetchloom/<version>`.
+reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is selected as the crypto provider. the system proxy settings are enabled. the user agent is `fetchloom/<version>`.
+
+| control | value |
+|---|---|
+| active network operations | 8 by default; `FETCHLOOM_JOBS` accepts 1 to 256 |
+| per-host slots | 4, keyed by the initial hostname, including while following redirects |
+| connect timeout | 45 s |
+| send and response-header deadline | 75 s per hop, combining connect and response allowances |
+| body idle timeout | 30 s between received chunks; no total download deadline |
+| redirect limit | 10 per request attempt |
+| metadata body limit | 64 MiB |
+| transient retry budget | 5 attempts including the first |
+| backoff | jittered exponential delay; `Retry-After` is a floor; above 60 s fails instead of waiting |
+| download diversion pages | at most 3, each at most 4 MiB, when a source supplies a page handler |
+
+retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
+
+resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
+
+a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
+
+### trust
+
+trusted hosts come from plain URLs passed to `add`, from the written host of a `get` reference, and from URL or dataverse entries in `data.toml`. trust is host-wide, not limited to one path or port. other hosts have private addresses refused or filtered out of direct DNS results.
+
+redirects are followed explicitly so every hop is checked. behind a proxy, untrusted names are looked up locally first and rejected if any returned address is private. an unresolvable name is left to the configured proxy. the proxy itself is trusted.
+
+source credentials attach only to their configured host over HTTPS on port 443. once a redirect leaves the original origin, no later hop receives those credentials. offline mode stops requests before sending and stops the resolver before lookup.
+
+project references reject recognized secret query keys on resolution. URL display masking is a wrapper used at call sites, not an invariant of `url::Url`. one-off URL records and successful `get` JSON retain raw URLs. do not share those records when fetching a signed link.
+
+a shared writable cache trusts every writer. partial-download handles refuse links and special files; on unix, a resumed partial must belong to the current user and have one hardlink. cache subdirectories are checked when created or first used. these checks do not authenticate object contents or isolate users from one another.
 
 ## archives
 
-- zip, using the `zip` crate at 9.1.2 or later, and tar with gzip, xz, zstd or bzip2.
-- one guard enforces every limit on the bytes actually written, never on sizes the archive declares: at most 1,000,000 members, 1 TiB unpacked, and a compression ratio of 200 to 1.
-- an archive is refused as a whole for an absolute path, a `..` part, a symlink, a hardlink or special file, a duplicate name, two names that collide on a case-insensitive disk, a name the disk cannot store such as `CON` on windows, or a limit exceeded.
-- each member becomes an object in the cache, and the archive's file list is recorded under `unpacked/`. the archive's own object is then deleted, unless a project on this machine keeps it packed.
-- an archive unpacks into a folder named after it, beside where it would have been: `train.zip` becomes `train/`. when every member sits under one top folder, that folder is not repeated. a dataset that is a single archive unpacks straight into the dataset's folder.
+the CLI chooses candidates by filename; byte inspection chooses the decoder. names and placement rules are in [CLI](cli.md#archives). zip uses its central directory to check entries first; tar is read sequentially. both feed the same name and byte guard.
 
-## the project
-
-- found by walking up from the working folder to the nearest `data.toml`, or from `-C`.
-- `data/` must be a real folder inside the project. a symlink or junction anywhere on the way is refused, and placing or deleting never follows a link.
-- `data.toml` is edited with `toml_edit`, so comments and order survive.
-- `data.lock` is written in a fixed order by our own writer, so the same inputs always give the same bytes.
-- each file is replaced atomically: written beside its target, then renamed over it. a command writes `data.toml` first, then `data.lock` once every file it names is in the cache, then the files under `data/`, then the state. each step is safe to repeat, so a run that stops anywhere is finished by running it again.
-- `.fetchloom/state` records each placed file's size, modification time and file id, read back by listing folders.
-- a command that changes the project holds `.fetchloom/lock`. `path` and `status` read without it when nothing needs syncing, so a thousand cluster jobs asking for the same path never queue. a `path` that must sync takes the lock and checks again.
-- fetchloom deletes only files it placed that still match what it placed. a file someone changed or added is kept and listed, and a changed file is overwritten only with `--force`.
-
-## errors
-
-every error has a kind such as `network.timeout`, `integrity.mismatch` or `reference.unresolved`, one sentence saying what happened, and a help line with what to do next, as a command when there is one.
-
-| exit | meaning |
+| limit | counts |
 |---|---|
-| 0 | done |
-| 1 | a `--check` found differences, or the run failed in a way listed in the output |
-| 2 | the command line was wrong |
-| 10 | a reference did not resolve |
-| 20 | the network failed, or `--offline` needed something not in the cache |
-| 30 | bytes did not match their hash |
-| 40 | a credential is missing or refused, or terms must be accepted on a website |
-| 50 | the local disk or the project is in a bad state |
+| 100,000 listed files per dataset | before selection; OSF counts files and folders together |
+| 1,000,000 archive entries | files and directories exposed by the reader |
+| 1 TiB unpacked | actual member bytes across one archive |
+| 200:1 expansion | bytes produced against compressed bytes read; checked once output reaches 4 MiB |
+| 16 MiB tar metadata per member | headers, long names and pax records read outside the member body |
 
-## observability
+names become NFC with leading `./` removed. windows-made zip separators become `/`. absolute paths, traversal, control characters, duplicate files, folded-name clashes and file/folder clashes fail. repeated identical tar directory declarations are allowed; duplicate zip directory names are rejected by the zip reader.
 
-- every command, request, cache lookup and placement runs inside a `tracing` span carrying its facts.
-- `-v` adds detail per dataset and the counters from [performance](performance.md). `-vv` adds debug logs, filtered by `FETCHLOOM_LOG`. `FETCHLOOM_TRACE` writes a timeline that opens in perfetto.
-- a panic prints the version, what was running and where to report it.
+links, devices, fifos, sparse tar files, encrypted zip entries and unsupported zip compression methods are refused. windows-specific name restrictions apply on windows. file permissions and timestamps from the archive are not restored.
 
-## platforms
+members are written and sealed in staging files. none is published until the archive passes its checks. a publication IO failure can leave already published members for reuse or gc. the downloaded packed object can also remain after a refused extraction.
 
-- windows: no admin rights needed and no symlinks. objects carry the read-only attribute, and gc deletes them with the flag that ignores it, so other links to the same file keep it. paths windows cannot store are refused before anything is written. files may lie deeper than 260 characters, since every path reaches windows in its long form, but windows works in no folder whose path passes 258 characters, so `-C` names such a folder and its length and stops. the cache defaults to `%LOCALAPPDATA%`, which onedrive does not sync. defender scans every new file, so a cache on a dev drive, or a defender exclusion, makes datasets of many small files much faster; `-v` says so when it applies.
-- macos: reflink on APFS. icloud drive folders get copies and a warning, since "optimize mac storage" can remove local files.
-- linux and clusters: safe on NFS, lustre and GPFS without file locks in the cache. in v0.1 a cache is shared safely by one user's processes; sharing one between people comes with the lab features.
+successful unpacking records a sorted member tree under the archive hash. a locked tree hash is compared before placement. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
 
-## room to grow
+## project coordination and observability
 
-v0.1 is small, and nothing in it blocks what comes after.
+commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. standalone `lock` currently reads its manifest and old lock before acquiring the lock. on a filesystem without working file locks, serialize modifying commands yourself.
 
-- `data.lock` and the JSON document carry versions. new keys may appear, and existing keys keep their meaning.
-- a new source is one new module and one enum variant. nothing else changes.
-- the cache keeps its layout version in a `layout` file at its root, so a future layout can migrate in place or start beside the old one.
-- a cache for a whole lab builds on the same lock-free objects. group permissions and gc across users add rules, not a new store.
-- `cite` reads the DOI, title and license that `data.lock` already records.
-- an R package or an fsspec filesystem calls the binary with `--json`, the way the python package does.
-- no hard dependencies. every third-party crate is used inside one module, behind our own types: reqwest in `net`, zip and tar in `archive`, clap in `cli`, toml_edit in `project`. replacing one touches one module. no feature relies on a single outside service, and a source that is down never stops the others.
+human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 
-## security
+`-v` adds details and total counters; `-vv` enables debug events. `FETCHLOOM_TRACE` records instrumented spans and events, including source resolution, rather than a complete phase profile. there is no custom panic report. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
 
-- `sync` never runs code from a project.
-- tokens come only from environment variables and each source's own token file. they never sit in `data.toml` and never appear in output.
-- archives, listings, lock files and links are hostile input until checked.
+## adding a source
+
+add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or a download-page handler when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.
