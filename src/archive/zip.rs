@@ -7,7 +7,7 @@ use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use ::zip::read::ZipFileEntry;
-use ::zip::{SUPPORTED_COMPRESSION_METHODS, ZipArchive};
+use ::zip::{SUPPORTED_COMPRESSION_METHODS, System, ZipArchive};
 
 use super::guard::{Guard, Meter};
 use super::names::Named;
@@ -56,7 +56,7 @@ fn checked(
         let entry = zip
             .by_index_data(index)
             .map_err(|err| damaged(None, &err))?;
-        let raw = entry.name().map_err(|err| damaged(None, &err))?;
+        let raw = name(&entry).map_err(|err| damaged(None, &err))?;
         let is_folder = is_folder(&entry);
         if let Some(reason) = refusal(&entry, is_folder) {
             return Err(refused_member(&raw, &reason));
@@ -66,6 +66,22 @@ fn checked(
         }
     }
     Ok(files)
+}
+
+/// the entry's name with `/` between folders. zips made on windows may use `\` instead, as
+/// powershell's Compress-Archive does, and windows never allows `\` inside a name.
+fn name(entry: &ZipFileEntry<'_>) -> ::zip::result::ZipResult<String> {
+    let name = entry.name()?;
+    Ok(
+        if matches!(
+            entry.system(),
+            System::Dos | System::WindowsNTFS | System::VFAT
+        ) {
+            name.replace('\\', "/")
+        } else {
+            name.into_owned()
+        },
+    )
 }
 
 fn is_folder(entry: &ZipFileEntry<'_>) -> bool {
@@ -259,6 +275,21 @@ mod tests {
         let unpacked = scratch.unpack(Format::Zip, &bytes).unwrap();
         let train = &unpacked.members[2];
         scratch.assert_stored(train, b"x,y\n1,2\n");
+    }
+
+    #[test]
+    fn backslashes_separate_folders_only_in_zips_made_on_windows() {
+        let files: &[(&str, &[u8])] = &[("data\\a.csv", b"1")];
+        let on = |system| {
+            let options = SimpleFileOptions::default().system(system);
+            zip_with(ZipWriter::new(Cursor::new(Vec::new())), files, options).into_inner()
+        };
+        let unpacked = Scratch::new()
+            .unpack(Format::Zip, &on(System::Dos))
+            .unwrap();
+        assert_eq!(unpacked.members[0].path, "data/a.csv");
+        let err = Scratch::new().refuse(Format::Zip, &on(System::Unix));
+        assert!(err.message.contains("folder separator"), "{}", err.message);
     }
 
     #[test]
