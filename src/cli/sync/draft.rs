@@ -73,10 +73,19 @@ impl Draft {
                     Some(file) if remote.named_by_server => file.path.clone(),
                     _ => remote.path.clone(),
                 };
-                // the same bytes unpack to the same files, while the dataset still unpacks
+                // the same bytes unpack to the same files, while the dataset still unpacks. an
+                // upgrade pins what this machine's unpacking recorded for them instead, so a tree
+                // another version of fetchloom pinned can be replaced without downloading again
                 let unpacks_to = earlier
                     .filter(|file| entry.extract && known == Some((file.sha256, file.size)))
-                    .and_then(|file| file.unpacks_to);
+                    .and_then(|file| {
+                        let recorded = if upgrading {
+                            cache.unpacked_tree(&file.sha256)
+                        } else {
+                            None
+                        };
+                        recorded.or(file.unpacks_to)
+                    });
                 DraftFile {
                     remote,
                     path,
@@ -344,5 +353,81 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
             deeper.as_str()
         )),
         None => error.help("compare the pattern with the paths above"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use super::*;
+    use crate::cache::Member;
+    use crate::cache::tests::store;
+    use crate::digest;
+    use crate::project::manifest::Manifest;
+    use crate::source::Reference;
+
+    #[test]
+    fn an_upgrade_takes_the_tree_this_machine_unpacked() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let archive = store(&cache, b"the zip");
+        let inside = store(&cache, b"a,b\n");
+        let members = [Member {
+            path: "a.csv".to_owned(),
+            size: inside.size,
+            sha256: inside.digest,
+        }];
+        let recorded = cache.record_unpacked(&archive.digest, &members).unwrap();
+        let stale = digest::sha256(b"a tree another version of fetchloom made");
+        let url = Url::parse("https://example.org/set.zip").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.set]\nref = \"https://example.org/set.zip\"\n").unwrap();
+        let listing = || Listing {
+            resolved: Reference::Url(url.clone()),
+            title: None,
+            version: None,
+            license: None,
+            doi: None,
+            files: vec![Remote {
+                path: "set.zip".to_owned(),
+                size: Some(archive.size),
+                sha256: Some(archive.digest),
+                md5: None,
+                url: url.clone(),
+                named_by_server: false,
+            }],
+        };
+        let locked = Locked {
+            name: "set".to_owned(),
+            reference: url.to_string(),
+            spec: String::new(),
+            resolved: url.to_string(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: String::new(),
+            files: vec![LockedFile {
+                path: "set.zip".to_owned(),
+                size: archive.size,
+                sha256: archive.digest,
+                md5: None,
+                url: url.to_string(),
+                unpacks_to: Some(stale),
+            }],
+        };
+        let entry = &manifest.datasets["set"];
+        let kept = Draft::new("set", entry, listing(), Some(&locked), false, &cache).unwrap();
+        assert_eq!(
+            kept.files[0].unpacks_to,
+            Some(stale),
+            "a relock keeps the pin"
+        );
+        let upgraded = Draft::new("set", entry, listing(), Some(&locked), true, &cache).unwrap();
+        assert_eq!(
+            upgraded.files[0].unpacks_to,
+            Some(recorded),
+            "an upgrade pins what this fetchloom unpacks"
+        );
     }
 }
