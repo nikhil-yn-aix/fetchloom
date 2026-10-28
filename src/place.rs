@@ -4,12 +4,12 @@ mod synced;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Permissions};
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(not(target_os = "linux"))]
+use std::io::{Read, Write};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
-use std::thread;
 
 use serde::{Deserialize, Serialize};
 
@@ -371,33 +371,45 @@ fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
 fn fill(object: &Path, output: &File, writable: bool) -> io::Result<()> {
-    let mut input = File::open(object)?;
-    let size = input.metadata()?.len();
-    match usize::try_from(size) {
-        Ok(size) if size <= BLOCK => {
-            let mut bytes = Vec::with_capacity(size);
-            input.read_to_end(&mut bytes)?;
-            (&*output).write_all(&bytes)?;
-        }
-        _ => overlapped(input, output)?,
-    }
+    transfer(File::open(object)?, output)?;
     output.set_permissions(writable_as(output.metadata()?.permissions(), writable))
 }
 
+/// linux copies from file to file inside the kernel, with `copy_file_range`, which a network
+/// filesystem can even run on the server.
+#[cfg(target_os = "linux")]
+fn transfer(mut input: File, mut output: &File) -> io::Result<()> {
+    io::copy(&mut input, &mut output).map(drop)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn transfer(mut input: File, mut output: &File) -> io::Result<()> {
+    match usize::try_from(input.metadata()?.len()) {
+        Ok(size) if size <= BLOCK => {
+            let mut bytes = Vec::with_capacity(size);
+            input.read_to_end(&mut bytes)?;
+            output.write_all(&bytes)
+        }
+        _ => overlapped(input, output),
+    }
+}
+
 /// how much a large copy reads at a time.
+#[cfg(not(target_os = "linux"))]
 const BLOCK: usize = 1 << 20;
 
 /// copies `input` into `output` a block at a time, reading the next block on another thread
 /// while this one writes the last. with the disk never waiting on the other side, a copy keeps
 /// pace with the operating system's own: 1 GiB took 0.62 s against 0.99 s one block at a time
 /// on an nvme laptop.
+#[cfg(not(target_os = "linux"))]
 fn overlapped(mut input: File, mut output: &File) -> io::Result<()> {
-    let (full, filled) = sync_channel::<io::Result<Vec<u8>>>(2);
-    let (empty, spare) = sync_channel::<Vec<u8>>(3);
+    let (full, filled) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(2);
+    let (empty, spare) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
     for _ in 0..3 {
         let _ = empty.send(vec![0; BLOCK]);
     }
-    thread::scope(move |scope| {
+    std::thread::scope(move |scope| {
         scope.spawn(move || {
             while let Ok(mut block) = spare.recv() {
                 block.resize(BLOCK, 0);
@@ -618,7 +630,7 @@ mod tests {
     fn a_file_of_many_blocks_is_copied_byte_for_byte() {
         let folder = TempDir::new().unwrap();
         let object = folder.path().join("object");
-        let bytes: Vec<u8> = (0..BLOCK * 3 + 123)
+        let bytes: Vec<u8> = (0..(3 << 20) + 123)
             .map(|at| u8::try_from(at % 251).unwrap())
             .collect();
         fs::write(&object, &bytes).unwrap();
