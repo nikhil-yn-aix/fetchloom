@@ -13,9 +13,17 @@ use url::{Host, Url};
 
 use super::Shown;
 
-/// the hosts a person wrote.
+/// the hosts a person wrote, and the proxies this machine sends requests through.
 #[derive(Clone, Default)]
-pub(crate) struct Typed(Arc<Mutex<HashSet<String>>>);
+pub(crate) struct Typed(Arc<Mutex<Hosts>>);
+
+#[derive(Default)]
+struct Hosts {
+    written: HashSet<String>,
+    /// a proxy may sit on a private address, and only reaching it is allowed: a URL that asks
+    /// for the proxy's host itself, as a redirect could, is refused unless a person wrote it.
+    proxies: HashSet<String>,
+}
 
 impl Typed {
     pub(crate) fn add(&self, url: &Url) {
@@ -26,37 +34,54 @@ impl Typed {
 
     /// trusts a host a person wrote down, such as a dataverse install on a university network.
     pub(crate) fn add_host(&self, host: &str) {
-        self.hosts().insert(
-            host.trim_start_matches('[')
-                .trim_end_matches(']')
-                .to_ascii_lowercase(),
-        );
+        self.hosts().written.insert(key(host));
+    }
+
+    /// lets the proxy at `host` be reached, wherever its address is.
+    pub(crate) fn add_proxy(&self, host: &str) {
+        self.hosts().proxies.insert(key(host));
     }
 
     fn contains(&self, host: &str) -> bool {
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        self.hosts().contains(&host.to_ascii_lowercase())
+        self.hosts().written.contains(&key(host))
     }
 
-    fn hosts(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    /// whether `host` may resolve to a private address: a person wrote it, or it is a proxy.
+    pub(crate) fn may_resolve_privately(&self, host: &str) -> bool {
+        let key = key(host);
+        let hosts = self.hosts();
+        hosts.written.contains(&key) || hosts.proxies.contains(&key)
+    }
+
+    fn hosts(&self) -> std::sync::MutexGuard<'_, Hosts> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// refuses a URL whose host is a private address written out, unless the user typed it.
-    /// names are checked later, on the addresses they resolve to.
+    /// refuses a URL whose host is a private address written out, or a proxy's host, unless the
+    /// user typed it. names are checked later, on the addresses they resolve to.
     pub(crate) fn check(&self, url: &Url) -> Result<(), Refused> {
+        let Some(host) = url.host_str() else {
+            return Err(Refused(format!("{} has no host", Shown(url))));
+        };
+        let hosts = self.hosts();
+        let host = key(host);
+        if hosts.written.contains(&host) {
+            return Ok(());
+        }
+        if hosts.proxies.contains(&host) {
+            return Err(Refused(format!(
+                "{} asks for the proxy this machine sends requests through",
+                Shown(url)
+            )));
+        }
         let ip = match url.host() {
             Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
             Some(Host::Ipv6(ip)) => IpAddr::V6(ip),
-            Some(Host::Domain(_)) => return Ok(()),
-            None => return Err(Refused(format!("{} has no host", Shown(url)))),
+            _ => return Ok(()),
         };
-        if is_private(ip)
-            && !self.contains(&ip.to_string())
-            && !url.host_str().is_some_and(|host| self.contains(host))
-        {
+        if is_private(ip) && !hosts.written.contains(&ip.to_string()) {
             return Err(Refused(format!(
                 "{} points at the private address {ip}",
                 Shown(url)
@@ -66,6 +91,12 @@ impl Typed {
     }
 }
 
+/// a host as the sets keep it: lowercase, an IPv6 address without its brackets.
+fn key(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
+}
 /// a request fetchloom will not make, with the reason in one sentence.
 #[derive(Debug)]
 pub(crate) struct Refused(pub(crate) String);
@@ -111,7 +142,7 @@ impl Proxies {
     /// itself, so fetchloom's resolver never sees the addresses, and a host nobody wrote is looked
     /// up here first and refused when any of its addresses is private. a name this machine cannot
     /// resolve is left to the proxy, since some networks resolve names only through it. the
-    /// proxy is trusted like a host a person wrote, since a person set it up.
+    /// proxy itself may be reached wherever it is, since a person set it up.
     pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
         let Some(proxy) = url
             .as_str()
@@ -122,7 +153,7 @@ impl Proxies {
             return Ok(());
         };
         if let Some(host) = proxy.uri().host() {
-            typed.add_host(host);
+            typed.add_proxy(host);
         }
         let Some(Host::Domain(name)) = url.host() else {
             return Ok(());
@@ -175,7 +206,7 @@ impl Resolver {
 impl reqwest::dns::Resolve for Resolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_ascii_lowercase();
-        let allowed = self.typed.contains(&host);
+        let allowed = self.typed.may_resolve_privately(&host);
         let offline = self.offline;
         Box::pin(async move {
             if offline {
@@ -271,6 +302,26 @@ mod tests {
             typed
                 .check(&Url::parse("https://zenodo.org/x").unwrap())
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_proxy_may_be_reached_but_never_requested() {
+        let typed = Typed::default();
+        typed.add_proxy("127.0.0.1");
+        typed.add_proxy("proxy.lab");
+        for url in ["http://127.0.0.1:9000/admin", "http://proxy.lab:9000/admin"] {
+            let url = Url::parse(url).unwrap();
+            assert!(typed.check(&url).is_err(), "{url}");
+        }
+        assert!(typed.may_resolve_privately("proxy.lab"));
+        assert!(!typed.may_resolve_privately("elsewhere.lab"));
+        typed.add_host("proxy.lab");
+        assert!(
+            typed
+                .check(&Url::parse("http://proxy.lab:9000/x").unwrap())
+                .is_ok(),
+            "unless a person wrote it"
         );
     }
 }
