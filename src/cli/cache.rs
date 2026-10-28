@@ -117,17 +117,31 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     );
     if checked.changed.is_empty() {
         output.done(&format!("verified {what}. every one is intact"));
-    } else {
-        for digest in &checked.changed {
+        return Ok(checked);
+    }
+    for digest in &checked.changed {
+        if !checked.stuck.contains(digest) {
             output.warn(&format!("object {digest} had changed and was removed"));
         }
-        output.done(&format!(
-            "verified {what}. {} changed and were removed",
-            units::count(checked.changed.len() as u64, "object", "objects")
-        ));
-        output.hint("the next sync downloads what a project still needs");
     }
-    Ok(checked)
+    let mut error = Error::new(
+        Kind::IntegrityMismatch,
+        format!(
+            "verified {what}. {} had changed",
+            units::count(checked.changed.len() as u64, "object", "objects")
+        ),
+    );
+    if checked.stuck.is_empty() {
+        return Err(error.help("the next sync downloads what a project still needs"));
+    }
+    error = error.detail(format!(
+        "{} could not be removed:",
+        units::count(checked.stuck.len() as u64, "of them", "of them")
+    ));
+    for digest in checked.stuck.iter().take(5) {
+        error = error.detail(cache.object_path(digest).display().to_string());
+    }
+    Err(error.help("remove them by hand. if others write to this cache, check who changed them"))
 }
 
 /// every object a registered project's data.lock needs, and the projects still on disk. a

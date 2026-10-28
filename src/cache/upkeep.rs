@@ -40,8 +40,10 @@ pub(crate) struct Freed {
 pub(crate) struct Checked {
     pub(crate) objects: u64,
     pub(crate) bytes: u64,
-    /// objects whose bytes no longer matched their name, now removed.
+    /// objects whose bytes no longer matched their name.
     pub(crate) changed: Vec<Sha256>,
+    /// changed objects that could not be removed, so they are still in the cache.
+    pub(crate) stuck: Vec<Sha256>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -180,7 +182,7 @@ impl Cache {
     pub(crate) fn verify_all(&self, threads: usize, progress: &(dyn Fn(u64) + Sync)) -> Checked {
         let objects = self.objects();
         let next = AtomicUsize::new(0);
-        let changed = Mutex::new(Vec::new());
+        let changed = Mutex::new((Vec::new(), Vec::new()));
         std::thread::scope(|scope| {
             for _ in 0..threads.max(1) {
                 scope.spawn(|| {
@@ -188,22 +190,29 @@ impl Cache {
                         let intact = Sha256::of_file(&object.path)
                             .is_ok_and(|actual| actual == object.digest);
                         progress(object.size);
-                        if !intact && fs::remove_file(&object.path).is_ok() {
-                            changed
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .push(object.digest);
+                        if intact {
+                            continue;
+                        }
+                        let removed = fs::remove_file(&object.path).is_ok();
+                        let mut found = changed
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        found.0.push(object.digest);
+                        if !removed {
+                            found.1.push(object.digest);
                         }
                     }
                 });
             }
         });
+        let (changed, stuck) = changed
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Checked {
             objects: objects.len() as u64,
             bytes: objects.iter().map(|object| object.size).sum(),
-            changed: changed
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            changed,
+            stuck,
         }
     }
 
@@ -277,5 +286,59 @@ mod tests {
         assert_eq!(seen.load(Ordering::Relaxed), 8);
         assert!(cache.find(&good.digest, Some(4)).is_some());
         assert!(cache.find(&bad.digest, Some(4)).is_none());
+    }
+
+    #[test]
+    fn a_changed_object_that_cannot_be_removed_is_still_reported() {
+        let (_dir, cache) = cache();
+        let bad = store(&cache, b"bad!");
+        damage(&bad.path);
+        let held = hold(&bad.path);
+        let checked = cache.verify_all(2, &|_| {});
+        drop(held);
+        assert_eq!(checked.changed, vec![bad.digest]);
+        assert_eq!(checked.stuck.is_empty(), !bad.path.exists());
+    }
+
+    fn damage(path: &Path) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test damages an object on purpose"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"BAD!")
+            .unwrap();
+    }
+
+    /// keeps `path` from being removed while the result lives.
+    #[cfg(windows)]
+    fn hold(path: &Path) -> impl Sized {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn hold(path: &Path) -> impl Sized {
+        use std::os::unix::fs::PermissionsExt;
+        struct Locked(PathBuf);
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        let folder = path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        Locked(folder)
     }
 }

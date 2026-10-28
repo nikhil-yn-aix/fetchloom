@@ -484,3 +484,29 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_changed_object_fails_verify_and_leaves_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let objects = sandbox.cache().join("objects");
+    let fan = fs::read_dir(&objects)?
+        .next()
+        .ok_or("no fan-out folder")??;
+    let object = fs::read_dir(fan.path())?.next().ok_or("no object")??.path();
+    let mut permissions = fs::metadata(&object)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test damages an object on purpose"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&object, permissions)?;
+    fs::write(&object, "damaged on disk")?;
+    let verify = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(verify.status.code(), Some(30));
+    let stderr = text(&verify.stderr)?;
+    assert!(stderr.contains("had changed and was removed"), "{stderr}");
+    assert!(!object.exists());
+    Ok(())
+}
