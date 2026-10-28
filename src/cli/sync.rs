@@ -25,6 +25,9 @@ use crate::project::manifest::{Entry, Manifest};
 use crate::source::{self, Listing, Reference, Remote};
 use crate::units;
 
+/// the most of a title the `Resolved` line shows.
+const TITLE: usize = 50;
+
 /// which datasets move to their newest version.
 pub(super) enum Upgrade {
     Nothing,
@@ -338,7 +341,12 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
         return;
     }
     let mut facts = vec![listing.resolved.to_string()];
-    facts.extend(listing.title.clone());
+    facts.extend(
+        listing
+            .title
+            .as_deref()
+            .map(|title| output.clip(title, TITLE)),
+    );
     facts.push(units::count(listing.files.len() as u64, "file", "files"));
     let size: Option<u64> = listing.files.iter().map(|file| file.size).sum();
     facts.extend(size.map(units::size));

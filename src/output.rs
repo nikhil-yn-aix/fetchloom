@@ -3,6 +3,7 @@
 mod progress;
 mod style;
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::{Mutex, PoisonError};
@@ -84,7 +85,7 @@ impl Output {
     pub(crate) fn step(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             let green = Paint::new().fg_color(Some(AnsiColor::Green.into())).bold();
-            self.line(&format!("{green}{verb:>11}{green:#} {text}"));
+            self.line(&format!("{green}{verb:>11}{green:#} {}", plain(text)));
         }
     }
 
@@ -92,7 +93,7 @@ impl Output {
     pub(crate) fn mark(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
-            self.line(&format!("{yellow}{verb:>11}{yellow:#} {text}"));
+            self.line(&format!("{yellow}{verb:>11}{yellow:#} {}", plain(text)));
         }
     }
 
@@ -100,7 +101,7 @@ impl Output {
     pub(crate) fn detail(&self, text: &str) {
         if self.tells(Level::Verbose) {
             let dim = Paint::new().dimmed();
-            self.line(&format!("{:>11} {dim}{text}{dim:#}", ""));
+            self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(text)));
         }
     }
 
@@ -111,7 +112,11 @@ impl Output {
             .push(text.to_owned());
         if self.tells(Level::Normal) {
             let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
-            self.line(&format!("{yellow}{}{yellow:#} {text}", self.style.warned()));
+            self.line(&format!(
+                "{yellow}{}{yellow:#} {}",
+                self.style.warned(),
+                plain(text)
+            ));
         }
     }
 
@@ -119,15 +124,24 @@ impl Output {
     pub(crate) fn done(&self, text: &str) {
         if self.tells(Level::Normal) {
             let green = Paint::new().fg_color(Some(AnsiColor::Green.into())).bold();
-            self.line(&format!("{green}{}{green:#} {text}", self.style.done()));
+            self.line(&format!(
+                "{green}{}{green:#} {}",
+                self.style.done(),
+                plain(text)
+            ));
         }
     }
 
     pub(crate) fn hint(&self, text: &str) {
         if self.tells(Level::Normal) {
             let bold = Paint::new().bold();
-            self.line(&format!("  {bold}hint:{bold:#} {text}"));
+            self.line(&format!("  {bold}hint:{bold:#} {}", plain(text)));
         }
+    }
+
+    /// free text from a source, such as a title, cut to fit one line of the story.
+    pub(crate) fn clip(&self, text: &str, most: usize) -> String {
+        units::clip(text, most, self.style.more())
     }
 
     /// the answer on stdout, such as a path a script will read.
@@ -145,12 +159,16 @@ impl Output {
         let red = Paint::new().fg_color(Some(AnsiColor::Red.into())).bold();
         let bold = Paint::new().bold();
         let dim = Paint::new().dimmed();
-        let mut text = format!("{red}{}{red:#} {}", self.style.failed(), error.message);
+        let mut text = format!(
+            "{red}{}{red:#} {}",
+            self.style.failed(),
+            plain(&error.message)
+        );
         for line in &error.details {
-            let _ = write!(text, "\n  {line}");
+            let _ = write!(text, "\n  {}", plain(line));
         }
         if let Some(help) = &error.help {
-            let _ = write!(text, "\n  {bold}help:{bold:#} {help}");
+            let _ = write!(text, "\n  {bold}help:{bold:#} {}", plain(help));
         }
         if self.level >= Level::Verbose {
             let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
@@ -270,5 +288,34 @@ impl Output {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
+    }
+}
+
+/// `text` with control characters written out as escapes, so text from a server cannot move the
+/// cursor or recolor the terminal.
+fn plain(text: &str) -> Cow<'_, str> {
+    if !text.contains(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut shown = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if c.is_control() {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
+    Cow::Owned(shown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain;
+
+    #[test]
+    fn server_text_cannot_steer_the_terminal() {
+        assert_eq!(plain("iris.csv · 4.1 KiB"), "iris.csv · 4.1 KiB");
+        assert_eq!(plain("\u{1b}[2Jgone"), "\\u{1b}[2Jgone");
+        assert_eq!(plain("two\nlines"), "two\\nlines");
     }
 }

@@ -42,7 +42,7 @@ pub(crate) fn from_url(url: &Url) -> Option<String> {
 }
 
 /// a dataset name made from free text, such as a title or a file name: lowercase letters,
-/// digits, `-` and `_`, at most 40 characters.
+/// digits, `-` and `_`, at most 40 characters, ending at a word break when one is near.
 pub(crate) fn dataset_name(text: &str) -> Option<String> {
     let mut name = String::with_capacity(text.len());
     for c in text.chars().flat_map(char::to_lowercase) {
@@ -54,7 +54,9 @@ pub(crate) fn dataset_name(text: &str) -> Option<String> {
     }
     let mut name = name.trim_matches('-').to_owned();
     if name.len() > 40 {
-        name.truncate(40);
+        // names are ascii here, so byte offsets are character offsets
+        let cut = name[..=40].rfind('-').filter(|&at| at >= 20).unwrap_or(40);
+        name.truncate(cut);
         let kept = name.trim_end_matches('-').len();
         name.truncate(kept);
     }
@@ -122,8 +124,9 @@ pub(crate) fn folder_for(file: &str) -> String {
     }
 }
 
-/// why a path inside a dataset or an archive could reach outside its folder on some platform,
-/// if it could. such a path is refused everywhere, so a `data.lock` works on every machine.
+/// why a path inside a dataset or an archive is refused, if it is: it could reach outside its
+/// folder on some platform, or it holds a control character that terminals would act on. such a
+/// path is refused everywhere, so a `data.lock` works on every machine.
 pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     if path.is_empty() {
         return Some("it is empty");
@@ -134,8 +137,8 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     if path.contains('\\') {
         return Some("it has a \\, which windows reads as a folder separator");
     }
-    if path.contains('\0') {
-        return Some("it holds a NUL character");
+    if path.contains(char::is_control) {
+        return Some("it holds a control character");
     }
     let bytes = path.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
@@ -293,6 +296,8 @@ mod tests {
             "c:/x",
             "a:b",
             "a\0b",
+            "\u{1b}[2Jcleared.csv",
+            "two\nlines.csv",
             "a/",
         ] {
             assert!(escapes(unsafe_path).is_some(), "{unsafe_path:?}");
@@ -325,6 +330,16 @@ mod tests {
         assert!(
             dataset_name(&"long ".repeat(20))
                 .is_some_and(|name| name.len() <= 40 && !name.ends_with('-'))
+        );
+        assert_eq!(
+            dataset_name("Effects of xylooligosaccharide supplementation on methane").as_deref(),
+            Some("effects-of-xylooligosaccharide"),
+            "long names end at a word break"
+        );
+        assert_eq!(
+            dataset_name(&"x".repeat(50)).map(|name| name.len()),
+            Some(40),
+            "one long word is cut where it must be"
         );
         assert!(is_dataset_name("eeg-2024_v2"));
         for bad in ["", "EEG", "a b", "-lead", "x.y"] {

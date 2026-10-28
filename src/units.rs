@@ -84,6 +84,23 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
     format!("{grouped} {}", if n == 1 { one } else { many })
 }
 
+/// free text on one line and at most `most` characters, cut after a whole word and ended with
+/// `more` when it is longer.
+pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let Some((end, _)) = flat.char_indices().nth(most) else {
+        return flat;
+    };
+    let head = &flat[..end];
+    let kept = match head.rfind(' ') {
+        Some(space) if !flat[end..].starts_with(' ') && space >= head.len() * 2 / 3 => {
+            &head[..space]
+        }
+        _ => head,
+    };
+    format!("{kept}{more}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +152,28 @@ mod tests {
     fn clocks_tick_in_whole_seconds() {
         assert_eq!(seconds(Duration::from_millis(12_900)), "12 s");
         assert_eq!(seconds(Duration::from_secs(245)), "4 min 05 s");
+    }
+
+    #[test]
+    fn clipped_text_keeps_one_line_and_whole_words() {
+        assert_eq!(clip("DatasetIris", 50, "…"), "DatasetIris");
+        assert_eq!(clip(" Iris\n\tdata  set ", 50, "…"), "Iris data set");
+        assert_eq!(
+            clip(
+                "Effects of xylooligosaccharide supplementation on methane emissions",
+                50,
+                "…"
+            ),
+            "Effects of xylooligosaccharide supplementation on…"
+        );
+        assert_eq!(
+            clip("one two three", 7, "..."),
+            "one two...",
+            "a cut that lands between words keeps the last one"
+        );
+        assert_eq!(
+            clip(&"é".repeat(60), 50, "…"),
+            format!("{}…", "é".repeat(50))
+        );
     }
 }
