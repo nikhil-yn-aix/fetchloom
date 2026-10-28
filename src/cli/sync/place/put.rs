@@ -68,10 +68,12 @@ pub(super) fn put_all<'t>(
                 continue;
             }
         };
+        // the placer seals a reflink or copy writable exactly when the dataset asks for copies
+        let writable = target.copy && method != Method::Hardlink;
         if let Some(look) = looks.get(target.path.as_str()) {
             state
                 .files
-                .insert(target.path.clone(), placed(target, method, *look));
+                .insert(target.path.clone(), placed(target, method, *look, writable));
         }
         count(work, method);
         let tally = tallies.entry(target.dataset.as_str()).or_default();

@@ -106,7 +106,7 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - `data.toml` is edited with `toml_edit`, so comments and order survive.
 - `data.lock` is written in a fixed order by our own writer, so the same inputs always give the same bytes.
 - each file is replaced atomically: written beside its target, then renamed over it. a command writes `data.toml` first, then `data.lock` once every file it names is in the cache, then the files under `data/`, then the state. each step is safe to repeat, so a run that stops anywhere is finished by running it again.
-- `.fetchloom/state` records each placed file's size, modification time and file id, read back by listing folders.
+- `.fetchloom/state` records each placed file's size and modification time, as listing its folder shows them, and how it was placed.
 - a command that changes the project holds `.fetchloom/lock`. `path` and `status` read without it when nothing needs syncing, so a thousand cluster jobs asking for the same path never queue. a `path` that must sync takes the lock and checks again.
 - fetchloom deletes only files it placed that still match what it placed. a file someone changed or added is kept and listed, and a changed file is overwritten only with `--force`.
 

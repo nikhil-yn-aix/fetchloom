@@ -129,7 +129,7 @@ each project keeps a small `.fetchloom/` folder beside `data.toml`. it never goe
 
 | path | holds |
 |---|---|
-| `state` | size, modification time and file identity of every placed file, so `status` needs no hashing |
+| `state` | size and modification time of every placed file, and whether it is a link or a copy and may be written to, so `status` needs no hashing |
 | `lock` | held while a command changes the project |
 
 ## settings

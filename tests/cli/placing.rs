@@ -243,3 +243,34 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
     assert_eq!(edited[0], b'S', "the project that made the edit keeps it");
     Ok(())
 }
+
+#[test]
+fn a_read_only_copy_becomes_writable_when_the_dataset_asks_for_copies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    // a folder a sync client owns gets read-only copies instead of links
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    assert!(fs::metadata(&placed)?.permissions().readonly());
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let synced = sandbox
+        .command(&["sync"])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(
+        !fs::metadata(&placed)?.permissions().readonly(),
+        "{}",
+        text(&synced.stderr)?
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    assert_eq!(server.requests().len(), 1, "the cache still holds iris");
+    Ok(())
+}

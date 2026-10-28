@@ -260,10 +260,9 @@ fn settle<'t, 'a>(
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
-                survey
-                    .state
-                    .files
-                    .insert(target.path.clone(), placed(target, Method::Copy, seen));
+                let writable = now_writable(&project.root.join(&target.path));
+                let found = placed(target, Method::Copy, seen, writable);
+                survey.state.files.insert(target.path.clone(), found);
                 placement.unchanged += 1;
                 adopted = true;
             }
@@ -318,7 +317,7 @@ fn decide(
     };
     match placed {
         Some(placed) if placed.look == *look => {
-            let fits = !target.copy || placed.method == Method::Copy;
+            let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
             } else {
@@ -407,13 +406,19 @@ fn now(path: &Path) -> Option<Look> {
         .map(|metadata| Look::of(&metadata))
 }
 
-fn placed(target: &Target, method: Method, look: Look) -> Placed {
+fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed {
     Placed {
         dataset: target.dataset.clone(),
         sha256: target.sha256,
         method,
         look,
+        writable,
     }
+}
+
+/// whether the file at `path` may be written to now.
+fn now_writable(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {

@@ -25,6 +25,10 @@ pub(crate) struct Placed {
     pub(crate) sha256: Sha256,
     pub(crate) method: Method,
     pub(crate) look: Look,
+    /// a file of its own that may be written to, as `copy = true` asks. a state written before
+    /// this was recorded reads as false, so such a copy is placed once more.
+    #[serde(default)]
+    pub(crate) writable: bool,
 }
 
 /// how a file looks on disk without reading it: its size and modification time.
@@ -88,11 +92,12 @@ mod tests {
             Placed {
                 dataset: "iris".to_owned(),
                 sha256: digest::sha256(b"x"),
-                method: Method::Hardlink,
+                method: Method::Copy,
                 look: Look {
                     size: 1,
                     modified: 42,
                 },
+                writable: true,
             },
         );
         let read = State::parse(&state.render());
@@ -103,5 +108,15 @@ mod tests {
                 .files
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_state_from_before_writable_copies_reads_them_as_read_only() {
+        let text = format!(
+            r#"{{"version":1,"files":{{"data/a.csv":{{"dataset":"a","sha256":"{}","method":"copy","look":{{"size":1,"modified":2}}}}}}}}"#,
+            digest::sha256(b"x")
+        );
+        let read = State::parse(text.as_bytes());
+        assert!(!read.files["data/a.csv"].writable);
     }
 }
