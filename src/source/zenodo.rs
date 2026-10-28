@@ -165,6 +165,7 @@ impl File {
         })
     }
 }
+
 impl fmt::Display for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "zenodo:{}", self.id)
@@ -350,6 +351,7 @@ mod tests {
         let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
     }
+
     #[test]
     #[ignore = "live: talks to zenodo.org"]
     fn live_zenodo() {

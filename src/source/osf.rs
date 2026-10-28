@@ -184,7 +184,8 @@ impl Metadata {
         }
     }
 }
-/// OSF ids are five or more lowercase letters and digits.
+
+/// OSF ids are five to twelve lowercase letters and digits.
 fn is_id(text: &str) -> bool {
     (5..=12).contains(&text.len())
         && text

@@ -260,6 +260,7 @@ impl File {
         Ok(url)
     }
 }
+
 impl fmt::Display for Article {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "figshare:{}", self.id)?;
