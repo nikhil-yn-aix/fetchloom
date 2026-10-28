@@ -2,9 +2,12 @@
 
 mod archives;
 mod basics;
+mod concurrent;
 mod get;
 mod hints;
+mod moved;
 mod progress;
 mod project;
 mod recovery;
+mod secrets;
 mod support;

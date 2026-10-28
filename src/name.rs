@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use percent_encoding::percent_decode_str;
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
 /// the longest name kept, in bytes. most filesystems stop at 255.
@@ -208,6 +209,17 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// a path as a case-insensitive disk compares it, so two paths with the same fold are one file
+/// on windows or macos. macos also sees both unicode forms of a name as one, so it is composed
+/// first. the round trip through uppercase matches what ntfs does with letters like the two
+/// greek sigmas, which lowercase alone keeps apart.
+pub(crate) fn fold(path: &str) -> String {
+    if path.is_ascii() {
+        return path.to_ascii_lowercase();
+    }
+    path.nfc().collect::<String>().to_uppercase().to_lowercase()
 }
 
 fn shorten(name: &str) -> String {

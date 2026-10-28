@@ -89,6 +89,8 @@ impl Default for Limits {
 pub(crate) struct Unpacked {
     pub(crate) members: Vec<Member>,
     pub(crate) tree: Sha256,
+    /// how many of the files were new to the cache.
+    pub(crate) written: u64,
 }
 
 /// stores one file the guard let through, reading it from the archive.
@@ -111,7 +113,7 @@ pub(crate) fn unpack(
 ) -> Result<Unpacked, Error> {
     let meter = Meter::default();
     let mut guard = Guard::new(limits, watch, &meter);
-    let mut members = store::store_all(cache, |writers| {
+    let (mut members, written) = store::store_all(cache, |writers| {
         let mut buffer = vec![0; BUFFER];
         let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {
             writers.keep(guard, path, from, &mut buffer)
@@ -126,7 +128,11 @@ pub(crate) fn unpack(
     })?;
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     let tree = tree_hash(&members);
-    Ok(Unpacked { members, tree })
+    Ok(Unpacked {
+        members,
+        tree,
+        written,
+    })
 }
 
 /// unpacks the archive the cache holds under `archive`, and records what it unpacked to. none

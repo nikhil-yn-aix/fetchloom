@@ -18,10 +18,10 @@ use crate::archive::{self, Unpacked};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net::Expect;
 use crate::output::Output;
 use crate::project::lock::{Lock, LockedFile};
 use crate::units;
+use crate::work::Work;
 
 /// an archive the cache holds, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
@@ -90,6 +90,7 @@ pub(in crate::cli) async fn unpack_all(
         })?;
         match unpacked {
             Ok(Some(unpacked)) => {
+                Work::add(&context.work.objects_written, unpacked.written);
                 tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
                 results[index] = Some(unpacked);
             }
@@ -180,6 +181,7 @@ impl Loop<'_> {
     /// cache does not hold, and checks that each unpacks to what the lock says.
     pub(super) async fn unpack_locked(
         &self,
+        lock: &Lock,
         archives: &[(String, &LockedFile)],
     ) -> Result<(), Error> {
         if archives.is_empty() {
@@ -188,18 +190,7 @@ impl Loop<'_> {
         let jobs = archives
             .iter()
             .filter(|(_, file)| self.cache.find(&file.sha256, Some(file.size)).is_none())
-            .map(|(dataset, file)| {
-                job(
-                    dataset,
-                    &file.path,
-                    &file.url,
-                    Expect {
-                        sha256: Some(file.sha256),
-                        md5: file.md5,
-                        size: Some(file.size),
-                    },
-                )
-            })
+            .map(|(dataset, file)| job(lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
         let unpacks = archives

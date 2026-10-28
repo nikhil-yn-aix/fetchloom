@@ -261,6 +261,38 @@ fn changed_bytes_upstream_stop_sync_with_the_fix() -> Result {
 }
 
 #[test]
+fn changed_bytes_from_a_source_that_states_md5_get_the_same_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let same_size = b"sepal_length,species\n4.9,setosa\n";
+    assert_eq!(same_size.len(), IRIS.len());
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(same_size, "\"v2\"")])?;
+    added(&sandbox, &server)?;
+    // zenodo, figshare and dataverse state an MD5, which data.lock keeps beside the SHA-256
+    let lock = sandbox.work().join("data.lock");
+    let text_before = fs::read_to_string(&lock)?;
+    fs::write(
+        &lock,
+        text_before.replace(
+            ", url = ",
+            ", md5 = \"0773746ec982652e1c31c2c7bbaacc9c\", url = ",
+        ),
+    )?;
+    let cold = clone(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&cold, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .output()?;
+    assert_eq!(output.status.code(), Some(30));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("is not the file that was locked"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("fetchloom lock --upgrade iris"), "{stderr}");
+    Ok(())
+}
+
+#[test]
 fn offline_uses_the_cache_or_says_what_is_missing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

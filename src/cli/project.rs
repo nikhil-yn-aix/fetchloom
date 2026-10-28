@@ -45,6 +45,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     };
     let manifest = Manifest::parse(&text)?;
     let parsed = Reference::parse(&args.link)?;
+    parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
         usable(asked, &manifest)?;
@@ -361,7 +362,7 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
     let project = find()?;
-    let (_, manifest) = project.manifest()?;
+    let (_, mut manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
@@ -369,21 +370,27 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     known(&manifest, name)?;
     if !ready(&project, &manifest, name)? {
         let _held = hold(context, &project).await?;
-        let work = Loop::new(
-            context,
-            &project,
-            Arc::new(net(context, &manifest)?),
-            open_cache()?,
-        );
-        sync_all(
-            &work,
-            &manifest,
-            project.lock()?.as_ref(),
-            &Upgrade::Nothing,
-            false,
-            None,
-        )
-        .await?;
+        // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
+        // done once they hold the lock, so they answer without syncing in turn
+        manifest = project.manifest()?.1;
+        known(&manifest, name)?;
+        if !ready(&project, &manifest, name)? {
+            let work = Loop::new(
+                context,
+                &project,
+                Arc::new(net(context, &manifest)?),
+                open_cache()?,
+            );
+            sync_all(
+                &work,
+                &manifest,
+                project.lock()?.as_ref(),
+                &Upgrade::Nothing,
+                false,
+                None,
+            )
+            .await?;
+        }
     }
     let folder = plan::folder(&manifest, name);
     let relative = match file.filter(|file| !file.is_empty()) {
@@ -587,6 +594,7 @@ async fn learn_name(
         },
         label: remote.path.clone(),
         dataset: None,
+        again: None,
     };
     let started = std::time::Instant::now();
     let fetched = fetch::all(context, net, cache, vec![job]).await?;

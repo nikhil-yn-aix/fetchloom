@@ -2,11 +2,14 @@
 //! and then off a terminal, and a stop at the first failure that keeps what already arrived for
 //! the next run.
 
+mod again;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tokio::task::JoinSet;
 
+pub(super) use self::again::Again;
 use super::Context;
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
@@ -20,6 +23,8 @@ pub(super) struct Job {
     pub(super) fetch: Fetch,
     pub(super) label: String,
     pub(super) dataset: Option<String>,
+    /// where to ask again when the file is pinned and its recorded link is dead.
+    pub(super) again: Option<Again>,
 }
 
 /// how all the downloads of one call go together: a bar for them all on a terminal when there
@@ -159,16 +164,18 @@ pub(super) async fn all(
     // a large file whose size the source did not state is asked about once its server tells
     // the size, or once that much arrived when it never does, and only the first one asks
     let asked = Arc::new(AtomicBool::new(false));
+    let listings = again::Listings::default();
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
-            let (net, cache, output, overall, asked) = (
+            let (net, cache, output, overall, asked, listings) = (
                 net.clone(),
                 cache.clone(),
                 context.output.clone(),
                 overall.clone(),
                 asked.clone(),
+                listings.clone(),
             );
             let yes = context.yes;
             tasks.spawn(async move {
@@ -179,7 +186,12 @@ pub(super) async fn all(
                     watch.bar();
                 }
                 let on = |event: Event| watch.on(&event);
-                let fetched = net.download(&job.fetch, &cache, &on).await;
+                let fetched = match net.download(&job.fetch, &cache, &on).await {
+                    Err(err) => {
+                        again::recover(&net, &cache, &output, &listings, &job, err, &on).await
+                    }
+                    fetched => fetched,
+                };
                 (index, fetched.map_err(|err| explain(err, &job)))
             });
         }
@@ -249,6 +261,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big.bin".to_owned(),
             dataset: None,
+            again: None,
         };
         let overall = Overall {
             bar: None,

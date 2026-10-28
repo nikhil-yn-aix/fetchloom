@@ -51,6 +51,13 @@ impl Sandbox {
     pub(crate) fn command(&self, args: &[&str]) -> Command {
         let home = self.root.path().join("home");
         let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+        // nothing from the machine running the tests may reach fetchloom: its own settings,
+        // proxies, colors, synced folders or any source's credentials
+        for (name, _) in std::env::vars_os() {
+            if leaks(&name.to_string_lossy()) {
+                command.env_remove(name);
+            }
+        }
         command
             .args(args)
             .current_dir(self.work())
@@ -60,25 +67,6 @@ impl Sandbox {
             .env("USERPROFILE", &home)
             .env("APPDATA", &home)
             .env("LOCALAPPDATA", &home);
-        let leaks = [
-            "NO_COLOR",
-            "CLICOLOR_FORCE",
-            "FETCHLOOM_OFFLINE",
-            "FETCHLOOM_LOG",
-            "FETCHLOOM_TRACE",
-            "OneDrive",
-            "OneDriveCommercial",
-            "OneDriveConsumer",
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ];
-        for name in leaks {
-            command.env_remove(name);
-        }
         command
     }
 
@@ -106,6 +94,21 @@ impl Sandbox {
 
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
+}
+
+/// whether a variable of the machine running the tests could change what fetchloom does.
+fn leaks(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    name.starts_with("FETCHLOOM_")
+        || name.starts_with("ONEDRIVE")
+        || name.starts_with("KAGGLE_")
+        || name.starts_with("HF_")
+        || name.ends_with("_PROXY")
+        || name.ends_with("_TOKEN")
+        || matches!(
+            name.as_str(),
+            "NO_COLOR" | "CLICOLOR_FORCE" | "XDG_CACHE_HOME" | "XDG_CONFIG_HOME"
+        )
 }
 
 /// a regex that matches `text` exactly.
