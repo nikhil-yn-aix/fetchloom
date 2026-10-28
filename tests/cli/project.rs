@@ -578,3 +578,63 @@ fn a_second_project_adding_the_same_link_moves_no_body() -> Result {
     );
     Ok(())
 }
+
+/// a clone of the project in a folder whose path is `length` characters long.
+#[cfg(windows)]
+fn deep_clone(sandbox: &Sandbox, length: usize) -> Result<std::path::PathBuf> {
+    let mut deep = sandbox.folder("deep")?;
+    while length - deep.as_os_str().len() > 40 {
+        deep.push("a_project_folder_name");
+    }
+    let rest = length - deep.as_os_str().len() - 1;
+    deep.push("p".repeat(rest));
+    fs::create_dir_all(&deep)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(file), deep.join(file))?;
+    }
+    Ok(deep)
+}
+
+#[cfg(windows)]
+#[test]
+fn a_project_whose_metadata_passes_260_characters_syncs_and_answers_path() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    // as deep as the folder in the report, which windows can still work in
+    let deep = deep_clone(&sandbox, 240)?;
+    let output = sandbox.command_in(&deep, &["--json", "sync"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert!(deep.join(".fetchloom").join("state").is_file());
+    let placed = deep.join("data").join("iris").join("iris.csv");
+    assert_eq!(fs::read(&placed)?, IRIS);
+    fs::remove_file(&placed)?;
+    let output = sandbox
+        .command_in(&deep, &["path", "iris/iris.csv"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(text(&output.stdout)?.trim())?, IRIS);
+    let status = sandbox.command_in(&deep, &["--json", "status"]).output()?;
+    assert_eq!(json(&status)?["status"], "ok");
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn a_folder_too_long_to_work_in_is_named_with_its_length_before_anything_is_written() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let deep = deep_clone(&sandbox, 300)?;
+    let named = deep.display().to_string();
+    let output = sandbox.command(&["-C", &named, "sync"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(&named) && stderr.contains("300 characters"),
+        "{stderr}"
+    );
+    assert!(!deep.join(".fetchloom").exists());
+    assert!(!deep.join("data").exists());
+    Ok(())
+}

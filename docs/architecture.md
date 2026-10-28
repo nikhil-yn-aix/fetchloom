@@ -135,7 +135,7 @@ every error has a kind such as `network.timeout`, `integrity.mismatch` or `refer
 
 ## platforms
 
-- windows: no admin rights needed and no symlinks. objects carry the read-only attribute, and gc deletes them with the flag that ignores it, so other links to the same file keep it. paths windows cannot store are refused before anything is written. the cache defaults to `%LOCALAPPDATA%`, which onedrive does not sync. defender scans every new file, so a cache on a dev drive, or a defender exclusion, makes datasets of many small files much faster; `-v` says so when it applies.
+- windows: no admin rights needed and no symlinks. objects carry the read-only attribute, and gc deletes them with the flag that ignores it, so other links to the same file keep it. paths windows cannot store are refused before anything is written. files may lie deeper than 260 characters, since every path reaches windows in its long form, but windows works in no folder whose path passes 258 characters, so `-C` names such a folder and its length and stops. the cache defaults to `%LOCALAPPDATA%`, which onedrive does not sync. defender scans every new file, so a cache on a dev drive, or a defender exclusion, makes datasets of many small files much faster; `-v` says so when it applies.
 - macos: reflink on APFS. icloud drive folders get copies and a warning, since "optimize mac storage" can remove local files.
 - linux and clusters: safe on NFS, lustre and GPFS without file locks in the cache. in v0.1 a cache is shared safely by one user's processes; sharing one between people comes with the lab features.
 

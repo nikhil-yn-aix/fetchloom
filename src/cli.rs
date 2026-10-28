@@ -103,6 +103,28 @@ fn open_cache() -> Result<Cache, Error> {
     })
 }
 
+/// why fetchloom cannot start in `folder`, as `-C` asks. windows lets a program work in no folder
+/// whose path passes 258 characters, so a project deeper than that is named with its length
+/// before anything is written.
+fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
+    if err.kind() != std::io::ErrorKind::InvalidFilename {
+        return Error::new(
+            Kind::Usage,
+            format!("cannot work in {}: {err}", folder.display()),
+        );
+    }
+    let path = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let length = path.as_os_str().to_string_lossy().chars().count();
+    Error::new(
+        Kind::Usage,
+        format!(
+            "cannot work in {}: at {length} characters, its path is too long for a working folder",
+            path.display()
+        ),
+    )
+    .help("move the project to a folder with a shorter path")
+}
+
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let args = match args::Args::try_parse() {
@@ -149,11 +171,7 @@ pub(crate) fn run() -> ExitCode {
     if let Some(folder) = &global.directory
         && let Err(err) = std::env::set_current_dir(folder)
     {
-        let error = Error::new(
-            Kind::Usage,
-            format!("cannot work in {}: {err}", folder.display()),
-        );
-        return finish::<()>(&context, name, Err(error), started);
+        return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
     }
     match command {
         args::Command::Add(args) => {

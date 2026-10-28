@@ -218,11 +218,32 @@ impl Project {
 /// replaces `path` in one step, so a reader sees the old file or the new one, never half.
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let folder = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut file = tempfile::NamedTempFile::new_in(folder)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let (temporary, file) = loop {
+        let temporary = folder.join(format!(".{name}.{:08x}.tmp", fastrand::u32(..)));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => break (temporary, file),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    };
+    // std's rename hands windows a long path in its `\\?\` form. tempfile's persist does not,
+    // and fails once a project's metadata passes 260 characters
+    let written = fill(file, bytes).and_then(|()| fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// writes `bytes` into a new file and flushes them to disk.
+fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)?;
-    file.as_file().sync_all()?;
-    file.persist(path).map_err(|err| err.error)?;
-    Ok(())
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -291,5 +312,25 @@ mod tests {
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "target\n/data/\n"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_deep_project_can_create_and_replace_its_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = dir.path().to_path_buf();
+        while root.as_os_str().len() < 300 {
+            root.push("a_long_project_folder_name");
+        }
+        fs::create_dir_all(&root).unwrap();
+        let project = Project { root };
+        let Hold::Held(_held) = project.hold().unwrap() else {
+            panic!("free")
+        };
+        project.write("data.lock", b"first").unwrap();
+        project.write("data.lock", b"second").unwrap();
+        project.write_state(&State::default()).unwrap();
+        assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"second");
+        assert!(project.root.join(FOLDER).join("state").is_file());
     }
 }
