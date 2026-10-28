@@ -79,16 +79,17 @@ pub(crate) fn run(
     let disk = scan(&project.root, &manifest.data_dir);
     let mut placement = Placement::default();
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
+    let mut placer = Placer::new(&data_dir);
     // removing first means a file that moved never collides with its own old copy
     remove_unwanted(
         project,
         &data_dir,
+        &mut placer,
         &mut state,
         &disk,
         &wanted,
         &mut placement,
     )?;
-    let mut placer = Placer::new(&data_dir);
     let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
     for target in &targets {
         let destination = project.root.join(&target.path);
@@ -229,6 +230,7 @@ fn decide(
 fn remove_unwanted(
     project: &Project,
     data_dir: &Path,
+    placer: &mut Placer,
     state: &mut State,
     disk: &HashMap<String, Look>,
     wanted: &HashSet<&str>,
@@ -241,14 +243,17 @@ fn remove_unwanted(
         .cloned()
         .collect();
     for path in unwanted {
-        let Some(placed) = state.files.remove(&path) else {
+        let Some(before) = state.files.remove(&path) else {
             continue;
         };
         match disk.get(&path) {
             None => {}
-            Some(look) if *look == placed.look => {
+            Some(look) if *look == before.look => {
                 let file = project.root.join(&path);
-                fs::remove_file(&file).map_err(|err| local(&file, &err))?;
+                placer
+                    .check_folders(&file, false)
+                    .and_then(|()| fs::remove_file(&file))
+                    .map_err(|err| local(&file, &err))?;
                 prune(file.parent(), data_dir);
                 placement.removed += 1;
             }
