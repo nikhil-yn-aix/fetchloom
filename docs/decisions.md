@@ -1,115 +1,119 @@
 # decisions
 
-a decision changes only with new evidence, recorded in its entry.
+## 1. rust, with two entry points
 
-## 1. rust, one binary, also shipped as a python wheel
+`fetchloom` and `fl` call one rust implementation. shell users need no language environment once it is built. python packaging remains separate release work; it is not a runtime dependency.
 
-one binary serves python, R and shell users alike, starts in milliseconds, and runs through `uvx fetchloom` with no setup. a python package would start slower and could clash with the packages in a user's environment.
+## 2. keep the project loop small
 
-## 2. the loop and nothing else
-
-v0.1 is add, remove, sync, lock, status, path, get and the cache, as listed in [scope](scope.md). steps, publishing, search, plugins, copy and pack are cut, because other tools do those jobs, and an earlier version of fetchloom never shipped while building them all.
+add, remove, sync, lock, status, path, get and cache cover fetching published inputs. preprocessing, publishing and workflow execution stay outside the command set. [scope](scope.md) sets those boundaries.
 
 ## 3. SHA-256 is a file's identity
 
-it runs at 1.13 GB/s on one laptop core in our test, faster than almost any network, and it is what hugging face, osf, github release assets, nix, OCI images and software heritage already use. the `sha2` crate picks the CPU's SHA instructions at runtime. blake3 is faster, but no source states it, so every lookup would need a second index.
+objects use the hash of their bytes as their name. two source URLs can therefore share one object, and a moved URL need not change a pin. source MD5 values get a lookup index; they do not replace SHA-256 identities. hash measurements belong in [performance](performance.md).
 
-## 4. the first download defines the hash when a source states none
+## 4. learn missing hashes from bytes
 
-google drive, kaggle, dropbox and plain URLs give no checksum. the first download is hashed, every later download must match it, and a mismatch is an error. where a source states MD5, it is checked on the first download too.
+when a source supplies no usable SHA-256 and size, locking learns them from an earlier pin, a checked MD5 mapping or a download. new downloads check stated MD5 too. later project downloads must match the pin. unpinned `get` revalidates URLs and may accept changed bytes.
 
-## 5. the lock lists what was downloaded
+## 5. record source files, not every archive member
 
-each downloaded file gets one line in `data.lock`. an archive gets one line plus the tree hash of what it unpacks to, not one line per member, so a zip of 100,000 images keeps the lock small and every machine can still prove it unpacked the same files.
+`data.lock` records the selected source files, even when a stated hash lets `lock` avoid downloading one. an unpacked archive gets one file entry and one tree hash. member lists stay in the cache, keeping the lock independent of the number of files inside an archive.
 
-## 6. archives unpack by default
+## 6. unpack recognized archive names by default
 
-66% of the 200 most-viewed zenodo datasets contain archives (zip, tar, 7z or rar), and people want the files inside. `extract = false` keeps an archive packed. once its members are stored and verified, the archive's own copy leaves the cache unless a project keeps it packed, so a 50 GB zip does not cost 100 GB.
+research code usually needs the members. `extract = false` and `--no-extract` preserve the packed file when it is the input instead. filename-based selection keeps zip-based data formats such as `.npz` intact. packed objects can leave the cache after unpacking, unless a registered project still needs them packed.
 
-## 7. sources are rust modules in this repository
+## 7. keep source adapters in the crate
 
-no metadata standard gives trustworthy checksums: signposting carries none, croissant on hugging face holds a placeholder, and schema.org and datacite carry none. so each source is a small module that calls its own API. the earlier version's TOML and JSONPath engine grew new features for every source, and plugins would add a protocol to maintain before anyone asked for one.
+source APIs have different version, checksum and paging rules. a closed enum and rust modules keep those rules beside their tests. a plugin interface would add a protocol without a current consumer.
 
-## 8. a DOI is routed by the host it lands on
+## 8. route DOIs through their handle URL
 
-doi.org is asked where a DOI points, without following the redirect, and that host picks the source. DOI prefixes are never used, because every dataverse or CKAN install registers its own.
+fetchloom reads the URL value from doi.org's handles API, then parses that URL as a source reference. it does not infer a repository from a DOI prefix or follow a landing-page redirect to identify it. unknown destinations fail rather than being downloaded as datasets.
 
-## 9. google drive, kaggle and dropbox are in v0.1
+## 9. finish the shared-link sources before release
 
-github readmes mention drive.google.com about 358,000 times, kaggle.com/datasets about 134,000 times and dropbox share links about 27,000 times, against about 35,000 for zenodo records. gdown alone is downloaded about 3 million times a month.
+hugging face, kaggle, drive and dropbox remain in the release scope because the first users fetch from those hosts as well as repositories. that is scope, not a completion claim: [plan](plan.md#milestones) separates parsers and direct-link paths from finished adapters.
 
-## 10. `fetchloom` is the command and `fl` is its short name
+## 10. keep `fetchloom` and `fl`
 
-windows powershell already uses `fl` for `Format-List`, and an alias there wins over any program. `fetchloom` also makes `uvx fetchloom sync` work, since uvx runs the command named after the package.
+both executable names use the same entry point, avoiding a second CLI to maintain. powershell already uses `fl` for `Format-List`; use `fetchloom` there.
 
-## 11. reflink, else hardlink, else copy, and never symlinks
+## 11. reflink, else hardlink, else copy
 
-reflinks and hardlinks cost no disk. symlinks need admin rights on windows and dangle when a cache is cleared. hardlinked objects are read-only, and a placed file found changed gets its object hashed before reuse, so an edit cannot spread to other projects unnoticed. inside folders that onedrive, dropbox or icloud drive sync, files are copied, because those tools break hardlinks. `copy = true` exists for tools that write into their inputs.
+reflinks share blocks while keeping independent files. hardlinks reuse the cached file itself. copying works when neither is available. symlinks would dangle after cache deletion and can require extra permissions on windows.
 
-## 12. the cache writes without locks
+hardlinks are read-only. recognized synced folders and writable placements skip hardlinks, but still try reflinks. a changed-hardlink audit covers only the project being synced, so a writable shared cache still requires trust. [placement](architecture.md#placing-files) states the limits.
 
-an object is written to a temp file, flushed, and put in place by an operation that fails if the name exists, so racing processes cannot corrupt it. file locks cannot be trusted on NFS, lustre and GPFS, which is where shared caches live.
+## 12. separate publication from partial ownership
 
-## 13. one crate
+hardlink publication lets competing writers publish a completed object without a global cache lock. unfinished downloads need an OS lock because their bytes are still changing. when locking is unavailable, private partials keep writers apart but lose cross-run resume.
 
-seven crates for an unreleased tool meant seven sets of boundaries to maintain before any were proven. modules with clear ownership give the same separation. a module becomes a crate when a second consumer needs it.
+the object-publication rename fallback still has a check/rename race. it must not be described as no-clobber on every filesystem.
 
-## 14. reqwest on tokio, with rustls and the operating system's certificate store
+## 13. keep one crate
 
-HTTP/2 lets many small files from one host share a connection, and hyper's connector races IPv4 and IPv6. `rustls-platform-verifier` trusts what windows and macos trust, so university and company certificates work. ring is the crypto provider because it builds on windows without extra tools. ureq is smaller, but it connects to one address at a time and has no HTTP/2.
+modules hold the current boundaries without separate package versions. the only public library entry point runs the CLI. a second independent consumer would be a reason to split a crate.
 
-## 15. network work on tokio, disk work on threads
+## 14. reqwest, tokio and rustls
 
-async file IO on tokio is slower than plain threads for writing, hashing and unpacking. bounded channels between the two keep memory flat.
+the client provides HTTP/2 and system proxy support. rustls uses the platform verifier, and ring is selected as its crypto provider. redirects are handled by fetchloom so each hop can be checked before sending credentials or reaching a private address.
 
-## 16. timeouts limit silence, never duration
+## 15. keep byte processing off async workers
 
-a slow 100 GB download must finish and a stalled one must fail. the earlier version lost a 3.7 GB download at 30 seconds because a connect timeout bounded the whole body.
+downloads hand bounded batches of chunks to blocking writers. archive readers use worker threads to write and seal members. this overlaps network, decompression and disk work. placement and metadata operations are still synchronous; there is no blanket rule that every disk call runs off the runtime.
 
-## 17. no config file in v0.1
+## 16. limit silence, not download duration
 
-a handful of environment variables and flags cover every setting. a file adds precedence rules and docs before anyone needs them. a cluster-wide file comes with the lab features.
+a connection has 45 seconds to connect, each request hop has 75 seconds to produce headers, and a body may be silent for 30 seconds between chunks. there is no whole-download deadline. [network limits](architecture.md#the-network) define retries and redirects separately.
 
-## 18. errors have a kind, a sentence and a next step
+## 17. use flags and environment variables
 
-kinds like `network.timeout` are stable for scripts and `--json`. a few exit codes group them, so a script can tell "network" from "integrity" without parsing text.
+there is no config file or config-file precedence to maintain. flags cover invocation choices; environment variables cover the cache, concurrency and logging. the exceptions to simple flag precedence are explicit in [settings](formats.md#settings).
 
-## 19. the terminal stack is small
+## 18. give errors stable kinds
 
-clap parses arguments and suggests "did you mean". anstream and anstyle color the output, indicatif and console draw progress, and dialoguer asks the two prompts: yes or no, and a line of text. nothing else draws on the terminal. symbols fall back to ASCII on the legacy windows console.
+kinds such as `network.unreachable` and `integrity.mismatch` let scripts act without parsing prose. a small set of exit codes groups them. the error carries a message, detail lines and optional help; not every failure has a next-step command.
 
-## 20. standard archive crates behind our own guard
+## 19. keep terminal output in one renderer
 
-`zip` at 9.1.2 or later, `tar`, flate2 on zlib-rs, liblzma, zstd and bzip2. october 2026 brought critical advisories in zip's extraction, and no audited crate enforces every limit, so one guard of ours checks every path, refuses every link inside an archive and counts every byte written. 7z waits for demand. rar is refused, because its only decoder is not open source.
+clap parses arguments. anstream and anstyle handle color, indicatif and console draw progress, and dialoguer asks yes/no questions. no text-entry prompt is implemented. normal output uses human steps; JSON combines a final report with collected warnings and errors.
 
-## 21. no coverage or mutation gates
+## 20. put archive readers behind a shared guard
 
-the earlier version spent whole milestones killing mutants while no user had run the tool. tests prove behavior through scenarios, snapshots and counters. coverage is looked at, and mutation testing runs on core modules before a release.
+zip 9.1.3, tar, flate2 with zlib-rs, liblzma, zstd and bzip2 supply readers. fetchloom checks names, entry types and actual expanded bytes. members stay staged until the archive passes. 7z and rar decoders are not included; those files stay packed with a warning.
 
-## 22. CI gates on counters, never on wall clock
+## 21. test behavior without coverage quotas
 
-requests, bytes, file operations and instruction counts are deterministic. wall clock time on laptops and shared runners swings by 2x, so it is recorded and tracked, never used to fail a build.
+unit tests, CLI scenarios, snapshots and work counters check observable behavior. no coverage or mutation gate is configured. mutation and fuzz tooling remain work to add, rather than tests already running before releases.
 
-## 23. dist for binaries, maturin for wheels
+## 22. assert work counters
 
-uv and ruff ship the same way: one version tag, binaries and installers on the github release, wheels on PyPI through trusted publishing, with attestations for both.
+CLI tests assert requests, bytes and placements for selected scenarios. these catch repeat work without relying on a runner's speed. there is no instruction-count harness or CI performance gate. wall-clock measurements belong in [performance](performance.md), with the machine and workload named.
+
+## 23. keep distribution work explicit
+
+source installation builds both executables with cargo. dist for standalone binaries and maturin for wheels are proposed release tools, not configured pipelines. installers, wheel tests, publishing and attestations remain [release work](plan.md#next).
 
 ## 24. no telemetry
 
-fetchloom talks only to the hosts the data lives on. researchers work with sensitive projects, and trust is worth more than usage numbers.
+there is no telemetry client or background service. network operations resolve references and fetch the selected data. no account with fetchloom is needed.
 
-## 25. the design is public
+## 25. keep design with code
 
-these docs live in the repository, so anyone can see why fetchloom works the way it does and argue with it.
+format and behavior changes need matching documentation in the same change. keeping the reasons in the repository lets a contributor review a choice with its implementation.
 
 ## 26. apache-2.0
 
-as permissive as MIT, with a patent grant, a NOTICE that travels with every copy, and no rights to the names fetchloom and KairosLab.
+[LICENSE](../LICENSE) grants use, modification and redistribution under apache-2.0, including its patent terms. [NOTICE](../NOTICE) names Nikhil Y N and KairosLab India Private Limited and preserves the notice about the project names. the license grants no trademark rights beyond describing origin.
 
-## 27. editing a dataset never upgrades it
+## 27. reuse resolved references for filter edits
 
-changing a dataset's filters resolves it again at the version already in `data.lock`. only `fetchloom lock --upgrade` moves to a newer version, as in uv, so tidying `data.toml` can never change your data behind your back.
+changing filters or extraction settings resolves the existing `resolved` reference when `ref` is unchanged. explicit versions can therefore stay fixed while the selection changes. changing `ref` or using `--upgrade` instead resolves the manifest reference.
 
-## 28. a dataset lists at most 100,000 files in v0.1
+this cannot preserve a past listing for a mutable URL or OSF node. new selections may include newer files. review the lock diff; only its recorded file hashes pin bytes.
 
-that keeps `data.lock` under about 20 MB and memory bounded. archives can hold up to 1,000,000 members, since they are recorded by one tree hash. the limit moves when a real dataset needs it.
+## 28. cap listings per dataset
+
+the accepted listing limit is 100,000 files; OSF includes folders in that count. filters run afterward. archives have a separate 1,000,000-entry limit. these limits bound individual accepted lists, not the total project size or serialized lock size.
