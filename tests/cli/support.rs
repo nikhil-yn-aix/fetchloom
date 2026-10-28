@@ -82,8 +82,10 @@ impl Sandbox {
         Ok(self.command(args).output()?)
     }
 
-    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports,
-    /// timings and rates. backslashes become slashes so windows matches the other platforms.
+    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports and
+    /// timings. a rate shows only once a download takes a second, which a busy machine or a
+    /// retry wait can cause, so rates are dropped whole. backslashes become slashes so windows
+    /// matches the other platforms.
     pub(crate) fn filters(&self) -> insta::Settings {
         let mut settings = insta::Settings::clone_current();
         settings.add_filter(
@@ -92,7 +94,7 @@ impl Sandbox {
         );
         settings.add_filter(r"\\", "/");
         settings.add_filter(r"127\.0\.0\.1:\d+", "127.0.0.1:[port]");
-        settings.add_filter(r"\d+(\.\d)? [KMGT]?i?B/s", "[rate]");
+        settings.add_filter(r" · \d+(\.\d)? [KMGT]?i?B/s", "");
         settings.add_filter(r"\d+ min \d+ s|\d+(\.\d)? m?s\b", "[time]");
         settings
     }
