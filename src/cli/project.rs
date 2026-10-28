@@ -73,6 +73,18 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
+    let old = project.lock()?;
+    if args.name.is_none()
+        && let Some(name) = present(&manifest, old.as_ref(), &reference, &listing)
+    {
+        let work = Loop {
+            context,
+            project: &project,
+            net,
+            cache,
+        };
+        return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
+    }
     if args.name.is_none() {
         learn_name(context, &net, &cache, &mut listing).await?;
     }
@@ -89,7 +101,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let synced = sync_all(
         &work,
         &new_manifest,
-        project.lock()?.as_ref(),
+        old.as_ref(),
         &Upgrade::Nothing,
         false,
         Some((name.clone(), listing)),
@@ -132,6 +144,64 @@ fn restore(project: &Project, before: Option<&str>) {
     if let Err(err) = restored {
         tracing::debug!(%err, "could not restore data.toml");
     }
+}
+
+/// the dataset in data.toml that already pins what was just resolved, under any spelling of its
+/// reference.
+fn present(
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    reference: &str,
+    listing: &Listing,
+) -> Option<String> {
+    let resolved = listing.resolved.to_string();
+    manifest
+        .datasets
+        .iter()
+        .find(|(name, entry)| {
+            entry.reference == reference
+                || old
+                    .and_then(|old| old.get(name))
+                    .is_some_and(|locked| locked.resolved == resolved)
+        })
+        .map(|(name, _)| name.clone())
+}
+
+/// `add` of a dataset data.toml already has. with the same patterns nothing changes, so running
+/// the same `add` twice is safe; other patterns need a choice only the person can make.
+async fn again(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    name: &str,
+    entry: &manifest::Entry,
+    listing: &Listing,
+) -> Result<Report, Error> {
+    let existing = &manifest.datasets[name];
+    if existing.select != entry.select || existing.exclude != entry.exclude {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "{} is already in data.toml as {name}, with other patterns",
+                listing.resolved
+            ),
+        )
+        .help(format!(
+            "change the patterns of {name} in data.toml, or pass --as <name> to add it a second time"
+        )));
+    }
+    let (lock_changed, placement) =
+        sync_all(work, manifest, old, &Upgrade::Nothing, false, None).await?;
+    work.context.output.done(&format!(
+        "{name} is already in data.toml. its files are in {}",
+        plan::folder(manifest, name)
+    ));
+    Ok(Report {
+        project: work.project.root.clone(),
+        datasets: Vec::new(),
+        lock_changed,
+        placement: Some(placement),
+    })
 }
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {

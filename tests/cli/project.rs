@@ -59,6 +59,36 @@ fn add_pins_downloads_and_places_a_link() -> Result {
 }
 
 #[test]
+fn adding_the_same_dataset_again_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let before = fs::read(sandbox.work().join("data.toml"))?;
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "✓ iris is already in data.toml. its files are in data/iris\n"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before);
+    assert_eq!(server.requests().len(), 1, "nothing is downloaded twice");
+    Ok(())
+}
+
+#[test]
+fn adding_it_again_with_other_patterns_names_the_dataset_it_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let output = sandbox.run(&["add", &server.url, "--select", "*.csv"])?;
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = text(&output.stderr)?;
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+#[test]
 fn a_second_sync_does_nothing_at_all() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

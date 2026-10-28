@@ -4,7 +4,7 @@ assertion_line: 56
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
-     Locked 1 file in data.lock
+     Locked iris · 1 file in data.lock
      Placed data/iris · 1 file linked, no extra disk
 ✓ added iris. its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`

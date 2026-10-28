@@ -137,25 +137,41 @@ impl Loop<'_> {
         Ok(Lock { datasets })
     }
 
-    /// writes data.lock when it changed, and says so.
+    /// writes data.lock when it changed, and says which datasets it pins anew or no longer.
     pub(super) fn write_lock(&self, old: Option<&Lock>, lock: &Lock) -> Result<bool, Error> {
         if old == Some(lock) {
             return Ok(false);
         }
         self.project.write(lock::FILE, lock.render().as_bytes())?;
-        let files: usize = lock
+        let output = &self.context.output;
+        let pinned: Vec<&Locked> = lock
             .datasets
             .iter()
-            .map(|dataset| dataset.files.len())
-            .sum();
-        self.context.output.step(
-            "Locked",
-            &format!(
-                "{} in {}",
-                units::count(files as u64, "file", "files"),
-                lock::FILE
-            ),
-        );
+            .filter(|dataset| old.and_then(|old| old.get(&dataset.name)) != Some(*dataset))
+            .collect();
+        let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
+        let which = match pinned.as_slice() {
+            [] => None,
+            [only] => Some(only.name.clone()),
+            many => Some(units::count(many.len() as u64, "dataset", "datasets")),
+        };
+        if let Some(which) = which {
+            output.step(
+                "Locked",
+                &format!(
+                    "{which} · {} in {}",
+                    units::count(files as u64, "file", "files"),
+                    lock::FILE
+                ),
+            );
+        }
+        let dropped = old
+            .iter()
+            .flat_map(|old| &old.datasets)
+            .filter(|dataset| lock.get(&dataset.name).is_none());
+        for dataset in dropped {
+            output.step("Removed", &format!("{} from {}", dataset.name, lock::FILE));
+        }
         Ok(true)
     }
 
