@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use object::NewObject;
+pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
@@ -248,7 +248,7 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub(super) fn cache() -> (tempfile::TempDir, Cache) {
@@ -260,7 +260,7 @@ mod tests {
     pub(crate) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
-        object.publish().unwrap()
+        object.seal().unwrap().publish(cache).unwrap()
     }
 
     #[test]
