@@ -44,6 +44,44 @@ fn get_has_its_own_help() -> Result {
     Ok(())
 }
 
+/// docs/scope.md names options of `add` and `get`, and each one is in that command's help.
+#[test]
+fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
+    let scope = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs")
+            .join("scope.md"),
+    )?;
+    let options = scope
+        .lines()
+        .find(|line| line.starts_with("every command takes"))
+        .ok_or("scope.md names no options")?;
+    let sandbox = Sandbox::new()?;
+    for (commands, intro) in [
+        (&["add", "get"][..], "`add` and `get` also take "),
+        (&["add"], "`add` takes "),
+        (&["get"], "`get` takes "),
+    ] {
+        let (_, rest) = options.split_once(intro).ok_or(intro)?;
+        let named = rest
+            .split(". ")
+            .next()
+            .and_then(|sentence| sentence.split(", and ").next())
+            .unwrap_or_default();
+        for command in commands {
+            let help = text(&sandbox.run(&[command, "--help"])?.stdout)?;
+            for option in named.split('`').skip(1).step_by(2) {
+                let flag = option.split(' ').next().unwrap_or(option);
+                assert!(
+                    help.contains(&format!("{flag} ")) || help.contains(&format!("{flag},")),
+                    "scope.md says {command} takes {flag}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
