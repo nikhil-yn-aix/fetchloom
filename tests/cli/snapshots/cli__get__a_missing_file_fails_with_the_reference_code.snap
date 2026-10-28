@@ -1,0 +1,6 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+✗ 127.0.0.1 has nothing at http://127.0.0.1:[port]/records/3608990/files/iris.csv (404)
+  help: check the link in a browser. it may have moved or been removed

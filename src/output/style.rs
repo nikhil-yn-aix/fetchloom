@@ -12,11 +12,13 @@ pub(crate) enum ColorChoice {
     Never,
 }
 
-/// whether stderr gets color and unicode symbols.
+/// what stderr can show: color, unicode symbols, and live bars and questions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Style {
     pub(crate) color: bool,
     pub(crate) unicode: bool,
+    /// a person watches stderr: it is a terminal, outside CI, and not a dumb one.
+    pub(crate) interactive: bool,
 }
 
 impl Style {
@@ -26,12 +28,25 @@ impl Style {
         Style {
             color: wants_color(choice, terminal, &var),
             unicode: wants_unicode(terminal, &var),
+            interactive: is_interactive(terminal, &var),
         }
     }
 
     pub(crate) fn failed(self) -> &'static str {
         if self.unicode { "✗" } else { "[x]" }
     }
+
+    pub(crate) fn done(self) -> &'static str {
+        if self.unicode { "✓" } else { "[ok]" }
+    }
+
+    pub(crate) fn warned(self) -> &'static str {
+        if self.unicode { "!" } else { "[!]" }
+    }
+}
+
+fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    terminal && var("CI").is_none_or(|v| v.is_empty()) && var("TERM").is_none_or(|v| v != "dumb")
 }
 
 fn wants_color(
@@ -123,6 +138,14 @@ mod tests {
             wants_unicode(false, &env(&[])),
             "files and pipes keep unicode"
         );
+    }
+
+    #[test]
+    fn bars_and_questions_need_a_person_at_a_terminal() {
+        assert!(is_interactive(true, &env(&[])));
+        assert!(!is_interactive(false, &env(&[])));
+        assert!(!is_interactive(true, &env(&[("CI", "true")])));
+        assert!(!is_interactive(true, &env(&[("TERM", "dumb")])));
     }
 
     #[cfg(windows)]

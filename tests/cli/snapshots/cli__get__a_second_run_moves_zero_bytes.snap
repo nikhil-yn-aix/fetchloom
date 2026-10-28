@@ -1,0 +1,6 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+    Checked iris.csv · unchanged on 127.0.0.1
+✓ iris/iris.csv is already up to date

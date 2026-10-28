@@ -1,0 +1,7 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+ Downloaded iris.csv · 32 B in [time]
+   Replaced iris/iris.csv · linked, no extra disk
+✓ fetched iris.csv into iris

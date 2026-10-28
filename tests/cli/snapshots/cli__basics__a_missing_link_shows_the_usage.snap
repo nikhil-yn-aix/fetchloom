@@ -1,0 +1,7 @@
+---
+source: tests/cli/basics.rs
+expression: text(&output.stderr)?
+---
+✗ <link> is missing
+  usage: fetchloom get [options] <link>
+  help: `fetchloom get --help` says what it takes

@@ -1,0 +1,187 @@
+//! what every end to end test needs: a clean folder, a private cache and home, and a server that
+//! answers with exactly the bytes a test scripts.
+
+use std::fmt::Write as _;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::process::{Command, Output};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// a working folder, a cache and a home of its own, so no test sees another's state or the
+/// machine's.
+pub(crate) struct Sandbox {
+    root: tempfile::TempDir,
+}
+
+impl Sandbox {
+    pub(crate) fn new() -> Result<Sandbox> {
+        let root = tempfile::tempdir()?;
+        for folder in ["work", "home"] {
+            std::fs::create_dir(root.path().join(folder))?;
+        }
+        Ok(Sandbox { root })
+    }
+
+    pub(crate) fn work(&self) -> PathBuf {
+        self.root.path().join("work")
+    }
+
+    pub(crate) fn command(&self, args: &[&str]) -> Command {
+        let home = self.root.path().join("home");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+        command
+            .args(args)
+            .current_dir(self.work())
+            .env("FETCHLOOM_CACHE", self.root.path().join("cache"))
+            .env("CLICOLOR", "0")
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("APPDATA", &home)
+            .env("LOCALAPPDATA", &home);
+        let leaks = [
+            "NO_COLOR",
+            "CLICOLOR_FORCE",
+            "FETCHLOOM_OFFLINE",
+            "FETCHLOOM_LOG",
+            "FETCHLOOM_TRACE",
+            "OneDrive",
+            "OneDriveCommercial",
+            "OneDriveConsumer",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ];
+        for name in leaks {
+            command.env_remove(name);
+        }
+        command
+    }
+
+    pub(crate) fn run(&self, args: &[&str]) -> Result<Output> {
+        Ok(self.command(args).output()?)
+    }
+
+    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports,
+    /// timings and rates. backslashes become slashes so windows matches the other platforms.
+    pub(crate) fn filters(&self) -> insta::Settings {
+        let mut settings = insta::Settings::clone_current();
+        settings.add_filter(
+            &literal(&self.root.path().display().to_string()),
+            "[sandbox]",
+        );
+        settings.add_filter(r"\\", "/");
+        settings.add_filter(r"127\.0\.0\.1:\d+", "127.0.0.1:[port]");
+        settings.add_filter(r"\d+(\.\d)? [KMGT]?i?B/s", "[rate]");
+        settings.add_filter(r"\d+ min \d+ s|\d+(\.\d)? m?s\b", "[time]");
+        settings
+    }
+}
+
+pub(crate) fn text(bytes: &[u8]) -> Result<String> {
+    Ok(String::from_utf8(bytes.to_vec())?)
+}
+
+/// a regex that matches `text` exactly.
+fn literal(text: &str) -> String {
+    let mut pattern = String::new();
+    for c in text.chars() {
+        if r"\.+*?()|[]{}^$#&-~".contains(c) {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern
+}
+
+/// a piece of a scripted response.
+pub(crate) enum Part {
+    Bytes(Vec<u8>),
+    Pause(Duration),
+}
+
+/// a server on this machine that answers each new connection with the next scripted response,
+/// byte for byte, then hangs up. it can do what real servers do and polite fakes cannot, such as
+/// stopping halfway through a body.
+pub(crate) struct Server {
+    pub(crate) url: String,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl Server {
+    pub(crate) fn start(path: &str, responses: Vec<Vec<Part>>) -> Result<Server> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}{path}", listener.local_addr()?);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let head = read_head(&mut stream);
+                if let Ok(mut seen) = seen.lock() {
+                    seen.push(head.to_ascii_lowercase());
+                }
+                for part in response {
+                    match part {
+                        Part::Bytes(bytes) => {
+                            let _ = stream.write_all(&bytes);
+                            let _ = stream.flush();
+                        }
+                        Part::Pause(pause) => std::thread::sleep(pause),
+                    }
+                }
+            }
+        });
+        Ok(Server { url, requests })
+    }
+
+    /// the head of every request so far, lowercased.
+    pub(crate) fn requests(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn read_head(stream: &mut TcpStream) -> String {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&head).into_owned()
+}
+
+/// a response: a status line, headers, then exactly `body`, even when it falls short of the
+/// length the headers promise.
+pub(crate) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<Part> {
+    let mut head = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
+    for (name, value) in headers {
+        let _ = write!(head, "{name}: {value}\r\n");
+    }
+    head.push_str("\r\n");
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(body);
+    vec![Part::Bytes(bytes)]
+}
+
+/// a whole file with a strong `ETag`.
+pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
+    reply(
+        "200 OK",
+        &[("Content-Length", &body.len().to_string()), ("ETag", etag)],
+        body,
+    )
+}

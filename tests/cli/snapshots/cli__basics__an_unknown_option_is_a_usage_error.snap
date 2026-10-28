@@ -1,6 +1,6 @@
 ---
-source: tests/cli.rs
-expression: "String::from_utf8(output).unwrap()"
+source: tests/cli/basics.rs
+expression: text(&output.stderr)?
 ---
 ✗ there is no option called "--verison"
   help: did you mean `--version`?

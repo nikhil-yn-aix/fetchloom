@@ -1,0 +1,36 @@
+---
+source: tests/cli/get.rs
+expression: pretty
+---
+{
+  "command": "get",
+  "errors": [],
+  "result": {
+    "files": [
+      {
+        "method": "[link]",
+        "origin": "network",
+        "path": "iris.csv",
+        "sha256": "d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d",
+        "size": 81,
+        "url": "http://127.0.0.1:[port]/records/3608990/files/iris.csv"
+      }
+    ],
+    "folder": "[folder]"
+  },
+  "schema": 1,
+  "status": "ok",
+  "warnings": [],
+  "work": {
+    "bytes_down": 81,
+    "cache_hits": 0,
+    "copies": 0,
+    "elapsed_ms": "[varies]",
+    "hardlinks": "[varies]",
+    "objects_written": 1,
+    "reflinks": "[varies]",
+    "requests": 1,
+    "resumes": 0,
+    "retries": 0
+  }
+}

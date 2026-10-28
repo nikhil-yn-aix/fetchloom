@@ -1,0 +1,8 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+! 127.0.0.1 answered 503. trying again in [time] (try 2 of 5)
+ Downloaded iris.csv · 81 B in [time]
+     Placed iris/iris.csv · linked, no extra disk
+✓ fetched iris.csv into iris

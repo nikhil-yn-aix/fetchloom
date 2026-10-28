@@ -1,25 +1,10 @@
-//! the binary as a user runs it.
+//! the version, the welcome, help and usage errors.
 
-use assert_cmd::Command;
-
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-fn run(binary: &str, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = Command::cargo_bin(binary)?;
-    command
-        .args(args)
-        .env_remove("NO_COLOR")
-        .env("CLICOLOR", "0");
-    Ok(command.output()?)
-}
-
-fn text(bytes: &[u8]) -> Result<String> {
-    Ok(String::from_utf8(bytes.to_vec())?)
-}
+use crate::support::{Result, Sandbox, text};
 
 #[test]
 fn version() -> Result {
-    let output = run("fetchloom", &["--version"])?;
+    let output = Sandbox::new()?.run(&["--version"])?;
     assert!(output.status.success());
     assert_eq!(
         text(&output.stdout)?,
@@ -30,7 +15,9 @@ fn version() -> Result {
 
 #[test]
 fn fl_is_the_same_program() -> Result {
-    let output = run("fl", &["--version"])?;
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fl"))
+        .arg("--version")
+        .output()?;
     assert!(output.status.success());
     assert_eq!(
         text(&output.stdout)?,
@@ -41,7 +28,15 @@ fn fl_is_the_same_program() -> Result {
 
 #[test]
 fn help_is_lowercase() -> Result {
-    let output = run("fetchloom", &["--help"])?;
+    let output = Sandbox::new()?.run(&["--help"])?;
+    assert!(output.status.success());
+    insta::assert_snapshot!(text(&output.stdout)?);
+    Ok(())
+}
+
+#[test]
+fn get_has_its_own_help() -> Result {
+    let output = Sandbox::new()?.run(&["get", "--help"])?;
     assert!(output.status.success());
     insta::assert_snapshot!(text(&output.stdout)?);
     Ok(())
@@ -49,7 +44,7 @@ fn help_is_lowercase() -> Result {
 
 #[test]
 fn welcome() -> Result {
-    let output = run("fetchloom", &[])?;
+    let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     insta::assert_snapshot!(text(&output.stdout)?);
     Ok(())
@@ -57,7 +52,15 @@ fn welcome() -> Result {
 
 #[test]
 fn an_unknown_option_is_a_usage_error() -> Result {
-    let output = run("fetchloom", &["--verison"])?;
+    let output = Sandbox::new()?.run(&["--verison"])?;
+    assert_eq!(output.status.code(), Some(2));
+    insta::assert_snapshot!(text(&output.stderr)?);
+    Ok(())
+}
+
+#[test]
+fn a_missing_link_shows_the_usage() -> Result {
+    let output = Sandbox::new()?.run(&["get"])?;
     assert_eq!(output.status.code(), Some(2));
     insta::assert_snapshot!(text(&output.stderr)?);
     Ok(())

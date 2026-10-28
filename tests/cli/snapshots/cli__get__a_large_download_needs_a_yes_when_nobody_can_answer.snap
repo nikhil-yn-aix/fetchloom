@@ -1,0 +1,6 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+✗ huge.bin is 2.0 GiB, and there is no terminal to ask before downloading it
+  help: add --yes to download it

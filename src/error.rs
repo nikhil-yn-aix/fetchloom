@@ -6,13 +6,55 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     Usage,
+    /// a question went unanswered or was answered no, so nothing happened.
+    Unconfirmed,
+    ReferenceInvalid,
+    ReferenceUnresolved,
+    NetworkUnreachable,
+    NetworkStatus,
+    NetworkRateLimited,
+    NetworkRefused,
+    OfflineMissing,
+    AuthRequired,
+    LocalIo,
+    LocalNotEmpty,
+    Interrupted,
 }
 
 impl Kind {
+    /// the name scripts match on. `-v` and `--json` show it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Kind::Usage => "usage",
+            Kind::Unconfirmed => "unconfirmed",
+            Kind::ReferenceInvalid => "reference.invalid",
+            Kind::ReferenceUnresolved => "reference.unresolved",
+            Kind::NetworkUnreachable => "network.unreachable",
+            Kind::NetworkStatus => "network.status",
+            Kind::NetworkRateLimited => "network.rate_limited",
+            Kind::NetworkRefused => "network.refused",
+            Kind::OfflineMissing => "offline.missing",
+            Kind::AuthRequired => "auth.required",
+            Kind::LocalIo => "local.io",
+            Kind::LocalNotEmpty => "local.not_empty",
+            Kind::Interrupted => "interrupted",
+        }
+    }
+
     /// the exit code a run ends with when this kind stops it.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
+            Kind::Unconfirmed => 1,
             Kind::Usage => 2,
+            Kind::ReferenceInvalid | Kind::ReferenceUnresolved => 10,
+            Kind::NetworkUnreachable
+            | Kind::NetworkStatus
+            | Kind::NetworkRateLimited
+            | Kind::NetworkRefused
+            | Kind::OfflineMissing => 20,
+            Kind::AuthRequired => 40,
+            Kind::LocalIo | Kind::LocalNotEmpty => 50,
+            Kind::Interrupted => 130,
         }
     }
 }
@@ -34,6 +76,11 @@ impl Error {
             details: Vec::new(),
             help: None,
         }
+    }
+
+    pub(crate) fn detail(mut self, line: impl Into<String>) -> Error {
+        self.details.push(line.into());
+        self
     }
 
     pub(crate) fn help(mut self, help: impl Into<String>) -> Error {
