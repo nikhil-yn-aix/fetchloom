@@ -163,6 +163,52 @@ impl Server {
         Ok(Server { url, requests })
     }
 
+    /// serves `body` with a strong `ETag`: slowly on the first connection, then at full speed and
+    /// from the asked range on the second.
+    pub(crate) fn slow_file(path: &str, body: Vec<u8>) -> Result<Server> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}{path}", listener.local_addr()?);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for slow in [true, false] {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let asked = read_head(&mut stream).to_ascii_lowercase();
+                let start = asked.lines().find_map(|line| {
+                    let start = line.strip_prefix("range: bytes=")?.strip_suffix('-')?;
+                    start.parse::<usize>().ok()
+                });
+                if let Ok(mut seen) = seen.lock() {
+                    seen.push(asked);
+                }
+                let rest = &body[start.unwrap_or_default()..];
+                let length = rest.len().to_string();
+                let mut headers = vec![("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+                let range =
+                    start.map(|start| format!("bytes {start}-{}/{}", body.len() - 1, body.len()));
+                let status = match &range {
+                    Some(range) => {
+                        headers.push(("Content-Range", range));
+                        "206 Partial Content"
+                    }
+                    None => "200 OK",
+                };
+                let _ = stream.write_all(&head(status, &headers));
+                for chunk in rest.chunks(64 * 1024) {
+                    if stream.write_all(chunk).is_err() {
+                        break;
+                    }
+                    if slow {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+        });
+        Ok(Server { url, requests })
+    }
+
     /// the head of every request so far, lowercased.
     pub(crate) fn requests(&self) -> Vec<String> {
         self.requests
@@ -187,14 +233,19 @@ fn read_head(stream: &mut TcpStream) -> String {
 /// a response: a status line, headers, then exactly `body`, even when it falls short of the
 /// length the headers promise.
 pub(crate) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<Part> {
+    let mut bytes = head(status, headers);
+    bytes.extend_from_slice(body);
+    vec![Part::Bytes(bytes)]
+}
+
+/// a status line and headers, ready for a body.
+fn head(status: &str, headers: &[(&str, &str)]) -> Vec<u8> {
     let mut head = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
     for (name, value) in headers {
         let _ = write!(head, "{name}: {value}\r\n");
     }
     head.push_str("\r\n");
-    let mut bytes = head.into_bytes();
-    bytes.extend_from_slice(body);
-    vec![Part::Bytes(bytes)]
+    head.into_bytes()
 }
 
 /// a whole file with a strong `ETag`.

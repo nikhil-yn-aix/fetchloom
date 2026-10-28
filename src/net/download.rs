@@ -111,7 +111,8 @@ enum Answer {
         name: Option<String>,
         resumed: bool,
     },
-    /// the server will not continue the earlier download, so it starts over from the first byte.
+    /// the earlier download cannot be continued, by the server or from the bytes kept, so it
+    /// starts over from the first byte.
     StartOver,
     /// the server sent a page, and the page says where the file is.
     Divert(Url),
@@ -216,9 +217,7 @@ impl Net {
                     Err(err) => return Err(err),
                 },
                 Ok(Answer::StartOver) => {
-                    tracing::debug!(
-                        "the server will not continue the earlier download, starting over"
-                    );
+                    tracing::debug!("the earlier download cannot be continued, starting over");
                     partial.discard();
                 }
                 Ok(Answer::Divert(next)) => {
@@ -369,6 +368,16 @@ impl Net {
         }
         let total = headers::total_length(&head, status);
         let name = headers::file_name(&head);
+        let validators = headers::validators(&head);
+        let body = Body {
+            offset,
+            total,
+            validators: validators.clone(),
+            md5: fetch.expect.md5.is_some(),
+        };
+        let Some(writer) = open(partial, body).await? else {
+            return Ok(Answer::StartOver);
+        };
         on(Event::Started {
             total,
             resumed: offset,
@@ -378,14 +387,7 @@ impl Net {
         if offset > 0 {
             Work::add(&self.work.resumes, 1);
         }
-        let validators = headers::validators(&head);
-        let body = Body {
-            offset,
-            total,
-            validators: validators.clone(),
-            md5: fetch.expect.md5.is_some(),
-        };
-        let writer = self.stream(from, partial, response, body, on).await?;
+        let writer = self.stream(from, writer, response, total, on).await?;
         let stored = tokio::task::spawn_blocking(move || writer.finish())
             .await
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
@@ -402,21 +404,13 @@ impl Net {
     async fn stream(
         &self,
         url: &Url,
-        partial: &Partial,
+        mut writer: PartialWriter,
         mut response: reqwest::Response,
-        body: Body,
+        total: Option<u64>,
         on: Listener<'_>,
     ) -> Result<PartialWriter, Failure> {
-        let Body {
-            offset,
-            total,
-            validators,
-            md5,
-        } = body;
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
-        let partial = partial.clone();
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
-            let mut writer = partial.writer(offset, total, validators, md5)?;
             while let Some(chunk) = receiver.blocking_recv() {
                 writer.write_all(&chunk)?;
             }
@@ -619,6 +613,31 @@ fn local(err: &io::Error) -> Error {
         Kind::LocalIo,
         format!("could not write to the cache: {err}"),
     )
+}
+
+/// opens the writing end of a download on a blocking thread, since continuing one hashes the
+/// bytes kept so far again. none when those bytes are not the ones recorded, so the download
+/// starts over.
+async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Failure> {
+    let Body {
+        offset,
+        total,
+        validators,
+        md5,
+    } = body;
+    let partial = partial.clone();
+    let opened =
+        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5))
+            .await
+            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
+    match opened {
+        Ok(writer) => Ok(Some(writer)),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+            tracing::debug!(%err, "the earlier download cannot be continued");
+            Ok(None)
+        }
+        Err(err) => Err(Failure::Final(local(&err))),
+    }
 }
 
 /// tells a person who stopped, or whose network failed, that the bytes so far are not lost.

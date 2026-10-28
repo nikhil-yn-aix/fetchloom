@@ -5,14 +5,15 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::{Cache, Stored, Validators};
-use crate::digest::{self, Hasher};
+use crate::digest::{self, Hasher, Sha256};
 
-/// how often a download records its progress, so a killed run loses little.
-const SAVE_EVERY: u64 = 64 * 1024 * 1024;
+/// how often a download records its progress, so a killed run loses about this much of it.
+const SAVE_EVERY: Duration = Duration::from_secs(1);
 const BUFFER: usize = 1024 * 1024;
 
 pub(crate) enum Claim {
@@ -35,6 +36,8 @@ pub(crate) struct Partial {
 struct Record {
     url: String,
     received: u64,
+    /// the SHA-256 of the first `received` bytes, which a resume checks before it trusts them.
+    sha256: Sha256,
     length: Option<u64>,
     validators: Validators,
 }
@@ -74,16 +77,16 @@ impl Cache {
 impl Partial {
     /// how many bytes an earlier run kept, and how the server identified them then.
     pub(crate) fn resumable(&self) -> Option<(u64, Validators)> {
-        let text = fs::read(&self.record).ok()?;
-        let record: Record = serde_json::from_slice(&text).ok()?;
+        let record = self.recorded()?;
         let on_disk = fs::metadata(&self.bytes).ok()?.len();
-        let usable = record.url == self.url && record.received > 0 && on_disk >= record.received;
-        usable.then_some((record.received, record.validators))
+        (record.received > 0 && on_disk >= record.received)
+            .then_some((record.received, record.validators))
     }
 
     /// writes from byte `offset` on. the record is the truth: bytes past it are cut off, and the
-    /// bytes before it are hashed again so the final hash covers the whole file. `md5` also
-    /// computes the MD5, to check one a source stated.
+    /// bytes before it are hashed again so the final hash covers the whole file. bytes that no
+    /// longer hash to what the record says, as after a power cut, fail with
+    /// [`io::ErrorKind::InvalidData`]. `md5` also computes the MD5, to check one a source stated.
     pub(crate) fn writer(
         &self,
         offset: u64,
@@ -112,22 +115,33 @@ impl Partial {
                 }
                 hasher.update(&buffer[..read]);
             }
+            let recorded = self
+                .recorded()
+                .filter(|record| record.received == offset)
+                .map(|record| record.sha256);
+            if recorded != Some(hasher.sha256_so_far()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the bytes kept from an earlier download are not the ones it recorded",
+                ));
+            }
         }
         file.seek(SeekFrom::Start(offset))?;
         Ok(PartialWriter {
             cache: self.cache.clone(),
             file: BufWriter::with_capacity(BUFFER, file),
-            hasher,
-            written: offset,
-            saved: offset,
-            bytes: self.bytes.clone(),
-            record_path: self.record.clone(),
             record: Record {
                 url: self.url.clone(),
                 received: offset,
+                sha256: hasher.sha256_so_far(),
                 length,
                 validators,
             },
+            hasher,
+            written: offset,
+            saved: Instant::now(),
+            bytes: self.bytes.clone(),
+            record_path: self.record.clone(),
         })
     }
 
@@ -135,6 +149,12 @@ impl Partial {
     pub(crate) fn discard(&self) {
         let _ = fs::remove_file(&self.bytes);
         let _ = fs::remove_file(&self.record);
+    }
+
+    fn recorded(&self) -> Option<Record> {
+        let text = fs::read(&self.record).ok()?;
+        let record: Record = serde_json::from_slice(&text).ok()?;
+        (record.url == self.url).then_some(record)
     }
 }
 
@@ -144,7 +164,7 @@ pub(crate) struct PartialWriter {
     file: BufWriter<File>,
     hasher: Hasher,
     written: u64,
-    saved: u64,
+    saved: Instant,
     bytes: PathBuf,
     record_path: PathBuf,
     record: Record,
@@ -155,15 +175,16 @@ impl PartialWriter {
         self.written
     }
 
-    /// records how far the download got, so a later run continues from there. the bytes reach
-    /// the disk first, so the record never promises bytes a power cut could still take.
+    /// records how far the download got, so a later run continues from there. the bytes are not
+    /// flushed first, which would stall the download every second. the record holds their hash
+    /// instead, and a resume that finds other bytes starts over.
     pub(crate) fn save(&mut self) -> io::Result<()> {
         self.file.flush()?;
-        self.file.get_ref().sync_data()?;
         self.record.received = self.written;
+        self.record.sha256 = self.hasher.sha256_so_far();
         let text = serde_json::to_vec(&self.record).map_err(io::Error::other)?;
         self.cache.write_atomically(&self.record_path, &text)?;
-        self.saved = self.written;
+        self.saved = Instant::now();
         Ok(())
     }
 
@@ -193,7 +214,7 @@ impl Write for PartialWriter {
         let written = self.file.write(buffer)?;
         self.hasher.update(&buffer[..written]);
         self.written += written as u64;
-        if self.written - self.saved >= SAVE_EVERY {
+        if self.saved.elapsed() >= SAVE_EVERY {
             self.save()?;
         }
         Ok(written)
@@ -252,6 +273,25 @@ mod tests {
             partial.resumable().is_none(),
             "a finished download leaves nothing to resume"
         );
+    }
+
+    #[test]
+    fn bytes_that_differ_from_their_record_are_never_continued() {
+        let (_dir, cache) = cache();
+        let partial = owned(&cache, "https://example.org/big");
+        let mut writer = partial
+            .writer(0, Some(6), Validators::default(), false)
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        // a power cut can keep the record and lose the bytes it counts
+        fs::write(&partial.bytes, b"\0\0\0").unwrap();
+        let (received, validators) = partial.resumable().unwrap();
+        let Err(error) = partial.writer(received, Some(6), validators, false) else {
+            panic!("zeros were continued as if they were abc");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

@@ -62,7 +62,7 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - objects are named by SHA-256, one read-only file each, under a two-character fan-out.
 - writes need no locks. a download streams into `tmp/`, is hashed, flushed to disk, sealed read-only, then put in place by an operation that fails when the name already exists. of two processes racing for one object, exactly one places it and the other finds it there. this stays safe on NFS, lustre and GPFS, where file locks cannot be trusted.
 - flushes run in parallel batches, never one blocking flush at a time. before an object is used, its size is checked against `data.lock`, which catches a file cut short by a crash. `cache verify` hashes every object again.
-- an unfinished download lives in `partial/` beside a small record of its URL, validators and bytes received. one process owns it at a time, claimed by rename, and a later run continues it.
+- an unfinished download lives in `partial/` beside a small record of its URL, validators, the bytes received and their SHA-256, saved every second. one process owns it at a time, by holding a lock beside it, and a later run continues it once the bytes kept still hash to the record.
 - every sync registers its project under `projects/`. `cache gc` keeps every object that a registered project's `data.lock` needs, following archives to the members they unpacked into. it removes the rest only when older than a day, and never touches an unfinished download younger than a day.
 - removing an object never breaks a project. placed files are links or copies, so they keep their bytes when the cache's name for them goes. at worst, a later project downloads that object again.
 - `CACHEDIR.TAG` tells backup tools to skip the folder.
