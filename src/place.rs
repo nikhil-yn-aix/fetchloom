@@ -2,7 +2,7 @@
 
 mod synced;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::num::NonZero;
@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
-/// other's waits. placing 10,000 files on windows, eight threads beat four and sixteen.
+/// other's waits. placing 10,000 files on windows took 7.5 s on four threads and 5.1 s on eight,
+/// and sixteen gained little more.
 const THREADS: usize = 8;
 
 /// the fewest items worth a thread of their own, since starting a thread costs more than a few
@@ -104,6 +105,7 @@ impl Placer {
                 Err(err) => results.push((index, Err(err))),
             }
         }
+        let ready = spread(ready);
         let this = &*self;
         let put = |(index, order): &(usize, &Order)| {
             (
@@ -267,6 +269,25 @@ pub(crate) fn run_all<T: Sync, R: Send>(items: &[T], job: impl Fn(&T) -> R + Syn
     });
     done.sort_unstable_by_key(|(index, _)| *index);
     done.into_iter().map(|(_, result)| result).collect()
+}
+
+/// the orders reordered so that neighbours go to different folders. links made into one folder
+/// wait on each other, so threads taking the next order in turn would queue on one folder.
+fn spread<'o, 'p>(orders: Vec<(usize, &'o Order<'p>)>) -> Vec<(usize, &'o Order<'p>)> {
+    let mut seen: HashMap<&Path, usize> = HashMap::new();
+    let mut ranked: Vec<(usize, (usize, &Order))> = orders
+        .into_iter()
+        .map(|item| {
+            let destination = item.1.destination;
+            let rank = seen
+                .entry(destination.parent().unwrap_or(destination))
+                .or_default();
+            *rank += 1;
+            (*rank, item)
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, item)| item).collect()
 }
 
 /// whether `error` means the filesystem refuses the method that failed for every file, not only
@@ -619,6 +640,26 @@ mod tests {
             assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
         }
         assert_eq!(fs::read_to_string(&taken).unwrap(), "mine");
+    }
+
+    #[test]
+    fn neighbouring_orders_go_to_different_folders() {
+        let object = Path::new("object");
+        let paths: Vec<PathBuf> = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let orders: Vec<Order> = paths
+            .iter()
+            .map(|destination| Order {
+                object,
+                destination,
+                writable: false,
+            })
+            .collect();
+        let spread = spread(orders.iter().enumerate().collect());
+        let indexes: Vec<usize> = spread.iter().map(|(index, _)| *index).collect();
+        assert_eq!(indexes, [0, 3, 4, 1, 5, 2]);
     }
 
     #[test]
