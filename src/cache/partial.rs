@@ -64,13 +64,22 @@ impl Cache {
                 None,
             ),
         };
-        Ok(Claim::Owned(Partial {
+        let claimed = Partial {
             cache: self.clone(),
             url: url.to_owned(),
             bytes: folder.join(format!("{stem}.part")),
             record: folder.join(format!("{stem}.json")),
             _lock: lock,
-        }))
+        };
+        // a read-only download was sealed for publishing by a run that did not finish. its name
+        // may already be a second name of the object, which must stay read-only, so the bytes
+        // are downloaded again rather than made writable
+        if fs::symlink_metadata(&claimed.bytes)
+            .is_ok_and(|metadata| metadata.permissions().readonly())
+        {
+            claimed.discard();
+        }
+        Ok(Claim::Owned(claimed))
     }
 }
 
@@ -292,6 +301,35 @@ mod tests {
             panic!("zeros were continued as if they were abc");
         };
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
+        let (_dir, cache) = cache();
+        let url = "https://example.org/sealed";
+        let object = store(&cache, b"abc");
+        let partial = owned(&cache, url);
+        let mut writer = partial
+            .writer(0, Some(3), Validators::default(), false)
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        // a run that died while publishing leaves its record and, sealed, a second name of the
+        // object it was publishing
+        fs::remove_file(&partial.bytes).unwrap();
+        fs::hard_link(&object.path, &partial.bytes).unwrap();
+        drop(partial);
+
+        let partial = owned(&cache, url);
+        assert!(partial.resumable().is_none());
+        let mut writer = partial
+            .writer(0, None, Validators::default(), false)
+            .unwrap();
+        writer.write_all(b"xyz").unwrap();
+        assert_eq!(fs::read(&writer.finish().unwrap().path).unwrap(), b"xyz");
+        assert_eq!(fs::read(&object.path).unwrap(), b"abc");
+        assert!(fs::metadata(&object.path).unwrap().permissions().readonly());
     }
 
     #[test]
