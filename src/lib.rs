@@ -6,6 +6,7 @@
     reason = "the sources and the project loop are being built on these parts"
 )]
 
+mod archive;
 mod cache;
 mod cli;
 mod digest;
