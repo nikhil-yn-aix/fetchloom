@@ -5,6 +5,7 @@
 mod put;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -201,9 +202,24 @@ impl<'a> Placing<'a> {
                 }),
                 Action::Replace => {
                     let destination = project.root.join(&target.path);
-                    placer
-                        .remove(&destination, false)
-                        .map_err(|err| local(&destination, &err))?;
+                    match now(&destination) {
+                        Some(look) if disk.get(&target.path) != Some(&look) => {
+                            let reason = if state.files.contains_key(&target.path) {
+                                Reason::Changed
+                            } else {
+                                Reason::Foreign
+                            };
+                            placement.kept.push(Kept {
+                                path: target.path.clone(),
+                                reason,
+                            });
+                            continue;
+                        }
+                        Some(_) => placer
+                            .remove(&destination, false)
+                            .map_err(|err| local(&destination, &err))?,
+                        None => {}
+                    }
                     placement.replaced += 1;
                     todo.push(target);
                 }
@@ -320,10 +336,19 @@ fn remove_unwanted(
             None => {}
             Some(look) if *look == before.look => {
                 let file = project.root.join(&path);
-                placer
-                    .remove(&file, true)
-                    .map_err(|err| local(&file, &err))?;
-                placement.removed += 1;
+                match now(&file) {
+                    Some(current) if current == *look => {
+                        placer
+                            .remove(&file, true)
+                            .map_err(|err| local(&file, &err))?;
+                        placement.removed += 1;
+                    }
+                    Some(_) => placement.kept.push(Kept {
+                        path,
+                        reason: Reason::Unneeded,
+                    }),
+                    None => {}
+                }
             }
             Some(_) => placement.kept.push(Kept {
                 path,
@@ -332,6 +357,15 @@ fn remove_unwanted(
         }
     }
     Ok(())
+}
+
+/// how the file at `path` looks right now. a file is read again right before it is deleted,
+/// since downloads may have run for hours after the folder was scanned, and someone may have
+/// changed it meanwhile.
+fn now(path: &Path) -> Option<Look> {
+    fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| Look::of(&metadata))
 }
 
 fn placed(target: &Target, method: Method, look: Look) -> Placed {

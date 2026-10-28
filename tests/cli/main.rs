@@ -3,5 +3,6 @@
 mod archives;
 mod basics;
 mod get;
+mod placing;
 mod project;
 mod support;
