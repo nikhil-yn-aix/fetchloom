@@ -51,3 +51,42 @@ fn a_failing_link_never_shows_its_token() -> Result {
     assert!(stderr.contains("token=***"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn a_dropped_connection_never_shows_the_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    let dropped = Vec::new();
+    let gone = reply("404 Not Found", &[("Content-Length", "0")], b"");
+    let server = Server::start(PATH, vec![dropped, gone])?;
+    let output = sandbox.run(&["get", &format!("{}?private_token=abc123", server.url)])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("trying again"),
+        "the retry is told: {stderr}"
+    );
+    assert!(!stderr.contains("abc123"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn a_refused_redirect_never_shows_the_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        PATH,
+        vec![reply(
+            "302 Found",
+            &[
+                ("Location", "http://10.0.0.1/data.csv?token=abc123"),
+                ("Content-Length", "0"),
+            ],
+            b"",
+        )],
+    )?;
+    let output = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains("private address"), "{stderr}");
+    assert!(!stderr.contains("abc123"), "{stderr}");
+    Ok(())
+}

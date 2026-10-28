@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use url::{Host, Url};
 
+use super::Shown;
+
 /// the hosts a person wrote.
 #[derive(Clone, Default)]
 pub(crate) struct Typed(Arc<Mutex<HashSet<String>>>);
@@ -48,13 +50,16 @@ impl Typed {
             Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
             Some(Host::Ipv6(ip)) => IpAddr::V6(ip),
             Some(Host::Domain(_)) => return Ok(()),
-            None => return Err(Refused(format!("{url} has no host"))),
+            None => return Err(Refused(format!("{} has no host", Shown(url)))),
         };
         if is_private(ip)
             && !self.contains(&ip.to_string())
             && !url.host_str().is_some_and(|host| self.contains(host))
         {
-            return Err(Refused(format!("{url} points at the private address {ip}")));
+            return Err(Refused(format!(
+                "{} points at the private address {ip}",
+                Shown(url)
+            )));
         }
         Ok(())
     }

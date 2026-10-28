@@ -142,7 +142,11 @@ impl Reference {
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let span = tracing::debug_span!("resolve", reference = %self);
+        let shown = match self {
+            Reference::Url(url) => crate::net::Shown(url).to_string(),
+            other => other.to_string(),
+        };
+        let span = tracing::debug_span!("resolve", reference = %shown);
         let listing = async {
             match self {
                 Reference::Doi(doi) => {

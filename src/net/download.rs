@@ -345,7 +345,7 @@ impl Net {
             () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(from))),
         };
         let status = response.status();
-        tracing::debug!(url = %from, status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
+        tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {

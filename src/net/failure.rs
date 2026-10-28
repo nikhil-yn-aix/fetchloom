@@ -132,7 +132,20 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error) -> Failure {
     } else if err.is_connect() {
         transient(format!("could not connect to {}", host(url)))
     } else {
-        transient(format!("the request to {} failed: {err}", host(url)))
+        transient(format!(
+            "the request to {} failed: {}",
+            host(url),
+            without_link(err)
+        ))
+    }
+}
+
+/// the error's text, with the link reqwest puts in it shown the way messages show links.
+fn without_link(err: &reqwest::Error) -> String {
+    let text = err.to_string();
+    match err.url() {
+        Some(link) => text.replace(link.as_str(), &Shown(link).to_string()),
+        None => text,
     }
 }
 
