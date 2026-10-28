@@ -144,6 +144,7 @@ impl<'a> Watch<'a> {
         Ok(())
     }
 }
+
 /// downloads every job within the network's limits and returns what each fetched, in the jobs'
 /// order.
 pub(super) async fn all(
@@ -221,6 +222,7 @@ pub(super) async fn all(
     }
     Ok(results.into_iter().flatten().collect())
 }
+
 /// says which file a failure concerns, and for bytes that changed upstream, how to take them on.
 fn explain(error: Error, job: &Job) -> Error {
     // an MD5 mismatch comes with its own help, since the source contradicts itself
