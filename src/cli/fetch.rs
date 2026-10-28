@@ -156,7 +156,9 @@ pub(super) async fn all(
     let count = jobs.len();
     let alone = count == 1;
     let overall = Arc::new(Overall::new(context, &jobs));
+    let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     let mut results: Vec<Option<Fetched>> = std::iter::repeat_with(|| None).take(count).collect();
+    let mut failed = Vec::new();
     let mut tasks = JoinSet::new();
     let mut queue = jobs.into_iter().enumerate();
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
@@ -207,6 +209,7 @@ pub(super) async fn all(
                     bar.message(format!("downloaded {done} of {count} files"));
                 }
             }
+            Ok((index, Err(err))) if on_its_own(&err) => failed.push((index, err)),
             Ok((_, Err(err))) => {
                 tasks.abort_all();
                 return Err(err);
@@ -220,7 +223,60 @@ pub(super) async fn all(
             }
         }
     }
+    if let Some(error) = together(&labels, failed) {
+        return Err(error);
+    }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// how many failed files one error names. the rest are counted.
+const NAMED: usize = 10;
+
+/// whether a failure concerns its own file only, so the other downloads go on and every such
+/// file is named at the end. a failure of the network, the disk or the person stops them all.
+fn on_its_own(error: &Error) -> bool {
+    matches!(
+        error.kind,
+        Kind::ReferenceUnresolved
+            | Kind::IntegrityMismatch
+            | Kind::AuthRequired
+            | Kind::NetworkRefused
+            | Kind::SourceInvalid
+    )
+}
+
+/// one error for the files that failed on their own: the failure itself when it is the only
+/// one, else a line naming each file and what happened to it, in the jobs' order.
+fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error> {
+    if failed.len() <= 1 {
+        return failed.pop().map(|(_, error)| error);
+    }
+    failed.sort_by_key(|(index, _)| *index);
+    let (_, first) = failed.first()?;
+    let shared_help = failed
+        .iter()
+        .all(|(_, error)| error.help == first.help)
+        .then(|| first.help.clone())
+        .flatten();
+    let mut error = Error::new(
+        first.kind,
+        format!("{} files could not be downloaded", failed.len()),
+    );
+    for (index, failure) in failed.iter().take(NAMED) {
+        let label = labels.get(*index).map_or("", String::as_str);
+        error = error.detail(if failure.message.starts_with(label) {
+            failure.message.clone()
+        } else {
+            format!("{label}: {}", failure.message)
+        });
+    }
+    if failed.len() > NAMED {
+        error = error.detail(format!("and {} more", failed.len() - NAMED));
+    }
+    Some(error.help(shared_help.unwrap_or_else(|| {
+        "the files that arrived are kept, so the same command again downloads only the rest"
+            .to_owned()
+    })))
 }
 
 /// says which file a failure concerns, and for bytes that changed upstream, how to take them on.

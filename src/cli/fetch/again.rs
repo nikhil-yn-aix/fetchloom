@@ -87,6 +87,10 @@ pub(super) async fn recover(
         return Err(failed.detail(format!("{} no longer lists it", again.resolved)));
     };
     if remote.url == job.fetch.url {
+        // a plain link is its own source, so asking it again says nothing new
+        if matches!(listing.resolved, Reference::Url(_)) {
+            return Err(failed);
+        }
         return Err(failed.detail(format!("{} still lists the same link", again.resolved)));
     }
     let (from, divert) = source::fetch_plan(&remote.url);
