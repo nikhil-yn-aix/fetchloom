@@ -239,10 +239,17 @@ fn alone(context: &Context, started: Instant) -> ExitCode {
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.
 fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
-    if yes || bytes <= ASK_ABOVE {
+    if bytes <= ASK_ABOVE {
         return Ok(());
     }
-    let size = units::size(bytes);
+    ask(output, yes, what, &units::size(bytes))
+}
+
+/// asks whether to download `what`, which needs `size`, as [`confirm`] does.
+fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> {
+    if yes {
+        return Ok(());
+    }
     match output.confirm(&format!("download {what} ({size})?")) {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(

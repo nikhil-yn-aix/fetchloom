@@ -55,7 +55,7 @@ $ fetchloom sync
 ## before anything moves
 
 - what a reference resolved to is printed before the first byte: title, version, file count, size, license.
-- a download over 1 GiB asks first on a terminal. outside one, it stops and names the flag: `--yes`.
+- a download over 1 GiB asks first on a terminal, and one whose size neither the source nor the server states asks once 1 GiB of it has arrived. outside a terminal, it stops and names the flag: `--yes`.
 - a license that restricts use, such as non-commercial or no derivatives, is shown as a yellow line.
 - a gated dataset (a hugging face repository that needs its terms accepted, a kaggle competition) stops with the page to open.
 
