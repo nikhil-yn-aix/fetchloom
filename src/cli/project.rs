@@ -215,15 +215,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     lock.datasets.retain(|dataset| dataset.name != args.name);
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let placement = place::run(
-        &context.output,
-        &context.work,
-        &project,
-        &new_manifest,
-        &lock,
-        &open_cache()?,
-        false,
-    )?;
+    let placement =
+        place::Placing::new(&project, &new_manifest, &lock, false)?.remove_only(&context.output)?;
     context.output.done(&format!("removed {}", args.name));
     Ok(Report {
         project: project.root,
@@ -300,13 +293,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     };
     let empty = Lock::default();
     let lock = work
-        .relock(
-            &manifest,
-            old.as_ref().unwrap_or(&empty),
-            &upgrade,
-            false,
-            None,
-        )
+        .relock(&manifest, old.as_ref().unwrap_or(&empty), &upgrade, None)
         .await?;
     let changed = work.write_lock(old.as_ref(), &lock)?;
     let moved = engine::tell_upgrades(&context.output, old.as_ref().unwrap_or(&empty), &lock);
@@ -463,18 +450,10 @@ async fn sync_all(
     place::audit(work.project, manifest, &work.cache)?;
     let empty = Lock::default();
     let lock = work
-        .relock(manifest, old.unwrap_or(&empty), upgrade, true, given)
+        .relock(manifest, old.unwrap_or(&empty), upgrade, given)
         .await?;
     let changed = work.write_lock(old, &lock)?;
-    let placement = place::run(
-        &work.context.output,
-        &work.context.work,
-        work.project,
-        manifest,
-        &lock,
-        &work.cache,
-        force,
-    )?;
+    let placement = work.place(manifest, &lock, force).await?;
     // gc keeps what registered projects need, so a failure here only risks a later download
     if let Err(err) = work.cache.register(&work.project.root) {
         tracing::debug!(%err, "could not register the project with the cache");
@@ -572,7 +551,7 @@ async fn learn_name(
                 md5: remote.md5,
                 size: remote.size,
             },
-            revalidate: false,
+            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
         },
         label: remote.path.clone(),
         dataset: None,

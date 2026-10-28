@@ -7,12 +7,12 @@ use std::collections::{HashMap, HashSet};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::project::lock::Lock;
+use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 
 /// one file a lock places.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Target {
+pub(crate) struct Target<'a> {
     pub(crate) dataset: String,
     /// the path in the project, with `/` between folders.
     pub(crate) path: String,
@@ -20,6 +20,8 @@ pub(crate) struct Target {
     pub(crate) size: u64,
     /// a writable copy, for tools that write into their inputs.
     pub(crate) copy: bool,
+    /// the locked file whose download holds these bytes.
+    pub(crate) locked: &'a LockedFile,
 }
 
 /// the folder a dataset lands in, relative to the project.
@@ -33,7 +35,7 @@ pub(crate) fn folder(manifest: &Manifest, name: &str) -> String {
 }
 
 /// every file the lock places for the datasets data.toml lists, or the first clash.
-pub(crate) fn targets(manifest: &Manifest, lock: &Lock) -> Result<Vec<Target>, Error> {
+pub(crate) fn targets<'a>(manifest: &Manifest, lock: &'a Lock) -> Result<Vec<Target<'a>>, Error> {
     let mut targets = Vec::new();
     let mut folders = Vec::new();
     for dataset in &lock.datasets {
@@ -48,6 +50,7 @@ pub(crate) fn targets(manifest: &Manifest, lock: &Lock) -> Result<Vec<Target>, E
                 sha256: file.sha256,
                 size: file.size,
                 copy: entry.copy,
+                locked: file,
             });
         }
         folders.push((folder, dataset.name.as_str()));
@@ -180,11 +183,8 @@ mod tests {
 
     #[test]
     fn files_land_in_their_dataset_folder() {
-        let targets = targets(
-            &manifest(TWO),
-            &lock(&[("a", &["x.csv", "sub/y.csv"]), ("b", &["z.csv"])]),
-        )
-        .unwrap();
+        let locked = lock(&[("a", &["x.csv", "sub/y.csv"]), ("b", &["z.csv"])]);
+        let targets = targets(&manifest(TWO), &locked).unwrap();
         let paths: Vec<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         assert_eq!(
             paths,

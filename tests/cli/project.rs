@@ -5,7 +5,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, Server, file, text};
+use crate::support::{Result, Sandbox, Server, file, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -318,7 +318,8 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
 #[test]
 fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
     added(&sandbox, &server)?;
     let path = sandbox.work().join("data.lock");
     let pinned = fs::read_to_string(&path)?;
@@ -340,6 +341,30 @@ fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
         fs::read_to_string(&path)?,
         dated,
         "a pin dates from when its data last changed"
+    );
+    let asked = &server.requests()[1];
+    assert!(
+        asked.contains("if-none-match: \"v1\""),
+        "an upgrade asks whether an unpinned file changed: {asked}"
+    );
+    Ok(())
+}
+
+#[test]
+fn upgrading_a_link_whose_bytes_changed_pins_the_new_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let changed = b"sepal_length,species\n9.9,new\n";
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(changed, "\"v2\"")])?;
+    added(&sandbox, &server)?;
+    let before = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let output = sandbox.run(&["lock", "--upgrade"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let after = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_ne!(before, after);
+    assert!(
+        after.contains(&format!("size = {}", changed.len())),
+        "{after}"
     );
     Ok(())
 }
@@ -508,5 +533,48 @@ fn a_changed_object_fails_verify_and_leaves_the_cache() -> Result {
     let stderr = text(&verify.stderr)?;
     assert!(stderr.contains("had changed and was removed"), "{stderr}");
     assert!(!object.exists());
+    Ok(())
+}
+
+#[test]
+fn remove_on_a_fresh_clone_downloads_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let iris = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let cows = Server::start(
+        "/files/cows.csv",
+        vec![file(b"cow,sound\nbess,moo\n", "\"c1\"")],
+    )?;
+    added(&sandbox, &iris)?;
+    added(&sandbox, &cows)?;
+    let clone = clone(&sandbox, "clone")?;
+    let cold = sandbox.folder("cold")?;
+    let output = sandbox
+        .command_in(&clone, &["remove", "cows"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(iris.requests().len(), 1, "remove fetches nothing");
+    assert!(!fs::read_to_string(clone.join("data.toml"))?.contains("cows"));
+    Ok(())
+}
+
+#[test]
+fn a_second_project_adding_the_same_link_moves_no_body() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    added(&sandbox, &server)?;
+    let other = sandbox.folder("other")?;
+    let output = sandbox
+        .command_in(&other, &["--json", "add", &server.url])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["work"]["bytes_down"], 0);
+    let asked = &server.requests()[1];
+    assert!(asked.contains("if-none-match: \"v1\""), "{asked}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
     Ok(())
 }

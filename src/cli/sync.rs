@@ -13,6 +13,7 @@ use tokio::task::JoinSet;
 use url::Url;
 
 use self::draft::Draft;
+use self::place::{Placement, Placing};
 use super::Context;
 use super::fetch::{self, Job};
 use crate::cache::Cache;
@@ -53,24 +54,44 @@ pub(super) struct Loop<'a> {
     pub(super) cache: Cache,
 }
 
-/// one file to put in the cache, and where its result goes.
-enum Slot {
-    /// a file whose hash only its bytes can tell: draft and file index.
-    Learn(usize, usize),
-    /// a file the lock already pins, missing from the cache.
-    Fill,
-}
-
 impl Loop<'_> {
-    /// the lock data.toml asks for. datasets whose entry changed are resolved again, files whose
-    /// hash no source states are downloaded to learn it, and with `fill` every file the lock
-    /// names is put in the cache. `given` is a listing already resolved for one dataset.
+    /// makes the data folder match `lock`. what each file needs is decided first, so only the
+    /// bytes placing lacks are downloaded.
+    pub(super) async fn place(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        force: bool,
+    ) -> Result<Placement, Error> {
+        let placing = Placing::new(self.project, manifest, lock, force)?;
+        let jobs = placing
+            .missing(&self.cache)
+            .into_iter()
+            .map(|(dataset, file)| {
+                job(
+                    &dataset,
+                    &file.path,
+                    &file.url,
+                    Expect {
+                        sha256: Some(file.sha256),
+                        md5: file.md5,
+                        size: Some(file.size),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.download(jobs).await?;
+        placing.apply(&self.context.output, &self.context.work, &self.cache)
+    }
+
+    /// the lock data.toml asks for. datasets whose entry changed are resolved again, and files
+    /// whose hash no source states are downloaded to learn it. `given` is a listing already
+    /// resolved for one dataset.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
         old: &Lock,
         upgrade: &Upgrade,
-        fill: bool,
         given: Option<(String, Listing)>,
     ) -> Result<Lock, Error> {
         let mut kept: Vec<Locked> = Vec::new();
@@ -95,40 +116,21 @@ impl Loop<'_> {
                 &manifest.datasets[&name],
                 listing,
                 old.get(&name),
+                upgrade.includes(&name),
+                &self.cache,
             )?);
         }
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
         for (index, draft) in drafts.iter().enumerate() {
-            for (file, job) in draft.jobs(&self.cache, fill) {
-                slots.push(file.map_or(Slot::Fill, |file| Slot::Learn(index, file)));
+            for (file, job) in draft.jobs() {
+                slots.push((index, file));
                 jobs.push(job);
             }
         }
-        if fill {
-            for locked in &kept {
-                for file in &locked.files {
-                    if self.cache.find(&file.sha256, Some(file.size)).is_none() {
-                        slots.push(Slot::Fill);
-                        jobs.push(job(
-                            &locked.name,
-                            &file.path,
-                            &file.url,
-                            Expect {
-                                sha256: Some(file.sha256),
-                                md5: file.md5,
-                                size: Some(file.size),
-                            },
-                        )?);
-                    }
-                }
-            }
-        }
         let fetched = self.download(jobs).await?;
-        for (slot, fetched) in slots.into_iter().zip(fetched) {
-            if let Slot::Learn(draft, file) = slot {
-                drafts[draft].learn(file, &fetched);
-            }
+        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
+            drafts[draft].learn(file, &fetched);
         }
         let now = lock::timestamp(SystemTime::now());
         let mut datasets = kept;

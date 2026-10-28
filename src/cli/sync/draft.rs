@@ -30,19 +30,30 @@ struct DraftFile {
 }
 
 impl Draft {
+    /// a dataset's files with every hash known without a download: stated by the source, carried
+    /// over from data.lock, or remembered from an earlier download whose MD5 the source stated.
+    /// an upgrade carries nothing over for a file no checksum pins, since only asking the server
+    /// tells whether its bytes changed.
     pub(super) fn new(
         name: &str,
         entry: &Entry,
         listing: Listing,
         previous: Option<&Locked>,
+        upgrading: bool,
+        cache: &Cache,
     ) -> Result<Draft, Error> {
         let files = filter(name, entry, &listing)?
             .into_iter()
             .map(|remote| {
-                let earlier = previous.and_then(|locked| carried(locked, &remote));
+                let pinned = remote.sha256.is_some() || remote.md5.is_some();
+                let earlier = previous
+                    .and_then(|locked| carried(locked, &remote))
+                    .filter(|_| pinned || !upgrading);
                 let known = match (remote.sha256, remote.size) {
                     (Some(sha256), Some(size)) => Some((sha256, size)),
-                    _ => earlier.map(|file| (file.sha256, file.size)),
+                    _ => earlier
+                        .map(|file| (file.sha256, file.size))
+                        .or_else(|| stated(cache, &remote)),
                 };
                 let path = match earlier {
                     Some(file) if remote.named_by_server => file.path.clone(),
@@ -64,48 +75,36 @@ impl Draft {
         })
     }
 
-    /// the downloads this dataset needs: each file whose hash is unknown, with its index, and
-    /// with `fill`, each known file missing from the cache.
-    pub(super) fn jobs(&self, cache: &Cache, fill: bool) -> Vec<(Option<usize>, Job)> {
-        let mut jobs = Vec::new();
-        for (index, file) in self.files.iter().enumerate() {
-            let learn = file.known.is_none();
-            let missing = file
-                .known
-                .is_some_and(|(sha256, size)| cache.find(&sha256, Some(size)).is_none());
-            if !(learn || fill && missing) {
-                continue;
-            }
-            let expect = match file.known {
-                Some((sha256, size)) => Expect {
-                    sha256: Some(sha256),
-                    md5: file.remote.md5,
-                    size: Some(size),
-                },
-                None => Expect {
-                    sha256: file.remote.sha256,
-                    md5: file.remote.md5,
-                    size: file.remote.size,
-                },
-            };
-            let (from, divert) = source::fetch_plan(&file.remote.url);
-            let fetch = Fetch {
-                url: file.remote.url.clone(),
-                from,
-                divert,
-                expect,
-                revalidate: false,
-            };
-            jobs.push((
-                learn.then_some(index),
-                Job {
+    /// the downloads that learn each unknown hash, with the index of the file each is for. a
+    /// file no checksum pins is asked about with what its URL served before, so bytes the cache
+    /// already holds are not sent again.
+    pub(super) fn jobs(&self) -> Vec<(usize, Job)> {
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| file.known.is_none())
+            .map(|(index, file)| {
+                let remote = &file.remote;
+                let (from, divert) = source::fetch_plan(&remote.url);
+                let fetch = Fetch {
+                    url: remote.url.clone(),
+                    from,
+                    divert,
+                    expect: Expect {
+                        sha256: remote.sha256,
+                        md5: remote.md5,
+                        size: remote.size,
+                    },
+                    revalidate: remote.sha256.is_none() && remote.md5.is_none(),
+                };
+                let job = Job {
                     fetch,
                     label: format!("{}/{}", self.name, file.path),
                     dataset: Some(self.name.clone()),
-                },
-            ));
-        }
-        jobs
+                };
+                (index, job)
+            })
+            .collect()
     }
 
     /// records what the bytes of file `index` turned out to be.
@@ -149,6 +148,15 @@ impl Draft {
             files,
         }
     }
+}
+
+/// the hash and size of the bytes an earlier download proved match the MD5 a source states.
+fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
+    let (sha256, size) = cache.stated_md5(&remote.md5?)?;
+    remote
+        .size
+        .is_none_or(|stated| stated == size)
+        .then_some((sha256, size))
 }
 
 /// the file data.lock already pins for this remote file, when it is the same file: the same
