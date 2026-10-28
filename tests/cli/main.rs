@@ -3,6 +3,7 @@
 mod archives;
 mod basics;
 mod get;
+mod hints;
 mod project;
 mod recovery;
 mod support;

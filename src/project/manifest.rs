@@ -408,12 +408,11 @@ mod tests {
         assert_eq!(weights.path.as_deref(), Some("models/w"));
         assert_eq!(parse("").data_dir, "data");
         assert!(parse("").datasets.is_empty());
-        assert_eq!(
-            parse("datasets.iris = { ref = \"zenodo:3608990\" }\n")
-                .datasets
-                .len(),
-            1,
-            "inline tables work too"
+        let inline = parse("datasets.iris = { ref = \"zenodo:3608990\" }\n");
+        assert_eq!(inline.datasets.len(), 1, "inline tables work too");
+        assert!(
+            !inline.datasets["iris"].lines.is_empty(),
+            "an entry from data.toml always cites its lines"
         );
     }
 

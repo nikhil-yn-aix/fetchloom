@@ -9,6 +9,7 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::name;
 use crate::net::{Expect, Fetch, Fetched};
+use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::Entry;
 use crate::source::{self, Listing, Remote};
@@ -283,9 +284,22 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
         if let Some(line) = entry.lines.get("exclude") {
             error = error.detail(line.clone());
         }
-        return Err(error.help("loosen the patterns in data.toml"));
+        return Err(error.help(match written(entry) {
+            Patterns::InDataToml => "loosen the patterns in data.toml",
+            Patterns::OnCommandLine => "loosen the patterns given to --select and --exclude",
+        }));
     }
     Ok(kept)
+}
+
+/// where an entry's patterns were written. `add` and `get` clear the lines of an entry they make
+/// from the command line, since no line of data.toml is to blame for it.
+fn written(entry: &Entry) -> Patterns {
+    if entry.lines.is_empty() {
+        Patterns::OnCommandLine
+    } else {
+        Patterns::InDataToml
+    }
 }
 
 fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error {
