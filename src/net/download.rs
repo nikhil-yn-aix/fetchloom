@@ -27,8 +27,9 @@ const DIVERSIONS: u32 = 3;
 const LARGEST_PAGE: usize = 4 * 1024 * 1024;
 
 /// turns a page a server sent instead of the file, such as a confirmation form, into the URL that
-/// serves the file, or into an error saying why there is none, such as a download quota.
-pub(crate) type Divert = fn(&Url, &str) -> Result<Url, Error>;
+/// serves the file, or into an error saying why there is none, such as a download quota. it reads
+/// the page with the URL the page came from, after redirects, and its status.
+pub(crate) type Divert = fn(&Url, u16, &str) -> Result<Url, Error>;
 
 /// what a download must turn out to be, when something already says so.
 #[derive(Clone, Copy, Debug, Default)]
@@ -347,6 +348,15 @@ impl Net {
         let status = response.status();
         tracing::debug!(url = %from, status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
+        if let Some(divert) = fetch.divert
+            && is_page(status, &head)
+        {
+            let url = response.url().clone();
+            let page = self.page(from, response).await?;
+            return divert(&url, status.as_u16(), &page)
+                .map(Answer::Divert)
+                .map_err(Failure::Final);
+        }
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
                 return Ok(Answer::NotModified);
@@ -359,14 +369,6 @@ impl Net {
             StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => return Ok(Answer::StartOver),
             status => return Err(failure::refusal(from, status, &head)),
         };
-        if let Some(divert) = fetch.divert
-            && headers::is_html(&head)
-        {
-            let page = self.page(from, response).await?;
-            return divert(from, &page)
-                .map(Answer::Divert)
-                .map_err(Failure::Final);
-        }
         let total = headers::total_length(&head, status);
         let name = headers::file_name(&head);
         on(Event::Started {
@@ -547,6 +549,16 @@ impl Net {
     }
 }
 
+/// whether an answer is a page in place of the file: HTML that names no file to save, sent as a
+/// success or as a refusal that asking again would not change.
+fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
+    let settled = status == StatusCode::OK
+        || (status.is_client_error()
+            && !failure::is_transient(status)
+            && status != StatusCode::RANGE_NOT_SATISFIABLE);
+    settled && headers::is_html(head) && headers::file_name(head).is_none()
+}
+
 /// checks a finished download against what was expected of it.
 fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     if let Some(size) = expect.size
@@ -634,3 +646,6 @@ fn progress_kept(error: Error, partial: &Partial) -> Error {
         None => error,
     }
 }
+
+#[cfg(test)]
+mod tests;

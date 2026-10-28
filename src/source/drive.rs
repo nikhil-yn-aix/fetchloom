@@ -1,12 +1,15 @@
-//! google drive: shared files and folders, pasted as links. a file is fetched through the `uc`
-//! endpoint, where large files first send a confirmation page.
+//! google drive: shared files and folders, pasted as links. a file downloads from drive's
+//! download host, which may first send a page that confirms the download or refuses it.
+
+mod html;
+mod page;
 
 use std::fmt;
 
 use url::Url;
 
 use super::{Listing, Reference, Remote, malformed};
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::net::{Api, Divert};
 
 /// a shared drive file or folder.
@@ -58,7 +61,7 @@ impl Item {
             ["drive", "folders", id, ..] | ["drive", "u", _, "folders", id, ..] => {
                 ((*id).to_owned(), true)
             }
-            ["folderview"] => (query_id()?, true),
+            ["folderview" | "embeddedfolderview"] => (query_id()?, true),
             ["open" | "uc" | "download"] => (query_id()?, false),
             _ => return None,
         };
@@ -69,14 +72,12 @@ impl Item {
     #[expect(
         clippy::unused_async,
         clippy::unused_async_trait_impl,
-        reason = "folders arrive with the drive milestone"
+        reason = "folders are walked next"
     )]
     pub(super) async fn resolve(&self, _api: &impl Api) -> Result<Listing, Error> {
         if self.folder {
             return Err(super::not_yet("drive folder"));
         }
-        let url = Url::parse(&format!("https://drive.google.com/uc?id={}", self.id))
-            .map_err(|err| malformed(&format!("drive:{}: {err}", self.id), "a drive link"))?;
         Ok(Listing {
             resolved: Reference::Drive(self.clone()),
             title: None,
@@ -88,11 +89,24 @@ impl Item {
                 size: None,
                 sha256: None,
                 md5: None,
-                url,
+                url: file_url(&self.id)?,
                 named_by_server: true,
             }],
         })
     }
+}
+
+/// the link data.lock keeps for a drive file. drive's `uc` link has outlived the hosts that serve
+/// the bytes, so only `fetch_plan` names those.
+fn file_url(id: &str) -> Result<Url, Error> {
+    let mut url = Url::parse("https://drive.google.com/uc").map_err(|err| {
+        Error::new(
+            Kind::SourceInvalid,
+            format!("could not make a drive link: {err}"),
+        )
+    })?;
+    url.query_pairs_mut().append_pair("id", id);
+    Ok(url)
 }
 
 /// drive ids are long runs of letters, digits, `-` and `_`.
@@ -113,7 +127,38 @@ impl fmt::Display for Item {
     }
 }
 
-/// where drive serves a file's bytes, and how to read the page it sends for large files.
-pub(super) fn fetch_plan(_url: &Url) -> Option<(Url, Option<Divert>)> {
-    None
+/// where drive serves the bytes of a file known by its `uc` link, and how to read the pages it
+/// sends instead.
+pub(super) fn fetch_plan(url: &Url) -> Option<(Url, Option<Divert>)> {
+    if url.host_str() != Some("drive.google.com") || url.path() != "/uc" {
+        return None;
+    }
+    let mut from = Url::parse("https://drive.usercontent.google.com/download").ok()?;
+    from.query_pairs_mut()
+        .extend_pairs(url.query_pairs())
+        .append_pair("export", "download")
+        // skips the form drive sends before a file too large to scan for viruses
+        .append_pair("confirm", "t");
+    Some((from, Some(page::divert)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_download_from_drives_download_host() {
+        let id = "1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb";
+        let known = Url::parse(&format!("https://drive.google.com/uc?id={id}")).unwrap();
+        let (from, divert) = fetch_plan(&known).unwrap();
+        assert_eq!(
+            from.as_str(),
+            format!(
+                "https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t"
+            )
+        );
+        assert!(divert.is_some());
+        let elsewhere = Url::parse(&format!("https://example.org/uc?id={id}")).unwrap();
+        assert!(fetch_plan(&elsewhere).is_none());
+    }
 }
