@@ -110,3 +110,28 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     );
     Ok(())
 }
+
+#[test]
+fn a_name_add_cannot_use_is_refused_before_any_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let manifest = "[datasets.flowers]\nref = \"zenodo:1\"\n";
+    fs::write(sandbox.work().join("data.toml"), manifest)?;
+    for (name, message) in [
+        (
+            "flowers",
+            "✗ data.toml already has a dataset called flowers\n",
+        ),
+        ("Flowers", "✗ \"Flowers\" is not a valid dataset name\n"),
+    ] {
+        // offline, resolving the link first would fail with exit 20 instead
+        let output = sandbox.run(&["--offline", "add", "zenodo:3608990", "--as", name])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(stderr.starts_with(message), "{stderr}");
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        manifest
+    );
+    Ok(())
+}

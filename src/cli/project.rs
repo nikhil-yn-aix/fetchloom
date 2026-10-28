@@ -45,6 +45,10 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     };
     let manifest = Manifest::parse(&text)?;
     let parsed = Reference::parse(&args.link)?;
+    // no answer from the source changes whether the name --as gives is usable
+    if let Some(asked) = args.name.as_deref() {
+        usable(asked, &manifest)?;
+    }
     let net = Arc::new(net(context, &manifest)?);
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
@@ -81,7 +85,10 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     if args.name.is_none() {
         learn_name(context, &net, &cache, &mut listing, !args.no_extract).await?;
     }
-    let name = choose_name(args.name.as_deref(), &listing, &parsed, &manifest)?;
+    let name = match args.name {
+        Some(asked) => asked,
+        None => choose_name(&listing, &parsed, &manifest)?,
+    };
     let updated = manifest::with_dataset(
         &text,
         &name,
@@ -605,47 +612,49 @@ async fn learn_name(
     Ok(())
 }
 
-/// the name a new dataset gets: the one asked for, else one made from its file or its title.
-fn choose_name(
-    asked: Option<&str>,
-    listing: &Listing,
-    parsed: &Parsed,
-    manifest: &Manifest,
-) -> Result<String, Error> {
-    let name = match asked {
-        Some(asked) if name::is_dataset_name(asked) => asked.to_owned(),
-        Some(asked) => {
-            let error = Error::new(
-                Kind::Usage,
-                format!("\"{asked}\" is not a valid dataset name"),
-            );
-            return Err(match name::dataset_name(asked) {
-                Some(suggested) => error.help(format!(
-                    "use lowercase letters, digits, - and _, such as --as {suggested}"
-                )),
-                None => error.help("use lowercase letters, digits, - and _"),
-            });
-        }
-        None => {
-            let single = match (listing.files.as_slice(), &parsed.file) {
-                ([only], _) => Some(
-                    only.path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&only.path)
-                        .to_owned(),
-                ),
-                (_, Some(file)) => Some(file.rsplit('/').next().unwrap_or(file).to_owned()),
-                _ => None,
-            };
-            single
-                .and_then(|file| name::dataset_name(&name::folder_for(&file)))
-                .or_else(|| listing.title.as_deref().and_then(name::dataset_name))
-                .or_else(|| name::dataset_name(&parsed.reference.to_string()))
-                .unwrap_or_else(|| "dataset".to_owned())
-        }
+/// refuses a name that is not a valid dataset name or that data.toml already has, as `--as`
+/// gives it.
+fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
+    if !name::is_dataset_name(asked) {
+        let error = Error::new(
+            Kind::Usage,
+            format!("\"{asked}\" is not a valid dataset name"),
+        );
+        return Err(match name::dataset_name(asked) {
+            Some(suggested) => error.help(format!(
+                "use lowercase letters, digits, - and _, such as --as {suggested}"
+            )),
+            None => error.help("use lowercase letters, digits, - and _"),
+        });
+    }
+    unused(asked, manifest)
+}
+
+/// the name a new dataset gets without `--as`: one made from its file or its title.
+fn choose_name(listing: &Listing, parsed: &Parsed, manifest: &Manifest) -> Result<String, Error> {
+    let single = match (listing.files.as_slice(), &parsed.file) {
+        ([only], _) => Some(
+            only.path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&only.path)
+                .to_owned(),
+        ),
+        (_, Some(file)) => Some(file.rsplit('/').next().unwrap_or(file).to_owned()),
+        _ => None,
     };
-    if manifest.datasets.contains_key(&name) {
+    let name = single
+        .and_then(|file| name::dataset_name(&name::folder_for(&file)))
+        .or_else(|| listing.title.as_deref().and_then(name::dataset_name))
+        .or_else(|| name::dataset_name(&parsed.reference.to_string()))
+        .unwrap_or_else(|| "dataset".to_owned());
+    unused(&name, manifest)?;
+    Ok(name)
+}
+
+/// refuses a name data.toml already has.
+fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
+    if manifest.datasets.contains_key(name) {
         return Err(Error::new(
             Kind::Usage,
             format!("data.toml already has a dataset called {name}"),
@@ -654,9 +663,8 @@ fn choose_name(
             "give this one another name with --as <name>, or run `fetchloom remove {name}` first"
         )));
     }
-    Ok(name)
+    Ok(())
 }
-
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
 /// pasted for drive, dropbox and plain links, which people recognize by their link.
 fn stored_reference(typed: &str, parsed: &Parsed) -> String {
