@@ -2,6 +2,7 @@
 
 mod archives;
 mod basics;
+mod concurrent;
 mod get;
 mod moved;
 mod project;
