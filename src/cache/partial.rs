@@ -1,15 +1,16 @@
 //! unfinished downloads: the bytes so far, a record of what they are, and a lock so that two
-//! processes never write the same download.
+//! processes never write the same download. anyone who can write to the cache could plant a link
+//! among them, so none of them is ever opened through one.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::{Cache, Stored, Validators};
+use super::{Cache, Stored, Validators, real_folder};
 use crate::digest::{self, Hasher, Sha256};
 
 /// how often a download records its progress, so a killed run loses about this much of it.
@@ -47,13 +48,10 @@ impl Cache {
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
         let key = digest::sha256(url.as_bytes()).hex();
         let partial = self.root.join("partial");
+        real_folder(&partial)?;
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(partial.join(format!("{key}.lock")))?;
+        let lock = open_unfollowed(&partial.join(format!("{key}.lock")), true)?;
         let (folder, stem, lock) = match lock.try_lock() {
             Ok(()) => (partial, key, Some(Arc::new(lock))),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
@@ -64,22 +62,13 @@ impl Cache {
                 None,
             ),
         };
-        let claimed = Partial {
+        Ok(Claim::Owned(Partial {
             cache: self.clone(),
             url: url.to_owned(),
             bytes: folder.join(format!("{stem}.part")),
             record: folder.join(format!("{stem}.json")),
             _lock: lock,
-        };
-        // a read-only download was sealed for publishing by a run that did not finish. its name
-        // may already be a second name of the object, which must stay read-only, so the bytes
-        // are downloaded again rather than made writable
-        if fs::symlink_metadata(&claimed.bytes)
-            .is_ok_and(|metadata| metadata.permissions().readonly())
-        {
-            claimed.discard();
-        }
-        Ok(Claim::Owned(claimed))
+        }))
     }
 }
 
@@ -87,15 +76,16 @@ impl Partial {
     /// how many bytes an earlier run kept, and how the server identified them then.
     pub(crate) fn resumable(&self) -> Option<(u64, Validators)> {
         let record = self.recorded()?;
-        let on_disk = fs::metadata(&self.bytes).ok()?.len();
-        (record.received > 0 && on_disk >= record.received)
+        let kept = fs::symlink_metadata(&self.bytes).ok()?;
+        (record.received > 0 && continuable(&kept) && kept.len() >= record.received)
             .then_some((record.received, record.validators))
     }
 
     /// writes from byte `offset` on. the record is the truth: bytes past it are cut off, and the
     /// bytes before it are hashed again so the final hash covers the whole file. bytes that no
-    /// longer hash to what the record says, as after a power cut, fail with
-    /// [`io::ErrorKind::InvalidData`]. `md5` also computes the MD5, to check one a source stated.
+    /// longer hash to what the record says, as after a power cut, or that this process may not
+    /// continue, fail with [`io::ErrorKind::InvalidData`]. `md5` also computes the MD5, to check
+    /// one a source stated.
     pub(crate) fn writer(
         &self,
         offset: u64,
@@ -103,13 +93,7 @@ impl Partial {
         validators: Validators,
         md5: bool,
     ) -> io::Result<PartialWriter> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&self.bytes)?;
-        file.set_len(offset)?;
+        let mut file = self.open(offset)?;
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -160,11 +144,120 @@ impl Partial {
         let _ = fs::remove_file(&self.record);
     }
 
+    /// the file for the bytes, cut to their first `offset`. bytes an earlier run kept are used
+    /// only when this process may continue them. otherwise a download from the first byte
+    /// removes their name and makes a new file there: a read-only one was sealed by a run that
+    /// did not finish publishing, and may already be a second name of the object, which must
+    /// never become writable.
+    fn open(&self, offset: u64) -> io::Result<File> {
+        let kept = open_unfollowed(&self.bytes, false)
+            .ok()
+            .filter(|file| file.metadata().is_ok_and(|metadata| continuable(&metadata)));
+        let file = match kept {
+            Some(file) => file,
+            None if offset > 0 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the bytes kept from an earlier download cannot be continued",
+                ));
+            }
+            None => {
+                if let Err(err) = fs::remove_file(&self.bytes)
+                    && err.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(err);
+                }
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&self.bytes)?
+            }
+        };
+        file.set_len(offset)?;
+        Ok(file)
+    }
+
     fn recorded(&self) -> Option<Record> {
         let text = fs::read(&self.record).ok()?;
         let record: Record = serde_json::from_slice(&text).ok()?;
         (record.url == self.url).then_some(record)
     }
+}
+
+/// opens `path` to read and write without following a link at its end, and refuses anything
+/// that is not a plain file. `create` makes a missing file.
+pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // a link opens as itself rather than as what it points at, and is refused below
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let refused = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a link or a special file, which fetchloom never writes into",
+                path.display()
+            ),
+        )
+    };
+    let opened = options.open(path);
+    // what unix answers when the name is a link
+    #[cfg(unix)]
+    let opened = opened.map_err(|err| {
+        if err.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) {
+            refused()
+        } else {
+            err
+        }
+    });
+    let file = opened?;
+    if is_plain(&file.metadata()?) {
+        Ok(file)
+    } else {
+        Err(refused())
+    }
+}
+
+/// whether `metadata` describes a plain file, not a link, a folder or a device.
+fn is_plain(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    metadata.file_type().is_file()
+}
+
+/// whether this process may write on into the file `metadata` describes: a plain file, still
+/// writable, and on unix this user's own with no other name, so that writing into it can change
+/// nothing outside the download.
+fn continuable(metadata: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.nlink() != 1 {
+            return false;
+        }
+    }
+    is_plain(metadata) && !metadata.permissions().readonly()
 }
 
 /// the writing end of a download: hashes every byte on its way to disk.
@@ -210,9 +303,14 @@ impl PartialWriter {
         } = self;
         let file = file.into_inner().map_err(io::IntoInnerError::into_error)?;
         file.sync_all()?;
+        // sealed through the handle that wrote it: by name, a link swapped in since would be
+        // sealed in its place
+        let mut permissions = file.metadata()?.permissions();
+        permissions.set_readonly(true);
+        file.set_permissions(permissions)?;
         drop(file);
         let (digest, md5) = hasher.finish();
-        let stored = cache.publish(&bytes, digest, written, md5)?;
+        let stored = cache.link_object(&bytes, digest, written, md5)?;
         let _ = fs::remove_file(&record_path);
         Ok(stored)
     }

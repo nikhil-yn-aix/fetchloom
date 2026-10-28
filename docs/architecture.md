@@ -65,6 +65,7 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - an unfinished download lives in `partial/` beside a small record of its URL, validators, the bytes received and their SHA-256, saved every second. one process owns it at a time, by holding a lock beside it, and a later run continues it once the bytes kept still hash to the record.
 - every sync registers its project under `projects/`. `cache gc` keeps every object that a registered project's `data.lock` needs, following archives to the members they unpacked into. it removes the rest only when older than a day, and never touches an unfinished download younger than a day.
 - removing an object never breaks a project. placed files are links or copies, so they keep their bytes when the cache's name for them goes. at worst, a later project downloads that object again.
+- a cache several people share trusts all of them: anyone who can write to it can change its objects, and `cache verify` finds that. no one can make fetchloom write outside it: it opens nothing in the cache through a link, keeps only real folders, and on unix continues only downloads its own user started.
 - `CACHEDIR.TAG` tells backup tools to skip the folder.
 
 ## placing files
