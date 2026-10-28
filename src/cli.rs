@@ -30,6 +30,9 @@ use crate::work::Work;
 /// not the processor, so the number does not follow the core count.
 const JOBS: usize = 8;
 
+/// a download larger than this asks first.
+const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
+
 /// what every command gets: where to print, the settings, the counters and the stop signal.
 struct Context {
     output: Arc<Output>,
@@ -183,14 +186,14 @@ pub(crate) fn run() -> ExitCode {
     }
 }
 
-/// asks before a large download. without a terminal to ask on, it stops and names the flag that
-/// says yes.
-fn confirm(context: &Context, what: &str, bytes: u64) -> Result<(), Error> {
+/// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
+/// it stops and names the flag.
+fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
+    if yes || bytes <= ASK_ABOVE {
+        return Ok(());
+    }
     let size = units::size(bytes);
-    match context
-        .output
-        .confirm(&format!("download {what} ({size})?"))
-    {
+    match output.confirm(&format!("download {what} ({size})?")) {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(
             Kind::Unconfirmed,

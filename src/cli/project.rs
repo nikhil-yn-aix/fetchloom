@@ -72,7 +72,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    engine::check_patterns(&parsed.reference.to_string(), &entry, &listing)?;
+    engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
     if args.name.is_none() {
         learn_name(context, &net, &cache, &mut listing).await?;
     }

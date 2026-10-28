@@ -22,11 +22,8 @@ use crate::output::Output;
 use crate::project::Project;
 use crate::project::lock::{self, Lock, Locked};
 use crate::project::manifest::{Entry, Manifest};
-use crate::source::{self, Listing, Reference};
+use crate::source::{self, Listing, Reference, Remote};
 use crate::units;
-
-/// a download above this size asks first.
-const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
 
 /// which datasets move to their newest version.
 pub(super) enum Upgrade {
@@ -235,13 +232,12 @@ impl Loop<'_> {
             .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
             .filter_map(|job| job.fetch.expect.size)
             .sum();
-        if size > ASK_ABOVE && !self.context.yes {
-            super::confirm(
-                self.context,
-                &units::count(jobs.len() as u64, "file", "files"),
-                size,
-            )?;
-        }
+        super::confirm(
+            &self.context.output,
+            self.context.yes,
+            &units::count(jobs.len() as u64, "file", "files"),
+            size,
+        )?;
         let started = Instant::now();
         let fetched = fetch::all(self.context, &self.net, &self.cache, jobs).await?;
         let downloaded: Vec<&Fetched> = fetched
@@ -266,9 +262,9 @@ impl Loop<'_> {
     }
 }
 
-/// checks a new dataset's patterns against its listing, before anything is written.
-pub(super) fn check_patterns(name: &str, entry: &Entry, listing: &Listing) -> Result<(), Error> {
-    draft::filter(name, entry, listing).map(drop)
+/// the files a dataset's patterns keep from its listing, or why the patterns are wrong.
+pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
+    draft::filter(name, entry, listing)
 }
 
 /// what to resolve for a dataset whose entry changed. a changed filter resolves the version

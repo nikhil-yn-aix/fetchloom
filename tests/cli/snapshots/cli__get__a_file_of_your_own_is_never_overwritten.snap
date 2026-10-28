@@ -1,6 +1,8 @@
 ---
 source: tests/cli/get.rs
+assertion_line: 223
 expression: stderr
 ---
+ Downloaded iris.csv · 81 B in [time]
 ✗ iris/iris.csv already exists with other contents
   help: move it away to fetch this file, or choose another folder with -o

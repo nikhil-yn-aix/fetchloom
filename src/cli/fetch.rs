@@ -1,6 +1,7 @@
 //! many downloads at once: a bar for each running one, one bar for them all, and a stop at the
 //! first failure that keeps what already arrived for the next run.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tokio::task::JoinSet;
@@ -39,16 +40,20 @@ pub(super) async fn all(
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.jobs * 2;
     let mut done = 0;
+    // a file whose size only its headers tell is asked about there, once per run
+    let asked = Arc::new(AtomicBool::new(false));
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
-            let (net, cache, output, overall) = (
+            let (net, cache, output, overall, asked) = (
                 net.clone(),
                 cache.clone(),
                 context.output.clone(),
                 overall.clone(),
+                asked.clone(),
             );
+            let yes = context.yes;
             tasks.spawn(async move {
                 let bar: OnceLock<Bar> = OnceLock::new();
                 let on = |event: Event| -> Result<(), Error> {
@@ -59,6 +64,13 @@ pub(super) async fn all(
                             job.label
                         )),
                         Event::Started { total, resumed, .. } => {
+                            let left = total.map_or(0, |total| total.saturating_sub(resumed));
+                            if job.fetch.expect.size.is_none()
+                                && left > super::ASK_ABOVE
+                                && !asked.swap(true, Ordering::Relaxed)
+                            {
+                                super::confirm(&output, yes, &job.label, left)?;
+                            }
                             bar.start(total, resumed);
                             if let Some(overall) = overall.as_ref() {
                                 overall.advance(resumed);
