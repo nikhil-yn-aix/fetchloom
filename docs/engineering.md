@@ -1,81 +1,76 @@
 # engineering
 
-## code
+## build
 
-- rust, edition 2024, on the stable toolchain pinned in `rust-toolchain.toml`.
-- one crate with one binary. modules follow [architecture](architecture.md). a module becomes its own crate only when a second consumer needs it.
-- `unsafe` is forbidden.
-- no `unwrap`, `expect` or `panic!` outside tests. errors are typed with `thiserror` and rendered in one place.
-- clippy runs with `-D warnings` and the pedantic group. any lint we allow sits in a short list with its reason.
-- files stay under about 400 lines and functions under about 60. past that, split by responsibility.
-- no dead code, no unused dependency, no feature flag nothing uses, no compatibility shim. replaced code is deleted in the same change.
-- comments, docstrings and names follow [style](style.md).
-- a new dependency names its reason in the commit, passes `cargo deny`, and is the smallest crate that does the job well.
+`rust-toolchain.toml` pins rust 1.99.1 with rustfmt and clippy. `Cargo.toml` uses edition 2024 and declares a minimum rust version of 1.99. one crate builds a library and two executables, `fetchloom` and `fl`.
 
-## design rules
+```sh
+cargo build --locked
+cargo run -- --version
+```
 
-- a pure core with IO at the edges. parsing, planning and comparing are plain functions over data, tested without a network or a disk.
-- parse, don't validate. a reference, a digest, a dataset path or a URL becomes a type once, where it enters, and stays valid after.
-- a trait only where there are two real implementations or a test needs a seam: the clock and the network.
-- every third-party crate is used inside one module, behind our own types, so replacing it touches one module.
-- one way to do each thing, and no option without a user who needs it.
+the compression dependencies need native build tools. keep `Cargo.lock` when building this application. [README](../README.md#install) covers source installation.
 
-## tests
+## code boundaries
 
-tests follow FIRST:
+parsers, digest types, glob matching and destination expansion can be tested as functions over data. project and cache modules own disk records. the CLI orders their effects; the HTTP layer also writes through the cache. [architecture](architecture.md#modules) maps the modules.
 
-- fast. the default suite runs in under a minute, and a test over one second has a reason.
-- independent. each test gets its own temp folder, cache and home directory, and reads nothing from the developer's machine.
-- repeatable. the default suite never touches the live network. sources are served from recorded responses by a local fake server, and time and randomness are injected.
-- self-validating. every test asserts. CLI output is checked with snapshots, with paths and durations filtered out.
-- timely. a test is written with its code, first when the behavior is already specified. a bug fix starts with a test that fails for the reported reason.
+`Api` is the source-listing test seam. tests also inject environment readers and archive limits. retry timing still uses the real clock and randomness. dependencies are not all hidden behind private adapters: `url::Url`, for example, crosses module boundaries.
 
-| kind | covers | runs |
-|---|---|---|
-| unit | pure functions and types | every commit |
-| property | parsers, lock round trips, path rules, planning | every commit |
-| end to end | the real binary against a fake server, one test per scenario in [scope](scope.md#done-means) | every commit, three platforms |
-| conformance | every source against the same recorded cases: a small dataset, a paged listing, a missing dataset, a rate limit, a redirect, a wrong checksum | every commit |
-| counters | requests, bytes and file operations for each scenario | every commit |
-| live | each source once against the real service | nightly, reports and never blocks |
-| fuzz | `data.toml`, `data.lock`, archive readers, what sources send back | before each release and whenever a parser changes |
+the crate forbids unsafe code. cargo configures warnings for missing public docs, unreachable public items and clippy's pedantic group, plus unwraps, expects, panics, debug prints and unfinished-code macros. errors use a hand-written `Error` and `Kind`, not `thiserror`. a crate-level `dead_code` expectation currently permits parts awaiting source integration.
 
-- one test per behavior, at the lowest level that shows it. nothing the type system already guarantees, nothing another test already covers.
-- a flaky test is a bug, fixed before merge. it is never retried until green.
-- mutation testing with cargo-mutants runs on core modules before a release to find tests that pass no matter what. it never blocks a merge.
-- coverage is looked at, never gated.
+keep modules focused and comments useful. there is no enforced file-length or function-length limit. lint exceptions need reasons. writing and commit rules are in [style](style.md).
 
-## tools
+## checks
 
-| job | tool |
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --locked
+```
+
+run the smallest relevant selector while working, then the full suite when the change crosses command boundaries:
+
+```sh
+cargo test --locked --test cli
+cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_and_get_take
+cargo test --locked source::zenodo
+cargo test --locked archive::
+```
+
+the first command runs the real-binary integration target. the second checks the option sentence in `docs/scope.md`. other markdown examples are not executed by the test suite.
+
+## test layers
+
+| location | checks |
 |---|---|
-| tests | cargo-nextest with `--no-fail-fast` |
-| snapshots | insta |
-| fake servers | wiremock |
-| property tests | proptest |
-| fuzzing | cargo-fuzz, on linux |
-| lint and format | clippy, rustfmt |
-| dependencies | cargo-deny for licenses, advisories and sources, cargo-shear for unused crates |
-| spelling and prose | typos, vale |
-| tasks | a justfile, so local runs and CI run the same commands |
-| python | ruff, pytest against the built wheel |
+| module `#[cfg(test)]` tests | parsing, rendering, hashes, paths, glob matching, limits and storage behavior |
+| `src/source/*` tests | source-specific responses through the in-memory `Recorded` implementation of `Api` |
+| `tests/fixtures/sources` | captured JSON listings and errors used by source tests |
+| `tests/fixtures/archives` | zip and tar files from several writers, including unsafe and damaged cases |
+| `tests/cli` | the compiled binary against a custom `TcpListener` server |
+| `tests/cli/snapshots` | human output and selected JSON or lock output checked with insta |
 
-## CI
+CLI cases cover repeat downloads, retries, resume, source-link recovery, offline use, project edits, archives, cache upkeep, concurrent processes, proxies and secret-bearing links. source tests do not all run a common conformance suite.
 
-- every pull request runs format, lint, prose, deny and the whole test suite on windows, macos and linux, in under 10 minutes.
-- every night, live source checks and the advisory database run. a failure opens one issue, or comments on the one already open.
-- before a release: fuzzing, mutation testing of core modules, every budget measured.
-- workflow actions are pinned by commit SHA and checked with zizmor.
-- a platform counts as supported only when its tests run in CI.
+the CLI harness creates a private working directory, cache and home. it removes inherited fetchloom settings, source token variables, proxy variables and synced-folder settings before starting the binary. it retains normal OS inputs such as `PATH`, `CI` and `TERM`. tests use local servers or recorded answers, not live repositories.
 
-## release
+snapshot filters replace sandbox paths, ports and durations, normalize path separators, and remove variable rates. review the unfiltered output when changing wording; a filtered snapshot does not prove every displayed value is right. snapshots and JSON counters check different contracts.
 
-- one version, set in `Cargo.toml`. a `v*` tag starts two workflows, the way uv and ruff ship:
-  - dist builds binaries for windows, macos and linux with shell and powershell installers, attaches them to the github release, and attests each build.
-  - maturin builds wheels that carry the binary and a small python module, published to PyPI through trusted publishing.
-- `data.lock` and the JSON document carry a format version. before 1.0, a format change bumps it and an older file is refused with the command that rebuilds it.
-- release notes come from commit messages, which is why those are written for people.
+for a bug fix, first add a test that fails for the reported behavior. use the lowest layer that demonstrates it. add a CLI case when exit codes, stdout, files left on disk or cross-command recovery are part of the bug. do not weaken an assertion to hide a failure.
+
+## automation still missing
+
+there are no checked-in CI workflows, nightly live-source checks or release workflows. the commands above are local checks, not a three-platform gate. windows, macos and linux branches in the code need a build and test matrix before release.
+
+nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-deny, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
+
+## release work
+
+`Cargo.toml` is the version source and has `publish = false`. no python package, wheel configuration, standalone installer or publishing pipeline is tracked. source builds are the available install path. [plan](plan.md#next) lists the remaining release milestones.
+
+`data.lock` and JSON each use format version 1. the cache writes a layout marker of 1 but does not validate it on open. format readers and recovery behavior are in [formats](formats.md); a version field alone is not a migration system.
 
 ## license
 
-apache-2.0, with a NOTICE that names fetchloom, Nikhil Y N and KairosLab India Private Limited. contributions come in under the same license. the reasons are in [decisions](decisions.md#26-apache-20).
+contributions use apache-2.0. keep [LICENSE](../LICENSE) and [NOTICE](../NOTICE) with distributions. NOTICE names Nikhil Y N and KairosLab India Private Limited. the [license decision](decisions.md#26-apache-20) records why.
