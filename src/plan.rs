@@ -187,7 +187,7 @@ fn common_top(members: &[Member]) -> Option<&str> {
 
 /// how a case-insensitive disk sees a name.
 fn key(path: &str) -> String {
-    path.to_lowercase()
+    name::fold(path)
 }
 
 fn overlapping(folders: &[(String, &str)]) -> Result<(), Error> {
@@ -472,6 +472,14 @@ mod tests {
         assert!(
             targets(&one, &lock(&[("a", &["Readme.md", "README.md"])])).is_err(),
             "case-insensitive disks see one file"
+        );
+        assert!(
+            targets(&one, &lock(&[("a", &["\u{3c2}.txt", "\u{3c3}.txt"])])).is_err(),
+            "windows upcases both sigmas to one letter"
+        );
+        assert!(
+            targets(&one, &lock(&[("a", &["caf\u{e9}.csv", "cafe\u{301}.csv"])])).is_err(),
+            "macos sees one name in both unicode forms"
         );
         assert!(
             targets(&one, &lock(&[("a", &["x", "x/y"])])).is_err(),

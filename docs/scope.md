@@ -16,7 +16,7 @@ v0.1 is the smallest fetchloom that serves the two groups [vision](vision.md) pu
 | `fetchloom cache` | shows where the cache is, how big it is and which projects use it. `cache gc` frees what no project needs. `cache verify` hashes every object again and removes any that changed |
 | `fetchloom` | inside a project, a short status. outside, a welcome with one command to try |
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--as <name>`, `--select <glob>` and `--exclude <glob>`. `fl` is a short name for the same program. powershell already uses `fl` for `Format-List`, so use `fetchloom` there.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder. `fl` is a short name for the same program. powershell already uses `fl` for `Format-List`, so use `fetchloom` there.
 
 ## sources
 
@@ -43,7 +43,7 @@ when a source states no checksum, the first download defines the SHA-256, and ev
 - downloads run in parallel with a limit per host, resume after an interruption, retry what can still succeed and respect rate limits.
 - a timeout limits silence on a connection, never the length of a download.
 - credentials come from where each source already keeps them (`HF_TOKEN`, `~/.kaggle/kaggle.json`, `ZENODO_TOKEN`) and go only to that source's host, only over https.
-- zip and tar archives (tar, tar.gz, tar.xz, tar.zst, tar.bz2) are unpacked unless `data.toml` says `extract = false`. an unsafe archive is refused as a whole. single compressed files like `.fastq.gz` stay as they are.
+- zip and tar archives (tar, tar.gz, tar.xz, tar.zst, tar.bz2) are unpacked unless `data.toml` says `extract = false`, or `--no-extract` keeps them packed. an unsafe archive is refused as a whole. single compressed files like `.fastq.gz` stay as they are.
 - one cache per machine, with files named by SHA-256 and stored read-only. projects get them by reflink, else hardlink, else copy. no symlinks, so windows needs no admin rights.
 - inside a folder that onedrive, dropbox or icloud drive syncs, files are copied instead of linked, because those tools break hardlinks. a warning says what that costs and that moving the project out of the synced folder avoids it.
 - several fetchloom processes can use one cache at the same time.

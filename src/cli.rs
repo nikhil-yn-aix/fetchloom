@@ -8,20 +8,19 @@ mod logs;
 mod project;
 mod status;
 mod sync;
+mod usage;
 
-use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
-use clap::error::{ContextKind, ContextValue, ErrorKind};
 use serde::Serialize;
 
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
 use crate::net::{self, Net, Notice};
-use crate::output::{ColorChoice, Level, Output, Style};
+use crate::output::{Level, Output, Style};
 use crate::source;
 use crate::stop::Stop;
 use crate::units;
@@ -45,6 +44,18 @@ struct Context {
 }
 
 impl Context {
+    /// a context with every setting at its default, printing through `output`.
+    fn new(output: Output) -> Context {
+        Context {
+            output: Arc::new(output),
+            offline: false,
+            yes: false,
+            jobs: JOBS,
+            work: Arc::default(),
+            stop: Arc::default(),
+        }
+    }
+
     /// the network, with credentials from where each source keeps them, and retries reported as
     /// warnings.
     fn net(&self) -> Result<Net, Error> {
@@ -95,121 +106,168 @@ fn open_cache() -> Result<Cache, Error> {
             .help("set FETCHLOOM_CACHE to a folder fetchloom may use")
     })?;
     Cache::open(root.clone()).map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("could not open the cache at {}: {err}", root.display()),
+        Error::io(
+            format_args!("could not open the cache at {}", root.display()),
+            &err,
         )
-        .help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
+}
+
+/// why fetchloom cannot start in `folder`, as `-C` asks. windows lets a program work in no folder
+/// whose path passes 258 characters, so a project deeper than that is named with its length
+/// before anything is written.
+fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
+    if err.kind() != std::io::ErrorKind::InvalidFilename {
+        return Error::new(
+            Kind::Usage,
+            format!("cannot work in {}: {err}", folder.display()),
+        )
+        .help("give -C a folder that exists and that you may open");
+    }
+    let path = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let length = path.as_os_str().to_string_lossy().chars().count();
+    Error::new(
+        Kind::Usage,
+        format!(
+            "cannot work in {}: at {length} characters, its path is too long for a working folder",
+            path.display()
+        ),
+    )
+    .help("move the project to a folder with a shorter path")
 }
 
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let args = match args::Args::try_parse() {
         Ok(args) => args,
-        Err(err) => return usage(&err),
-    };
-    let Some(command) = args.command else {
-        let _ = writeln!(std::io::stdout().lock(), "{}", welcome());
-        return ExitCode::SUCCESS;
+        Err(err) => return usage::answer(&err, started),
     };
     let global = args.global;
-    let level = match (global.quiet, global.verbose) {
-        (true, _) => Level::Quiet,
-        (false, 0) => Level::Normal,
-        (false, 1) => Level::Verbose,
-        (false, _) => Level::Debug,
-    };
+    let level = level(global.quiet, global.verbose);
     let var = |name: &str| std::env::var_os(name);
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
-    let output = Arc::new(Output::new(style, level, global.json, logs.on_stderr()));
-    let name = command.name();
-    let context = match jobs(&var) {
-        Ok(jobs) => Context {
-            output,
-            offline: global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
-            yes: global.yes,
-            jobs,
-            work: Arc::default(),
-            stop: Arc::default(),
-        },
-        Err(error) => {
-            let context = Context {
-                output,
-                offline: false,
-                yes: false,
-                jobs: JOBS,
-                work: Arc::default(),
-                stop: Arc::default(),
-            };
-            return finish::<()>(&context, name, Err(error), started);
-        }
-    };
+    let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
+    context.offline = global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1");
+    context.yes = global.yes;
+    if args.version {
+        return about(
+            &context,
+            &format!("fetchloom {}", env!("CARGO_PKG_VERSION")),
+            started,
+        );
+    }
+    let name = args.command.as_ref().map(args::Command::name);
     if let Some(folder) = &global.directory
         && let Err(err) = std::env::set_current_dir(folder)
     {
-        let error = Error::new(
-            Kind::Usage,
-            format!("cannot work in {}: {err}", folder.display()),
-        );
-        return finish::<()>(&context, name, Err(error), started);
+        return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
     }
+    let Some(command) = args.command else {
+        return alone(&context, started);
+    };
+    match jobs(&var) {
+        Ok(jobs) => context.jobs = jobs,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    dispatch(&context, command, started)
+}
+
+/// runs a command and turns how it ended into an exit code.
+fn dispatch(context: &Context, command: args::Command, started: Instant) -> ExitCode {
+    let name = Some(command.name());
     match command {
         args::Command::Add(args) => {
-            let outcome = block_on(&context, project::add(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::add(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Remove(args) => {
-            let outcome = block_on(&context, project::remove(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::remove(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {
-            let outcome = block_on(&context, project::sync(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::sync(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Lock(args) => {
-            let outcome = block_on(&context, project::lock(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::lock(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Status => {
-            let outcome = status::run(&context);
-            finish(&context, name, outcome, started)
+            let outcome = status::run(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {
-            let outcome = block_on(&context, project::path(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::path(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache { action: None }) => {
-            let outcome = cache::info(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::info(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Gc),
         }) => {
-            let outcome = cache::gc(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::gc(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Verify),
         }) => {
-            let outcome = cache::verify(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::verify(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Get(args) => {
-            let outcome = block_on(&context, get::run(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, get::run(context, args));
+            finish(context, name, outcome, started)
         }
     }
 }
 
+/// what `--version` and `fetchloom` alone report in `--json`.
+#[derive(Serialize)]
+struct About {
+    version: &'static str,
+}
+
+/// prints `text` for a person, or the version in the document `--json` asked for.
+fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
+    context.output.answer(text);
+    let about = About {
+        version: env!("CARGO_PKG_VERSION"),
+    };
+    finish(context, None, Ok(about), started)
+}
+
+/// `fetchloom` alone: a short status inside a project, and the welcome outside one.
+fn alone(context: &Context, started: Instant) -> ExitCode {
+    match project::find() {
+        Ok(project) => {
+            let outcome = status::brief(context, &project);
+            finish(context, Some("status"), outcome, started)
+        }
+        Err(_) => about(
+            context,
+            &format!("fetchloom {}\n\n{WELCOME}", env!("CARGO_PKG_VERSION")),
+            started,
+        ),
+    }
+}
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.
 fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
-    if yes || bytes <= ASK_ABOVE {
+    if bytes <= ASK_ABOVE {
         return Ok(());
     }
-    let size = units::size(bytes);
+    ask(output, yes, what, &units::size(bytes))
+}
+
+/// asks whether to download `what`, which needs `size`, as [`confirm`] does.
+fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> {
+    if yes {
+        return Ok(());
+    }
     match output.confirm(&format!("download {what} ({size})?")) {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(
@@ -234,7 +292,7 @@ fn block_on<T>(
         .worker_threads(workers)
         .enable_all()
         .build()
-        .map_err(|err| Error::new(Kind::LocalIo, format!("could not start: {err}")))?;
+        .map_err(|err| Error::io("could not start", &err))?;
     let stop = context.stop.clone();
     runtime.spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -251,7 +309,7 @@ fn block_on<T>(
 /// prints how the run ended and turns it into an exit code.
 fn finish<T: Serialize>(
     context: &Context,
-    command: &str,
+    command: Option<&str>,
     outcome: Result<T, Error>,
     started: Instant,
 ) -> ExitCode {
@@ -270,97 +328,26 @@ fn finish<T: Serialize>(
     }
 }
 
-fn welcome() -> String {
-    format!(
-        "fetchloom {}\n\nput the exact data a project needs onto any machine with one command.\n\n  fetchloom get <link>    fetch something once, without a project\n\n`fetchloom --help` lists every option.",
-        env!("CARGO_PKG_VERSION")
-    )
-}
+/// what `fetchloom` alone prints outside a project, below the version. it ends with a command to
+/// copy.
+const WELCOME: &str = "  fetchloom add <link>    add a dataset, pin it and download it into data/
+  fetchloom sync          make data/ match data.lock on this machine
+  fetchloom status        see what changed
+  fetchloom path <name>   print where a dataset is, for scripts
+  fetchloom get <link>    fetch something once, without a project
 
-/// help and version go to stdout as clap writes them. a mistake on the command line becomes one
-/// of our own errors, so it reads like every other failure.
-fn usage(err: &clap::Error) -> ExitCode {
-    if matches!(
-        err.kind(),
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-    ) {
-        let _ = err.print();
-        return ExitCode::SUCCESS;
+<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+
+get a first dataset into this folder:
+
+  fetchloom add zenodo:3608990";
+
+/// how much of the story `-q` and `-v` ask for.
+fn level(quiet: bool, verbose: u8) -> Level {
+    match (quiet, verbose) {
+        (true, _) => Level::Quiet,
+        (false, 0) => Level::Normal,
+        (false, 1) => Level::Verbose,
+        (false, _) => Level::Debug,
     }
-    let error = describe(err);
-    Output::new(
-        Style::detect(ColorChoice::Auto),
-        Level::Normal,
-        false,
-        false,
-    )
-    .error(&error);
-    ExitCode::from(error.kind.exit_code())
-}
-
-fn describe(err: &clap::Error) -> Error {
-    let named = |context| match err.get(context) {
-        Some(ContextValue::String(value)) => Some(value.clone()),
-        Some(ContextValue::Strings(values)) => values.first().cloned(),
-        _ => None,
-    };
-    let message = match (
-        err.kind(),
-        named(ContextKind::InvalidSubcommand),
-        named(ContextKind::InvalidArg),
-    ) {
-        (ErrorKind::InvalidSubcommand, Some(command), _) => {
-            format!("there is no command called \"{command}\"")
-        }
-        (ErrorKind::UnknownArgument, _, Some(arg)) => {
-            format!("there is no option called \"{arg}\"")
-        }
-        (ErrorKind::MissingRequiredArgument, _, Some(arg)) => format!("{arg} is missing"),
-        _ => first_line(err),
-    };
-    // a missing or wrong value is easiest to fix next to the usage line
-    let usage = match err.get(ContextKind::Usage) {
-        Some(ContextValue::StyledStr(text))
-            if matches!(
-                err.kind(),
-                ErrorKind::MissingRequiredArgument | ErrorKind::InvalidValue
-            ) =>
-        {
-            let text = text.to_string();
-            let text = text.trim();
-            Some(
-                text.strip_prefix("Usage:")
-                    .map_or(text, str::trim)
-                    .to_owned(),
-            )
-        }
-        _ => None,
-    };
-    let help = if let Some(command) = named(ContextKind::SuggestedSubcommand) {
-        format!("did you mean `fetchloom {command}`?")
-    } else if let Some(arg) = named(ContextKind::SuggestedArg) {
-        format!("did you mean `{arg}`?")
-    } else if let Some(ContextValue::Strings(values)) = err.get(ContextKind::ValidValue) {
-        format!("use one of: {}", values.join(", "))
-    } else if let Some(usage) = &usage {
-        let command: Vec<&str> = usage
-            .split_whitespace()
-            .take_while(|word| !word.starts_with(['[', '<']))
-            .collect();
-        format!("`{} --help` says what it takes", command.join(" "))
-    } else {
-        "`fetchloom --help` lists every command and option".to_owned()
-    };
-    let error = Error::new(Kind::Usage, message);
-    match usage {
-        Some(usage) => error.detail(format!("usage: {usage}")),
-        None => error,
-    }
-    .help(help)
-}
-
-fn first_line(err: &clap::Error) -> String {
-    let text = err.to_string();
-    let line = text.lines().next().unwrap_or_default();
-    line.strip_prefix("error: ").unwrap_or(line).to_owned()
 }

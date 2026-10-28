@@ -12,7 +12,7 @@ use url::Url;
 
 use super::failure::{self, Failure, Retry};
 use super::headers::{self, if_range};
-use super::{CONNECT, IDLE, Net, RESPONSE, host};
+use super::{IDLE, Net, host};
 use crate::cache::{Cache, Claim, Partial, PartialWriter, Stored, UrlRecord, Validators};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -112,7 +112,8 @@ enum Answer {
         name: Option<String>,
         resumed: bool,
     },
-    /// the server will not continue the earlier download, so it starts over from the first byte.
+    /// the earlier download cannot be continued, by the server or from the bytes kept, so it
+    /// starts over from the first byte.
     StartOver,
     /// the server sent a page, and the page says where the file is.
     Divert(Url),
@@ -217,9 +218,7 @@ impl Net {
                     Err(err) => return Err(err),
                 },
                 Ok(Answer::StartOver) => {
-                    tracing::debug!(
-                        "the server will not continue the earlier download, starting over"
-                    );
+                    tracing::debug!("the earlier download cannot be continued, starting over");
                     partial.discard();
                 }
                 Ok(Answer::Divert(next)) => {
@@ -322,31 +321,26 @@ impl Net {
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| pinned || if_range(validators).is_some());
-        let mut request = self.request(from);
-        if let Some((received, validators)) = &earlier {
-            request = request.header(header::RANGE, format!("bytes={received}-"));
-            if let Some(check) = if_range(validators) {
-                request = request.header(header::IF_RANGE, check);
+        let conditions = |mut request: reqwest::RequestBuilder| {
+            if let Some((received, validators)) = &earlier {
+                request = request.header(header::RANGE, format!("bytes={received}-"));
+                if let Some(check) = if_range(validators) {
+                    request = request.header(header::IF_RANGE, check);
+                }
+            } else if let Some(known) = known {
+                if let Some(etag) = &known.etag {
+                    request = request.header(header::IF_NONE_MATCH, etag);
+                }
+                if let Some(date) = &known.last_modified {
+                    request = request.header(header::IF_MODIFIED_SINCE, date);
+                }
             }
-        } else if let Some(known) = known {
-            if let Some(etag) = &known.etag {
-                request = request.header(header::IF_NONE_MATCH, etag);
-            }
-            if let Some(date) = &known.last_modified {
-                request = request.header(header::IF_MODIFIED_SINCE, date);
-            }
-        }
-        Work::add(&self.work.requests, 1);
-        let response = tokio::select! {
-            sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
-                Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(from), (CONNECT + RESPONSE).as_secs()))),
-                Ok(Err(err)) => return Err(failure::classify(from, &err)),
-                Ok(Ok(response)) => response,
-            },
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(from))),
+            request
         };
+        Work::add(&self.work.requests, 1);
+        let response = self.send(from, conditions).await?;
         let status = response.status();
-        tracing::debug!(url = %from, status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
+        tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
         if let Some(divert) = fetch.divert
             && is_page(status, &head)
@@ -371,6 +365,16 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = headers::file_name(&head);
+        let validators = headers::validators(&head);
+        let body = Body {
+            offset,
+            total,
+            validators: validators.clone(),
+            md5: fetch.expect.md5.is_some(),
+        };
+        let Some(writer) = open(partial, body).await? else {
+            return Ok(Answer::StartOver);
+        };
         on(Event::Started {
             total,
             resumed: offset,
@@ -380,14 +384,7 @@ impl Net {
         if offset > 0 {
             Work::add(&self.work.resumes, 1);
         }
-        let validators = headers::validators(&head);
-        let body = Body {
-            offset,
-            total,
-            validators: validators.clone(),
-            md5: fetch.expect.md5.is_some(),
-        };
-        let writer = self.stream(from, partial, response, body, on).await?;
+        let writer = self.stream(from, writer, response, total, on).await?;
         let stored = tokio::task::spawn_blocking(move || writer.finish())
             .await
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
@@ -404,21 +401,13 @@ impl Net {
     async fn stream(
         &self,
         url: &Url,
-        partial: &Partial,
+        mut writer: PartialWriter,
         mut response: reqwest::Response,
-        body: Body,
+        total: Option<u64>,
         on: Listener<'_>,
     ) -> Result<PartialWriter, Failure> {
-        let Body {
-            offset,
-            total,
-            validators,
-            md5,
-        } = body;
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
-        let partial = partial.clone();
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
-            let mut writer = partial.writer(offset, total, validators, md5)?;
             while let Some(chunk) = receiver.blocking_recv() {
                 writer.write_all(&chunk)?;
             }
@@ -575,19 +564,8 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         )
         .detail(format!("expected {size} bytes, got {}", stored.size)));
     }
-    if let (Some(stated), Some(got)) = (expect.md5, stored.md5)
-        && stated != got
-    {
-        return Err(Error::new(
-            Kind::IntegrityMismatch,
-            format!(
-                "{} sent bytes whose MD5 is not the one it states for {url}",
-                host(url)
-            ),
-        )
-        .detail(format!("stated md5 {stated}, got {got}"))
-        .help("try again later. if it keeps happening, the copy on the server may be damaged"));
-    }
+    // a pinned SHA-256 decides first: bytes it rejects changed upstream, which the caller knows
+    // how to fix, while an MD5 alone that disagrees means the source contradicts itself
     if let Some(expected) = expect.sha256
         && expected != stored.digest
     {
@@ -600,6 +578,19 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
             expected.short(),
             stored.digest.short()
         )));
+    }
+    if let (Some(stated), Some(got)) = (expect.md5, stored.md5)
+        && stated != got
+    {
+        return Err(Error::new(
+            Kind::IntegrityMismatch,
+            format!(
+                "{} sent bytes whose MD5 is not the one it states for {url}",
+                host(url)
+            ),
+        )
+        .detail(format!("stated md5 {stated}, got {got}"))
+        .help("try again later. if it keeps happening, the copy on the server may be damaged"));
     }
     Ok(())
 }
@@ -631,6 +622,31 @@ fn local(err: &io::Error) -> Error {
         Kind::LocalIo,
         format!("could not write to the cache: {err}"),
     )
+}
+
+/// opens the writing end of a download on a blocking thread, since continuing one hashes the
+/// bytes kept so far again. none when those bytes are not the ones recorded, so the download
+/// starts over.
+async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Failure> {
+    let Body {
+        offset,
+        total,
+        validators,
+        md5,
+    } = body;
+    let partial = partial.clone();
+    let opened =
+        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5))
+            .await
+            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
+    match opened {
+        Ok(writer) => Ok(Some(writer)),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+            tracing::debug!(%err, "the earlier download cannot be continued");
+            Ok(None)
+        }
+        Err(err) => Err(Failure::Final(local(&err))),
+    }
 }
 
 /// tells a person who stopped, or whose network failed, that the bytes so far are not lost.

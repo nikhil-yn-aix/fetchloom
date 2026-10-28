@@ -172,7 +172,7 @@ impl Cache {
             let Some(key) = name.strip_suffix(".lock") else {
                 continue;
             };
-            let Ok(lock) = fs::OpenOptions::new().write(true).open(entry.path()) else {
+            let Ok(lock) = super::partial::open_unfollowed(&entry.path(), false) else {
                 continue;
             };
             if lock.try_lock().is_err() {

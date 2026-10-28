@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use percent_encoding::percent_decode_str;
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
 /// the longest name kept, in bytes. most filesystems stop at 255.
@@ -87,20 +88,46 @@ pub(crate) fn closest<'a>(
         .map(|(_, candidate)| candidate)
 }
 
-/// the number of single-character edits that turn `a` into `b`.
+/// the `most` candidates nearest to `word`, nearest first, however far that is.
+pub(crate) fn nearest<'a>(
+    word: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    most: usize,
+) -> Vec<&'a str> {
+    let mut ranked: Vec<(usize, &str)> = candidates
+        .into_iter()
+        .map(|candidate| (distance(word, candidate), candidate))
+        .collect();
+    ranked.sort_unstable();
+    ranked
+        .into_iter()
+        .take(most)
+        .map(|(_, candidate)| candidate)
+        .collect()
+}
+
+/// the number of edits that turn `a` into `b`: adding, dropping or changing a character, or
+/// swapping two neighbours, the most common typo of all.
 fn distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut previous = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let substitute = previous + usize::from(ca != *cb);
-            previous = row[j + 1];
-            row[j + 1] = substitute.min(row[j] + 1).min(previous + 1);
+    // a swap of two neighbours reaches two rows back, so that row is kept as well
+    let mut before = vec![0; b.len() + 1];
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut row = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        row[0] = i;
+        for j in 1..=b.len() {
+            let change = previous[j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            row[j] = change.min(previous[j] + 1).min(row[j - 1] + 1);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                row[j] = row[j].min(before[j - 2] + 1);
+            }
         }
+        std::mem::swap(&mut before, &mut previous);
+        std::mem::swap(&mut previous, &mut row);
     }
-    row[b.len()]
+    previous[b.len()]
 }
 
 /// the folder `get` makes for a file: its name without the extension, and without a `.tar`
@@ -182,6 +209,17 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// a path as a case-insensitive disk compares it, so two paths with the same fold are one file
+/// on windows or macos. macos also sees both unicode forms of a name as one, so it is composed
+/// first. the round trip through uppercase matches what ntfs does with letters like the two
+/// greek sigmas, which lowercase alone keeps apart.
+pub(crate) fn fold(path: &str) -> String {
+    if path.is_ascii() {
+        return path.to_ascii_lowercase();
+    }
+    path.nfc().collect::<String>().to_uppercase().to_lowercase()
 }
 
 fn shorten(name: &str) -> String {
@@ -358,5 +396,21 @@ mod tests {
             Some("exclude")
         );
         assert_eq!(closest("banana", ["ref", "select", "exclude"]), None);
+        assert_eq!(
+            closest("irsi", ["cows", "iris"]),
+            Some("iris"),
+            "two neighbours swapped are one edit"
+        );
+        assert_eq!(distance("ab", "ba"), 1);
+        assert_eq!(closest("sync", ["iris", "cows"]), None);
+        assert_eq!(
+            closest("irxy", ["iris"]),
+            None,
+            "two changed letters of four are not close"
+        );
+        assert_eq!(
+            nearest("iris.csv", ["b.txt", "iris.tsv", "a.csv"], 2),
+            ["iris.tsv", "a.csv"]
+        );
     }
 }

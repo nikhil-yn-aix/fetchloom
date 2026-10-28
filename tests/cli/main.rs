@@ -2,6 +2,14 @@
 
 mod archives;
 mod basics;
+mod cache;
+mod concurrent;
 mod get;
+mod hints;
+mod moved;
+mod progress;
 mod project;
+mod proxy;
+mod recovery;
+mod secrets;
 mod support;

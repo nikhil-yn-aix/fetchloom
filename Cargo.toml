@@ -28,7 +28,11 @@ console = { version = "0.16", default-features = false }
 dialoguer = { version = "0.12", default-features = false }
 fastrand = "2.5"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+# the type of link hyper-util's proxy matcher takes
+http = "1.5"
 httpdate = "1.0"
+# the proxy matcher reqwest uses, so fetchloom knows when a proxy resolves a name in its place
+hyper-util = { version = "0.1.21", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 indicatif = "0.18"
 liblzma = { version = "0.4.9", default-features = false }
 md-5 = "0.11"
@@ -51,6 +55,11 @@ unicode-normalization = "0.1.26"
 url = "2.5"
 zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "zstd"] }
 zstd = { version = "0.14", default-features = false }
+
+# std cannot open a file without following a link, or tell which user runs fetchloom, without
+# unsafe. tempfile already builds rustix on unix.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 [dev-dependencies]
 insta = { version = "1.49", features = ["filters"] }

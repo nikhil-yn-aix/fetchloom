@@ -150,6 +150,11 @@ impl Hasher {
         let sha256 = Sha256(sha2::Digest::finalize(self.sha256).into());
         (sha256, self.md5.map(|md5| Md5(md5.finalize().into())))
     }
+
+    /// the SHA-256 of the bytes so far. the hasher goes on taking more.
+    pub(crate) fn sha256_so_far(&self) -> Sha256 {
+        Sha256(sha2::Digest::finalize(self.sha256.clone()).into())
+    }
 }
 
 /// the SHA-256 of `bytes`.
