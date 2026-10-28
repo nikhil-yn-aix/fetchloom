@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{CommandFactory, Parser};
+use clap::{ArgMatches, CommandFactory, Parser};
 use serde::Serialize;
 
 use crate::cache::Cache;
@@ -121,12 +121,7 @@ pub(crate) fn run() -> ExitCode {
         Err(err) => return usage(&err, started),
     };
     let global = args.global;
-    let level = match (global.quiet, global.verbose) {
-        (true, _) => Level::Quiet,
-        (false, 0) => Level::Normal,
-        (false, 1) => Level::Verbose,
-        (false, _) => Level::Debug,
-    };
+    let level = level(global.quiet, global.verbose);
     let var = |name: &str| std::env::var_os(name);
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
@@ -322,23 +317,43 @@ get a first dataset into this folder:
 
   fetchloom add zenodo:3608990";
 
+/// how much of the story `-q` and `-v` ask for.
+fn level(quiet: bool, verbose: u8) -> Level {
+    match (quiet, verbose) {
+        (true, _) => Level::Quiet,
+        (false, 0) => Level::Normal,
+        (false, 1) => Level::Verbose,
+        (false, _) => Level::Debug,
+    }
+}
+
 /// help goes to stdout as clap writes it, even with `--json`, since it is for people. a mistake
-/// on the command line becomes one of our own errors, so it reads like every other failure and
-/// fills the document `--json` asks for.
+/// on the command line becomes one of our own errors, printed like every other failure: in the
+/// document `--json` asks for, or with the detail and colors the options clap read ask for.
 fn usage(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         let _ = err.print();
         return ExitCode::SUCCESS;
     }
-    let json = asks_for_json();
-    let context = Context::new(Output::new(
-        Style::detect(ColorChoice::Auto),
-        Level::Normal,
-        json,
-        false,
-    ));
-    let command = named_command();
-    finish::<()>(&context, command.as_deref(), Err(describe(err)), started)
+    let read = args::Args::command()
+        .ignore_errors(true)
+        .try_get_matches()
+        .ok();
+    let (level, color) = read
+        .as_ref()
+        .map_or((Level::Normal, ColorChoice::Auto), |read| {
+            let quiet = read.get_flag("quiet");
+            let color = read.get_one("color").copied().unwrap_or_default();
+            (level(quiet, read.get_count("verbose")), color)
+        });
+    let output = Output::new(Style::detect(color), level, asks_for_json(), false);
+    let command = read.as_ref().and_then(named_command);
+    finish::<()>(
+        &Context::new(output),
+        command.as_deref(),
+        Err(describe(err)),
+        started,
+    )
 }
 
 /// whether the command line asks for `--json`, read from the arguments themselves, since clap
@@ -350,22 +365,16 @@ fn asks_for_json() -> bool {
         .any(|arg| arg == "--json")
 }
 
-/// the command a command line names as far as clap can read it, such as `cache` in
-/// `fetchloom cache gx`.
-fn named_command() -> Option<String> {
-    let matches = args::Args::command()
-        .ignore_errors(true)
-        .try_get_matches()
-        .ok()?;
+/// the command `read` names, such as `cache` in `fetchloom cache gx`.
+fn named_command(read: &ArgMatches) -> Option<String> {
     let mut names = Vec::new();
-    let mut current = &matches;
+    let mut current = read;
     while let Some((name, inner)) = current.subcommand() {
         names.push(name);
         current = inner;
     }
     (!names.is_empty()).then(|| names.join(" "))
 }
-
 fn describe(err: &clap::Error) -> Error {
     let named = |context| match err.get(context) {
         Some(ContextValue::String(value)) => Some(value.clone()),

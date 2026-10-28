@@ -113,6 +113,21 @@ fn a_missing_link_shows_the_usage() -> Result {
 }
 
 #[test]
+fn a_usage_error_follows_verbose_and_color() -> Result {
+    let sandbox = Sandbox::new()?;
+    let verbose = sandbox.run(&["-v", "sycn"])?;
+    assert_eq!(verbose.status.code(), Some(2));
+    let stderr = text(&verbose.stderr)?;
+    assert!(stderr.contains("\n  kind: usage\n"), "{stderr}");
+    let colored = sandbox.run(&["--color", "always", "sycn"])?;
+    let stderr = text(&colored.stderr)?;
+    assert!(stderr.starts_with("\u{1b}["), "{stderr}");
+    let plain = sandbox.run(&["sycn"])?;
+    assert!(!text(&plain.stderr)?.contains('\u{1b}'));
+    Ok(())
+}
+
+#[test]
 fn json_gets_one_document_whatever_the_command_line() -> Result {
     let sandbox = Sandbox::new()?;
     let version = env!("CARGO_PKG_VERSION");
