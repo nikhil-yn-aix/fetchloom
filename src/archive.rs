@@ -17,14 +17,20 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
 pub(crate) use detect::Format;
-#[expect(
-    unused_imports,
-    reason = "the sync loop calls these once it unpacks archives"
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "the sync loop calls these once it unpacks archives"
+    )
 )]
 pub(crate) use detect::{Detected, detect};
-#[expect(
-    unused_imports,
-    reason = "the sync loop calls these once it unpacks archives"
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "the sync loop calls these once it unpacks archives"
+    )
 )]
 pub(crate) use tree::common_top;
 pub(crate) use tree::tree_hash;
