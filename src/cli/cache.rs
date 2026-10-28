@@ -10,7 +10,7 @@ use super::{Context, open_cache};
 use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
-use crate::project::lock::Lock;
+use crate::project::lock::{self, Lock};
 use crate::units;
 
 /// what `fetchloom cache` reports, as `--json` prints it.
@@ -101,13 +101,18 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
     let total: u64 = cache.objects().iter().map(|object| object.size).sum();
-    let bar = context
-        .output
-        .bar("checking every file in the cache".to_owned());
+    let what = "every file in the cache";
+    let bar = context.output.bar(format!("checking {what}"));
     bar.start(Some(total), 0);
+    let ticker = context
+        .output
+        .ticker("Checking", what.to_owned(), [Some(total)]);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let checked = cache.verify_all(threads, &|bytes| bar.advance(bytes));
-    drop(bar);
+    let checked = cache.verify_all(threads, &|bytes| {
+        bar.advance(bytes);
+        ticker.advance(bytes);
+    });
+    drop((bar, ticker));
     let output = &context.output;
     let what = format!(
         "{} · {}",
@@ -160,6 +165,12 @@ pub(super) fn needed(
             continue;
         }
         let lock = project.lock().map_err(|err| {
+            // a broken lock is fixed in its own project, which is not where gc runs
+            let help = match err.help.as_deref() {
+                Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
+                Some(help) => help.to_owned(),
+                None => "fix that project's data.lock, then try again".to_owned(),
+            };
             Error::new(
                 Kind::ProjectInvalid,
                 format!(
@@ -168,7 +179,7 @@ pub(super) fn needed(
                 ),
             )
             .detail(err.message)
-            .help("fix that project's data.lock, or run `fetchloom lock` there, then try again")
+            .help(help)
         })?;
         if let Some(lock) = &lock {
             add(&mut needed, cache, lock);
@@ -202,5 +213,63 @@ fn add(needed: &mut Needed, cache: &Cache, lock: &Lock) {
         if !whole {
             needed.objects.insert(file.sha256);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::Member;
+    use crate::cache::tests::store;
+    use crate::project::lock::{Locked, LockedFile};
+
+    #[test]
+    fn an_archive_stays_needed_while_a_file_it_unpacked_to_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let archive = store(&cache, b"the archive itself");
+        let first = store(&cache, b"first\n");
+        let second = store(&cache, b"second\n");
+        let members = [("a.txt", &first), ("b.txt", &second)].map(|(path, stored)| Member {
+            path: path.to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+        });
+        let tree = cache.record_unpacked(&archive.digest, &members).unwrap();
+        let lock = Lock {
+            datasets: vec![Locked {
+                name: "set".to_owned(),
+                reference: "https://example.org/set.zip".to_owned(),
+                spec: String::new(),
+                resolved: "https://example.org/set.zip".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                timestamp: String::new(),
+                files: vec![LockedFile {
+                    path: "set.zip".to_owned(),
+                    size: archive.size,
+                    sha256: archive.digest,
+                    md5: None,
+                    url: "https://example.org/set.zip".to_owned(),
+                    unpacks_to: Some(tree),
+                }],
+            }],
+        };
+        let mut whole = Needed::default();
+        add(&mut whole, &cache, &lock);
+        assert!(whole.objects.contains(&second.digest));
+        assert!(
+            !whole.objects.contains(&archive.digest),
+            "its files stand for it"
+        );
+
+        cache.drop_object(&second.digest).unwrap();
+        let mut missing = Needed::default();
+        add(&mut missing, &cache, &lock);
+        assert!(
+            missing.objects.contains(&archive.digest),
+            "unpacking it again is the only way back to b.txt"
+        );
     }
 }

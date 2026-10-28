@@ -46,8 +46,14 @@ impl Project {
 
     /// data.toml's text and what it says.
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
-        let text = fs::read_to_string(self.manifest_path())
-            .map_err(|err| self.unreadable(manifest::FILE, &err))?;
+        let text = fs::read_to_string(self.manifest_path()).map_err(|err| {
+            if err.kind() == io::ErrorKind::InvalidData {
+                Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
+                    .help("save it as UTF-8, then run the command again")
+            } else {
+                self.unreadable(manifest::FILE, &err)
+            }
+        })?;
         let manifest = Manifest::parse(&text)?;
         Ok((text, manifest))
     }
@@ -57,6 +63,11 @@ impl Project {
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => Lock::parse(&text).map(Some),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
+                Kind::ProjectInvalid,
+                "data.lock cannot be read: it is not UTF-8 text",
+            )
+            .help(lock::BROKEN)),
             Err(err) => Err(self.unreadable(lock::FILE, &err)),
         }
     }
@@ -70,17 +81,13 @@ impl Project {
     /// replaces a file at the project's root in one step.
     pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         write_atomically(&self.root.join(name), bytes)
-            .map_err(|err| Error::new(Kind::LocalIo, format!("could not write {name}: {err}")))
+            .map_err(|err| Error::io(format_args!("could not write {name}"), &err))
     }
 
     pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
         let folder = self.inner()?;
-        write_atomically(&folder.join("state"), &state.render()).map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("could not record what was placed: {err}"),
-            )
-        })
+        write_atomically(&folder.join("state"), &state.render())
+            .map_err(|err| Error::io("could not record what was placed", &err))
     }
 
     /// takes the project lock, unless another fetchloom holds it.
@@ -91,12 +98,7 @@ impl Project {
             .truncate(false)
             .write(true)
             .open(folder.join("lock"))
-            .map_err(|err| {
-                Error::new(
-                    Kind::LocalIo,
-                    format!("could not open the project lock: {err}"),
-                )
-            })?;
+            .map_err(|err| Error::io("could not open the project lock", &err))?;
         match file.try_lock() {
             Ok(()) => Ok(Hold::Held(Held(Some(file)))),
             Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
@@ -131,16 +133,13 @@ impl Project {
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     fs::create_dir(&folder).map_err(|err| {
-                        Error::new(
-                            Kind::LocalIo,
-                            format!("could not create {}: {err}", folder.display()),
-                        )
+                        Error::io(format_args!("could not create {}", folder.display()), &err)
                     })?;
                 }
                 Err(err) => {
-                    return Err(Error::new(
-                        Kind::LocalIo,
-                        format!("could not read {}: {err}", folder.display()),
+                    return Err(Error::io(
+                        format_args!("could not read {}", folder.display()),
+                        &err,
                     ));
                 }
             }
@@ -192,25 +191,19 @@ impl Project {
         let folder = self.root.join(FOLDER);
         if !folder.is_dir() {
             fs::create_dir_all(&folder).map_err(|err| {
-                Error::new(
-                    Kind::LocalIo,
-                    format!("could not create {}: {err}", folder.display()),
-                )
+                Error::io(format_args!("could not create {}", folder.display()), &err)
             })?;
             write_atomically(&folder.join(".gitignore"), b"*\n").map_err(|err| {
-                Error::new(
-                    Kind::LocalIo,
-                    format!("could not write {}: {err}", folder.display()),
-                )
+                Error::io(format_args!("could not write {}", folder.display()), &err)
             })?;
         }
         Ok(folder)
     }
 
     fn unreadable(&self, name: &str, err: &io::Error) -> Error {
-        Error::new(
-            Kind::LocalIo,
-            format!("could not read {}: {err}", self.root.join(name).display()),
+        Error::io(
+            format_args!("could not read {}", self.root.join(name).display()),
+            err,
         )
     }
 }

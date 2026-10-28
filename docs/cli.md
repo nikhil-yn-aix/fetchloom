@@ -15,10 +15,6 @@ the bar: someone who is nervous in a terminal runs fetchloom for the first time 
 $ fetchloom
 fetchloom 0.1.0
 
-get a first dataset into this folder:
-
-  fetchloom add zenodo:3608990
-
   fetchloom add <link>    add a dataset, pin it and download it into data/
   fetchloom sync          make data/ match data.lock on this machine
   fetchloom status        see what changed
@@ -26,6 +22,10 @@ get a first dataset into this folder:
   fetchloom get <link>    fetch something once, without a project
 
 <link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+
+get a first dataset into this folder:
+
+  fetchloom add zenodo:3608990
 ```
 
 ```
@@ -55,7 +55,7 @@ $ fetchloom sync
 ## before anything moves
 
 - what a reference resolved to is printed before the first byte: title, version, file count, size, license.
-- a download over 1 GiB asks first on a terminal. outside one, it stops and names the flag: `--yes`.
+- a download over 1 GiB asks first on a terminal, and one whose size neither the source nor the server states asks once 1 GiB of it has arrived. outside a terminal, it stops and names the flag: `--yes`.
 - a license that restricts use, such as non-commercial or no derivatives, is shown as a yellow line.
 - a gated dataset (a hugging face repository that needs its terms accepted, a kaggle competition) stops with the page to open.
 
@@ -117,5 +117,6 @@ one module formats every size, rate, duration and count: `4.1 KiB`, `84 MiB/s`, 
 - color is decided once at start, in this order: `--color`, then `NO_COLOR`, then `CLICOLOR_FORCE`, then `CLICOLOR=0`, then `TERM=dumb` or `CI`, then whether stderr is a terminal.
 - where the terminal cannot show unicode, such as the legacy windows console, symbols fall back to ASCII: `[ok]`, `[x]`, `[!]` and a `-\|/` spinner.
 - off a terminal, or in CI, there are no spinners, no bars and no prompts. lines print plainly and a question becomes an error naming the flag that answers it.
+- there, a batch of downloads, unpacking or checking that runs past 2 seconds says what it does in one line, then how far it got in one line every 10 seconds, never a line per file: `Downloading 3 files · 1.2 GiB`, then `Downloading 410.0 MiB of 1.2 GiB · 10 s`.
 
 the crates that draw all of this are listed in [decisions](decisions.md#19-the-terminal-stack-is-small).

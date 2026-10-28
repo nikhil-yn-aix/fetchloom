@@ -1,11 +1,18 @@
 ---
 source: tests/cli/basics.rs
-expression: text(&output.stdout)?
+assertion_line: 57
+expression: stdout
 ---
 fetchloom 0.1.0
 
-put the exact data a project needs onto any machine with one command.
-
+  fetchloom add <link>    add a dataset, pin it and download it into data/
+  fetchloom sync          make data/ match data.lock on this machine
+  fetchloom status        see what changed
+  fetchloom path <name>   print where a dataset is, for scripts
   fetchloom get <link>    fetch something once, without a project
 
-`fetchloom --help` lists every option.
+<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+
+get a first dataset into this folder:
+
+  fetchloom add zenodo:3608990

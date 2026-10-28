@@ -261,6 +261,38 @@ fn changed_bytes_upstream_stop_sync_with_the_fix() -> Result {
 }
 
 #[test]
+fn changed_bytes_from_a_source_that_states_md5_get_the_same_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let same_size = b"sepal_length,species\n4.9,setosa\n";
+    assert_eq!(same_size.len(), IRIS.len());
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(same_size, "\"v2\"")])?;
+    added(&sandbox, &server)?;
+    // zenodo, figshare and dataverse state an MD5, which data.lock keeps beside the SHA-256
+    let lock = sandbox.work().join("data.lock");
+    let text_before = fs::read_to_string(&lock)?;
+    fs::write(
+        &lock,
+        text_before.replace(
+            ", url = ",
+            ", md5 = \"0773746ec982652e1c31c2c7bbaacc9c\", url = ",
+        ),
+    )?;
+    let cold = clone(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&cold, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .output()?;
+    assert_eq!(output.status.code(), Some(30));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("is not the file that was locked"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("fetchloom lock --upgrade iris"), "{stderr}");
+    Ok(())
+}
+
+#[test]
 fn offline_uses_the_cache_or_says_what_is_missing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
@@ -390,6 +422,37 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
         "{}",
         text(&typo.stderr)?
     );
+    let swapped = sandbox.run(&["path", "irsi"])?;
+    assert!(
+        text(&swapped.stderr)?.contains("did you mean iris?"),
+        "{}",
+        text(&swapped.stderr)?
+    );
+    Ok(())
+}
+
+#[test]
+fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("archives")
+        .join("python.zip");
+    let server = Server::start("/files/dataset.zip", vec![file(&fs::read(zip)?, "\"z1\"")])?;
+    added(&sandbox, &server)?;
+    let typo = sandbox.run(&["path", "dataset/data/trian.csv"])?;
+    assert_eq!(typo.status.code(), Some(2));
+    assert!(
+        text(&typo.stderr)?.contains("did you mean `fetchloom path dataset/data/train.csv`?"),
+        "{}",
+        text(&typo.stderr)?
+    );
+    let unknown = sandbox.run(&["path", "dataset/not-a-file.csv"])?;
+    assert_eq!(unknown.status.code(), Some(2));
+    let stderr = text(&unknown.stderr)?;
+    assert!(!stderr.contains("fetchloom status"), "{stderr}");
+    insta::assert_snapshot!(stderr);
     Ok(())
 }
 
@@ -435,7 +498,7 @@ fn a_pattern_that_matches_nothing_explains_why_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let output = sandbox.run(&["add", &server.url, "--select", "*.txt"])?;
-    assert_eq!(output.status.code(), Some(50));
+    assert_eq!(output.status.code(), Some(2), "the command line was wrong");
     assert!(
         !sandbox.work().join("data.toml").exists(),
         "a failed add leaves no data.toml behind"
@@ -461,6 +524,28 @@ fn status_lists_what_differs() -> Result {
     assert_eq!(output.status.code(), Some(0));
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+#[test]
+fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let inner = sandbox.work().join("data").join("iris");
+    let calm = sandbox.command_in(&inner, &[]).output()?;
+    assert_eq!(calm.status.code(), Some(0));
+    assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
+    assert_eq!(text(&calm.stderr)?, "✓ everything matches data.lock\n");
+    fs::remove_file(inner.join("iris.csv"))?;
+    let missing = sandbox.run(&[])?;
+    assert_eq!(
+        text(&missing.stderr)?,
+        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs, and `fetchloom sync` brings it in line\n"
+    );
+    let document = json(&sandbox.run(&["--json"])?)?;
+    assert_eq!(document["command"], "status");
+    assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
     Ok(())
 }
 

@@ -77,7 +77,7 @@ impl Names {
     }
 
     fn insert(&mut self, path: &str, raw: Option<&str>, is_folder: bool) -> Result<(), Error> {
-        let key = fold(path);
+        let key = name::fold(path);
         let seen = match self.seen.entry(key) {
             Entry::Vacant(vacant) => {
                 let path = (vacant.key() != path).then(|| path.into());
@@ -109,16 +109,6 @@ impl Names {
                 "the archive holds \"{path}\" both as a file and as a folder"
             ))),
         }
-    }
-}
-
-/// a name as a case-insensitive disk compares it. upper then lower case also joins letters that
-/// lower case alone keeps apart, such as the two greek sigmas.
-fn fold(path: &str) -> String {
-    if path.is_ascii() {
-        path.to_ascii_lowercase()
-    } else {
-        path.to_uppercase().to_lowercase()
     }
 }
 
