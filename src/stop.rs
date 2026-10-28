@@ -20,4 +20,9 @@ impl Stop {
         let mut receiver = self.0.subscribe();
         let _ = receiver.wait_for(|asked| *asked).await;
     }
+
+    /// whether a stop was asked, for work that runs on its own thread.
+    pub(crate) fn is_asked(&self) -> bool {
+        *self.0.borrow()
+    }
 }

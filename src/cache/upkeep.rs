@@ -26,6 +26,15 @@ pub(crate) struct Object {
     modified: SystemTime,
 }
 
+/// what the projects using a cache need from it.
+#[derive(Debug, Default)]
+pub(crate) struct Needed {
+    /// objects a project places, and archives a project has not unpacked on this machine yet.
+    pub(crate) objects: HashSet<Sha256>,
+    /// archives whose record tells what a project places from them.
+    pub(crate) unpacked: HashSet<Sha256>,
+}
+
 /// what a sweep freed.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Freed {
@@ -40,8 +49,10 @@ pub(crate) struct Freed {
 pub(crate) struct Checked {
     pub(crate) objects: u64,
     pub(crate) bytes: u64,
-    /// objects whose bytes no longer matched their name, now removed.
+    /// objects whose bytes no longer matched their name.
     pub(crate) changed: Vec<Sha256>,
+    /// changed objects that could not be removed, so they are still in the cache.
+    pub(crate) stuck: Vec<Sha256>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -110,18 +121,27 @@ impl Cache {
         objects
     }
 
-    /// removes every object not in `needed` that is older than a day, and the unfinished downloads
-    /// and temporary files left that long.
-    pub(crate) fn sweep(&self, needed: &HashSet<Sha256>, now: SystemTime) -> Freed {
+    /// removes every object not in `needed` that is older than a day, the records of archives no
+    /// project uses, and the unfinished downloads and temporary files left that long.
+    pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
         let mut freed = Freed::default();
         for object in self.objects() {
-            if !needed.contains(&object.digest)
+            if !needed.objects.contains(&object.digest)
                 && old(object.modified)
                 && fs::remove_file(&object.path).is_ok()
             {
                 freed.objects += 1;
                 freed.bytes += object.size;
+            }
+        }
+        for archive in self.unpacked_archives() {
+            let path = self.unpacked_path(&archive);
+            let stale = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(old);
+            if !needed.unpacked.contains(&archive) && stale {
+                let _ = fs::remove_file(path);
             }
         }
         freed.leftovers += self.sweep_partials(&old);
@@ -180,7 +200,7 @@ impl Cache {
     pub(crate) fn verify_all(&self, threads: usize, progress: &(dyn Fn(u64) + Sync)) -> Checked {
         let objects = self.objects();
         let next = AtomicUsize::new(0);
-        let changed = Mutex::new(Vec::new());
+        let changed = Mutex::new((Vec::new(), Vec::new()));
         std::thread::scope(|scope| {
             for _ in 0..threads.max(1) {
                 scope.spawn(|| {
@@ -188,22 +208,29 @@ impl Cache {
                         let intact = Sha256::of_file(&object.path)
                             .is_ok_and(|actual| actual == object.digest);
                         progress(object.size);
-                        if !intact && fs::remove_file(&object.path).is_ok() {
-                            changed
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .push(object.digest);
+                        if intact {
+                            continue;
+                        }
+                        let removed = fs::remove_file(&object.path).is_ok();
+                        let mut found = changed
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        found.0.push(object.digest);
+                        if !removed {
+                            found.1.push(object.digest);
                         }
                     }
                 });
             }
         });
+        let (changed, stuck) = changed
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Checked {
             objects: objects.len() as u64,
             bytes: objects.iter().map(|object| object.size).sum(),
-            changed: changed
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            changed,
+            stuck,
         }
     }
 
@@ -237,17 +264,35 @@ mod tests {
         let needed = store(&cache, b"needed");
         let unneeded = store(&cache, b"unneeded");
         let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        let keep = Needed {
+            objects: HashSet::from([needed.digest]),
+            ..Needed::default()
+        };
         assert_eq!(
-            cache
-                .sweep(&HashSet::from([needed.digest]), SystemTime::now())
-                .objects,
+            cache.sweep(&keep, SystemTime::now()).objects,
             0,
             "nothing is old yet"
         );
-        let freed = cache.sweep(&HashSet::from([needed.digest]), later);
+        let freed = cache.sweep(&keep, later);
         assert_eq!((freed.objects, freed.bytes), (1, 8));
         assert!(cache.find(&needed.digest, Some(6)).is_some());
         assert!(cache.find(&unneeded.digest, Some(8)).is_none());
+    }
+
+    #[test]
+    fn a_sweep_keeps_the_records_of_archives_in_use() {
+        let (_dir, cache) = cache();
+        let used = digest::sha256(b"used archive");
+        let unused = digest::sha256(b"unused archive");
+        for archive in [used, unused] {
+            cache.record_unpacked(&archive, &[]).unwrap();
+        }
+        let keep = Needed {
+            unpacked: HashSet::from([used]),
+            ..Needed::default()
+        };
+        cache.sweep(&keep, SystemTime::now() + GRACE + Duration::from_secs(60));
+        assert_eq!(cache.unpacked_archives(), [used]);
     }
 
     #[test]
@@ -277,5 +322,59 @@ mod tests {
         assert_eq!(seen.load(Ordering::Relaxed), 8);
         assert!(cache.find(&good.digest, Some(4)).is_some());
         assert!(cache.find(&bad.digest, Some(4)).is_none());
+    }
+
+    #[test]
+    fn a_changed_object_that_cannot_be_removed_is_still_reported() {
+        let (_dir, cache) = cache();
+        let bad = store(&cache, b"bad!");
+        damage(&bad.path);
+        let held = hold(&bad.path);
+        let checked = cache.verify_all(2, &|_| {});
+        drop(held);
+        assert_eq!(checked.changed, vec![bad.digest]);
+        assert_eq!(checked.stuck.is_empty(), !bad.path.exists());
+    }
+
+    fn damage(path: &Path) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test damages an object on purpose"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"BAD!")
+            .unwrap();
+    }
+
+    /// keeps `path` from being removed while the result lives.
+    #[cfg(windows)]
+    fn hold(path: &Path) -> impl Sized {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn hold(path: &Path) -> impl Sized {
+        use std::os::unix::fs::PermissionsExt;
+        struct Locked(PathBuf);
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        let folder = path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        Locked(folder)
     }
 }

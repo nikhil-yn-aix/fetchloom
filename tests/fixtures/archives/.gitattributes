@@ -1,0 +1,7 @@
+# archives made by real tools, kept byte for byte
+*.zip binary
+*.tar binary
+*.gz binary
+*.xz binary
+*.zst binary
+*.bz2 binary

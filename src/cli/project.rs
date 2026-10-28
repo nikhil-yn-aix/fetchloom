@@ -77,12 +77,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     if args.name.is_none()
         && let Some(name) = present(&manifest, old.as_ref(), &reference, &listing)
     {
-        let work = Loop {
-            context,
-            project: &project,
-            net,
-            cache,
-        };
+        let work = Loop::new(context, &project, net, cache);
         return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
     }
     if args.name.is_none() {
@@ -92,12 +87,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let updated = manifest::with_dataset(&text, &name, &reference, &select, &args.filter.exclude)?;
     let new_manifest = Manifest::parse(&updated)?;
     project.write(manifest::FILE, updated.as_bytes())?;
-    let work = Loop {
-        context,
-        project: &project,
-        net,
-        cache,
-    };
+    let work = Loop::new(context, &project, net, cache);
     let synced = sync_all(
         &work,
         &new_manifest,
@@ -215,15 +205,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     lock.datasets.retain(|dataset| dataset.name != args.name);
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let placement = place::run(
-        &context.output,
-        &context.work,
-        &project,
-        &new_manifest,
-        &lock,
-        &open_cache()?,
-        false,
-    )?;
+    let placement = place::Placing::new(&project, &new_manifest, &lock, &open_cache()?, false)?
+        .remove_only(&context.output)?;
     context.output.done(&format!("removed {}", args.name));
     Ok(Report {
         project: project.root,
@@ -238,12 +221,12 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let _held = hold(context, &project).await?;
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
-    let work = Loop {
+    let work = Loop::new(
         context,
-        project: &project,
-        net: Arc::new(net(context, &manifest)?),
-        cache: open_cache()?,
-    };
+        &project,
+        Arc::new(net(context, &manifest)?),
+        open_cache()?,
+    );
     let (lock_changed, placement) = sync_all(
         &work,
         &manifest,
@@ -292,23 +275,18 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             Upgrade::Only(names.into_iter().collect::<BTreeSet<_>>())
         }
     };
-    let work = Loop {
+    let work = Loop::new(
         context,
-        project: &project,
-        net: Arc::new(net(context, &manifest)?),
-        cache: open_cache()?,
-    };
+        &project,
+        Arc::new(net(context, &manifest)?),
+        open_cache()?,
+    );
     let empty = Lock::default();
     let lock = work
-        .relock(
-            &manifest,
-            old.as_ref().unwrap_or(&empty),
-            &upgrade,
-            false,
-            None,
-        )
+        .relock(&manifest, old.as_ref().unwrap_or(&empty), &upgrade, None)
         .await?;
     let changed = work.write_lock(old.as_ref(), &lock)?;
+    work.drop_unpacked(&lock);
     let moved = engine::tell_upgrades(&context.output, old.as_ref().unwrap_or(&empty), &lock);
     if changed {
         context
@@ -372,12 +350,12 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     known(&manifest, name)?;
     if !ready(&project, &manifest, name)? {
         let _held = hold(context, &project).await?;
-        let work = Loop {
+        let work = Loop::new(
             context,
-            project: &project,
-            net: Arc::new(net(context, &manifest)?),
-            cache: open_cache()?,
-        };
+            &project,
+            Arc::new(net(context, &manifest)?),
+            open_cache()?,
+        );
         sync_all(
             &work,
             &manifest,
@@ -394,7 +372,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         Some(file) => {
             let lock = project.lock()?.unwrap_or_default();
             let wanted = format!("{folder}/{file}");
-            let targets = plan::targets(&manifest, &lock)?;
+            let targets = plan::from_cache(&manifest, &lock, &open_cache()?)?.targets;
             if !targets.iter().any(|target| {
                 target.path == wanted || target.path.starts_with(&format!("{wanted}/"))
             }) {
@@ -440,8 +418,12 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
     }
     let state = project.state();
     let disk = place::scan(&project.root, &manifest.data_dir);
-    let targets = plan::targets(manifest, &lock)?;
-    Ok(targets
+    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
+    if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
+        return Ok(false);
+    }
+    Ok(planned
+        .targets
         .iter()
         .filter(|target| target.dataset == name)
         .all(|target| {
@@ -463,18 +445,11 @@ async fn sync_all(
     place::audit(work.project, manifest, &work.cache)?;
     let empty = Lock::default();
     let lock = work
-        .relock(manifest, old.unwrap_or(&empty), upgrade, true, given)
+        .relock(manifest, old.unwrap_or(&empty), upgrade, given)
         .await?;
     let changed = work.write_lock(old, &lock)?;
-    let placement = place::run(
-        &work.context.output,
-        &work.context.work,
-        work.project,
-        manifest,
-        &lock,
-        &work.cache,
-        force,
-    )?;
+    let placement = work.place(manifest, &lock, force).await?;
+    work.drop_unpacked(&lock);
     // gc keeps what registered projects need, so a failure here only risks a later download
     if let Err(err) = work.cache.register(&work.project.root) {
         tracing::debug!(%err, "could not register the project with the cache");
@@ -572,7 +547,7 @@ async fn learn_name(
                 md5: remote.md5,
                 size: remote.size,
             },
-            revalidate: false,
+            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
         },
         label: remote.path.clone(),
         dataset: None,

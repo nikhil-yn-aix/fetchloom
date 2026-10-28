@@ -2,9 +2,10 @@
 
 mod synced;
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,9 @@ pub(crate) enum Method {
 
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
+    root: PathBuf,
+    /// folders under the root already seen to be real folders, not links.
+    folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
     can_reflink: bool,
     can_hardlink: bool,
@@ -33,12 +37,14 @@ impl Placer {
     pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
-        Placer::starting_at(Method::Reflink, synced)
+        Placer::starting_at(root, Method::Reflink, synced)
     }
 
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
-    fn starting_at(first: Method, synced: Option<&'static str>) -> Placer {
+    fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
+            root,
+            folders: HashSet::new(),
             synced,
             can_reflink: first == Method::Reflink,
             can_hardlink: first != Method::Copy,
@@ -65,9 +71,7 @@ impl Placer {
         destination: &Path,
         writable: bool,
     ) -> io::Result<Method> {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        self.check_folders(destination, true)?;
         if self.can_reflink {
             match reflink_copy::reflink(object, destination) {
                 Ok(()) => {
@@ -87,6 +91,38 @@ impl Placer {
         copy(object, destination)?;
         seal(destination, writable)?;
         Ok(Method::Copy)
+    }
+
+    /// checks every folder between the root and `path`, refusing a link among them, so a link
+    /// inside the data folder can never send a file elsewhere or delete one there. with `make`,
+    /// missing folders are made one at a time. each folder is checked once.
+    pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
+        let path = std::path::absolute(path)?;
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        if self.folders.contains(parent) {
+            return Ok(());
+        }
+        if make && !self.folders.contains(&self.root) {
+            fs::create_dir_all(&self.root)?;
+            self.folders.insert(self.root.clone());
+        }
+        let inside = parent.strip_prefix(&self.root).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is outside {}", path.display(), self.root.display()),
+            )
+        })?;
+        let mut folder = self.root.clone();
+        for part in inside.components() {
+            folder.push(part);
+            if !self.folders.contains(&folder) {
+                real_folder(&folder, make)?;
+                self.folders.insert(folder.clone());
+            }
+        }
+        Ok(())
     }
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
@@ -145,6 +181,35 @@ fn is_refusal_code(code: i32) -> bool {
 #[cfg(not(any(windows, target_os = "macos")))]
 fn is_refusal_code(_code: i32) -> bool {
     false
+}
+
+/// checks that `folder` is a real folder, not a link to one, and makes it when `make` asks and it
+/// is missing.
+fn real_folder(folder: &Path, make: bool) -> io::Result<()> {
+    match fs::symlink_metadata(folder) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a link, and fetchloom only places files in real folders",
+                folder.display()
+            ),
+        )),
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            format!("{} is a file where a folder should be", folder.display()),
+        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound && make => {
+            match fs::create_dir(folder) {
+                // another process made it first
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                    real_folder(folder, false)
+                }
+                created => created,
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// copies `object` to `destination`, failing when `destination` exists.
@@ -221,7 +286,7 @@ mod tests {
     fn a_hardlink_is_chosen_on_one_volume() {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Hardlink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         let method = placer.place(&object, &destination, false).unwrap();
 
@@ -233,7 +298,7 @@ mod tests {
     fn starting_below_hardlinks_falls_back_to_a_copy() {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Copy, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
 
         let method = placer.place(&object, &destination, false).unwrap();
 
@@ -249,7 +314,7 @@ mod tests {
             .join("data")
             .join("weather")
             .join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Hardlink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         placer.place(&object, &destination, false).unwrap();
 
@@ -262,7 +327,7 @@ mod tests {
             let (folder, object) = cache(true);
             let destination = folder.path().join("placed.csv");
             fs::write(&destination, "edited by hand").unwrap();
-            let mut placer = Placer::starting_at(first, None);
+            let mut placer = Placer::starting_at(folder.path().to_path_buf(), first, None);
 
             let error = placer.place(&object, &destination, false).unwrap_err();
 
@@ -279,7 +344,7 @@ mod tests {
     fn a_hardlink_keeps_the_objects_read_only_flag() {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Hardlink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         let method = placer.place(&object, &destination, false).unwrap();
 
@@ -292,7 +357,7 @@ mod tests {
     fn a_copy_is_made_read_only() {
         let (folder, object) = cache(false);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Copy, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
 
         placer.place(&object, &destination, false).unwrap();
 
@@ -303,7 +368,7 @@ mod tests {
     fn a_writable_placement_is_a_writable_copy() {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Hardlink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         let method = placer.place(&object, &destination, true).unwrap();
 
@@ -316,7 +381,11 @@ mod tests {
     fn a_synced_folder_gets_a_copy_instead_of_a_hardlink() {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
-        let mut placer = Placer::starting_at(Method::Hardlink, Some("onedrive"));
+        let mut placer = Placer::starting_at(
+            folder.path().to_path_buf(),
+            Method::Hardlink,
+            Some("onedrive"),
+        );
 
         let method = placer.place(&object, &destination, false).unwrap();
 
@@ -326,7 +395,7 @@ mod tests {
     #[test]
     fn the_whole_ladder_never_copies_within_one_volume() {
         let (folder, object) = cache(true);
-        let mut placer = Placer::starting_at(Method::Reflink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
 
         for name in ["first.csv", "second.csv"] {
             let destination = folder.path().join(name);
@@ -350,7 +419,8 @@ mod tests {
         ];
         for refusal in refusals {
             let (folder, object) = cache(true);
-            let mut placer = Placer::starting_at(Method::Hardlink, None);
+            let mut placer =
+                Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
             let described = refusal.to_string();
 
             placer.learn(Method::Hardlink, refusal).unwrap();
@@ -365,7 +435,7 @@ mod tests {
     #[test]
     fn too_many_links_falls_back_for_that_file_alone() {
         let (folder, object) = cache(true);
-        let mut placer = Placer::starting_at(Method::Hardlink, None);
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         placer
             .learn(Method::Hardlink, io::ErrorKind::TooManyLinks.into())
@@ -379,5 +449,41 @@ mod tests {
 
     fn is_read_only(path: &Path) -> bool {
         fs::metadata(path).unwrap().permissions().readonly()
+    }
+
+    #[test]
+    fn a_link_inside_the_root_is_never_followed() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let outside = folder.path().join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let link = root.join("dataset");
+        if !link_folder(&outside, &link) {
+            return;
+        }
+        let mut placer = Placer::new(&root);
+
+        let error = placer
+            .place(&object, &link.join("placed.csv"), false)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("is a link"), "{error}");
+        assert!(!outside.join("placed.csv").exists());
+        assert!(placer.check_folders(&link.join("old.csv"), false).is_err());
+    }
+
+    /// makes `link` point at the folder `target`: a junction on windows, which needs no admin.
+    fn link_folder(target: &Path, link: &Path) -> bool {
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|output| output.status.success());
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link).is_ok();
+        made
     }
 }

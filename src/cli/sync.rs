@@ -3,19 +3,22 @@
 
 mod draft;
 pub(super) mod place;
+mod unpack;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use tokio::task::JoinSet;
 use url::Url;
 
 use self::draft::Draft;
+use self::place::{Placement, Placing};
 use super::Context;
 use super::fetch::{self, Job};
 use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
@@ -51,26 +54,73 @@ pub(super) struct Loop<'a> {
     pub(super) project: &'a Project,
     pub(super) net: Arc<Net>,
     pub(super) cache: Cache,
+    /// archives this run unpacked, whose own bytes the cache may drop once their files are in.
+    unpacked: Mutex<Vec<Sha256>>,
 }
 
-/// one file to put in the cache, and where its result goes.
-enum Slot {
-    /// a file whose hash only its bytes can tell: draft and file index.
-    Learn(usize, usize),
-    /// a file the lock already pins, missing from the cache.
-    Fill,
-}
+impl<'a> Loop<'a> {
+    pub(super) fn new(
+        context: &'a Context,
+        project: &'a Project,
+        net: Arc<Net>,
+        cache: Cache,
+    ) -> Self {
+        Loop {
+            context,
+            project,
+            net,
+            cache,
+            unpacked: Mutex::default(),
+        }
+    }
 
-impl Loop<'_> {
-    /// the lock data.toml asks for. datasets whose entry changed are resolved again, files whose
-    /// hash no source states are downloaded to learn it, and with `fill` every file the lock
-    /// names is put in the cache. `given` is a listing already resolved for one dataset.
+    /// makes the data folder match `lock`. what each file needs is decided first, so only the
+    /// bytes placing lacks are downloaded. archives this machine never unpacked are unpacked
+    /// first, since what they hold decides where files go.
+    pub(super) async fn place(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        force: bool,
+    ) -> Result<Placement, Error> {
+        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        let unknown = placing.unknown();
+        if !unknown.is_empty() {
+            self.unpack_locked(&unknown).await?;
+            placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        }
+        let (archives, files): (Vec<_>, Vec<_>) = placing
+            .missing(&self.cache)
+            .into_iter()
+            .partition(|(_, file)| file.unpacks_to.is_some());
+        let jobs = files
+            .into_iter()
+            .map(|(dataset, file)| {
+                job(
+                    &dataset,
+                    &file.path,
+                    &file.url,
+                    Expect {
+                        sha256: Some(file.sha256),
+                        md5: file.md5,
+                        size: Some(file.size),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.download(jobs).await?;
+        self.unpack_locked(&archives).await?;
+        placing.apply(&self.context.output, &self.context.work, &self.cache)
+    }
+
+    /// the lock data.toml asks for. datasets whose entry changed are resolved again, and files
+    /// whose hash no source states are downloaded to learn it. `given` is a listing already
+    /// resolved for one dataset.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
         old: &Lock,
         upgrade: &Upgrade,
-        fill: bool,
         given: Option<(String, Listing)>,
     ) -> Result<Lock, Error> {
         let mut kept: Vec<Locked> = Vec::new();
@@ -95,41 +145,25 @@ impl Loop<'_> {
                 &manifest.datasets[&name],
                 listing,
                 old.get(&name),
+                upgrade.includes(&name),
+                &self.cache,
             )?);
         }
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
         for (index, draft) in drafts.iter().enumerate() {
-            for (file, job) in draft.jobs(&self.cache, fill) {
-                slots.push(file.map_or(Slot::Fill, |file| Slot::Learn(index, file)));
+            for (file, job) in draft.jobs(&self.cache) {
+                slots.push((index, file));
                 jobs.push(job);
             }
         }
-        if fill {
-            for locked in &kept {
-                for file in &locked.files {
-                    if self.cache.find(&file.sha256, Some(file.size)).is_none() {
-                        slots.push(Slot::Fill);
-                        jobs.push(job(
-                            &locked.name,
-                            &file.path,
-                            &file.url,
-                            Expect {
-                                sha256: Some(file.sha256),
-                                md5: file.md5,
-                                size: Some(file.size),
-                            },
-                        )?);
-                    }
-                }
-            }
-        }
         let fetched = self.download(jobs).await?;
-        for (slot, fetched) in slots.into_iter().zip(fetched) {
-            if let Slot::Learn(draft, file) = slot {
+        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
+            if let Some(file) = file {
                 drafts[draft].learn(file, &fetched);
             }
         }
+        self.unpack_drafts(&mut drafts).await?;
         let now = lock::timestamp(SystemTime::now());
         let mut datasets = kept;
         datasets.extend(drafts.into_iter().map(|draft| {

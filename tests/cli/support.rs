@@ -30,6 +30,10 @@ impl Sandbox {
         self.root.path().join("work")
     }
 
+    pub(crate) fn cache(&self) -> PathBuf {
+        self.root.path().join("cache")
+    }
+
     /// another folder in the sandbox, such as a second clone of a project.
     pub(crate) fn folder(&self, name: &str) -> Result<PathBuf> {
         let path = self.root.path().join(name);
@@ -50,7 +54,7 @@ impl Sandbox {
         command
             .args(args)
             .current_dir(self.work())
-            .env("FETCHLOOM_CACHE", self.root.path().join("cache"))
+            .env("FETCHLOOM_CACHE", self.cache())
             .env("CLICOLOR", "0")
             .env("HOME", &home)
             .env("USERPROFILE", &home)

@@ -1,15 +1,13 @@
 //! `fetchloom cache`: where the cache is and what it holds. `cache gc` frees what no project needs,
 //! and `cache verify` hashes every object again.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Cache, Checked, Freed};
-use crate::digest::Sha256;
+use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::units;
@@ -32,7 +30,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let bytes: u64 = objects.iter().map(|object| object.size).sum();
     let kept: u64 = objects
         .iter()
-        .filter(|object| needed.contains(&object.digest))
+        .filter(|object| needed.objects.contains(&object.digest))
         .map(|object| object.size)
         .sum();
     let output = &context.output;
@@ -117,24 +115,38 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     );
     if checked.changed.is_empty() {
         output.done(&format!("verified {what}. every one is intact"));
-    } else {
-        for digest in &checked.changed {
+        return Ok(checked);
+    }
+    for digest in &checked.changed {
+        if !checked.stuck.contains(digest) {
             output.warn(&format!("object {digest} had changed and was removed"));
         }
-        output.done(&format!(
-            "verified {what}. {} changed and were removed",
-            units::count(checked.changed.len() as u64, "object", "objects")
-        ));
-        output.hint("the next sync downloads what a project still needs");
     }
-    Ok(checked)
+    let mut error = Error::new(
+        Kind::IntegrityMismatch,
+        format!(
+            "verified {what}. {} had changed",
+            units::count(checked.changed.len() as u64, "object", "objects")
+        ),
+    );
+    if checked.stuck.is_empty() {
+        return Err(error.help("the next sync downloads what a project still needs"));
+    }
+    error = error.detail(format!(
+        "{} could not be removed:",
+        units::count(checked.stuck.len() as u64, "of them", "of them")
+    ));
+    for digest in checked.stuck.iter().take(5) {
+        error = error.detail(cache.object_path(digest).display().to_string());
+    }
+    Err(error.help("remove them by hand. if others write to this cache, check who changed them"))
 }
 
-/// every object a registered project's data.lock needs, and the projects still on disk. a
-/// project whose data.toml is gone is forgotten. a lock that cannot be read stops gc, so nothing
-/// a project needs is ever deleted by mistake.
-fn needed(cache: &Cache) -> Result<(HashSet<Sha256>, Vec<PathBuf>), Error> {
-    let mut needed = HashSet::new();
+/// every object a registered project's data.lock needs, following each archive to the files it
+/// unpacked to, and the projects still on disk. a project whose data.toml is gone is forgotten. a
+/// lock that cannot be read stops gc, so nothing a project needs is ever deleted by mistake.
+fn needed(cache: &Cache) -> Result<(Needed, Vec<PathBuf>), Error> {
+    let mut needed = Needed::default();
     let mut projects = Vec::new();
     for root in cache.projects() {
         let project = Project { root };
@@ -153,8 +165,26 @@ fn needed(cache: &Cache) -> Result<(HashSet<Sha256>, Vec<PathBuf>), Error> {
             .detail(err.message)
             .help("fix that project's data.lock, or run `fetchloom lock` there, then try again")
         })?;
-        for dataset in lock.iter().flat_map(|lock| &lock.datasets) {
-            needed.extend(dataset.files.iter().map(|file| file.sha256));
+        for file in lock
+            .iter()
+            .flat_map(|lock| &lock.datasets)
+            .flat_map(|dataset| &dataset.files)
+        {
+            let members = file
+                .unpacks_to
+                .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
+            match members {
+                Some(members) => {
+                    needed.unpacked.insert(file.sha256);
+                    needed
+                        .objects
+                        .extend(members.iter().map(|member| member.sha256));
+                }
+                // a plain file, or an archive not unpacked here yet, whose own bytes are needed
+                None => {
+                    needed.objects.insert(file.sha256);
+                }
+            }
         }
         projects.push(project.root);
     }

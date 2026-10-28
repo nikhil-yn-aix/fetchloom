@@ -12,6 +12,7 @@ use super::manifest::Entry;
 use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
+use crate::name;
 
 pub(crate) const FILE: &str = "data.lock";
 const VERSION: u32 = 1;
@@ -78,6 +79,7 @@ impl Lock {
                 datasets.sort_by(|a, b| a.name.cmp(&b.name));
                 for dataset in &mut datasets {
                     dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
+                    check_paths(dataset)?;
                 }
                 Ok(Lock { datasets })
             }
@@ -217,6 +219,25 @@ fn other_version(version: u32) -> Error {
     .help("run `fetchloom lock` to write it again in this format")
 }
 
+/// refuses a lock that would place a file outside its dataset's folder. fetchloom never writes
+/// such a path, so the lock was edited or made by someone else.
+fn check_paths(dataset: &Locked) -> Result<(), Error> {
+    for file in &dataset.files {
+        if let Some(reason) = name::escapes(&file.path) {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "data.lock lists {} in {}, which fetchloom refuses because {reason}",
+                    quoted(&file.path),
+                    dataset.name
+                ),
+            )
+            .help("only fetchloom writes data.lock. restore it from git, or run `fetchloom lock` to write it again"));
+        }
+    }
+    Ok(())
+}
+
 fn tree<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Sha256>, D::Error> {
     let Some(text) = Option::<String>::deserialize(deserializer)? else {
         return Ok(None);
@@ -315,6 +336,26 @@ mod tests {
         let broken = Lock::parse("version = 1\n[[dataset]]\nname = 3\n").unwrap_err();
         assert_eq!(broken.kind, Kind::ProjectInvalid);
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
+    }
+
+    #[test]
+    fn a_path_that_leaves_its_folder_is_refused() {
+        for path in [
+            "../../outside.txt",
+            "a/../../b",
+            "..\\\\..\\\\outside.txt",
+            "/etc/passwd",
+            "C:/Windows/x",
+            "a//b",
+        ] {
+            let text = format!(
+                "version = 1\n[[dataset]]\nname = \"x\"\nref = \"https://example.org/x\"\nspec = \"sha256:00\"\nresolved = \"https://example.org/x\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles = [\n  {{ path = \"{path}\", size = 1, sha256 = \"{}\", url = \"https://example.org/x\" }},\n]\n",
+                digest::sha256(b"x")
+            );
+            let err = Lock::parse(&text).unwrap_err();
+            assert_eq!(err.kind, Kind::ProjectInvalid, "{path}");
+            assert!(err.message.contains("data.lock"), "{}", err.message);
+        }
     }
 
     #[test]
