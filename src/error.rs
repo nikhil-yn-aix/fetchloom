@@ -10,11 +10,14 @@ pub(crate) enum Kind {
     Unconfirmed,
     ReferenceInvalid,
     ReferenceUnresolved,
+    /// a source answered in a way fetchloom cannot use, such as a listing it cannot read.
+    SourceInvalid,
     NetworkUnreachable,
     NetworkStatus,
     NetworkRateLimited,
     NetworkRefused,
     OfflineMissing,
+    IntegrityMismatch,
     AuthRequired,
     LocalIo,
     LocalNotEmpty,
@@ -29,11 +32,13 @@ impl Kind {
             Kind::Unconfirmed => "unconfirmed",
             Kind::ReferenceInvalid => "reference.invalid",
             Kind::ReferenceUnresolved => "reference.unresolved",
+            Kind::SourceInvalid => "source.invalid",
             Kind::NetworkUnreachable => "network.unreachable",
             Kind::NetworkStatus => "network.status",
             Kind::NetworkRateLimited => "network.rate_limited",
             Kind::NetworkRefused => "network.refused",
             Kind::OfflineMissing => "offline.missing",
+            Kind::IntegrityMismatch => "integrity.mismatch",
             Kind::AuthRequired => "auth.required",
             Kind::LocalIo => "local.io",
             Kind::LocalNotEmpty => "local.not_empty",
@@ -46,12 +51,13 @@ impl Kind {
         match self {
             Kind::Unconfirmed => 1,
             Kind::Usage => 2,
-            Kind::ReferenceInvalid | Kind::ReferenceUnresolved => 10,
+            Kind::ReferenceInvalid | Kind::ReferenceUnresolved | Kind::SourceInvalid => 10,
             Kind::NetworkUnreachable
             | Kind::NetworkStatus
             | Kind::NetworkRateLimited
             | Kind::NetworkRefused
             | Kind::OfflineMissing => 20,
+            Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty => 50,
             Kind::Interrupted => 130,

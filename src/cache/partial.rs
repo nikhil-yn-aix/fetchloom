@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Cache, Stored, Validators, key_of};
-use crate::digest::Hasher;
+use super::{Cache, Stored, Validators};
+use crate::digest::{self, Hasher};
 
 /// how often a download records its progress, so a killed run loses little.
 const SAVE_EVERY: u64 = 64 * 1024 * 1024;
@@ -42,7 +42,7 @@ struct Record {
 impl Cache {
     /// claims the unfinished download of `url` for this process, unless another process has it.
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
-        let key = key_of(url);
+        let key = digest::sha256(url.as_bytes()).hex();
         let partial = self.root.join("partial");
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
@@ -82,12 +82,14 @@ impl Partial {
     }
 
     /// writes from byte `offset` on. the record is the truth: bytes past it are cut off, and the
-    /// bytes before it are hashed again so the final hash covers the whole file.
+    /// bytes before it are hashed again so the final hash covers the whole file. `md5` also
+    /// computes the MD5, to check one a source stated.
     pub(crate) fn writer(
         &self,
         offset: u64,
         length: Option<u64>,
         validators: Validators,
+        md5: bool,
     ) -> io::Result<PartialWriter> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -96,7 +98,11 @@ impl Partial {
             .write(true)
             .open(&self.bytes)?;
         file.set_len(offset)?;
-        let mut hasher = Hasher::default();
+        let mut hasher = if md5 {
+            Hasher::with_md5()
+        } else {
+            Hasher::default()
+        };
         if offset > 0 {
             let mut buffer = vec![0; BUFFER];
             loop {
@@ -175,7 +181,8 @@ impl PartialWriter {
         let file = file.into_inner().map_err(io::IntoInnerError::into_error)?;
         file.sync_all()?;
         drop(file);
-        let stored = cache.publish(&bytes, hasher.finish(), written)?;
+        let (digest, md5) = hasher.finish();
+        let stored = cache.publish(&bytes, digest, written, md5)?;
         let _ = fs::remove_file(&record_path);
         Ok(stored)
     }
@@ -199,7 +206,7 @@ impl Write for PartialWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{cache, download};
+    use super::super::tests::{cache, store};
     use super::*;
 
     fn owned(cache: &Cache, url: &str) -> Partial {
@@ -218,7 +225,9 @@ mod tests {
             last_modified: None,
         };
         let partial = owned(&cache, url);
-        let mut writer = partial.writer(0, Some(6), validators.clone()).unwrap();
+        let mut writer = partial
+            .writer(0, Some(6), validators.clone(), true)
+            .unwrap();
         writer.write_all(b"abc").unwrap();
         writer.save().unwrap();
         // bytes written after the last save are lost on a crash, so the record must win
@@ -228,12 +237,17 @@ mod tests {
         assert_eq!(received, 3);
         assert_eq!(seen, validators);
 
-        let mut resumed = partial.writer(received, Some(6), seen).unwrap();
+        let mut resumed = partial.writer(received, Some(6), seen, true).unwrap();
         assert_eq!(resumed.written(), 3);
         resumed.write_all(b"def").unwrap();
         let stored = resumed.finish().unwrap();
         assert_eq!(fs::read(&stored.path).unwrap(), b"abcdef");
         assert_eq!(stored.size, 6);
+        assert_eq!(
+            stored.md5.map(|md5| md5.hex()).as_deref(),
+            Some("e80b5017098950fc58aad83c8c14978e"),
+            "md5 covers the resumed prefix too"
+        );
         assert!(
             partial.resumable().is_none(),
             "a finished download leaves nothing to resume"
@@ -259,11 +273,13 @@ mod tests {
         let (_dir, cache) = cache();
         let url = "https://example.org/a";
         let partial = owned(&cache, url);
-        let mut writer = partial.writer(0, None, Validators::default()).unwrap();
+        let mut writer = partial
+            .writer(0, None, Validators::default(), false)
+            .unwrap();
         writer.write_all(b"abc").unwrap();
         let stored = writer.finish().unwrap();
         assert_eq!(fs::read(&stored.path).unwrap(), b"abc");
         drop(partial);
-        assert_eq!(download(&cache, url, b"abc").path, stored.path);
+        assert_eq!(store(&cache, b"abc").path, stored.path);
     }
 }

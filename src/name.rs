@@ -62,6 +62,65 @@ pub(crate) fn folder_for(file: &str) -> String {
     }
 }
 
+/// why a path inside a dataset or an archive could reach outside its folder on some platform,
+/// if it could. such a path is refused everywhere, so a `data.lock` works on every machine.
+pub(crate) fn escapes(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("it is empty");
+    }
+    if path.starts_with('/') {
+        return Some("it starts at the root of the disk");
+    }
+    if path.contains('\\') {
+        return Some("it has a \\, which windows reads as a folder separator");
+    }
+    if path.contains('\0') {
+        return Some("it holds a NUL character");
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Some("it names a windows drive");
+    }
+    for part in path.split('/') {
+        if part.is_empty() {
+            return Some("it has an empty folder name");
+        }
+        if part == "." || part == ".." {
+            return Some("it climbs out of its folder");
+        }
+    }
+    None
+}
+
+/// why this machine's disks cannot store a path, if they cannot. checked before anything is
+/// written, since other platforms may store the same path fine.
+pub(crate) fn unstorable(path: &str) -> Option<String> {
+    for part in path.split('/') {
+        if part.len() > 255 {
+            return Some(format!("\"{}…\" is longer than disks allow", shorten(part)));
+        }
+        if cfg!(windows) {
+            if let Some(c) = part
+                .chars()
+                .find(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+            {
+                return Some(format!(
+                    "\"{part}\" has {c:?}, which windows does not allow in names"
+                ));
+            }
+            if part.ends_with(['.', ' ']) {
+                return Some(format!(
+                    "\"{part}\" ends with a dot or a space, which windows drops"
+                ));
+            }
+            if is_reserved_on_windows(part) {
+                return Some(format!("\"{part}\" is a name windows reserves for devices"));
+            }
+        }
+    }
+    None
+}
+
 fn shorten(name: &str) -> String {
     if name.len() <= LONGEST {
         return name.to_owned();
@@ -154,5 +213,41 @@ mod tests {
         assert_eq!(folder_for("release-v1.2.zip"), "release-v1.2");
         assert_eq!(folder_for("README"), "README");
         assert_eq!(folder_for(".hidden"), "hidden");
+    }
+
+    #[test]
+    fn paths_that_could_escape_are_caught_on_every_platform() {
+        for safe in ["a.csv", "a/b/c.csv", "ünïcode/名前.txt", "con.csv", "ab:c"] {
+            assert_eq!(escapes(safe), None, "{safe}");
+        }
+        // on windows `a:b` is a path on drive A, so it leaves the folder
+        for unsafe_path in [
+            "",
+            "/etc/passwd",
+            "../x",
+            "a/../../x",
+            "a//b",
+            "a/./b",
+            "a\\b",
+            "C:x",
+            "c:/x",
+            "a:b",
+            "a\0b",
+            "a/",
+        ] {
+            assert!(escapes(unsafe_path).is_some(), "{unsafe_path:?}");
+        }
+    }
+
+    #[test]
+    fn storable_depends_on_the_platform() {
+        assert_eq!(unstorable("data/train.csv"), None);
+        assert!(unstorable(&"x".repeat(256)).is_some());
+        assert_eq!(
+            unstorable("2020-01-01T10:00:00.csv").is_some(),
+            cfg!(windows)
+        );
+        assert_eq!(unstorable("data/CON.txt").is_some(), cfg!(windows));
+        assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
     }
 }

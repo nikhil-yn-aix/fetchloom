@@ -15,17 +15,69 @@ use serde::Serialize;
 
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
+use crate::net::{self, Net, Notice};
 use crate::output::{ColorChoice, Level, Output, Style};
+use crate::source;
 use crate::stop::Stop;
+use crate::units;
 use crate::work::Work;
+
+/// downloads running at once when `FETCHLOOM_JOBS` says nothing. downloads wait on the network,
+/// not the processor, so the number does not follow the core count.
+const JOBS: usize = 8;
 
 /// what every command gets: where to print, the settings, the counters and the stop signal.
 struct Context {
-    output: Output,
+    output: Arc<Output>,
     offline: bool,
     yes: bool,
+    jobs: usize,
     work: Arc<Work>,
     stop: Arc<Stop>,
+}
+
+impl Context {
+    /// the network, with credentials from where each source keeps them, and retries reported as
+    /// warnings.
+    fn net(&self) -> Result<Net, Error> {
+        let output = self.output.clone();
+        let notify: net::Notify = Arc::new(move |notice| match notice {
+            Notice::Retrying { reason, wait, next } => {
+                output.warn(&format!(
+                    "{reason}. trying again in {} (try {next} of {})",
+                    units::duration(wait),
+                    net::ATTEMPTS
+                ));
+            }
+        });
+        let options = net::Options {
+            offline: self.offline,
+            jobs: self.jobs,
+            credentials: source::credentials(&|name| std::env::var_os(name)),
+        };
+        Net::new(options, self.work.clone(), self.stop.clone(), notify)
+    }
+}
+
+/// `FETCHLOOM_JOBS`, or the default.
+fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error> {
+    let Some(value) = var("FETCHLOOM_JOBS").filter(|value| !value.is_empty()) else {
+        return Ok(JOBS);
+    };
+    value
+        .to_str()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .filter(|jobs| (1..=256).contains(jobs))
+        .ok_or_else(|| {
+            Error::new(
+                Kind::Usage,
+                format!(
+                    "FETCHLOOM_JOBS is \"{}\", which is not a number from 1 to 256",
+                    value.display()
+                ),
+            )
+            .help(format!("unset it to use the default of {JOBS}"))
+        })
 }
 
 /// the cache this machine uses, created on first use.
@@ -63,15 +115,30 @@ pub(crate) fn run() -> ExitCode {
     let var = |name: &str| std::env::var_os(name);
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
-    let context = Context {
-        output: Output::new(style, level, global.json, logs.on_stderr()),
-        offline: global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
-        yes: global.yes,
-        work: Arc::default(),
-        stop: Arc::default(),
-    };
+    let output = Arc::new(Output::new(style, level, global.json, logs.on_stderr()));
     let name = match &command {
         args::Command::Get(_) => "get",
+    };
+    let context = match jobs(&var) {
+        Ok(jobs) => Context {
+            output,
+            offline: global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
+            yes: global.yes,
+            jobs,
+            work: Arc::default(),
+            stop: Arc::default(),
+        },
+        Err(error) => {
+            let context = Context {
+                output,
+                offline: false,
+                yes: false,
+                jobs: JOBS,
+                work: Arc::default(),
+                stop: Arc::default(),
+            };
+            return finish::<()>(&context, name, Err(error), started);
+        }
     };
     if let Some(folder) = &global.directory
         && let Err(err) = std::env::set_current_dir(folder)

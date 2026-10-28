@@ -1,0 +1,498 @@
+//! sources: where datasets live, how a person names one, and how each lists its files. a source
+//! never downloads file bodies. it says what to download and how to check it.
+
+mod dataverse;
+mod doi;
+mod drive;
+mod dropbox;
+mod figshare;
+mod hf;
+mod kaggle;
+mod osf;
+#[cfg(test)]
+pub(crate) mod recorded;
+mod zenodo;
+
+use std::collections::HashSet;
+use std::ffi::OsString;
+use std::fmt;
+use std::path::PathBuf;
+
+use url::Url;
+
+use crate::digest::{Md5, Sha256};
+use crate::error::{Error, Kind};
+use crate::name;
+use crate::net::{self, Api, Credential, Divert, Response};
+
+/// the most files one dataset may list, so `data.lock` stays small and memory stays bounded.
+pub(crate) const MOST_FILES: usize = 100_000;
+
+/// reads the environment, so tests can give each run its own.
+pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+/// where a dataset comes from, parsed once where it enters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Reference {
+    Url(Url),
+    Doi(doi::Doi),
+    Zenodo(zenodo::Record),
+    Figshare(figshare::Article),
+    Dataverse(dataverse::Dataset),
+    Osf(osf::Node),
+    HuggingFace(hf::Repo),
+    Kaggle(kaggle::Dataset),
+    Drive(drive::Item),
+    Dropbox(dropbox::Link),
+}
+
+/// a reference, and the one file inside it when a pasted link pointed at a single file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Parsed {
+    pub(crate) reference: Reference,
+    pub(crate) file: Option<String>,
+}
+
+/// what a source says a dataset holds, at one exact version.
+#[derive(Clone, Debug)]
+pub(crate) struct Listing {
+    /// the exact version, as a reference that keeps naming these same files.
+    pub(crate) resolved: Reference,
+    pub(crate) title: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) license: Option<String>,
+    pub(crate) doi: Option<String>,
+    pub(crate) files: Vec<Remote>,
+}
+
+/// one file a source lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Remote {
+    /// where the file goes inside the dataset, with `/` between folders.
+    pub(crate) path: String,
+    pub(crate) size: Option<u64>,
+    pub(crate) sha256: Option<Sha256>,
+    pub(crate) md5: Option<Md5>,
+    /// a URL that keeps serving these bytes. `data.lock` records it, so it never carries a token
+    /// or a signature.
+    pub(crate) url: Url,
+    /// the path is only a guess from the link, and the name the server sends replaces it.
+    pub(crate) named_by_server: bool,
+}
+
+impl Reference {
+    /// reads a reference as a person writes it: an id such as `zenodo:3608990`, a DOI, or a link
+    /// pasted from a browser.
+    pub(crate) fn parse(text: &str) -> Result<Parsed, Error> {
+        let text = text.trim();
+        let whole = |reference| {
+            Ok(Parsed {
+                reference,
+                file: None,
+            })
+        };
+        if let Some(doi) = doi::Doi::bare(text) {
+            return whole(Reference::Doi(doi));
+        }
+        let Some((scheme, rest)) = text.split_once(':') else {
+            return Err(unknown(text));
+        };
+        match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" => link(text),
+            "doi" => whole(Reference::Doi(doi::Doi::parse(rest)?)),
+            "zenodo" => whole(Reference::Zenodo(zenodo::Record::parse(rest)?)),
+            "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
+            "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
+            "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
+            "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
+            "kaggle" => whole(Reference::Kaggle(kaggle::Dataset::parse(rest)?)),
+            "drive" => whole(Reference::Drive(drive::Item::parse(rest)?)),
+            _ => Err(unknown(text)),
+        }
+    }
+
+    /// asks the source what the dataset holds: at the exact version this reference names, or at
+    /// the newest one when it names none.
+    pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
+        let _span = tracing::debug_span!("resolve", reference = %self).entered();
+        let listing = match self {
+            Reference::Doi(doi) => {
+                let target = doi.locate(api).await?;
+                let mut listing = target.resolve_direct(api).await?;
+                listing.doi.get_or_insert_with(|| doi.name().to_owned());
+                listing
+            }
+            other => other.resolve_direct(api).await?,
+        };
+        check(self, listing)
+    }
+
+    async fn resolve_direct(&self, api: &impl Api) -> Result<Listing, Error> {
+        match self {
+            Reference::Url(url) => Ok(single(url)),
+            Reference::Doi(doi) => Err(Error::new(
+                Kind::ReferenceUnresolved,
+                format!("{doi} leads to another DOI, which fetchloom does not follow"),
+            )),
+            Reference::Zenodo(record) => record.resolve(api).await,
+            Reference::Figshare(article) => article.resolve(api).await,
+            Reference::Dataverse(dataset) => dataset.resolve(api).await,
+            Reference::Osf(node) => node.resolve(api).await,
+            Reference::HuggingFace(repo) => repo.resolve(api).await,
+            Reference::Kaggle(dataset) => dataset.resolve(api).await,
+            Reference::Drive(item) => item.resolve(api).await,
+            Reference::Dropbox(link) => Ok(link.listing()),
+        }
+    }
+}
+
+impl fmt::Display for Reference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Reference::Url(url) => write!(f, "{url}"),
+            Reference::Doi(doi) => write!(f, "{doi}"),
+            Reference::Zenodo(record) => write!(f, "{record}"),
+            Reference::Figshare(article) => write!(f, "{article}"),
+            Reference::Dataverse(dataset) => write!(f, "{dataset}"),
+            Reference::Osf(node) => write!(f, "{node}"),
+            Reference::HuggingFace(repo) => write!(f, "{repo}"),
+            Reference::Kaggle(dataset) => write!(f, "{dataset}"),
+            Reference::Drive(item) => write!(f, "{item}"),
+            Reference::Dropbox(link) => write!(f, "{link}"),
+        }
+    }
+}
+
+/// where to ask for a file's bytes, and how to read a page a host sends in their place.
+pub(crate) fn fetch_plan(url: &Url) -> (Url, Option<Divert>) {
+    drive::fetch_plan(url).unwrap_or_else(|| (url.clone(), None))
+}
+
+/// every credential found where its source keeps it.
+pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
+    let mut found = Vec::new();
+    found.extend(zenodo::credentials(var));
+    found.extend(figshare::credentials(var));
+    found.extend(osf::credentials(var));
+    found.extend(hf::credentials(var));
+    found.extend(kaggle::credentials(var));
+    found
+}
+
+/// the user's home folder.
+pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if cfg!(windows) {
+        set("USERPROFILE").or_else(|| set("HOME"))
+    } else {
+        set("HOME")
+    }
+}
+
+/// a link pasted from a browser, matched to the source that serves it by its host.
+fn link(text: &str) -> Result<Parsed, Error> {
+    let url = Url::parse(text).map_err(|err| {
+        Error::new(
+            Kind::ReferenceInvalid,
+            format!("\"{text}\" is not a valid link: {err}"),
+        )
+        .help("copy the link again from the browser's address bar")
+    })?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::new(
+            Kind::ReferenceInvalid,
+            "this link carries a user name or password, which would end up in files and logs",
+        )
+        .help("remove the login part from the link"));
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(Error::new(
+            Kind::ReferenceInvalid,
+            format!("\"{text}\" names no host"),
+        ));
+    }
+    let routed = doi::Doi::from_link(&url)
+        .map(|doi| (Reference::Doi(doi), None))
+        .or_else(|| {
+            zenodo::Record::from_link(&url).map(|(record, file)| (Reference::Zenodo(record), file))
+        })
+        .or_else(|| {
+            figshare::Article::from_link(&url).map(|article| (Reference::Figshare(article), None))
+        })
+        .or_else(|| {
+            dataverse::Dataset::from_link(&url).map(|dataset| (Reference::Dataverse(dataset), None))
+        })
+        .or_else(|| osf::Node::from_link(&url).map(|node| (Reference::Osf(node), None)))
+        .or_else(|| {
+            hf::Repo::from_link(&url).map(|(repo, file)| (Reference::HuggingFace(repo), file))
+        })
+        .or_else(|| {
+            kaggle::Dataset::from_link(&url).map(|dataset| (Reference::Kaggle(dataset), None))
+        })
+        .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
+        .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)));
+    let Some((reference, file)) = routed else {
+        if let Some(source) = known_host(&url) {
+            return Err(Error::new(
+                Kind::ReferenceInvalid,
+                format!("fetchloom does not know this kind of {source} link: {url}"),
+            )
+            .help("paste the link of the dataset's own page, or its id, such as zenodo:3608990"));
+        }
+        return Ok(Parsed {
+            reference: Reference::Url(url),
+            file: None,
+        });
+    };
+    Ok(Parsed { reference, file })
+}
+
+/// the source a host belongs to, for links to its pages that are not datasets. downloading such a
+/// page would only give its HTML.
+fn known_host(url: &Url) -> Option<&'static str> {
+    Some(match url.host_str()? {
+        "zenodo.org" | "www.zenodo.org" => "zenodo",
+        "figshare.com" => "figshare",
+        "osf.io" | "www.osf.io" => "osf",
+        "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
+        "kaggle.com" | "www.kaggle.com" => "kaggle",
+        "drive.google.com" | "docs.google.com" => "google drive",
+        "dropbox.com" | "www.dropbox.com" => "dropbox",
+        _ => return None,
+    })
+}
+
+/// the error for a source whose listing is not built yet.
+fn not_yet(source: &str) -> Error {
+    Error::new(
+        Kind::ReferenceInvalid,
+        format!("fetchloom cannot list {source} datasets yet"),
+    )
+}
+
+/// a plain link: one file, named by its last path segment until the server names it.
+fn single(url: &Url) -> Listing {
+    Listing {
+        resolved: Reference::Url(url.clone()),
+        title: None,
+        version: None,
+        license: None,
+        doi: None,
+        files: vec![Remote {
+            path: name::from_url(url).unwrap_or_else(|| "download".to_owned()),
+            size: None,
+            sha256: None,
+            md5: None,
+            url: url.clone(),
+            named_by_server: true,
+        }],
+    }
+}
+
+/// a listing is hostile input: every path must stay inside the dataset, and no path may appear
+/// twice.
+fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
+    if listing.files.len() > MOST_FILES {
+        return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {} files, more than the {MOST_FILES} fetchloom handles in one dataset", listing.files.len()))
+            .help("add select patterns to data.toml to keep the files you need"));
+    }
+    let mut seen = HashSet::with_capacity(listing.files.len());
+    for file in &listing.files {
+        if let Some(reason) = name::escapes(&file.path) {
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "{reference} lists a file at \"{}\", which fetchloom refuses because {reason}",
+                    file.path
+                ),
+            ));
+        }
+        if !seen.insert(file.path.as_str()) {
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!("{reference} lists \"{}\" twice", file.path),
+            ));
+        }
+    }
+    Ok(listing)
+}
+
+/// reads a JSON answer from a source's API. a missing dataset and a refusal become errors that
+/// name the reference, so every source words them the same way.
+pub(crate) fn json<T: serde::de::DeserializeOwned>(
+    reference: &dyn fmt::Display,
+    response: &Response,
+) -> Result<T, Error> {
+    match response.status {
+        200..=299 => response.json(),
+        404 | 410 => Err(Error::new(Kind::ReferenceUnresolved, format!("{reference} does not exist, or is not public"))
+            .help("check the id in a browser. a dataset that was removed cannot be fetched")),
+        401 | 403 => Err(Error::new(Kind::AuthRequired, format!("{} refused access to {reference}", net::host(&response.url)))
+            .help("if the dataset is private or restricted, set the token for this source, as fetchloom's docs describe")),
+        status => Err(Error::new(Kind::NetworkStatus, format!("{} answered {status} for {reference}", net::host(&response.url)))),
+    }
+}
+
+fn unknown(text: &str) -> Error {
+    Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
+        .help("use a link, a DOI, or an id such as zenodo:3608990, hf:datasets/org/name or kaggle:owner/name")
+}
+
+/// the error for a malformed id after a known prefix, such as `zenodo:abc`.
+fn malformed(text: &str, expected: &str) -> Error {
+    Error::new(
+        Kind::ReferenceInvalid,
+        format!("\"{text}\" is not a valid reference"),
+    )
+    .help(format!("write it as {expected}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> Parsed {
+        Reference::parse(text).unwrap()
+    }
+
+    #[test]
+    fn ids_links_and_dois_find_their_source() {
+        let cases = [
+            ("zenodo:3608990", "zenodo:3608990"),
+            ("https://zenodo.org/records/3608990", "zenodo:3608990"),
+            ("https://zenodo.org/record/3608990", "zenodo:3608990"),
+            ("doi:10.5281/zenodo.3608990", "doi:10.5281/zenodo.3608990"),
+            ("10.5281/zenodo.3608990", "doi:10.5281/zenodo.3608990"),
+            (
+                "https://doi.org/10.5281/zenodo.3608990",
+                "doi:10.5281/zenodo.3608990",
+            ),
+            ("figshare:34744689", "figshare:34744689"),
+            ("figshare:34744689@2", "figshare:34744689@2"),
+            (
+                "https://figshare.com/articles/dataset/some_title/34744689/2",
+                "figshare:34744689@2",
+            ),
+            (
+                "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
+                "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
+            ),
+            (
+                "https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP&version=2.0",
+                "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@2.0",
+            ),
+            ("osf:abc12", "osf:abc12"),
+            ("https://osf.io/abc12/", "osf:abc12"),
+            (
+                "hf:datasets/stanfordnlp/imdb",
+                "hf:datasets/stanfordnlp/imdb",
+            ),
+            (
+                "hf:stanfordnlp/imdb@main",
+                "hf:datasets/stanfordnlp/imdb@main",
+            ),
+            (
+                "https://huggingface.co/datasets/stanfordnlp/imdb",
+                "hf:datasets/stanfordnlp/imdb",
+            ),
+            ("kaggle:uciml/iris", "kaggle:uciml/iris"),
+            (
+                "https://www.kaggle.com/datasets/uciml/iris/versions/2",
+                "kaggle:uciml/iris@2",
+            ),
+            (
+                "https://drive.google.com/file/d/1AbCdEfGhIjK/view?usp=sharing",
+                "drive:1AbCdEfGhIjK",
+            ),
+            (
+                "https://drive.google.com/drive/folders/1AbCdEfGhIjK",
+                "drive:folders/1AbCdEfGhIjK",
+            ),
+            (
+                "https://www.dropbox.com/s/abc123/data.zip?dl=0",
+                "https://www.dropbox.com/s/abc123/data.zip?dl=1",
+            ),
+            (
+                "https://example.org/data.csv",
+                "https://example.org/data.csv",
+            ),
+        ];
+        for (text, canonical) in cases {
+            assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
+            assert_eq!(
+                parse(canonical).reference,
+                parse(text).reference,
+                "{canonical} reads back the same"
+            );
+        }
+    }
+
+    #[test]
+    fn links_to_one_file_say_which() {
+        let zenodo = parse("https://zenodo.org/records/3608990/files/iris.csv?download=1");
+        assert_eq!(zenodo.reference.to_string(), "zenodo:3608990");
+        assert_eq!(zenodo.file.as_deref(), Some("iris.csv"));
+        let hf = parse(
+            "https://huggingface.co/datasets/stanfordnlp/imdb/blob/main/plain_text/train-00000-of-00001.parquet",
+        );
+        assert_eq!(
+            hf.reference.to_string(),
+            "hf:datasets/stanfordnlp/imdb@main"
+        );
+        assert_eq!(
+            hf.file.as_deref(),
+            Some("plain_text/train-00000-of-00001.parquet")
+        );
+    }
+
+    #[test]
+    fn nonsense_is_refused_with_a_way_forward() {
+        for text in [
+            "zenodo is great",
+            "zenodo:abc",
+            "kaggle:onlyowner",
+            "https://user:secret@example.org/x",
+            "ftp://example.org/x",
+            "https://",
+        ] {
+            let err = Reference::parse(text).unwrap_err();
+            assert_eq!(err.kind, Kind::ReferenceInvalid, "{text}");
+        }
+    }
+
+    #[test]
+    fn listings_cannot_escape_their_folder_or_repeat_a_path() {
+        let url = Url::parse("https://example.org/x").unwrap();
+        let listing = |paths: &[&str]| Listing {
+            files: paths
+                .iter()
+                .map(|path| Remote {
+                    path: (*path).to_owned(),
+                    url: url.clone(),
+                    ..single(&url).files[0].clone()
+                })
+                .collect(),
+            ..single(&url)
+        };
+        let reference = Reference::Url(url.clone());
+        assert!(check(&reference, listing(&["a/b.csv", "c.csv"])).is_ok());
+        for bad in [
+            &["../x"][..],
+            &["/etc/passwd"],
+            &["a//b"],
+            &["a\\b"],
+            &["C:/x"],
+            &["x", "x"],
+        ] {
+            assert_eq!(
+                check(&reference, listing(bad)).unwrap_err().kind,
+                Kind::SourceInvalid,
+                "{bad:?}"
+            );
+        }
+    }
+}

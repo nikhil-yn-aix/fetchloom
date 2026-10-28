@@ -16,9 +16,9 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Event, Fetched, Net, Origin};
+use crate::net::{self, Event, Expect, Fetch, Fetched, Origin};
 use crate::place::{Method, Placer};
-use crate::reference::Reference;
+use crate::source::{self, Reference};
 use crate::units;
 use crate::work::Work;
 
@@ -52,11 +52,25 @@ enum Outcome {
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
-    let Reference::Url(url) = Reference::parse(&args.link)?;
+    let parsed = Reference::parse(&args.link)?;
     let cache = super::open_cache()?;
-    let net = Net::new(context.offline, context.work.clone(), context.stop.clone())?;
-    net.typed(&url);
-    let guess = name::from_url(&url).unwrap_or_else(|| "download".to_owned());
+    let net = context.net()?;
+    if let Reference::Url(url) = &parsed.reference {
+        net.typed(url);
+    }
+    let listing = parsed.reference.resolve(&net).await?;
+    let [remote] = listing.files.as_slice() else {
+        return Err(Error::new(
+            Kind::ReferenceInvalid,
+            format!(
+                "{} holds {} files, and get fetches one at a time for now",
+                parsed.reference,
+                listing.files.len()
+            ),
+        ));
+    };
+    let url = remote.url.clone();
+    let guess = remote.path.clone();
     let chosen = args.output.as_deref();
     let bar = context
         .output
@@ -95,26 +109,40 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
                 bar.start(total, resumed);
             }
             Event::Bytes(bytes) => bar.advance(bytes),
-            Event::Retrying {
-                attempt,
-                wait,
-                reason,
-            } => context.output.warn(&format!(
-                "{reason}. trying again in {} (try {} of {})",
-                units::duration(wait),
-                attempt + 1,
-                net::ATTEMPTS
-            )),
         }
         Ok(())
     };
+    let (from, divert) = source::fetch_plan(&url);
+    let fetch = Fetch {
+        url: url.clone(),
+        from,
+        divert,
+        expect: Expect {
+            sha256: remote.sha256,
+            md5: remote.md5,
+            size: remote.size,
+        },
+        revalidate: true,
+    };
     let started = Instant::now();
-    let fetched = net.download(&url, &cache, &on).await?;
+    let fetched = net.download(&fetch, &cache, &on).await?;
     drop(bar);
     let file = file_name(fetched.name.as_deref(), &guess);
     let folder = folder_for(&file, chosen);
     tell_fetched(context, &url, &file, &fetched, started.elapsed());
-    let (outcome, hint) = put(context, &cache, &fetched, &folder, &file)?;
+    report(context, &cache, &url, &fetched, folder, file)
+}
+
+/// places the fetched file, says how it went, and describes it for `--json`.
+fn report(
+    context: &Context,
+    cache: &Cache,
+    url: &Url,
+    fetched: &Fetched,
+    folder: PathBuf,
+    file: String,
+) -> Result<Report, Error> {
+    let (outcome, hint) = put(context, cache, fetched, &folder, &file)?;
     let shown = folder.join(&file);
     let method = match outcome {
         Outcome::Placed(method) | Outcome::Replaced(method) => {
@@ -288,7 +316,7 @@ fn holds(path: &Path, fetched: &Fetched) -> Result<bool, Error> {
 fn replaceable(path: &Path, cache: &Cache) -> Result<bool, Error> {
     let size = fs::metadata(path).map_err(|err| local(path, &err))?.len();
     let digest = Sha256::of_file(path).map_err(|err| local(path, &err))?;
-    Ok(cache.find(&digest, size).is_some())
+    Ok(cache.find(&digest, Some(size)).is_some())
 }
 
 /// refuses before downloading when the file already in the folder is someone's own and cannot

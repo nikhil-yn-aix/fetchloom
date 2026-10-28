@@ -1,5 +1,6 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
+mod object;
 mod partial;
 
 use std::ffi::OsString;
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 
-use crate::digest::{Hasher, Sha256};
+use crate::digest::{self, Md5, Sha256};
 
 const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
@@ -27,6 +28,8 @@ pub(crate) struct Stored {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
     pub(crate) path: PathBuf,
+    /// the MD5 of the bytes, when it was computed to check one a source stated.
+    pub(crate) md5: Option<Md5>,
     /// false when the cache already held these bytes.
     pub(crate) new: bool,
 }
@@ -73,7 +76,7 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
-        for folder in ["objects", "partial", "urls", "tmp"] {
+        for folder in ["objects", "partial", "urls", "stated", "tmp"] {
             fs::create_dir_all(root.join(folder))?;
         }
         let cache = Cache { root };
@@ -86,16 +89,21 @@ impl Cache {
         Ok(cache)
     }
 
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn object_path(&self, digest: &Sha256) -> PathBuf {
         let hex = digest.hex();
         self.root.join("objects").join(&hex[..2]).join(&hex[2..])
     }
 
-    /// the object's path, when the cache holds it with exactly `size` bytes.
-    pub(crate) fn find(&self, digest: &Sha256, size: u64) -> Option<PathBuf> {
+    /// the object's path, when the cache holds it. a known size must match, which catches a file
+    /// cut short by a crash.
+    pub(crate) fn find(&self, digest: &Sha256, size: Option<u64>) -> Option<PathBuf> {
         let path = self.object_path(digest);
         let metadata = fs::metadata(&path).ok()?;
-        (metadata.is_file() && metadata.len() == size).then_some(path)
+        (metadata.is_file() && size.is_none_or(|size| metadata.len() == size)).then_some(path)
     }
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
@@ -109,8 +117,35 @@ impl Cache {
         self.write_atomically(&self.url_record_path(&record.url), &text)
     }
 
+    /// the object holding the bytes a source stated this MD5 for, when an earlier download
+    /// checked it.
+    pub(crate) fn stated_md5(&self, md5: &Md5) -> Option<(Sha256, u64)> {
+        let text = fs::read_to_string(self.stated_path(md5)).ok()?;
+        let (digest, size) = text.trim().split_once(' ')?;
+        Some((Sha256::from_hex(digest)?, size.parse().ok()?))
+    }
+
+    pub(crate) fn save_stated_md5(&self, md5: &Md5, digest: &Sha256, size: u64) -> io::Result<()> {
+        let path = self.stated_path(md5);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.write_atomically(&path, format!("{digest} {size}\n").as_bytes())
+    }
+
     fn url_record_path(&self, url: &str) -> PathBuf {
-        self.root.join("urls").join(format!("{}.json", key_of(url)))
+        self.root
+            .join("urls")
+            .join(format!("{}.json", digest::sha256(url.as_bytes()).hex()))
+    }
+
+    fn stated_path(&self, md5: &Md5) -> PathBuf {
+        let hex = md5.hex();
+        self.root
+            .join("stated")
+            .join("md5")
+            .join(&hex[..2])
+            .join(&hex[2..])
     }
 
     /// replaces `path` in one step, so a reader sees the old file or the new one, never half of one.
@@ -124,7 +159,13 @@ impl Cache {
 
     /// moves a finished file into the cache under its hash. the move never replaces an existing
     /// object, so of two processes racing for the same bytes exactly one places them.
-    fn publish(&self, source: &Path, digest: Sha256, size: u64) -> io::Result<Stored> {
+    fn publish(
+        &self,
+        source: &Path,
+        digest: Sha256,
+        size: u64,
+        md5: Option<Md5>,
+    ) -> io::Result<Stored> {
         let path = self.object_path(&digest);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -151,15 +192,10 @@ impl Cache {
             digest,
             size,
             path,
+            md5,
             new,
         })
     }
-}
-
-fn key_of(url: &str) -> String {
-    let mut hasher = Hasher::default();
-    hasher.update(url.as_bytes());
-    hasher.finish().hex()
 }
 
 #[cfg(test)]
@@ -172,13 +208,10 @@ mod tests {
         (dir, cache)
     }
 
-    pub(super) fn download(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
-        let Claim::Owned(partial) = cache.claim(url).unwrap() else {
-            panic!("nothing else holds {url}");
-        };
-        let mut writer = partial.writer(0, None, Validators::default()).unwrap();
+    pub(super) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
+        let mut writer = cache.object_writer(false).unwrap();
         writer.write_all(bytes).unwrap();
-        writer.finish().unwrap()
+        writer.close().unwrap().publish().unwrap()
     }
 
     #[test]
@@ -193,9 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_download_lands_read_only_under_its_hash() {
+    fn an_object_lands_read_only_under_its_hash() {
         let (_dir, cache) = cache();
-        let stored = download(&cache, "https://example.org/a", b"abc");
+        let stored = store(&cache, b"abc");
         assert!(stored.new);
         assert_eq!(
             stored.digest.hex(),
@@ -203,9 +236,13 @@ mod tests {
         );
         assert_eq!(fs::read(&stored.path).unwrap(), b"abc");
         assert!(fs::metadata(&stored.path).unwrap().permissions().readonly());
-        assert_eq!(cache.find(&stored.digest, 3), Some(stored.path.clone()));
         assert_eq!(
-            cache.find(&stored.digest, 4),
+            cache.find(&stored.digest, Some(3)),
+            Some(stored.path.clone())
+        );
+        assert_eq!(cache.find(&stored.digest, None), Some(stored.path.clone()));
+        assert_eq!(
+            cache.find(&stored.digest, Some(4)),
             None,
             "a size mismatch is not a hit"
         );
@@ -214,11 +251,13 @@ mod tests {
     #[test]
     fn the_same_bytes_twice_are_stored_once() {
         let (_dir, cache) = cache();
-        let first = download(&cache, "https://example.org/a", b"same");
-        let second = download(&cache, "https://example.org/b", b"same");
+        let first = store(&cache, b"same");
+        let second = store(&cache, b"same");
         assert!(first.new);
         assert!(!second.new);
         assert_eq!(first.path, second.path);
+        let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
+        assert_eq!(leftovers, 0, "nothing is left behind in tmp");
     }
 
     #[test]
@@ -226,7 +265,7 @@ mod tests {
         let (_dir, cache) = cache();
         let record = UrlRecord {
             url: "https://example.org/iris.csv".to_owned(),
-            sha256: download(&cache, "https://example.org/iris.csv", b"x").digest,
+            sha256: store(&cache, b"x").digest,
             size: 1,
             name: Some("iris.csv".to_owned()),
             validators: Validators {
@@ -237,6 +276,16 @@ mod tests {
         cache.save_url_record(&record).unwrap();
         assert_eq!(cache.url_record(&record.url), Some(record));
         assert_eq!(cache.url_record("https://example.org/other"), None);
+    }
+
+    #[test]
+    fn a_stated_md5_finds_its_object() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"abc");
+        let md5 = Md5::from_hex("900150983cd24fb0d6963f7d28e17f72").unwrap();
+        assert_eq!(cache.stated_md5(&md5), None);
+        cache.save_stated_md5(&md5, &stored.digest, 3).unwrap();
+        assert_eq!(cache.stated_md5(&md5), Some((stored.digest, 3)));
     }
 
     #[test]
