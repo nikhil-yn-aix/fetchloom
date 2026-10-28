@@ -1,5 +1,6 @@
 ---
 source: tests/cli/basics.rs
+assertion_line: 41
 expression: text(&output.stdout)?
 ---
 fetch something once, without a project
@@ -7,15 +8,17 @@ fetch something once, without a project
 usage: fetchloom get [options] <link>
 
 arguments:
-  <link>  what to download: any link you would paste in a browser
+  <link>  what to download: a link, a DOI, or an id such as zenodo:3608990
 
 options:
-  -o, --output <dir>  put the download in <dir> instead of a new folder named after it
-  -q, --quiet         print only the answer and errors
-  -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
-      --json          print one JSON document on stdout instead of the story
-      --offline       use only what is already on this machine
-  -y, --yes           answer yes to every question, such as before a large download
-      --color <when>  when to use color [default: auto] [possible values: auto, always, never]
-  -C <dir>            run as if fetchloom started in <dir>
-  -h, --help          print help
+  -o, --output <dir>    put the download in <dir> instead of a new folder named after it
+      --select <glob>   keep only files matching this pattern, such as "**/*.csv". repeat it for more
+      --exclude <glob>  leave out files matching this pattern. repeat it for more
+  -q, --quiet           print only the answer and errors
+  -v, --verbose...      say more: -v adds detail and counters, -vv adds debug logs
+      --json            print one JSON document on stdout instead of the story
+      --offline         use only what is already on this machine
+  -y, --yes             answer yes to every question, such as before a large download
+      --color <when>    when to use color [default: auto] [possible values: auto, always, never]
+  -C <dir>              run as if fetchloom started in <dir>
+  -h, --help            print help

@@ -88,6 +88,14 @@ impl Output {
         }
     }
 
+    /// a difference found, in the same rhythm as steps but in the warning color.
+    pub(crate) fn mark(&self, verb: &str, text: &str) {
+        if self.tells(Level::Normal) {
+            let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
+            self.line(&format!("{yellow}{verb:>11}{yellow:#} {text}"));
+        }
+    }
+
     /// detail for `-v`: where things are, which method was used, full hashes.
     pub(crate) fn detail(&self, text: &str) {
         if self.tells(Level::Verbose) {

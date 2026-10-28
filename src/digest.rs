@@ -28,6 +28,13 @@ impl Sha256 {
         hex(&self.0)
     }
 
+    /// the first 12 hex digits, enough to compare two hashes at a glance.
+    pub(crate) fn short(&self) -> String {
+        let mut text = self.hex();
+        text.truncate(12);
+        text
+    }
+
     /// the digest as raw bytes, for hashes built from other hashes.
     pub(crate) fn bytes(&self) -> &[u8; 32] {
         &self.0

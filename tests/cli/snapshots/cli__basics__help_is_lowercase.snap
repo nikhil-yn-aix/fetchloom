@@ -1,5 +1,6 @@
 ---
 source: tests/cli/basics.rs
+assertion_line: 33
 expression: text(&output.stdout)?
 ---
 put the exact data a project needs onto any machine with one command
@@ -7,7 +8,13 @@ put the exact data a project needs onto any machine with one command
 usage: fetchloom [options] <command>
 
 commands:
-  get  fetch something once, without a project
+  add     add a dataset, pin it and download it into the data folder
+  remove  drop a dataset and the files fetchloom placed for it
+  sync    make the data folder match data.lock on this machine
+  lock    bring data.lock in line with data.toml without downloading what is pinned
+  status  list files that are missing, changed by hand or extra
+  path    print where a dataset or a file in it is, syncing first if needed
+  get     fetch something once, without a project
 
 options:
   -q, --quiet         print only the answer and errors

@@ -124,9 +124,17 @@ impl Net {
         })
     }
 
-    /// marks the host of a URL the user typed, so it may be a private address such as a lab server.
+    /// marks the host of a URL a person wrote, so it may be a private address such as a lab
+    /// server.
     pub(crate) fn typed(&self, url: &Url) {
         self.typed.add(url);
+    }
+
+    /// trusts the hosts data.toml names, since a person wrote them too.
+    pub(crate) fn trust(&self, manifest_hosts: impl IntoIterator<Item = String>) {
+        for host in manifest_hosts {
+            self.typed.add_host(&host);
+        }
     }
 
     pub(crate) fn is_offline(&self) -> bool {

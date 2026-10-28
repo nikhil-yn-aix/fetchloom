@@ -106,6 +106,21 @@ impl Cache {
         (metadata.is_file() && size.is_none_or(|size| metadata.len() == size)).then_some(path)
     }
 
+    /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
+    /// edited, is removed so the next run downloads it again. says whether it was intact.
+    pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
+        let path = self.object_path(digest);
+        match Sha256::of_file(&path) {
+            Ok(actual) if actual == *digest => Ok(true),
+            Ok(_) => {
+                fs::remove_file(&path)?;
+                Ok(false)
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
         let text = fs::read(self.url_record_path(url)).ok()?;
         let record: UrlRecord = serde_json::from_slice(&text).ok()?;

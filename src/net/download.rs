@@ -582,9 +582,13 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     {
         return Err(Error::new(
             Kind::IntegrityMismatch,
-            format!("{} sent other bytes than were locked for {url}", host(url)),
+            format!("{} sent other bytes than expected for {url}", host(url)),
         )
-        .detail(format!("expected sha256 {expected}, got {}", stored.digest)));
+        .detail(format!(
+            "expected sha256 {}, got {}",
+            expected.short(),
+            stored.digest.short()
+        )));
     }
     Ok(())
 }

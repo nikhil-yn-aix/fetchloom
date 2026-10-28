@@ -98,7 +98,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
                     && !context.yes
                     && !asked.swap(true, Ordering::Relaxed)
                 {
-                    confirm(context, &file, total - resumed)?;
+                    super::confirm(context, &file, total - resumed)?;
                 }
                 if resumed > 0 {
                     context
@@ -361,25 +361,6 @@ fn tell_fetched(context: &Context, url: &Url, file: &str, fetched: &Fetched, ela
     }
     output.detail(&format!("sha256 {}", fetched.digest));
     output.detail(&format!("object {}", fetched.path.display()));
-}
-
-fn confirm(context: &Context, file: &str, bytes: u64) -> Result<(), Error> {
-    let size = units::size(bytes);
-    match context
-        .output
-        .confirm(&format!("download {file} ({size})?"))
-    {
-        Some(true) => Ok(()),
-        Some(false) => Err(Error::new(
-            Kind::Unconfirmed,
-            format!("did not download {file}"),
-        )),
-        None => Err(Error::new(
-            Kind::Unconfirmed,
-            format!("{file} is {size}, and there is no terminal to ask before downloading it"),
-        )
-        .help("add --yes to download it")),
-    }
 }
 
 fn count(work: &Work, method: Method) {

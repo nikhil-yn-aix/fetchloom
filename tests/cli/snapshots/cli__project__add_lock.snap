@@ -1,0 +1,16 @@
+---
+source: tests/cli/project.rs
+assertion_line: 55
+expression: lock
+---
+version = 1
+
+[[dataset]]
+name = "iris"
+ref = "http://127.0.0.1:[port]/files/iris.csv"
+spec = "[spec]"
+resolved = "http://127.0.0.1:[port]/files/iris.csv"
+locked = "[time]"
+files = [
+  { path = "iris.csv", size = 32, sha256 = "8b1ffd452ff4bb8e22402d04ac3f2eab66202dd50aee35e61d420bdd99b285eb", url = "http://127.0.0.1:[port]/files/iris.csv" },
+]

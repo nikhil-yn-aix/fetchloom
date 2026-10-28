@@ -70,6 +70,19 @@ impl Dataset {
             })
     }
 
+    /// the install's host name, without its port.
+    pub(super) fn host_name(&self) -> &str {
+        match self.host.strip_prefix('[') {
+            Some(bracketed) => bracketed
+                .split_once(']')
+                .map_or(bracketed, |(host, _)| host),
+            None => self
+                .host
+                .split_once(':')
+                .map_or(self.host.as_str(), |(host, _)| host),
+        }
+    }
+
     /// asks the install's native API for the dataset's files.
     #[expect(
         clippy::unused_async,
