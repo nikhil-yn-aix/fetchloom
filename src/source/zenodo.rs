@@ -68,12 +68,19 @@ impl Record {
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
         let response = api.get(&self.url()?).await?;
         let answer: Answer = super::json(self, &response)?;
-        if answer.metadata.access_right != "open" {
-            return Err(Error::new(
-                Kind::AuthRequired,
-                format!("{self} is {}", answer.metadata.access_right),
-            )
-            .help("open the record on zenodo.org to check its access conditions"));
+        if answer.id == 0 {
+            return Err(self.invalid("the record has no concrete id"));
+        }
+        match answer.metadata.access_right.as_str() {
+            "open" => (),
+            "restricted" | "embargoed" | "closed" => {
+                return Err(Error::new(
+                    Kind::AuthRequired,
+                    format!("{self} is {}", answer.metadata.access_right),
+                )
+                .help("open the record on zenodo.org to check its access conditions"));
+            }
+            _ => return Err(self.invalid("the access condition is not recognized")),
         }
         let resolved = Record { id: answer.id };
         // the records API embeds all files, including the 1,123 in record 7793716.
@@ -327,6 +334,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn unknown_access_conditions_are_invalid_answers() {
+        let body = changed(|value| value["metadata"]["access_right"] = "unknown".into());
+        let recorded = Recorded::default().on(IRIS, 200, body);
+        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.help.is_some());
+    }
+
+    #[test]
+    fn a_zero_record_id_cannot_be_a_version_pin() {
+        let body = changed(|value| value["id"] = 0.into());
+        let recorded = Recorded::default().on(IRIS, 200, body);
+        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+    }
     #[test]
     #[ignore = "live: talks to zenodo.org"]
     fn live_zenodo() {
