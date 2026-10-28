@@ -2,6 +2,8 @@
 //! it, in a fixed order, so the same inputs always give the same bytes and a diff shows exactly
 //! what changed.
 
+mod canonical;
+
 use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -73,6 +75,9 @@ struct VersionOnly {
 impl Lock {
     pub(crate) fn parse(text: &str) -> Result<Lock, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        if let Some(lock) = canonical::read(text) {
+            return Ok(lock);
+        }
         match toml::from_str::<Stored>(text) {
             Ok(stored) if stored.version == VERSION => {
                 let mut datasets = stored.dataset;
