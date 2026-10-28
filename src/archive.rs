@@ -155,12 +155,7 @@ pub(crate) fn unpack_cached(
     let unpacked = unpack(&object, format, &Limits::default(), cache, watch)?;
     cache
         .record_unpacked(archive, &unpacked.members)
-        .map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("could not record what an archive unpacked to: {err}"),
-            )
-        })?;
+        .map_err(|err| Error::io("could not record what an archive unpacked to", &err))?;
     Ok(Some(unpacked))
 }
 
@@ -190,18 +185,15 @@ fn damaged(at: Option<&str>, err: &dyn std::fmt::Display) -> Error {
 }
 
 fn not_written(path: &str, err: &io::Error) -> Error {
-    Error::new(
-        Kind::LocalIo,
-        format!("could not write \"{path}\" into the cache: {err}"),
+    Error::io(
+        format_args!("could not write \"{path}\" into the cache"),
+        err,
     )
-    .help("check that the cache's disk has room and that fetchloom may write to it")
+    .or_help("check that the cache's disk has room and that fetchloom may write to it")
 }
 
 fn unreadable(archive: &Path, err: &io::Error) -> Error {
-    Error::new(
-        Kind::LocalIo,
-        format!("could not read {}: {err}", archive.display()),
-    )
+    Error::io(format_args!("could not read {}", archive.display()), err)
 }
 
 #[cfg(test)]

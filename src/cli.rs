@@ -106,11 +106,11 @@ fn open_cache() -> Result<Cache, Error> {
             .help("set FETCHLOOM_CACHE to a folder fetchloom may use")
     })?;
     Cache::open(root.clone()).map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("could not open the cache at {}: {err}", root.display()),
+        Error::io(
+            format_args!("could not open the cache at {}", root.display()),
+            &err,
         )
-        .help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
 }
 
@@ -271,7 +271,7 @@ fn block_on<T>(
         .worker_threads(workers)
         .enable_all()
         .build()
-        .map_err(|err| Error::new(Kind::LocalIo, format!("could not start: {err}")))?;
+        .map_err(|err| Error::io("could not start", &err))?;
     let stop = context.stop.clone();
     runtime.spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {

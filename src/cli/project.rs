@@ -33,12 +33,8 @@ pub(super) struct Report {
 }
 
 pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
-    let here = std::env::current_dir().map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("cannot read the current folder: {err}"),
-        )
-    })?;
+    let here =
+        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
     let _held = hold(context, &project).await?;
     let existed = project.manifest_path().is_file();
@@ -138,7 +134,7 @@ fn restore(project: &Project, before: Option<&str>) {
     let restored = match before {
         Some(text) => project.write(manifest::FILE, text.as_bytes()),
         None => std::fs::remove_file(project.manifest_path())
-            .map_err(|err| Error::new(Kind::LocalIo, err.to_string())),
+            .map_err(|err| Error::io("could not remove data.toml", &err)),
     };
     if let Err(err) = restored {
         tracing::debug!(%err, "could not restore data.toml");
@@ -494,12 +490,8 @@ async fn sync_all(
 
 /// the project around the current folder.
 pub(super) fn find() -> Result<Project, Error> {
-    let here = std::env::current_dir().map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("cannot read the current folder: {err}"),
-        )
-    })?;
+    let here =
+        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     Project::find(&here).ok_or_else(|| {
         Error::new(
             Kind::ProjectInvalid,
