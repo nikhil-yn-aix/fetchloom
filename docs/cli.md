@@ -117,5 +117,6 @@ one module formats every size, rate, duration and count: `4.1 KiB`, `84 MiB/s`, 
 - color is decided once at start, in this order: `--color`, then `NO_COLOR`, then `CLICOLOR_FORCE`, then `CLICOLOR=0`, then `TERM=dumb` or `CI`, then whether stderr is a terminal.
 - where the terminal cannot show unicode, such as the legacy windows console, symbols fall back to ASCII: `[ok]`, `[x]`, `[!]` and a `-\|/` spinner.
 - off a terminal, or in CI, there are no spinners, no bars and no prompts. lines print plainly and a question becomes an error naming the flag that answers it.
+- there, a batch of downloads, unpacking or checking that runs past 2 seconds says what it does in one line, then how far it got in one line every 10 seconds, never a line per file: `Downloading 3 files · 1.2 GiB`, then `Downloading 410.0 MiB of 1.2 GiB · 10 s`.
 
 the crates that draw all of this are listed in [decisions](decisions.md#19-the-terminal-stack-is-small).

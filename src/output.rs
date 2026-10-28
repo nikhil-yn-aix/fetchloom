@@ -13,7 +13,7 @@ use anstyle::{AnsiColor, Style as Paint};
 use indicatif::MultiProgress;
 use serde::Serialize;
 
-pub(crate) use progress::Bar;
+pub(crate) use progress::{Bar, Ticker};
 pub(crate) use style::{ColorChoice, Style};
 
 use crate::error::Error;
@@ -185,6 +185,30 @@ impl Output {
         }
     }
 
+    /// plain lines about a batch of work where no bar shows it, such as `Downloading 3 files`.
+    /// `sizes` holds each file's size, or none for one whose download tells it.
+    pub(crate) fn ticker(
+        &self,
+        verb: &'static str,
+        what: String,
+        sizes: impl IntoIterator<Item = Option<u64>>,
+    ) -> Ticker {
+        if self.bars.is_some() || !self.tells(Level::Normal) {
+            return Ticker::quiet();
+        }
+        let known = sizes
+            .into_iter()
+            .fold((0, 0), |(total, unknown), size| match size {
+                Some(size) => (total + size, unknown),
+                None => (total, unknown + 1),
+            });
+        let color = self.style.color;
+        Ticker::start(verb, what, known, move |verb, text| {
+            let cyan = Paint::new().fg_color(Some(AnsiColor::Cyan.into())).bold();
+            write_line(color, &format!("{cyan}{verb:>11}{cyan:#} {}", plain(text)));
+        })
+    }
+
     /// asks a yes or no question on the terminal. none when nobody can answer, as in CI or a pipe.
     pub(crate) fn confirm(&self, question: &str) -> Option<bool> {
         if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
@@ -276,20 +300,23 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let write = || {
-            let choice = if self.style.color {
-                anstream::ColorChoice::Always
-            } else {
-                anstream::ColorChoice::Never
-            };
-            let mut err = anstream::AutoStream::new(std::io::stderr().lock(), choice);
-            let _ = writeln!(err, "{text}");
-        };
+        let write = || write_line(self.style.color, text);
         match &self.bars {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
     }
+}
+
+/// one line on stderr, with its colors only when they are on.
+fn write_line(color: bool, text: &str) {
+    let choice = if color {
+        anstream::ColorChoice::Always
+    } else {
+        anstream::ColorChoice::Never
+    };
+    let mut err = anstream::AutoStream::new(std::io::stderr().lock(), choice);
+    let _ = writeln!(err, "{text}");
 }
 
 /// `text` with control characters written out as escapes, so text from a server cannot move the

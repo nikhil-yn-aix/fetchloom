@@ -101,13 +101,18 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
     let total: u64 = cache.objects().iter().map(|object| object.size).sum();
-    let bar = context
-        .output
-        .bar("checking every file in the cache".to_owned());
+    let what = "every file in the cache";
+    let bar = context.output.bar(format!("checking {what}"));
     bar.start(Some(total), 0);
+    let ticker = context
+        .output
+        .ticker("Checking", what.to_owned(), [Some(total)]);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let checked = cache.verify_all(threads, &|bytes| bar.advance(bytes));
-    drop(bar);
+    let checked = cache.verify_all(threads, &|bytes| {
+        bar.advance(bytes);
+        ticker.advance(bytes);
+    });
+    drop((bar, ticker));
     let output = &context.output;
     let what = format!(
         "{} · {}",
