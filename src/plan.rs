@@ -72,37 +72,65 @@ pub(crate) fn plan<'a>(
             continue;
         };
         let folder = folder(manifest, &dataset.name);
-        let alone = dataset.files.len() == 1;
-        for file in &dataset.files {
-            let target = |path: &str, sha256, size| Target {
-                dataset: dataset.name.clone(),
-                path: format!("{folder}/{path}"),
-                sha256,
-                size,
-                copy: entry.copy,
-                locked: file,
-            };
-            if file.unpacks_to.is_none() {
-                plan.targets
-                    .push(target(&file.path, file.sha256, file.size));
-                continue;
-            }
-            let Some(members) = members(file) else {
-                plan.unknown.push((dataset.name.as_str(), file));
-                continue;
-            };
-            for (member, path) in members
-                .iter()
-                .zip(unpacked_paths(&file.path, alone, &members))
-            {
-                plan.targets.push(target(&path, member.sha256, member.size));
-            }
-        }
+        expand(
+            &mut plan,
+            &dataset.name,
+            &folder,
+            entry.copy,
+            &dataset.files,
+            members,
+        );
         folders.push((folder, dataset.name.as_str()));
     }
     overlapping(&folders)?;
-    clashing(&plan.targets)?;
+    check(&plan.targets, Patterns::InDataToml)?;
     Ok(plan)
+}
+
+/// adds where one dataset's files land in `folder`, an archive standing for the files `members`
+/// says it unpacked to.
+pub(crate) fn expand<'a>(
+    plan: &mut Plan<'a>,
+    dataset: &'a str,
+    folder: &str,
+    copy: bool,
+    files: &'a [LockedFile],
+    members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
+) {
+    let alone = files.len() == 1;
+    for file in files {
+        let target = |path: &str, sha256, size| Target {
+            dataset: dataset.to_owned(),
+            path: join(folder, path),
+            sha256,
+            size,
+            copy,
+            locked: file,
+        };
+        if file.unpacks_to.is_none() {
+            plan.targets
+                .push(target(&file.path, file.sha256, file.size));
+            continue;
+        }
+        let Some(members) = members(file) else {
+            plan.unknown.push((dataset, file));
+            continue;
+        };
+        for (member, path) in members
+            .iter()
+            .zip(unpacked_paths(&file.path, alone, &members))
+        {
+            plan.targets.push(target(&path, member.sha256, member.size));
+        }
+    }
+}
+
+/// where the patterns that decide a dataset's files are set, so a clash says where to change
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Patterns {
+    InDataToml,
+    OnCommandLine,
 }
 
 /// where an archive's files land inside its dataset's folder, in the order of `members`. a
@@ -110,7 +138,7 @@ pub(crate) fn plan<'a>(
 /// top folder they may all share, as nix's fetchzip does. an archive beside other files unpacks
 /// where it sits: a lone top folder or file comes out as it is, as `unzip` would make it, and
 /// anything else goes into a folder named after the archive.
-fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> Vec<String> {
+pub(crate) fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> Vec<String> {
     let (beside, name) = archive.rsplit_once('/').unwrap_or(("", archive));
     let top = common_top(members);
     if alone {
@@ -183,7 +211,9 @@ fn overlapping(folders: &[(String, &str)]) -> Result<(), Error> {
     Ok(())
 }
 
-fn clashing(targets: &[Target]) -> Result<(), Error> {
+/// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
+/// path as a case-insensitive disk sees it, or a file where a folder must be.
+pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error> {
     let mut files: HashMap<String, &Target> = HashMap::with_capacity(targets.len());
     let mut folders: HashMap<String, &Target> = HashMap::new();
     for target in targets {
@@ -192,14 +222,11 @@ fn clashing(targets: &[Target]) -> Result<(), Error> {
                 Kind::ProjectInvalid,
                 format!("{} cannot be stored on this machine: {reason}", target.path),
             )
-            .help(format!(
-                "leave it out with an exclude pattern in datasets.{}",
-                target.dataset
-            )));
+            .help(leave_out("it", target, patterns)));
         }
         let path_key = key(&target.path);
         if let Some(other) = files.insert(path_key.clone(), target) {
-            return Err(clash(other, target));
+            return Err(clash(other, target, patterns));
         }
         let mut parent = path_key.as_str();
         while let Some((folder, _)) = parent.rsplit_once('/') {
@@ -218,16 +245,13 @@ fn clashing(targets: &[Target]) -> Result<(), Error> {
                     file.path, inside.path
                 ),
             )
-            .help(format!(
-                "leave one of them out with an exclude pattern in datasets.{}",
-                inside.dataset
-            )));
+            .help(fix(file, inside, patterns)));
         }
     }
     Ok(())
 }
 
-fn clash(first: &Target, second: &Target) -> Error {
+fn clash(first: &Target, second: &Target, patterns: Patterns) -> Error {
     let message = if first.path == second.path {
         format!("two files would land on {}", first.path)
     } else {
@@ -236,17 +260,35 @@ fn clash(first: &Target, second: &Target) -> Error {
             first.path, second.path
         )
     };
+    Error::new(Kind::ProjectInvalid, message).help(fix(first, second, patterns))
+}
+
+/// how to resolve a clash between `first` and `second`: keep an archive involved packed, or leave
+/// a file out.
+fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
     let unpacked = [first, second]
         .into_iter()
         .find(|target| target.locked.unpacks_to.is_some());
-    let help = match unpacked {
-        Some(target) => format!(
+    match (unpacked, patterns) {
+        (Some(target), Patterns::InDataToml) => format!(
             "set extract = false on datasets.{} in data.toml to keep its archives packed",
             target.dataset
         ),
-        None => "leave one of them out with an exclude pattern in data.toml".to_owned(),
-    };
-    Error::new(Kind::ProjectInvalid, message).help(help)
+        (Some(_), Patterns::OnCommandLine) => {
+            "pass --no-extract to keep archives packed".to_owned()
+        }
+        (None, _) => leave_out("one of them", second, patterns),
+    }
+}
+
+fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
+    match patterns {
+        Patterns::InDataToml => format!(
+            "leave {what} out with an exclude pattern in datasets.{}",
+            target.dataset
+        ),
+        Patterns::OnCommandLine => format!("leave {what} out with --exclude"),
+    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 
 mod draft;
 pub(super) mod place;
-mod unpack;
+pub(super) mod unpack;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -360,6 +360,7 @@ fn job(dataset: &str, path: &str, url: &str, expect: Expect) -> Result<Job, Erro
             divert,
             expect,
             revalidate: false,
+            unpack: false,
         },
         label: format!("{dataset}/{path}"),
         dataset: Some(dataset.to_owned()),

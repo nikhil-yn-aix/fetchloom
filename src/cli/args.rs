@@ -184,6 +184,10 @@ pub(crate) struct Add {
 
     #[command(flatten)]
     pub(crate) filter: Filter,
+
+    /// keep zip and tar archives packed, as extract = false in data.toml does
+    #[arg(long, help_heading = "options")]
+    pub(crate) no_extract: bool,
 }
 
 /// drop a dataset and the files fetchloom placed for it
@@ -235,4 +239,8 @@ pub(crate) struct Get {
 
     #[command(flatten)]
     pub(crate) filter: Filter,
+
+    /// keep zip and tar archives packed instead of unpacking them
+    #[arg(long, help_heading = "options")]
+    pub(crate) no_extract: bool,
 }

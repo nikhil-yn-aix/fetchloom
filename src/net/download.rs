@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
 
 use bytes::Bytes;
 use reqwest::StatusCode;
@@ -50,6 +49,9 @@ pub(crate) struct Fetch {
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
     pub(crate) revalidate: bool,
+    /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
+    /// the cache once its own object is gone.
+    pub(crate) unpack: bool,
 }
 
 impl Fetch {
@@ -60,6 +62,7 @@ impl Fetch {
             divert: None,
             expect: Expect::default(),
             revalidate: false,
+            unpack: false,
         }
     }
 }
@@ -89,12 +92,12 @@ pub(crate) enum Origin {
     Cache,
 }
 
-/// a file's bytes, ready in the cache.
+/// a file's bytes, ready in the cache: as an object, or for an archive the caller unpacks, as
+/// the files it unpacked to.
 #[derive(Debug)]
 pub(crate) struct Fetched {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
-    pub(crate) path: PathBuf,
     /// the file name the server gave, when it gave one.
     pub(crate) name: Option<String>,
     pub(crate) origin: Origin,
@@ -138,13 +141,13 @@ impl Net {
             return Ok(found);
         }
         let known = if fetch.revalidate {
-            remembered(cache, &fetch.url)
+            remembered(cache, fetch)
         } else {
             None
         };
         if self.offline {
             return known
-                .map(|(record, path)| fetched(record, path, Origin::Cache))
+                .map(|record| fetched(record, Origin::Cache))
                 .ok_or_else(|| failure::offline(&fetch.url));
         }
         self.typed
@@ -156,12 +159,8 @@ impl Net {
             if let Some(found) = self.in_cache(fetch, cache) {
                 return Ok(found);
             }
-            if let Some((record, path)) = fetch
-                .revalidate
-                .then(|| remembered(cache, &fetch.url))
-                .flatten()
-            {
-                return Ok(fetched(record, path, Origin::Cache));
+            if let Some(record) = fetch.revalidate.then(|| remembered(cache, fetch)).flatten() {
+                return Ok(fetched(record, Origin::Cache));
             }
         }
         let _permits = self.permit(&fetch.from).await?;
@@ -174,10 +173,10 @@ impl Net {
         fetch: &Fetch,
         cache: &Cache,
         partial: &Partial,
-        known: Option<(UrlRecord, PathBuf)>,
+        known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
-        let validators = known.as_ref().map(|(record, _)| record.validators.clone());
+        let validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
         let mut restarted = false;
@@ -189,7 +188,7 @@ impl Net {
             {
                 Ok(Answer::NotModified) => {
                     return known
-                        .map(|(record, path)| fetched(record, path, Origin::NotModified))
+                        .map(|record| fetched(record, Origin::NotModified))
                         .ok_or_else(|| {
                             Error::new(
                                 Kind::NetworkStatus,
@@ -206,7 +205,7 @@ impl Net {
                     name,
                     resumed,
                 }) => match verify(&fetch.url, &fetch.expect, &stored) {
-                    Ok(()) => return Ok(self.remember(fetch, cache, stored, validators, name)),
+                    Ok(()) => return Ok(self.remember(fetch, cache, &stored, validators, name)),
                     // bytes from two connections may not belong together, so a resumed download
                     // that does not match starts over once before it counts as a mismatch
                     Err(err) if resumed && !restarted => {
@@ -253,7 +252,8 @@ impl Net {
         }
     }
 
-    /// the object a download would produce, when the expectations already identify it.
+    /// the bytes a download would produce, when the expectations already identify them and the
+    /// cache holds them.
     fn in_cache(&self, fetch: &Fetch, cache: &Cache) -> Option<Fetched> {
         let expect = &fetch.expect;
         let (digest, size) = match (expect.sha256, expect.md5) {
@@ -267,16 +267,16 @@ impl Net {
             }
             (None, None) => return None,
         };
-        let path = cache.find(&digest, size)?;
-        let size = match size {
-            Some(size) => size,
-            None => fs::metadata(&path).ok()?.len(),
+        let size = match (cache.find(&digest, size), size) {
+            (Some(_), Some(size)) => size,
+            (Some(path), None) => fs::metadata(&path).ok()?.len(),
+            (None, Some(size)) if holds(cache, fetch, &digest, Some(size)) => size,
+            (None, _) => return None,
         };
         Work::add(&self.work.cache_hits, 1);
         Some(Fetched {
             digest,
             size,
-            path,
             name: None,
             origin: Origin::Cache,
         })
@@ -513,7 +513,7 @@ impl Net {
         &self,
         fetch: &Fetch,
         cache: &Cache,
-        stored: Stored,
+        stored: &Stored,
         validators: Validators,
         name: Option<String>,
     ) -> Fetched {
@@ -541,7 +541,6 @@ impl Net {
         Fetched {
             digest: stored.digest,
             size: stored.size,
-            path: stored.path,
             name,
             origin: Origin::Network,
         }
@@ -593,18 +592,23 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     Ok(())
 }
 
-/// what the cache holds for `url` from an earlier download, when the bytes are still there.
-fn remembered(cache: &Cache, url: &Url) -> Option<(UrlRecord, PathBuf)> {
-    let record = cache.url_record(url.as_str())?;
-    let path = cache.find(&record.sha256, Some(record.size))?;
-    Some((record, path))
+/// what the cache holds for the fetch's URL from an earlier download, when the bytes are still
+/// there.
+fn remembered(cache: &Cache, fetch: &Fetch) -> Option<UrlRecord> {
+    let record = cache.url_record(fetch.url.as_str())?;
+    holds(cache, fetch, &record.sha256, Some(record.size)).then_some(record)
 }
 
-fn fetched(record: UrlRecord, path: PathBuf, origin: Origin) -> Fetched {
+/// whether the cache holds these bytes: as an object, or, for an archive the caller unpacks, as
+/// every file it unpacked to.
+fn holds(cache: &Cache, fetch: &Fetch, digest: &Sha256, size: Option<u64>) -> bool {
+    cache.find(digest, size).is_some() || fetch.unpack && cache.holds_unpacked(digest, None)
+}
+
+fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
     Fetched {
         digest: record.sha256,
         size: record.size,
-        path,
         name: record.name,
         origin,
     }
