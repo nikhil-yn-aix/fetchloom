@@ -3,8 +3,8 @@
 mod synced;
 
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io;
+use std::fs::{self, File, Permissions};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -88,8 +88,7 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
-        copy(object, destination)?;
-        seal(destination, writable)?;
+        copy(object, destination, writable)?;
         Ok(Method::Copy)
     }
 
@@ -249,41 +248,60 @@ fn real_folder(folder: &Path, make: bool) -> io::Result<()> {
     }
 }
 
-/// copies `object` to `destination`, failing when `destination` exists.
-fn copy(object: &Path, destination: &Path) -> io::Result<()> {
-    // std::fs::copy replaces an existing file, so the name is claimed first by an open that fails
-    // when it exists.
-    File::create_new(destination)?;
-    undo_on_error(fs::copy(object, destination), destination).map(drop)
+/// copies `object` to `destination`, failing when `destination` exists, and makes the copy
+/// writable or read-only as asked.
+fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
+    let claimed = File::create_new(destination)?;
+    undo_on_error(fill(object, &claimed, writable), destination)
 }
 
-/// makes a new reflink or copy at `destination` writable or read-only, as asked. a hardlink is
-/// never sealed, because its flag is the object's.
+/// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
+/// a link swapped in for the name `output` claimed is never written through.
+fn fill(object: &Path, output: &File, writable: bool) -> io::Result<()> {
+    let mut input = File::open(object)?;
+    // std copies from file to file inside the kernel on linux. elsewhere it reads straight into
+    // the writer's buffer, which up to 1 MiB saves calls on large files and costs a small one
+    // nothing.
+    let capacity = usize::try_from(input.metadata()?.len())
+        .unwrap_or(usize::MAX)
+        .clamp(8 * 1024, 1024 * 1024);
+    let mut writer = BufWriter::with_capacity(capacity, output);
+    io::copy(&mut input, &mut writer)?;
+    writer.flush()?;
+    output.set_permissions(writable_as(output.metadata()?.permissions(), writable))
+}
+
+/// makes a new reflink at `destination` writable or read-only, as asked. a hardlink is never
+/// sealed, because its flag is the object's.
 fn seal(destination: &Path, writable: bool) -> io::Result<()> {
     undo_on_error(set_writable(destination, writable), destination)
 }
 
-/// makes the file at `path` writable by its owner, or read-only for everyone.
-#[cfg(unix)]
+/// makes the file at `path` writable or read-only, as `writable_as` describes.
 fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
+    let permissions = writable_as(fs::metadata(path)?.permissions(), writable);
+    fs::set_permissions(path, permissions)
+}
+
+/// `permissions` changed to let the file's owner write it, or no one.
+#[cfg(unix)]
+fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = fs::metadata(path)?.permissions();
     let mode = permissions.mode();
     permissions.set_mode(if writable {
         mode | 0o200
     } else {
         mode & !0o222
     });
-    fs::set_permissions(path, permissions)
+    permissions
 }
 
-/// makes the file at `path` writable, or read-only.
+/// `permissions` changed to make the file writable, or read-only.
 #[cfg(not(unix))]
-fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
-    let mut permissions = fs::metadata(path)?.permissions();
+fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     permissions.set_readonly(!writable);
-    fs::set_permissions(path, permissions)
+    permissions
 }
 
 /// removes the file just made at `destination` when a later step failed, so placing it again
@@ -412,6 +430,26 @@ mod tests {
         assert_eq!(method, Method::Copy);
         assert!(!is_read_only(&destination));
         assert!(is_read_only(&object));
+    }
+
+    #[test]
+    fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
+        let (folder, object) = cache(true);
+        let destination = folder.path().join("placed.csv");
+        let outside = folder.path().join("outside.csv");
+        fs::write(&outside, "someone else's file").unwrap();
+        let claimed = File::create_new(&destination).unwrap();
+        // someone swaps a link to another file in for the name once it is claimed
+        fs::rename(&destination, folder.path().join("claimed.csv")).unwrap();
+        fs::hard_link(&outside, &destination).unwrap();
+
+        fill(&object, &claimed, false).unwrap();
+
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "someone else's file");
+        assert!(!is_read_only(&outside));
+        let copied = folder.path().join("claimed.csv");
+        assert_eq!(fs::read_to_string(&copied).unwrap(), CONTENTS);
+        assert!(is_read_only(&copied));
     }
 
     #[test]
