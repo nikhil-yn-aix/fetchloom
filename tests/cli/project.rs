@@ -316,6 +316,35 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
 }
 
 #[test]
+fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let path = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&path)?;
+    let start = pinned.find("locked = \"").ok_or("no locked line")? + "locked = \"".len();
+    let dated = format!(
+        "{}2001-02-03T04:05:06Z{}",
+        &pinned[..start],
+        &pinned[start + 20..]
+    );
+    fs::write(&path, &dated)?;
+    let output = sandbox.run(&["lock", "--upgrade"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "✓ data.lock was already up to date. nothing to do\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&path)?,
+        dated,
+        "a pin dates from when its data last changed"
+    );
+    Ok(())
+}
+
+#[test]
 fn path_prints_where_a_dataset_or_file_is() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

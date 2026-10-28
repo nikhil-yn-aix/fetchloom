@@ -132,7 +132,18 @@ impl Loop<'_> {
         }
         let now = lock::timestamp(SystemTime::now());
         let mut datasets = kept;
-        datasets.extend(drafts.into_iter().map(|draft| draft.finish(&now)));
+        datasets.extend(drafts.into_iter().map(|draft| {
+            let mut locked = draft.finish(&now);
+            // a pin dates from when its data last changed, so resolving the same data again
+            // leaves data.lock as it was
+            if let Some(before) = old.get(&locked.name)
+                && before.resolved == locked.resolved
+                && before.files == locked.files
+            {
+                locked.timestamp.clone_from(&before.timestamp);
+            }
+            locked
+        }));
         datasets.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(Lock { datasets })
     }

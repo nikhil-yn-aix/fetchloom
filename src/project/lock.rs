@@ -36,7 +36,7 @@ pub(crate) struct Locked {
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
-    /// when the dataset was last resolved, in UTC.
+    /// when the pinned data last changed, in UTC.
     #[serde(rename = "locked")]
     pub(crate) timestamp: String,
     /// sorted by path.
