@@ -147,13 +147,14 @@ credentials are read from where each source already keeps them: `HF_TOKEN` or `~
 
 ## the JSON document
 
-with `--json`, every command prints one document on stdout and nothing else.
+with `--json`, every run prints one document on stdout and nothing else, even a run that stops at a mistake on the command line. `--help` still prints text, since it is for people.
 
 ```json
 {"schema": 1, "command": "sync", "status": "ok", "result": {}, "warnings": [], "errors": [], "work": {}}
 ```
 
+- `command` is the command the command line names, such as `sync` or `cache gc`, or null when it names none. `--version` and `fetchloom` alone give `{"version": "0.1.0"}` as `result`.
 - `status` is `ok`, `partial` or `error`.
-- each error carries `kind`, `message`, `help` and the dataset or path it concerns.
+- each error carries `kind`, `message`, `help` and the dataset or path it concerns. a mistake on the command line is kind `usage`.
 - `work` holds the counters: requests, bytes downloaded, files placed, cache hits, time per phase.
 - a key keeps its meaning for as long as `schema` stays the same.

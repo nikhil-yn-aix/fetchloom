@@ -9,13 +9,12 @@ mod project;
 mod status;
 mod sync;
 
-use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use clap::Parser;
 use clap::error::{ContextKind, ContextValue, ErrorKind};
+use clap::{CommandFactory, Parser};
 use serde::Serialize;
 
 use crate::cache::Cache;
@@ -45,6 +44,18 @@ struct Context {
 }
 
 impl Context {
+    /// a context with every setting at its default, printing through `output`.
+    fn new(output: Output) -> Context {
+        Context {
+            output: Arc::new(output),
+            offline: false,
+            yes: false,
+            jobs: JOBS,
+            work: Arc::default(),
+            stop: Arc::default(),
+        }
+    }
+
     /// the network, with credentials from where each source keeps them, and retries reported as
     /// warnings.
     fn net(&self) -> Result<Net, Error> {
@@ -107,11 +118,7 @@ pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let args = match args::Args::try_parse() {
         Ok(args) => args,
-        Err(err) => return usage(&err),
-    };
-    let Some(command) = args.command else {
-        let _ = writeln!(std::io::stdout().lock(), "{}", welcome());
-        return ExitCode::SUCCESS;
+        Err(err) => return usage(&err, started),
     };
     let global = args.global;
     let level = match (global.quiet, global.verbose) {
@@ -123,29 +130,17 @@ pub(crate) fn run() -> ExitCode {
     let var = |name: &str| std::env::var_os(name);
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
-    let output = Arc::new(Output::new(style, level, global.json, logs.on_stderr()));
-    let name = command.name();
-    let context = match jobs(&var) {
-        Ok(jobs) => Context {
-            output,
-            offline: global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
-            yes: global.yes,
-            jobs,
-            work: Arc::default(),
-            stop: Arc::default(),
-        },
-        Err(error) => {
-            let context = Context {
-                output,
-                offline: false,
-                yes: false,
-                jobs: JOBS,
-                work: Arc::default(),
-                stop: Arc::default(),
-            };
-            return finish::<()>(&context, name, Err(error), started);
-        }
-    };
+    let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
+    context.offline = global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1");
+    context.yes = global.yes;
+    if args.version {
+        return about(
+            &context,
+            &format!("fetchloom {}", env!("CARGO_PKG_VERSION")),
+            started,
+        );
+    }
+    let name = args.command.as_ref().map(args::Command::name);
     if let Some(folder) = &global.directory
         && let Err(err) = std::env::set_current_dir(folder)
     {
@@ -155,54 +150,81 @@ pub(crate) fn run() -> ExitCode {
         );
         return finish::<()>(&context, name, Err(error), started);
     }
+    let Some(command) = args.command else {
+        return about(&context, &welcome(), started);
+    };
+    match jobs(&var) {
+        Ok(jobs) => context.jobs = jobs,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    dispatch(&context, command, started)
+}
+
+/// runs a command and turns how it ended into an exit code.
+fn dispatch(context: &Context, command: args::Command, started: Instant) -> ExitCode {
+    let name = Some(command.name());
     match command {
         args::Command::Add(args) => {
-            let outcome = block_on(&context, project::add(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::add(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Remove(args) => {
-            let outcome = block_on(&context, project::remove(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::remove(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {
-            let outcome = block_on(&context, project::sync(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::sync(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Lock(args) => {
-            let outcome = block_on(&context, project::lock(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::lock(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Status => {
-            let outcome = status::run(&context);
-            finish(&context, name, outcome, started)
+            let outcome = status::run(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {
-            let outcome = block_on(&context, project::path(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, project::path(context, args));
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache { action: None }) => {
-            let outcome = cache::info(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::info(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Gc),
         }) => {
-            let outcome = cache::gc(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::gc(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Verify),
         }) => {
-            let outcome = cache::verify(&context);
-            finish(&context, name, outcome, started)
+            let outcome = cache::verify(context);
+            finish(context, name, outcome, started)
         }
         args::Command::Get(args) => {
-            let outcome = block_on(&context, get::run(&context, args));
-            finish(&context, name, outcome, started)
+            let outcome = block_on(context, get::run(context, args));
+            finish(context, name, outcome, started)
         }
     }
 }
 
+/// what `--version` and `fetchloom` alone report in `--json`.
+#[derive(Serialize)]
+struct About {
+    version: &'static str,
+}
+
+/// prints `text` for a person, or the version in the document `--json` asked for.
+fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
+    context.output.answer(text);
+    let about = About {
+        version: env!("CARGO_PKG_VERSION"),
+    };
+    finish(context, None, Ok(about), started)
+}
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.
 fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
@@ -251,7 +273,7 @@ fn block_on<T>(
 /// prints how the run ended and turns it into an exit code.
 fn finish<T: Serialize>(
     context: &Context,
-    command: &str,
+    command: Option<&str>,
     outcome: Result<T, Error>,
     started: Instant,
 ) -> ExitCode {
@@ -277,25 +299,48 @@ fn welcome() -> String {
     )
 }
 
-/// help and version go to stdout as clap writes them. a mistake on the command line becomes one
-/// of our own errors, so it reads like every other failure.
-fn usage(err: &clap::Error) -> ExitCode {
-    if matches!(
-        err.kind(),
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-    ) {
+/// help goes to stdout as clap writes it, even with `--json`, since it is for people. a mistake
+/// on the command line becomes one of our own errors, so it reads like every other failure and
+/// fills the document `--json` asks for.
+fn usage(err: &clap::Error, started: Instant) -> ExitCode {
+    if err.kind() == ErrorKind::DisplayHelp {
         let _ = err.print();
         return ExitCode::SUCCESS;
     }
-    let error = describe(err);
-    Output::new(
+    let json = asks_for_json();
+    let context = Context::new(Output::new(
         Style::detect(ColorChoice::Auto),
         Level::Normal,
+        json,
         false,
-        false,
-    )
-    .error(&error);
-    ExitCode::from(error.kind.exit_code())
+    ));
+    let command = named_command();
+    finish::<()>(&context, command.as_deref(), Err(describe(err)), started)
+}
+
+/// whether the command line asks for `--json`, read from the arguments themselves, since clap
+/// stops at the first mistake and `--json` may come after it.
+fn asks_for_json() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json")
+}
+
+/// the command a command line names as far as clap can read it, such as `cache` in
+/// `fetchloom cache gx`.
+fn named_command() -> Option<String> {
+    let matches = args::Args::command()
+        .ignore_errors(true)
+        .try_get_matches()
+        .ok()?;
+    let mut names = Vec::new();
+    let mut current = &matches;
+    while let Some((name, inner)) = current.subcommand() {
+        names.push(name);
+        current = inner;
+    }
+    (!names.is_empty()).then(|| names.join(" "))
 }
 
 fn describe(err: &clap::Error) -> Error {

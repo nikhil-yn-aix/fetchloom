@@ -42,7 +42,8 @@ pub(crate) struct Output {
 #[derive(Serialize)]
 struct Document<'a, T> {
     schema: u32,
-    command: &'a str,
+    /// none when no command ran, as for `--version` or a command line that could not be read.
+    command: Option<&'a str>,
     status: &'static str,
     result: Option<&'a T>,
     warnings: Vec<String>,
@@ -233,7 +234,7 @@ impl Output {
     /// prints the `--json` document for a run, whatever its outcome.
     pub(crate) fn document<T: Serialize>(
         &self,
-        command: &str,
+        command: Option<&str>,
         outcome: Result<&T, &Error>,
         counts: Counts,
         elapsed: Duration,
