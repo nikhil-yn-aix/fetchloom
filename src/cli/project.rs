@@ -54,7 +54,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         net.typed(url);
     }
     let cache = open_cache()?;
-    let mut listing = parsed.reference.resolve(&*net).await?;
+    let mut listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
         parsed.file.iter().cloned().collect()

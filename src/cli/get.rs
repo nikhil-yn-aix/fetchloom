@@ -55,7 +55,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     let cache = open_cache()?;
     let net = Arc::new(context.net()?);
     net.trust(parsed.reference.written_host());
-    let listing = parsed.reference.resolve(&*net).await?;
+    let listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
     engine::tell_resolved(&context.output, &listing);
     let files = selected(&args, &parsed, &listing)?;
     let chosen = args.output.as_deref();

@@ -43,6 +43,26 @@ impl Bar {
         }
     }
 
+    /// a spinner and its message, with the time taken once that passes 2 seconds.
+    pub(super) fn spin(bars: &MultiProgress, message: String, unicode: bool) -> Bar {
+        let bar = bars.add(ProgressBar::new_spinner().with_message(message));
+        let spinning = ProgressStyle::with_template("{spinner:.cyan} {msg}{waited}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
+            .tick_chars(ticks(unicode))
+            .with_key(
+                "waited",
+                |state: &ProgressState, out: &mut dyn fmt::Write| {
+                    let _ = out.write_str(&waited(state.elapsed()));
+                },
+            );
+        bar.set_style(spinning);
+        bar.enable_steady_tick(TICK);
+        Bar {
+            bar: Some(bar),
+            unicode,
+        }
+    }
+
     pub(crate) fn message(&self, text: String) {
         if let Some(bar) = &self.bar {
             bar.set_message(text);
@@ -81,35 +101,70 @@ fn style(unicode: bool, sized: bool) -> ProgressStyle {
     } else {
         "{spinner:.cyan} {wide_msg} {amount}"
     };
-    let (ticks, fill) = if unicode {
-        ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", "━╸─")
-    } else {
-        ("-\\|/ ", "=> ")
-    };
+    let fill = if unicode { "━╸─" } else { "=> " };
     ProgressStyle::with_template(template)
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
-        .tick_chars(ticks)
+        .tick_chars(ticks(unicode))
         .progress_chars(fill)
         .with_key("amount", amount)
 }
 
-/// `1.2 MiB / 4.1 MiB · 3.4 MiB/s · 1 s left`, in the units the rest of fetchloom prints.
-fn amount(state: &ProgressState, out: &mut dyn fmt::Write) {
-    if state.pos() == 0 {
-        return;
+fn ticks(unicode: bool) -> &'static str {
+    if unicode {
+        "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "
+    } else {
+        "-\\|/ "
     }
-    let done = units::size(state.pos());
-    let _ = match state.len() {
-        Some(total) => write!(out, "{done} / {}", units::size(total)),
-        None => write!(out, "{done}"),
-    };
-    let rate = state.per_sec();
-    if rate > 0.0 && state.elapsed() >= SETTLE {
-        let _ = write!(out, " · {}", units::speed(rate));
-        if state.len().is_some() {
-            let _ = write!(out, " · {} left", units::seconds(state.eta()));
+}
+
+/// what a bar shows of its progress, from what `indicatif` measured.
+fn amount(state: &ProgressState, out: &mut dyn fmt::Write) {
+    let shown = measure(
+        state.pos(),
+        state.len(),
+        state.per_sec(),
+        state.elapsed(),
+        state.eta(),
+    );
+    let _ = out.write_str(&shown);
+}
+
+/// `1.2 MiB / 4.1 MiB · 3.4 MiB/s · 1 s left`, in the units the rest of fetchloom prints, and
+/// the time taken once that passes 2 seconds, so a wait for the first byte shows too.
+fn measure(done: u64, total: Option<u64>, rate: f64, elapsed: Duration, left: Duration) -> String {
+    let mut parts = Vec::new();
+    if done > 0 {
+        let done = units::size(done);
+        parts.push(match total {
+            Some(total) => format!("{done} / {}", units::size(total)),
+            None => done,
+        });
+        if rate > 0.0 && elapsed >= SETTLE {
+            parts.push(units::speed(rate));
+            if total.is_some() {
+                parts.push(format!("{} left", units::seconds(left)));
+            }
         }
     }
+    if elapsed >= MOMENT {
+        parts.push(units::seconds(elapsed));
+    }
+    parts.join(" · ")
+}
+
+/// ` · 12 s` after a spinner's message, once its wait passes 2 seconds.
+fn waited(elapsed: Duration) -> String {
+    if elapsed >= MOMENT {
+        format!(" · {}", units::seconds(elapsed))
+    } else {
+        String::new()
+    }
+}
+
+/// a step that waits, shown until dropped: a spinner on a terminal, plain lines off one.
+pub(crate) struct Wait {
+    pub(super) _spinner: Bar,
+    pub(super) _ticker: Ticker,
 }
 
 /// a batch of work told in plain lines where no bar shows it, as in a log or a pipe: what it
@@ -248,6 +303,8 @@ fn tick(
                         units::size(done.min(total)),
                         units::size(total)
                     ),
+                    // a wait with no bytes to count, such as a source taking its time to answer
+                    None if done == 0 => format!("{what} · {elapsed}"),
                     None => format!("{} · {elapsed}", units::size(done)),
                 },
             );
@@ -312,6 +369,44 @@ mod tests {
             heard[1..]
                 .iter()
                 .all(|line| line.starts_with("Downloading 150 B of 300 B · ")),
+            "{heard:?}"
+        );
+    }
+
+    #[test]
+    fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
+        let second = Duration::from_secs(1);
+        assert_eq!(measure(0, None, 0.0, second, Duration::ZERO), "");
+        assert_eq!(
+            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO),
+            "12 s"
+        );
+        assert_eq!(
+            measure(1024, Some(4096), 0.0, second, Duration::ZERO),
+            "1.0 KiB / 4.0 KiB"
+        );
+        assert_eq!(
+            measure(1024, Some(4096), 512.0, 12 * second, 6 * second),
+            "1.0 KiB / 4.0 KiB · 512 B/s · 6 s left · 12 s"
+        );
+        assert_eq!(waited(Duration::from_millis(1999)), "");
+        assert_eq!(waited(12 * second), " · 12 s");
+    }
+
+    #[test]
+    fn a_wait_without_bytes_says_what_it_waits_for() {
+        let (heard, say) = ear();
+        let pace = (Duration::from_millis(30), Duration::from_millis(90));
+        let ticker = Ticker::paced("Resolving", "zenodo:1".to_owned(), (0, 1), pace, say);
+        std::thread::sleep(Duration::from_millis(300));
+        drop(ticker);
+        let heard = heard.lock().unwrap();
+        assert_eq!(heard[0], "Resolving zenodo:1", "{heard:?}");
+        assert!(heard.len() >= 2, "{heard:?}");
+        assert!(
+            heard[1..]
+                .iter()
+                .all(|line| line.starts_with("Resolving zenodo:1 · ")),
             "{heard:?}"
         );
     }

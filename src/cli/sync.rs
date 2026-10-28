@@ -228,6 +228,7 @@ impl<'a> Loop<'a> {
     ) -> Result<Vec<(String, Listing)>, Error> {
         let mut listings = Vec::with_capacity(asks.len());
         let mut tasks = JoinSet::new();
+        let mut asked = Vec::new();
         for (name, text) in asks {
             if let Some((given_name, listing)) = &given
                 && *given_name == name
@@ -241,12 +242,24 @@ impl<'a> Loop<'a> {
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
+            if !stands_for_itself(&parsed.reference) {
+                asked.push(parsed.reference.to_string());
+            }
             let net = self.net.clone();
             tasks.spawn(async move {
                 let listing = parsed.reference.resolve(&*net).await;
                 (name, listing)
             });
         }
+        let output = &self.context.output;
+        let _waiting = match asked.as_slice() {
+            [] => None,
+            [one] => Some(output.wait("Resolving", one.clone())),
+            many => Some(output.wait(
+                "Resolving",
+                units::count(many.len() as u64, "dataset", "datasets"),
+            )),
+        };
         while let Some(joined) = tasks.join_next().await {
             let (name, listing) = joined.map_err(|err| {
                 Error::new(
@@ -329,6 +342,23 @@ impl<'a> Loop<'a> {
 /// the files a dataset's patterns keep from its listing, or why the patterns are wrong.
 pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
     draft::filter(name, entry, listing)
+}
+
+/// resolves a reference, with a spinner or plain lines while its source takes its time.
+pub(super) async fn resolve(
+    output: &Output,
+    reference: &Reference,
+    net: &Net,
+) -> Result<Listing, Error> {
+    let _waiting =
+        (!stands_for_itself(reference)).then(|| output.wait("Resolving", reference.to_string()));
+    reference.resolve(net).await
+}
+
+/// whether a reference resolves without asking anyone, as a plain link does. such a link may
+/// also carry a token, which no spinner should print.
+fn stands_for_itself(reference: &Reference) -> bool {
+    matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }
 
 /// what to resolve for a dataset whose entry changed. a changed filter resolves the version

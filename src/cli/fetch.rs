@@ -93,9 +93,15 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// the download's bar, made when it is first needed.
+    fn bar(&self) -> &Bar {
+        self.bar
+            .get_or_init(|| self.output.bar(self.job.label.clone()))
+    }
+
     fn on(&self, event: &Event) -> Result<(), Error> {
         let label = &self.job.label;
-        let bar = self.bar.get_or_init(|| self.output.bar(label.clone()));
+        let bar = self.bar();
         match *event {
             Event::Waiting => {
                 bar.message(format!("waiting for another fetchloom to download {label}"));
@@ -142,6 +148,7 @@ pub(super) async fn all(
     jobs: Vec<Job>,
 ) -> Result<Vec<Fetched>, Error> {
     let count = jobs.len();
+    let alone = count == 1;
     let overall = Arc::new(Overall::new(context, &jobs));
     let mut results: Vec<Option<Fetched>> = std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
@@ -166,6 +173,11 @@ pub(super) async fn all(
             let yes = context.yes;
             tasks.spawn(async move {
                 let watch = Watch::new(&job, &output, &overall, &asked, yes);
+                // with no bar for them all, a lone download shows its bar while the server
+                // takes its time to answer
+                if alone {
+                    watch.bar();
+                }
                 let on = |event: Event| watch.on(&event);
                 let fetched = net.download(&job.fetch, &cache, &on).await;
                 (index, fetched.map_err(|err| explain(err, &job)))

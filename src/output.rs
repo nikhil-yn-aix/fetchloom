@@ -13,7 +13,7 @@ use anstyle::{AnsiColor, Style as Paint};
 use indicatif::MultiProgress;
 use serde::Serialize;
 
-pub(crate) use progress::{Bar, Ticker};
+pub(crate) use progress::{Bar, Ticker, Wait};
 pub(crate) use style::{ColorChoice, Style};
 
 use crate::error::Error;
@@ -182,6 +182,24 @@ impl Output {
         match &self.bars {
             Some(bars) => Bar::add(bars, message, self.style.unicode),
             None => Bar::hidden(),
+        }
+    }
+
+    /// a step that waits on something, such as `resolving zenodo:3608990`: a spinner with the
+    /// time it has taken on a terminal, and plain lines off one once it takes more than a
+    /// moment. it ends when dropped.
+    pub(crate) fn wait(&self, verb: &'static str, what: String) -> Wait {
+        let spinner = match &self.bars {
+            Some(bars) => Bar::spin(
+                bars,
+                format!("{} {}", verb.to_lowercase(), plain(&what)),
+                self.style.unicode,
+            ),
+            None => Bar::hidden(),
+        };
+        Wait {
+            _spinner: spinner,
+            _ticker: self.ticker(verb, what, [None]),
         }
     }
 
