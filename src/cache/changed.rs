@@ -14,18 +14,28 @@ impl Cache {
     /// remembers that the object for `digest` no longer held its bytes, as of now.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
         let folder = self.changed_folder();
-        fs::create_dir_all(&folder)?;
-        fs::write(folder.join(digest.hex()), b"")
+        super::real_folder(&folder)?;
+        self.write_atomically(&folder.join(digest.hex()), b"")
     }
 
     /// every object found changed, with when it was found, in nanoseconds since 1970 like the
     /// times a project records for its files.
     pub(crate) fn changed(&self) -> HashMap<Sha256, u64> {
-        fs::read_dir(self.changed_folder())
+        let folder = self.changed_folder();
+        if !fs::symlink_metadata(&folder).is_ok_and(|metadata| {
+            let kind = metadata.file_type();
+            kind.is_dir() && !kind.is_symlink()
+        }) {
+            return HashMap::new();
+        }
+        fs::read_dir(folder)
             .into_iter()
             .flatten()
             .flatten()
             .filter_map(|entry| {
+                if !entry.file_type().ok()?.is_file() {
+                    return None;
+                }
                 let digest = Sha256::from_hex(&entry.file_name().to_string_lossy())?;
                 let found = entry.metadata().ok()?.modified().ok()?;
                 let since = found.duration_since(UNIX_EPOCH).ok()?;
@@ -38,7 +48,7 @@ impl Cache {
     /// that it would still put back.
     pub(crate) fn forget_changed(&self, needed: &HashSet<Sha256>) {
         for digest in self.changed().into_keys() {
-            if !needed.contains(&digest) {
+            if !needed.contains(&digest) && super::real_folder(&self.changed_folder()).is_ok() {
                 let _ = fs::remove_file(self.changed_folder().join(digest.hex()));
             }
         }
@@ -55,9 +65,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn marking_a_changed_object_never_writes_through_a_link() {
+        let (dir, cache) = cache();
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"keep these bytes").unwrap();
+        let digest = crate::digest::sha256(b"object");
+        fs::create_dir_all(cache.changed_folder()).unwrap();
+        let mark = cache.changed_folder().join(digest.hex());
+        fs::hard_link(&outside, &mark).unwrap();
+
+        cache.mark_changed(&digest).unwrap();
+
+        assert_eq!(fs::read(outside).unwrap(), b"keep these bytes");
+        assert_eq!(fs::read(mark).unwrap(), b"");
+    }
+
+    #[test]
     fn a_changed_object_is_remembered_until_no_project_needs_it() {
         let (_dir, cache) = cache();
-        assert!(cache.changed().is_empty(), "nothing yet, and no folder");
+        assert!(cache.changed().is_empty(), "nothing marked");
         let kept = store(&cache, b"kept").digest;
         let dropped = store(&cache, b"dropped").digest;
         for digest in [kept, dropped] {

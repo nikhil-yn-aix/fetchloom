@@ -62,9 +62,10 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - objects are named by SHA-256, one read-only file each, under a two-character fan-out.
 - writes need no locks. a download streams into `tmp/`, is hashed, flushed to disk, sealed read-only, then put in place by an operation that fails when the name already exists. of two processes racing for one object, exactly one places it and the other finds it there. this stays safe on NFS, lustre and GPFS, where file locks cannot be trusted.
 - flushes run in parallel batches, never one blocking flush at a time. before an object is used, its size is checked against `data.lock`, which catches a file cut short by a crash. `cache verify` hashes every object again.
-- an unfinished download lives in `partial/` beside a small record of its URL, validators and bytes received. one process owns it at a time, claimed by rename, and a later run continues it.
+- an unfinished download lives in `partial/` beside a small record of its URL, validators, the bytes received and their SHA-256, saved every second. one process owns it at a time, by holding a lock beside it, and a later run continues it once the bytes kept still hash to the record.
 - every sync registers its project under `projects/`. `cache gc` keeps every object that a registered project's `data.lock` needs, following archives to the members they unpacked into. it removes the rest only when older than a day, and never touches an unfinished download younger than a day.
 - removing an object never breaks a project. placed files are links or copies, so they keep their bytes when the cache's name for them goes. at worst, a later project downloads that object again.
+- a cache several people share trusts all of them: anyone who can write to it can change its objects, and `cache verify` finds that. no one can make fetchloom write outside it: it opens nothing in the cache through a link, keeps only real folders, and on unix continues only downloads its own user started.
 - `CACHEDIR.TAG` tells backup tools to skip the folder.
 
 ## placing files
@@ -86,7 +87,8 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - retries cover connection errors, timeouts, 408, 429 and 5xx, with jittered backoff up to 60 s and at most 5 attempts. `Retry-After` is a floor. when a host asks for more than 60 s, the next known location is tried, or the error says how long the host asked for.
 - resume is a range request from the last verified byte, used only when the file's identity is fixed by a pinned hash, an immutable version or a strong ETag. otherwise the download starts over.
 - credentials attach only to their own scheme, host and port, only over https, and are dropped on any redirect to another origin.
-- a URL that did not come from the command line may not reach a private, loopback or link-local address. the check runs on the address each connection actually uses, for the first request and every redirect, so a hostile `data.lock` cannot reach into a local network.
+- a URL that did not come from the command line may not reach a private, loopback or link-local address. the check runs on the address each connection actually uses, for the first request and every redirect, so a hostile `data.lock` cannot reach into a local network. fetchloom follows redirects itself, so each hop is checked before it goes out.
+- behind a proxy, which resolves names itself, a host nobody wrote is looked up here first and refused when any of its addresses is private. a name this machine cannot resolve is left to the proxy, and the proxy itself is trusted, since a person set it up.
 - URLs live in a type that hides tokens and signed query values whenever they are displayed or logged.
 - offline mode is enforced inside the client, so no source can forget it.
 - the user agent is `fetchloom/<version>`.
@@ -133,7 +135,7 @@ every error has a kind such as `network.timeout`, `integrity.mismatch` or `refer
 
 ## platforms
 
-- windows: no admin rights needed and no symlinks. objects carry the read-only attribute, and gc deletes them with the flag that ignores it, so other links to the same file keep it. paths windows cannot store are refused before anything is written. the cache defaults to `%LOCALAPPDATA%`, which onedrive does not sync. defender scans every new file, so a cache on a dev drive, or a defender exclusion, makes datasets of many small files much faster; `-v` says so when it applies.
+- windows: no admin rights needed and no symlinks. objects carry the read-only attribute, and gc deletes them with the flag that ignores it, so other links to the same file keep it. paths windows cannot store are refused before anything is written. files may lie deeper than 260 characters, since every path reaches windows in its long form, but windows works in no folder whose path passes 258 characters, so `-C` names such a folder and its length and stops. the cache defaults to `%LOCALAPPDATA%`, which onedrive does not sync. defender scans every new file, so a cache on a dev drive, or a defender exclusion, makes datasets of many small files much faster; `-v` says so when it applies.
 - macos: reflink on APFS. icloud drive folders get copies and a warning, since "optimize mac storage" can remove local files.
 - linux and clusters: safe on NFS, lustre and GPFS without file locks in the cache. in v0.1 a cache is shared safely by one user's processes; sharing one between people comes with the lab features.
 

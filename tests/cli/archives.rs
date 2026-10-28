@@ -184,7 +184,12 @@ fn get_unpacks_a_zip_into_its_folder_and_a_second_run_moves_nothing() -> Result 
 fn the_cache_counts_an_archive_by_the_files_it_unpacked_to() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
-    ok(&sandbox.run(&["add", &server.url])?)?;
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    assert_eq!(
+        added["work"]["objects_written"],
+        FILES.len() + 1,
+        "the zip and each file it holds"
+    );
     let info = json(&sandbox.run(&["--json", "cache"])?)?;
     let bytes: usize = FILES.iter().map(|(_, bytes)| bytes.len()).sum();
     assert_eq!(info["result"]["needed"], bytes);
@@ -255,5 +260,98 @@ fn add_with_no_extract_writes_extract_false() -> Result {
     assert!(manifest.contains("extract = false"), "{manifest}");
     let folder = sandbox.work().join("data").join("dataset");
     assert_eq!(fs::read(folder.join("dataset.zip"))?, zip);
+    Ok(())
+}
+
+#[test]
+fn removing_a_dataset_keeps_files_of_an_archive_the_cache_never_saw() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    let notes = Server::start("/files/notes.csv", vec![file(b"a,b\n", "\"n1\"")])?;
+    ok(&sandbox.run(&["add", &zip.url])?)?;
+    ok(&sandbox.run(&["add", &notes.url])?)?;
+    let removed = sandbox
+        .command_in(&sandbox.work(), &["remove", "notes"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
+        .output()?;
+    ok(&removed)?;
+    assert!(!sandbox.work().join("data").join("notes").exists());
+    holds_the_archive(&sandbox.work().join("data").join("dataset"))
+}
+
+#[test]
+fn an_archive_another_project_places_as_a_file_stays_in_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    // python-nested.zip holds python.zip, byte for byte, under nested/
+    let nested = Server::start(
+        "/files/nested.zip",
+        vec![file(&fixture("python-nested.zip")?, "\"n1\"")],
+    )?;
+    ok(&sandbox.run(&["add", &nested.url])?)?;
+    let other = sandbox.folder("other")?;
+    let zip = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    ok(&sandbox.command_in(&other, &["add", &zip.url]).output()?)?;
+    holds_the_archive(&other.join("data").join("dataset"))?;
+    assert!(zip_object(&sandbox.cache()).exists());
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    ok(&sandbox
+        .command_in(&clone, &["sync", "--offline"])
+        .output()?)?;
+    assert_eq!(
+        fs::read(clone.join("data").join("nested").join("python.zip"))?,
+        fixture("python.zip")?
+    );
+    Ok(())
+}
+
+#[test]
+fn get_drops_an_archive_it_unpacked_on_an_earlier_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"z1\"")], b"");
+    let server = Server::start(
+        PATH,
+        vec![file(&fixture("python.zip")?, "\"z1\""), unchanged],
+    )?;
+    let taken = sandbox.work().join("dataset");
+    fs::create_dir(&taken)?;
+    fs::write(taken.join("notes.txt"), "mine")?;
+    let refused = sandbox.run(&["get", &server.url])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stderr)?
+    );
+    assert!(
+        zip_object(&sandbox.cache()).exists(),
+        "refused before placing"
+    );
+    ok(&sandbox.run(&["get", &server.url, "-o", "fresh"])?)?;
+    holds_the_archive(&sandbox.work().join("fresh"))?;
+    assert!(
+        !zip_object(&sandbox.cache()).exists(),
+        "its files are in, so its own bytes go"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_file_the_server_never_named_an_archive_needs_its_own_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let named = Server::start(PATH, vec![file(&zip, "\"z1\"")])?;
+    ok(&sandbox.run(&["get", &named.url])?)?;
+    let bare = Server::start("/download/12345", vec![file(&zip, "\"z1\"")])?;
+    ok(&sandbox.run(&["get", &bare.url])?)?;
+    assert_eq!(fs::read(sandbox.work().join("12345").join("12345"))?, zip);
+    // as cache gc would, once the object is a day old
+    fs::remove_file(zip_object(&sandbox.cache()))?;
+    let offline = sandbox.run(&["--offline", "get", &bare.url, "-o", "fresh"])?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains("is not in the cache"), "{stderr}");
     Ok(())
 }

@@ -1,8 +1,8 @@
 //! `fetchloom get`: one link into one folder, through the cache.
 
 use std::fs;
-use std::process::{Output, Stdio};
-use std::time::Duration;
+use std::process::{Child, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -128,6 +128,70 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     );
     assert!(resumed.contains("if-range: \"v1\""), "{resumed}");
     Ok(())
+}
+
+#[test]
+fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
+    let body: Vec<u8> = (0..1_048_576u32).flat_map(u32::to_le_bytes).collect();
+    let sandbox = Sandbox::new()?;
+    // the first answer trickles at 640 KiB a second, so the kill lands inside the body
+    let server = Server::slow_file("/big.bin", body.clone())?;
+    let mut child = sandbox
+        .command(&["--json", "get", &server.url])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let on_disk = part_reaches(&sandbox, 1024 * 1024, &mut child)?;
+    child.kill()?;
+    child.wait()?;
+    assert!(
+        on_disk >= 1024 * 1024,
+        "the first run ended before the kill"
+    );
+
+    let output = sandbox.run(&["--json", "get", &server.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let work = &json(&output)?["work"];
+    assert_eq!(work["resumes"], 1, "{work}");
+    let continued = body.len() as u64 - work["bytes_down"].as_u64().unwrap_or_default();
+    assert!(
+        continued > 0 && on_disk.saturating_sub(continued) <= 2 * 640 * 1024,
+        "{on_disk} bytes were on disk and the download continued from {continued}"
+    );
+    let asked = &server.requests()[1];
+    assert!(
+        asked.contains(&format!("range: bytes={continued}-")),
+        "{asked}"
+    );
+    assert!(asked.contains("if-range: \"v1\""), "{asked}");
+    assert_eq!(fs::read(sandbox.work().join("big").join("big.bin"))?, body);
+    Ok(())
+}
+
+/// waits until an unfinished download in the cache holds `size` bytes, or the run ends, and says
+/// how many it holds.
+fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut on_disk = 0;
+    while on_disk < size && run.try_wait()?.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        // the size a folder listing shows lags behind a file another process still writes on
+        // windows, so each file is asked directly
+        on_disk = fs::read_dir(sandbox.cache().join("partial"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "part")
+            })
+            .filter_map(|path| fs::metadata(path).ok())
+            .map(|metadata| metadata.len())
+            .max()
+            .unwrap_or_default();
+    }
+    Ok(on_disk)
 }
 
 #[test]

@@ -96,10 +96,14 @@ impl NewObject {
 impl Sealed {
     /// puts the object in place under its hash.
     pub(crate) fn publish(self, cache: &Cache) -> io::Result<Stored> {
-        let Sealed { temp, digest, size } = self;
+        let Sealed {
+            mut temp,
+            digest,
+            size,
+        } = self;
         let stored = cache.link_object(&temp, digest, size, None)?;
-        // linking moved or removed the file, so there is nothing left to delete
-        let _ = temp.keep();
+        // linking moved or removed the file, and whatever has its name now is not ours to touch
+        temp.disable_cleanup(true);
         Ok(stored)
     }
 }

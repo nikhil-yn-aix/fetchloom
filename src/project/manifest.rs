@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike};
+use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlError};
 
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
@@ -40,19 +40,7 @@ impl Manifest {
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let reader = Reader { text };
-        let document = Document::parse(text).map_err(|err| {
-            let message = err
-                .message()
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_owned();
-            reader.error(
-                err.span(),
-                format!("data.toml is not valid TOML: {message}"),
-            )
-        })?;
+        let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
         let root = document.as_table();
         reader.known(root, &TOP_KEYS, "")?;
         let data_dir = match root.get("project") {
@@ -363,13 +351,19 @@ fn next_table(document: &mut DocumentMut, position: isize) -> Option<&mut Table>
 
 fn editable(text: &str) -> Result<DocumentMut, Error> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    text.parse::<DocumentMut>().map_err(|err| {
-        let message = err.message().lines().next().unwrap_or_default().to_owned();
-        Error::new(
-            Kind::ProjectInvalid,
+    text.parse::<DocumentMut>()
+        .map_err(|err| not_toml(text, &err))
+}
+
+/// data.toml that is not TOML at all, pointing at the line where reading it stopped.
+fn not_toml(text: &str, err: &TomlError) -> Error {
+    let message = err.message().lines().next().unwrap_or_default().trim();
+    Reader { text }
+        .error(
+            err.span(),
             format!("data.toml is not valid TOML: {message}"),
         )
-    })
+        .help("fix that line, then run the command again")
 }
 
 #[cfg(test)]
@@ -408,12 +402,11 @@ mod tests {
         assert_eq!(weights.path.as_deref(), Some("models/w"));
         assert_eq!(parse("").data_dir, "data");
         assert!(parse("").datasets.is_empty());
-        assert_eq!(
-            parse("datasets.iris = { ref = \"zenodo:3608990\" }\n")
-                .datasets
-                .len(),
-            1,
-            "inline tables work too"
+        let inline = parse("datasets.iris = { ref = \"zenodo:3608990\" }\n");
+        assert_eq!(inline.datasets.len(), 1, "inline tables work too");
+        assert!(
+            !inline.datasets["iris"].lines.is_empty(),
+            "an entry from data.toml always cites its lines"
         );
     }
 

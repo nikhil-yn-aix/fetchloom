@@ -18,10 +18,10 @@ use crate::archive::{self, Unpacked};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net::Expect;
 use crate::output::Output;
 use crate::project::lock::{Lock, LockedFile};
 use crate::units;
+use crate::work::Work;
 
 /// an archive the cache holds, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
@@ -31,7 +31,8 @@ pub(in crate::cli) struct Unpack {
 }
 
 /// unpacks archives the cache holds and records what each unpacked to: what it holds, or none
-/// for a file whose bytes are no archive after all. a few run at once, each with a bar.
+/// for a file whose bytes are no archive after all. a few run at once, each with a bar on a
+/// terminal, while off one plain lines tell the whole batch.
 pub(in crate::cli) async fn unpack_all(
     context: &Context,
     cache: &Cache,
@@ -43,6 +44,12 @@ pub(in crate::cli) async fn unpack_all(
         .div_ceil(4)
         .min(4);
     let failed = Arc::new(AtomicBool::new(false));
+    let what = match archives.as_slice() {
+        [only] => only.label.clone(),
+        _ => units::count(archives.len() as u64, "archive", "archives"),
+    };
+    let sizes = archives.iter().map(|unpack| Some(unpack.size));
+    let ticker = Arc::new(context.output.ticker("Unpacking", what, sizes));
     let mut results: Vec<Option<Unpacked>> = std::iter::repeat_with(|| None)
         .take(archives.len())
         .collect();
@@ -55,13 +62,16 @@ pub(in crate::cli) async fn unpack_all(
             let cache = cache.clone();
             let stop = context.stop.clone();
             let failed = failed.clone();
+            let ticker = ticker.clone();
             let bar = context.output.bar(format!("unpacking {}", unpack.label));
             bar.start(Some(unpack.size), 0);
             tasks.spawn_blocking(move || {
                 let started = Instant::now();
                 let read = Cell::new(0);
                 let watch = |now: u64| {
-                    bar.advance(now.saturating_sub(read.replace(now)));
+                    let bytes = now.saturating_sub(read.replace(now));
+                    bar.advance(bytes);
+                    ticker.advance(bytes);
                     stop.is_asked() || failed.load(Ordering::Relaxed)
                 };
                 let unpacked = archive::unpack_cached(&cache, &unpack.archive, unpack.size, &watch);
@@ -80,6 +90,7 @@ pub(in crate::cli) async fn unpack_all(
         })?;
         match unpacked {
             Ok(Some(unpacked)) => {
+                Work::add(&context.work.objects_written, unpacked.written);
                 tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
                 results[index] = Some(unpacked);
             }
@@ -170,6 +181,7 @@ impl Loop<'_> {
     /// cache does not hold, and checks that each unpacks to what the lock says.
     pub(super) async fn unpack_locked(
         &self,
+        lock: &Lock,
         archives: &[(String, &LockedFile)],
     ) -> Result<(), Error> {
         if archives.is_empty() {
@@ -178,18 +190,7 @@ impl Loop<'_> {
         let jobs = archives
             .iter()
             .filter(|(_, file)| self.cache.find(&file.sha256, Some(file.size)).is_none())
-            .map(|(dataset, file)| {
-                job(
-                    dataset,
-                    &file.path,
-                    &file.url,
-                    Expect {
-                        sha256: Some(file.sha256),
-                        md5: file.md5,
-                        size: Some(file.size),
-                    },
-                )
-            })
+            .map(|(dataset, file)| job(lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
         let unpacks = archives

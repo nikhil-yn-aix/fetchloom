@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use super::failure::{self, Failure, Retry};
-use super::{CONNECT, IDLE, Net, RESPONSE, host};
+use super::{IDLE, Net, host};
 use crate::error::{Error, Kind};
 use crate::work::Work;
 
@@ -82,20 +82,16 @@ impl Api for Net {
 impl Net {
     async fn answer(&self, url: &Url) -> Result<Response, Failure> {
         Work::add(&self.work.requests, 1);
-        let request = self.request(url).header(
-            header::ACCEPT,
-            "application/json, text/html;q=0.9, */*;q=0.8",
-        );
-        let mut response = tokio::select! {
-            sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
-                Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(url), (CONNECT + RESPONSE).as_secs()))),
-                Ok(Err(err)) => return Err(failure::classify(url, &err)),
-                Ok(Ok(response)) => response,
-            },
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
-        };
+        let mut response = self
+            .send(url, |request| {
+                request.header(
+                    header::ACCEPT,
+                    "application/json, text/html;q=0.9, */*;q=0.8",
+                )
+            })
+            .await?;
         let status = response.status();
-        tracing::debug!(%url, status = status.as_u16(), "answer");
+        tracing::debug!(url = %super::Shown(url), status = status.as_u16(), "answer");
         if failure::is_transient(status) {
             return Err(failure::refusal(url, status, response.headers()));
         }

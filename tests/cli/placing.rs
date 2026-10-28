@@ -151,14 +151,23 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
 /// a project in `work` and a second one in `other`, both holding iris as a link to one cached
 /// file, with iris then edited through the first project's link.
 fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
-    let added = sandbox.run(&["add", &server.url])?;
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let other = sandbox.folder("other")?;
     for name in ["data.toml", "data.lock"] {
         fs::copy(sandbox.work().join(name), other.join(name))?;
     }
-    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+    let synced = sandbox
+        .command_in(&other, &["sync"])
+        .env("OneDrive", &other)
+        .output()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    for project in [sandbox.work(), other.clone()] {
+        link_iris(sandbox, &project)?;
+    }
     let mut edited = V1.to_vec();
     edited[0] = b'S';
     edit(
@@ -166,6 +175,37 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<std::path::Pa
         &edited,
     )?;
     Ok(other)
+}
+
+/// gives the fixture real hardlinks even when the filesystem chose reflinks or copies.
+fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
+    let state_path = project.join(".fetchloom").join("state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    let path = "data/iris/iris.csv";
+    let record = &mut state["files"][path];
+    let digest = record["sha256"]
+        .as_str()
+        .ok_or("a placed file has a digest")?;
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&digest[..2])
+        .join(&digest[2..]);
+    let destination = project.join(path);
+    fs::remove_file(&destination)?;
+    fs::hard_link(object, &destination)?;
+    let metadata = fs::symlink_metadata(destination)?;
+    let modified = u64::try_from(
+        metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos(),
+    )?;
+    record["method"] = serde_json::json!("hardlink");
+    record["look"] = serde_json::json!({"size": metadata.len(), "modified": modified});
+    record["writable"] = serde_json::json!(false);
+    fs::write(state_path, serde_json::to_vec(&state)?)?;
+    Ok(())
 }
 
 #[test]

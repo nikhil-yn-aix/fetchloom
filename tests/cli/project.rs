@@ -261,6 +261,38 @@ fn changed_bytes_upstream_stop_sync_with_the_fix() -> Result {
 }
 
 #[test]
+fn changed_bytes_from_a_source_that_states_md5_get_the_same_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let same_size = b"sepal_length,species\n4.9,setosa\n";
+    assert_eq!(same_size.len(), IRIS.len());
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(same_size, "\"v2\"")])?;
+    added(&sandbox, &server)?;
+    // zenodo, figshare and dataverse state an MD5, which data.lock keeps beside the SHA-256
+    let lock = sandbox.work().join("data.lock");
+    let text_before = fs::read_to_string(&lock)?;
+    fs::write(
+        &lock,
+        text_before.replace(
+            ", url = ",
+            ", md5 = \"0773746ec982652e1c31c2c7bbaacc9c\", url = ",
+        ),
+    )?;
+    let cold = clone(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&cold, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .output()?;
+    assert_eq!(output.status.code(), Some(30));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("is not the file that was locked"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("fetchloom lock --upgrade iris"), "{stderr}");
+    Ok(())
+}
+
+#[test]
 fn offline_uses_the_cache_or_says_what_is_missing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
@@ -390,6 +422,37 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
         "{}",
         text(&typo.stderr)?
     );
+    let swapped = sandbox.run(&["path", "irsi"])?;
+    assert!(
+        text(&swapped.stderr)?.contains("did you mean iris?"),
+        "{}",
+        text(&swapped.stderr)?
+    );
+    Ok(())
+}
+
+#[test]
+fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("archives")
+        .join("python.zip");
+    let server = Server::start("/files/dataset.zip", vec![file(&fs::read(zip)?, "\"z1\"")])?;
+    added(&sandbox, &server)?;
+    let typo = sandbox.run(&["path", "dataset/data/trian.csv"])?;
+    assert_eq!(typo.status.code(), Some(2));
+    assert!(
+        text(&typo.stderr)?.contains("did you mean `fetchloom path dataset/data/train.csv`?"),
+        "{}",
+        text(&typo.stderr)?
+    );
+    let unknown = sandbox.run(&["path", "dataset/not-a-file.csv"])?;
+    assert_eq!(unknown.status.code(), Some(2));
+    let stderr = text(&unknown.stderr)?;
+    assert!(!stderr.contains("fetchloom status"), "{stderr}");
+    insta::assert_snapshot!(stderr);
     Ok(())
 }
 
@@ -435,7 +498,7 @@ fn a_pattern_that_matches_nothing_explains_why_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let output = sandbox.run(&["add", &server.url, "--select", "*.txt"])?;
-    assert_eq!(output.status.code(), Some(50));
+    assert_eq!(output.status.code(), Some(2), "the command line was wrong");
     assert!(
         !sandbox.work().join("data.toml").exists(),
         "a failed add leaves no data.toml behind"
@@ -461,6 +524,28 @@ fn status_lists_what_differs() -> Result {
     assert_eq!(output.status.code(), Some(0));
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+#[test]
+fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let inner = sandbox.work().join("data").join("iris");
+    let calm = sandbox.command_in(&inner, &[]).output()?;
+    assert_eq!(calm.status.code(), Some(0));
+    assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
+    assert_eq!(text(&calm.stderr)?, "✓ everything matches data.lock\n");
+    fs::remove_file(inner.join("iris.csv"))?;
+    let missing = sandbox.run(&[])?;
+    assert_eq!(
+        text(&missing.stderr)?,
+        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs, and `fetchloom sync` brings it in line\n"
+    );
+    let document = json(&sandbox.run(&["--json"])?)?;
+    assert_eq!(document["command"], "status");
+    assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
     Ok(())
 }
 
@@ -576,5 +661,65 @@ fn a_second_project_adding_the_same_link_moves_no_body() -> Result {
         fs::read(other.join("data").join("iris").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+/// a clone of the project in a folder whose path is `length` characters long.
+#[cfg(windows)]
+fn deep_clone(sandbox: &Sandbox, length: usize) -> Result<std::path::PathBuf> {
+    let mut deep = sandbox.folder("deep")?;
+    while length - deep.as_os_str().len() > 40 {
+        deep.push("a_project_folder_name");
+    }
+    let rest = length - deep.as_os_str().len() - 1;
+    deep.push("p".repeat(rest));
+    fs::create_dir_all(&deep)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(file), deep.join(file))?;
+    }
+    Ok(deep)
+}
+
+#[cfg(windows)]
+#[test]
+fn a_project_whose_metadata_passes_260_characters_syncs_and_answers_path() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    // as deep as the folder in the report, which windows can still work in
+    let deep = deep_clone(&sandbox, 240)?;
+    let output = sandbox.command_in(&deep, &["--json", "sync"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert!(deep.join(".fetchloom").join("state").is_file());
+    let placed = deep.join("data").join("iris").join("iris.csv");
+    assert_eq!(fs::read(&placed)?, IRIS);
+    fs::remove_file(&placed)?;
+    let output = sandbox
+        .command_in(&deep, &["path", "iris/iris.csv"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(text(&output.stdout)?.trim())?, IRIS);
+    let status = sandbox.command_in(&deep, &["--json", "status"]).output()?;
+    assert_eq!(json(&status)?["status"], "ok");
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn a_folder_too_long_to_work_in_is_named_with_its_length_before_anything_is_written() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let deep = deep_clone(&sandbox, 300)?;
+    let named = deep.display().to_string();
+    let output = sandbox.command(&["-C", &named, "sync"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(&named) && stderr.contains("300 characters"),
+        "{stderr}"
+    );
+    assert!(!deep.join(".fetchloom").exists());
+    assert!(!deep.join("data").exists());
     Ok(())
 }

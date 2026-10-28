@@ -18,14 +18,14 @@ use self::disk::Survey;
 use self::draft::Draft;
 use self::place::{Placement, Placing};
 use super::Context;
-use super::fetch::{self, Job};
+use super::fetch::{self, Again, Job};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
 use crate::project::Project;
-use crate::project::lock::{self, Lock, Locked};
+use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::{self, Listing, Reference, Remote};
 use crate::units;
@@ -89,7 +89,7 @@ impl<'a> Loop<'a> {
         let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
-            self.unpack_locked(&unknown).await?;
+            self.unpack_locked(lock, &unknown).await?;
             let survey = placing.into_survey();
             placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         }
@@ -99,21 +99,10 @@ impl<'a> Loop<'a> {
             .partition(|(_, file)| file.unpacks_to.is_some());
         let jobs = files
             .into_iter()
-            .map(|(dataset, file)| {
-                job(
-                    &dataset,
-                    &file.path,
-                    &file.url,
-                    Expect {
-                        sha256: Some(file.sha256),
-                        md5: file.md5,
-                        size: Some(file.size),
-                    },
-                )
-            })
+            .map(|(dataset, file)| job(lock, &dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
-        self.unpack_locked(&archives).await?;
+        self.unpack_locked(lock, &archives).await?;
         placing.apply(&self.context.output, &self.context.work, &self.cache)
     }
 
@@ -233,6 +222,7 @@ impl<'a> Loop<'a> {
     ) -> Result<Vec<(String, Listing)>, Error> {
         let mut listings = Vec::with_capacity(asks.len());
         let mut tasks = JoinSet::new();
+        let mut asked = Vec::new();
         for (name, text) in asks {
             if let Some((given_name, listing)) = &given
                 && *given_name == name
@@ -246,12 +236,28 @@ impl<'a> Loop<'a> {
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
+            parsed
+                .reference
+                .check_shareable()
+                .map_err(|err| cite(err, entry, "ref"))?;
+            if !stands_for_itself(&parsed.reference) {
+                asked.push(parsed.reference.to_string());
+            }
             let net = self.net.clone();
             tasks.spawn(async move {
                 let listing = parsed.reference.resolve(&*net).await;
                 (name, listing)
             });
         }
+        let output = &self.context.output;
+        let _waiting = match asked.as_slice() {
+            [] => None,
+            [one] => Some(output.wait("Resolving", one.clone())),
+            many => Some(output.wait(
+                "Resolving",
+                units::count(many.len() as u64, "dataset", "datasets"),
+            )),
+        };
         while let Some(joined) = tasks.join_next().await {
             let (name, listing) = joined.map_err(|err| {
                 Error::new(
@@ -336,6 +342,23 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
     draft::filter(name, entry, listing)
 }
 
+/// resolves a reference, with a spinner or plain lines while its source takes its time.
+pub(super) async fn resolve(
+    output: &Output,
+    reference: &Reference,
+    net: &Net,
+) -> Result<Listing, Error> {
+    let _waiting =
+        (!stands_for_itself(reference)).then(|| output.wait("Resolving", reference.to_string()));
+    reference.resolve(net).await
+}
+
+/// whether a reference resolves without asking anyone, as a plain link does. such a link may
+/// also carry a token, which no spinner should print.
+fn stands_for_itself(reference: &Reference) -> bool {
+    matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
+}
+
 /// what to resolve for a dataset whose entry changed. a changed filter resolves the version
 /// already locked, so tidying data.toml never moves data. a new ref, or an upgrade, asks for the
 /// newest.
@@ -348,27 +371,42 @@ fn pinned(entry: &Entry, previous: Option<&Locked>, upgrading: bool) -> String {
     }
 }
 
-/// the download of one locked or listed file.
-fn job(dataset: &str, path: &str, url: &str, expect: Expect) -> Result<Job, Error> {
-    let url = Url::parse(url).map_err(|err| {
+/// the download of one locked file. when its recorded link is dead, the source is asked again
+/// at the version the lock pins.
+fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
+    let url = Url::parse(&file.url).map_err(|err| {
         Error::new(
             Kind::ProjectInvalid,
-            format!("data.lock has a broken link for {dataset}/{path}: {err}"),
+            format!(
+                "data.lock has a broken link for {dataset}/{}: {err}",
+                file.path
+            ),
         )
-        .help("run `fetchloom lock` to write it again")
+        // `fetchloom lock` keeps a dataset whose entry did not change, link and all
+        .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
+    let pinned = lock.datasets.iter().find(|locked| locked.name == dataset);
     let (from, divert) = source::fetch_plan(&url);
     Ok(Job {
         fetch: Fetch {
             url,
             from,
             divert,
-            expect,
+            expect: Expect {
+                sha256: Some(file.sha256),
+                md5: file.md5,
+                size: Some(file.size),
+            },
             revalidate: false,
             unpack: false,
         },
-        label: format!("{dataset}/{path}"),
+        label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
+        again: pinned.map(|locked| Again {
+            resolved: locked.resolved.clone(),
+            path: file.path.clone(),
+            alone: locked.files.len() == 1,
+        }),
     })
 }
 

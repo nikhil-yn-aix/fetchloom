@@ -6,10 +6,15 @@ mod partial;
 mod unpacked;
 mod upkeep;
 
+#[cfg(test)]
+mod link_tests;
+
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,10 +27,16 @@ use crate::digest::{self, Md5, Sha256};
 
 const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
+const FOLDERS: [&str; 8] = [
+    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
+];
 
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
     root: PathBuf,
+    /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
+    /// real folders.
+    checked: Arc<[AtomicBool; 256]>,
 }
 
 /// an object as it sits in the cache after a write.
@@ -83,12 +94,14 @@ impl Cache {
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
         let _span = tracing::debug_span!("open_cache").entered();
-        for folder in [
-            "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
-        ] {
-            fs::create_dir_all(root.join(folder))?;
+        fs::create_dir_all(&root)?;
+        for folder in FOLDERS {
+            real_folder(&root.join(folder))?;
         }
-        let cache = Cache { root };
+        let cache = Cache {
+            root,
+            checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
+        };
         for (name, text) in [("layout", LAYOUT), ("CACHEDIR.TAG", TAG)] {
             let path = cache.root.join(name);
             if !path.exists() {
@@ -170,8 +183,9 @@ impl Cache {
 
     pub(crate) fn save_stated_md5(&self, md5: &Md5, digest: &Sha256, size: u64) -> io::Result<()> {
         let path = self.stated_path(md5);
+        real_folder(&self.root.join("stated").join("md5"))?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            real_folder(parent)?;
         }
         self.write_atomically(&path, format!("{digest} {size}\n").as_bytes())
     }
@@ -193,25 +207,26 @@ impl Cache {
 
     /// replaces `path` in one step, so a reader sees the old file or the new one, never half of one.
     fn write_atomically(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let mut file = tempfile::NamedTempFile::new_in(self.root.join("tmp"))?;
-        file.write_all(bytes)?;
-        file.as_file().sync_all()?;
-        file.persist(path).map_err(|err| err.error)?;
-        Ok(())
-    }
-
-    /// seals a finished download read-only and moves it into the cache under its hash.
-    fn publish(
-        &self,
-        source: &Path,
-        digest: Sha256,
-        size: u64,
-        md5: Option<Md5>,
-    ) -> io::Result<Stored> {
-        let mut permissions = fs::metadata(source)?.permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(source, permissions)?;
-        self.link_object(source, digest, size, md5)
+        let (temporary, file) = loop {
+            let temporary = self
+                .root
+                .join("tmp")
+                .join(format!("{:016x}.tmp", fastrand::u64(..)));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+        };
+        let written = fill_and_rename(file, bytes, &temporary, path);
+        if written.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        written
     }
 
     /// moves a sealed file into the cache under its hash. the link never replaces an existing
@@ -224,6 +239,13 @@ impl Cache {
         md5: Option<Md5>,
     ) -> io::Result<Stored> {
         let path = self.object_path(&digest);
+        let first = usize::from(digest.bytes()[0]);
+        if !self.checked[first].load(Ordering::Relaxed) {
+            if let Some(folder) = path.parent() {
+                real_folder(folder)?;
+            }
+            self.checked[first].store(true, Ordering::Relaxed);
+        }
         let new = link_new(source, &path)?;
         Ok(Stored {
             digest,
@@ -241,10 +263,10 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
     let new = match fs::hard_link(source, path) {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
-        // the first object under a prefix makes the prefix's folder
+        // something removed the object's folder since this run checked it
         Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+                real_folder(parent)?;
             }
             return link_new(source, path);
         }
@@ -257,6 +279,42 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
     };
     fs::remove_file(source)?;
     Ok(new)
+}
+
+/// writes `bytes` into the new file at `temporary`, flushes them to disk and moves the file to
+/// `path`.
+fn fill_and_rename(mut file: File, bytes: &[u8], temporary: &Path, path: &Path) -> io::Result<()> {
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    // a rename moves a name: a link at `path` is replaced, never followed
+    fs::rename(temporary, path)
+}
+
+/// makes `folder` when it is missing, and checks that it is a real folder rather than a link, so
+/// that nothing the cache writes there can land outside it.
+fn real_folder(folder: &Path) -> io::Result<()> {
+    if let Err(err) = fs::create_dir(folder)
+        && err.kind() != io::ErrorKind::AlreadyExists
+    {
+        return Err(err);
+    }
+    let found = fs::symlink_metadata(folder)?.file_type();
+    if found.is_dir() {
+        return Ok(());
+    }
+    let what = if found.is_symlink() {
+        "a link"
+    } else {
+        "a file"
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} is {what}, and the cache keeps only real folders",
+            folder.display()
+        ),
+    ))
 }
 
 #[cfg(test)]

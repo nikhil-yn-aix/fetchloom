@@ -35,12 +35,8 @@ pub(super) struct Report {
 }
 
 pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
-    let here = std::env::current_dir().map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("cannot read the current folder: {err}"),
-        )
-    })?;
+    let here =
+        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
     let _held = hold(context, &project).await?;
     let existed = project.manifest_path().is_file();
@@ -51,12 +47,17 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     };
     let manifest = Manifest::parse(&text)?;
     let parsed = Reference::parse(&args.link)?;
+    parsed.reference.check_shareable()?;
+    // no answer from the source changes whether the name --as gives is usable
+    if let Some(asked) = args.name.as_deref() {
+        usable(asked, &manifest)?;
+    }
     let net = Arc::new(net(context, &manifest)?);
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
     }
     let cache = open_cache()?;
-    let mut listing = parsed.reference.resolve(&*net).await?;
+    let mut listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
         parsed.file.iter().cloned().collect()
@@ -87,7 +88,10 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     if args.name.is_none() {
         learn_name(context, &net, &cache, &mut listing, !args.no_extract).await?;
     }
-    let name = choose_name(args.name.as_deref(), &listing, &parsed, &manifest)?;
+    let name = match args.name {
+        Some(asked) => asked,
+        None => choose_name(&listing, &parsed, &manifest)?,
+    };
     let updated = manifest::with_dataset(
         &text,
         &name,
@@ -140,7 +144,7 @@ fn restore(project: &Project, before: Option<&str>) {
     let restored = match before {
         Some(text) => project.write(manifest::FILE, text.as_bytes()),
         None => std::fs::remove_file(project.manifest_path())
-            .map_err(|err| Error::new(Kind::LocalIo, err.to_string())),
+            .map_err(|err| Error::io("could not remove data.toml", &err)),
     };
     if let Err(err) = restored {
         tracing::debug!(%err, "could not restore data.toml");
@@ -368,7 +372,7 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
     let project = find()?;
-    let (_, manifest) = project.manifest()?;
+    let (_, mut manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
@@ -376,21 +380,27 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     known(&manifest, name)?;
     if !ready(&project, &manifest, name)? {
         let _held = hold(context, &project).await?;
-        let work = Loop::new(
-            context,
-            &project,
-            Arc::new(net(context, &manifest)?),
-            open_cache()?,
-        );
-        sync_all(
-            &work,
-            &manifest,
-            project.lock()?.as_ref(),
-            &Upgrade::Nothing,
-            false,
-            None,
-        )
-        .await?;
+        // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
+        // done once they hold the lock, so they answer without syncing in turn
+        manifest = project.manifest()?.1;
+        known(&manifest, name)?;
+        if !ready(&project, &manifest, name)? {
+            let work = Loop::new(
+                context,
+                &project,
+                Arc::new(net(context, &manifest)?),
+                open_cache()?,
+            );
+            sync_all(
+                &work,
+                &manifest,
+                project.lock()?.as_ref(),
+                &Upgrade::Nothing,
+                false,
+                None,
+            )
+            .await?;
+        }
     }
     let folder = plan::folder(&manifest, name);
     let relative = match file.filter(|file| !file.is_empty()) {
@@ -406,16 +416,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                     .iter()
                     .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
                     .collect();
-                let error = Error::new(
-                    Kind::Usage,
-                    format!("{name} has no file or folder called {file}"),
-                );
-                return Err(match name::closest(file, inside.iter().copied()) {
-                    Some(best) => {
-                        error.help(format!("did you mean `fetchloom path {name}/{best}`?"))
-                    }
-                    None => error.help(format!("`fetchloom status` lists what {name} holds")),
-                });
+                return Err(not_in(name, file, &inside));
             }
             wanted
         }
@@ -425,6 +426,34 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
     context.output.answer(&path.display().to_string());
     Ok(path)
+}
+
+/// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to
+/// what was asked.
+fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        format!("{name} has no file or folder called {file}"),
+    );
+    if let Some(best) = name::closest(file, inside.iter().copied()) {
+        return error.help(format!("did you mean `fetchloom path {name}/{best}`?"));
+    }
+    let near = name::nearest(file, inside.iter().copied(), 3);
+    let shown = match near.as_slice() {
+        [] => return error.help(format!("{name} holds no files")),
+        [only] => (*only).to_owned(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    };
+    let holds = if inside.len() > near.len() {
+        let files = crate::units::count(inside.len() as u64, "file", "files");
+        format!("{name} holds {files}, such as {shown}")
+    } else {
+        format!("{name} holds {shown}")
+    };
+    error.detail(holds).help(format!(
+        "name a path it holds, such as `fetchloom path {name}/{}`",
+        near[0]
+    ))
 }
 
 /// whether a dataset is locked as data.toml asks and every file of it sits unchanged where it
@@ -491,12 +520,8 @@ async fn sync_all(
 
 /// the project around the current folder.
 pub(super) fn find() -> Result<Project, Error> {
-    let here = std::env::current_dir().map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("cannot read the current folder: {err}"),
-        )
-    })?;
+    let here =
+        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     Project::find(&here).ok_or_else(|| {
         Error::new(
             Kind::ProjectInvalid,
@@ -585,6 +610,7 @@ async fn learn_name(
         },
         label: remote.path.clone(),
         dataset: None,
+        again: None,
     };
     let started = std::time::Instant::now();
     let fetched = fetch::all(context, net, cache, vec![job]).await?;
@@ -610,47 +636,49 @@ async fn learn_name(
     Ok(())
 }
 
-/// the name a new dataset gets: the one asked for, else one made from its file or its title.
-fn choose_name(
-    asked: Option<&str>,
-    listing: &Listing,
-    parsed: &Parsed,
-    manifest: &Manifest,
-) -> Result<String, Error> {
-    let name = match asked {
-        Some(asked) if name::is_dataset_name(asked) => asked.to_owned(),
-        Some(asked) => {
-            let error = Error::new(
-                Kind::Usage,
-                format!("\"{asked}\" is not a valid dataset name"),
-            );
-            return Err(match name::dataset_name(asked) {
-                Some(suggested) => error.help(format!(
-                    "use lowercase letters, digits, - and _, such as --as {suggested}"
-                )),
-                None => error.help("use lowercase letters, digits, - and _"),
-            });
-        }
-        None => {
-            let single = match (listing.files.as_slice(), &parsed.file) {
-                ([only], _) => Some(
-                    only.path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&only.path)
-                        .to_owned(),
-                ),
-                (_, Some(file)) => Some(file.rsplit('/').next().unwrap_or(file).to_owned()),
-                _ => None,
-            };
-            single
-                .and_then(|file| name::dataset_name(&name::folder_for(&file)))
-                .or_else(|| listing.title.as_deref().and_then(name::dataset_name))
-                .or_else(|| name::dataset_name(&parsed.reference.to_string()))
-                .unwrap_or_else(|| "dataset".to_owned())
-        }
+/// refuses a name that is not a valid dataset name or that data.toml already has, as `--as`
+/// gives it.
+fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
+    if !name::is_dataset_name(asked) {
+        let error = Error::new(
+            Kind::Usage,
+            format!("\"{asked}\" is not a valid dataset name"),
+        );
+        return Err(match name::dataset_name(asked) {
+            Some(suggested) => error.help(format!(
+                "use lowercase letters, digits, - and _, such as --as {suggested}"
+            )),
+            None => error.help("use lowercase letters, digits, - and _"),
+        });
+    }
+    unused(asked, manifest)
+}
+
+/// the name a new dataset gets without `--as`: one made from its file or its title.
+fn choose_name(listing: &Listing, parsed: &Parsed, manifest: &Manifest) -> Result<String, Error> {
+    let single = match (listing.files.as_slice(), &parsed.file) {
+        ([only], _) => Some(
+            only.path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&only.path)
+                .to_owned(),
+        ),
+        (_, Some(file)) => Some(file.rsplit('/').next().unwrap_or(file).to_owned()),
+        _ => None,
     };
-    if manifest.datasets.contains_key(&name) {
+    let name = single
+        .and_then(|file| name::dataset_name(&name::folder_for(&file)))
+        .or_else(|| listing.title.as_deref().and_then(name::dataset_name))
+        .or_else(|| name::dataset_name(&parsed.reference.to_string()))
+        .unwrap_or_else(|| "dataset".to_owned());
+    unused(&name, manifest)?;
+    Ok(name)
+}
+
+/// refuses a name data.toml already has.
+fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
+    if manifest.datasets.contains_key(name) {
         return Err(Error::new(
             Kind::Usage,
             format!("data.toml already has a dataset called {name}"),
@@ -659,9 +687,8 @@ fn choose_name(
             "give this one another name with --as <name>, or run `fetchloom remove {name}` first"
         )));
     }
-    Ok(name)
+    Ok(())
 }
-
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
 /// pasted for drive, dropbox and plain links, which people recognize by their link.
 fn stored_reference(typed: &str, parsed: &Parsed) -> String {

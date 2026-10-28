@@ -33,8 +33,8 @@ pub(crate) struct Args {
     help: Option<bool>,
 
     /// print the version
-    #[arg(short = 'V', long, action = ArgAction::Version, help_heading = "options")]
-    version: Option<bool>,
+    #[arg(short = 'V', long, help_heading = "options")]
+    pub(crate) version: bool,
 }
 
 /// options every command takes.
