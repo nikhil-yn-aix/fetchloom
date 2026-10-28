@@ -350,7 +350,8 @@ fn job(dataset: &str, path: &str, url: &str, expect: Expect) -> Result<Job, Erro
             Kind::ProjectInvalid,
             format!("data.lock has a broken link for {dataset}/{path}: {err}"),
         )
-        .help("run `fetchloom lock` to write it again")
+        // `fetchloom lock` keeps a dataset whose entry did not change, link and all
+        .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
     let (from, divert) = source::fetch_plan(&url);
     Ok(Job {

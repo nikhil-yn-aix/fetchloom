@@ -16,6 +16,9 @@ use crate::name;
 
 pub(crate) const FILE: &str = "data.lock";
 const VERSION: u32 = 1;
+/// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
+/// file first and fails the same way.
+pub(crate) const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Lock {
@@ -85,9 +88,14 @@ impl Lock {
             }
             Ok(stored) => Err(other_version(stored.version)),
             Err(err) => match toml::from_str::<VersionOnly>(text) {
-                Ok(VersionOnly { version: Some(version) }) if version != VERSION => Err(other_version(version)),
-                _ => Err(Error::new(Kind::ProjectInvalid, format!("data.lock cannot be read: {}", err.message()))
-                    .help("only fetchloom writes data.lock. restore it from git, or run `fetchloom lock` to write it again")),
+                Ok(VersionOnly {
+                    version: Some(version),
+                }) if version != VERSION => Err(other_version(version)),
+                _ => Err(Error::new(
+                    Kind::ProjectInvalid,
+                    format!("data.lock cannot be read: {}", err.message()),
+                )
+                .help(BROKEN)),
             },
         }
     }
@@ -212,11 +220,16 @@ fn quoted(text: &str) -> String {
 }
 
 fn other_version(version: u32) -> Error {
-    Error::new(
+    let error = Error::new(
         Kind::ProjectInvalid,
         format!("data.lock is in format {version}, and this fetchloom reads format {VERSION}"),
-    )
-    .help("run `fetchloom lock` to write it again in this format")
+    );
+    // no fetchloom ever wrote an older format, so one is a broken file
+    if version > VERSION {
+        error.help("update fetchloom to read this newer format")
+    } else {
+        error.help(BROKEN)
+    }
 }
 
 /// refuses a lock that would place a file outside its dataset's folder. fetchloom never writes
@@ -232,7 +245,7 @@ fn check_paths(dataset: &Locked) -> Result<(), Error> {
                     dataset.name
                 ),
             )
-            .help("only fetchloom writes data.lock. restore it from git, or run `fetchloom lock` to write it again"));
+            .help(BROKEN));
         }
     }
     Ok(())
@@ -333,8 +346,18 @@ mod tests {
     fn another_format_or_a_broken_file_is_refused_with_the_fix() {
         let newer = Lock::parse("version = 2\n[[dataset]]\nwhatever = 1\n").unwrap_err();
         assert!(newer.message.contains("format 2"), "{}", newer.message);
-        let broken = Lock::parse("version = 1\n[[dataset]]\nname = 3\n").unwrap_err();
-        assert_eq!(broken.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            newer.help.as_deref(),
+            Some("update fetchloom to read this newer format")
+        );
+        for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
+            let broken = Lock::parse(text).unwrap_err();
+            assert_eq!(broken.kind, Kind::ProjectInvalid);
+            assert_eq!(broken.help.as_deref(), Some(BROKEN), "{text}");
+        }
+        assert!(
+            BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
+        );
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
 
@@ -355,6 +378,7 @@ mod tests {
             let err = Lock::parse(&text).unwrap_err();
             assert_eq!(err.kind, Kind::ProjectInvalid, "{path}");
             assert!(err.message.contains("data.lock"), "{}", err.message);
+            assert_eq!(err.help.as_deref(), Some(BROKEN), "{path}");
         }
     }
 

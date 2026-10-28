@@ -71,7 +71,7 @@ files = [
 
 | key | meaning |
 |---|---|
-| `version` | the format version. a `data.lock` with another version is refused with the command that rebuilds it |
+| `version` | the format version. a `data.lock` in a newer format is refused with advice to update fetchloom |
 | `spec` | hash of the entry's `ref`, `select`, `exclude` and `extract`. while it matches, the dataset is not resolved again. when it changes, the dataset is resolved again at the version already locked |
 | `resolved` | the exact version the reference pointed to, in the form listed below |
 | `title`, `license`, `doi` | as the source states them |

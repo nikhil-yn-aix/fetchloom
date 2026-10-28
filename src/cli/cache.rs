@@ -10,7 +10,7 @@ use super::{Context, open_cache};
 use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
-use crate::project::lock::Lock;
+use crate::project::lock::{self, Lock};
 use crate::units;
 
 /// what `fetchloom cache` reports, as `--json` prints it.
@@ -160,6 +160,12 @@ pub(super) fn needed(
             continue;
         }
         let lock = project.lock().map_err(|err| {
+            // a broken lock is fixed in its own project, which is not where gc runs
+            let help = match err.help.as_deref() {
+                Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
+                Some(help) => help.to_owned(),
+                None => "fix that project's data.lock, then try again".to_owned(),
+            };
             Error::new(
                 Kind::ProjectInvalid,
                 format!(
@@ -168,7 +174,7 @@ pub(super) fn needed(
                 ),
             )
             .detail(err.message)
-            .help("fix that project's data.lock, or run `fetchloom lock` there, then try again")
+            .help(help)
         })?;
         if let Some(lock) = &lock {
             add(&mut needed, cache, lock);

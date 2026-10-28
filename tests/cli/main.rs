@@ -4,4 +4,5 @@ mod archives;
 mod basics;
 mod get;
 mod project;
+mod recovery;
 mod support;

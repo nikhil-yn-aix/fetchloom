@@ -57,6 +57,11 @@ impl Project {
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => Lock::parse(&text).map(Some),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
+                Kind::ProjectInvalid,
+                "data.lock cannot be read: it is not UTF-8 text",
+            )
+            .help(lock::BROKEN)),
             Err(err) => Err(self.unreadable(lock::FILE, &err)),
         }
     }
