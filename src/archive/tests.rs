@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 
 use super::samples::{Scratch, compress, tar_of, zip_of};
-use super::{Detected, Format, Limits, Unpacked, common_top, detect, unpack};
+use super::{Detected, Format, Limits, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
 
 /// the tree hash of the folder every good fixture archives, as python computed it from the files
@@ -54,7 +54,13 @@ fn archives_made_by_real_tools_unpack_to_the_tree_python_computed() {
     ] {
         let unpacked = fixture(name).unwrap_or_else(|err| panic!("{name}: {}", err.message));
         assert_eq!(unpacked.tree.hex(), FIXTURE_TREE, "{name}");
-        assert_eq!(common_top(&unpacked.members), Some("dataset"), "{name}");
+        assert!(
+            unpacked
+                .members
+                .iter()
+                .all(|member| member.path.starts_with("dataset/")),
+            "{name}"
+        );
     }
 }
 
@@ -193,5 +199,36 @@ fn names_that_collide_refuse_the_whole_archive() {
             let err = Scratch::new().refuse(format, &archive(format, files));
             assert_eq!(err.kind, Kind::SourceInvalid, "{files:?}");
         }
+    }
+}
+
+/// times unpacking 20,000 files of 4 KiB, where creating files costs more than inflating them:
+/// `cargo test --release --lib archive::tests::many_small_files -- --ignored --nocapture`
+#[test]
+#[ignore = "writes 20,000 files"]
+fn many_small_files() {
+    let row = b"0.125,3.5,17,2026-10-28,ok\n".repeat(152);
+    let names: Vec<String> = (0..20_000)
+        .map(|index| format!("corpus/{:03}/{index:06}.csv", index % 100))
+        .collect();
+    let files: Vec<(&str, &[u8])> = names.iter().map(|name| (name.as_str(), &row[..])).collect();
+    let zip = zip_of(&files);
+    for round in 0..3 {
+        let scratch = Scratch::new();
+        let path = scratch.file("small.zip", &zip);
+        let started = std::time::Instant::now();
+        let unpacked = unpack(
+            &path,
+            Format::Zip,
+            &Limits::default(),
+            &scratch.cache,
+            &|| false,
+        )
+        .unwrap();
+        println!(
+            "round {round}: {} files in {} ms",
+            unpacked.members.len(),
+            started.elapsed().as_millis()
+        );
     }
 }

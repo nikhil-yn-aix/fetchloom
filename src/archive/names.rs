@@ -50,14 +50,14 @@ impl Names {
         } else {
             path.nfc().collect()
         };
-        if let Some(reason) = name::escapes(&nfc) {
-            return Err(refused_member(raw, reason));
-        }
         if nfc.chars().any(char::is_control) {
             return Err(refused_member(
                 &raw.escape_debug().to_string(),
                 "it holds a control character, which no list of files can record safely",
             ));
+        }
+        if let Some(reason) = name::escapes(&nfc) {
+            return Err(refused_member(raw, reason));
         }
         if let Some(reason) = name::unstorable(&nfc) {
             return Err(refused(format!(

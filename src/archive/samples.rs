@@ -54,9 +54,8 @@ impl Scratch {
 
     /// the cache holds no object and nothing waits in its `tmp/`.
     pub(super) fn assert_empty(&self) {
-        let root = self.cache.root();
-        let objects = fs::read_dir(root.join("objects")).unwrap().count();
-        let temporary = fs::read_dir(root.join("tmp")).unwrap().count();
+        let objects = self.cache.objects().len();
+        let temporary = fs::read_dir(self.cache.root().join("tmp")).unwrap().count();
         assert_eq!((objects, temporary), (0, 0), "objects and temporary files");
     }
 

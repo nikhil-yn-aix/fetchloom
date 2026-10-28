@@ -2,6 +2,7 @@
 
 mod object;
 mod partial;
+mod unpacked;
 mod upkeep;
 
 use std::ffi::OsString;
@@ -11,7 +12,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use object::NewObject;
 pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed};
 
 use crate::digest::{self, Md5, Sha256};
@@ -78,7 +81,9 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
-        for folder in ["objects", "partial", "urls", "stated", "projects", "tmp"] {
+        for folder in [
+            "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
+        ] {
             fs::create_dir_all(root.join(folder))?;
         }
         let cache = Cache { root };
@@ -174,8 +179,7 @@ impl Cache {
         Ok(())
     }
 
-    /// moves a finished file into the cache under its hash. the move never replaces an existing
-    /// object, so of two processes racing for the same bytes exactly one places them.
+    /// seals a finished download read-only and moves it into the cache under its hash.
     fn publish(
         &self,
         source: &Path,
@@ -183,28 +187,23 @@ impl Cache {
         size: u64,
         md5: Option<Md5>,
     ) -> io::Result<Stored> {
+        let mut permissions = fs::metadata(source)?.permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(source, permissions)?;
+        self.link_object(source, digest, size, md5)
+    }
+
+    /// moves a sealed file into the cache under its hash. the link never replaces an existing
+    /// object, so of two processes racing for the same bytes exactly one places them.
+    fn link_object(
+        &self,
+        source: &Path,
+        digest: Sha256,
+        size: u64,
+        md5: Option<Md5>,
+    ) -> io::Result<Stored> {
         let path = self.object_path(&digest);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let new = match fs::hard_link(source, &path) {
-            Ok(()) => true,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
-            // a filesystem without hardlinks gets a plain rename, guarded by a check
-            Err(_) if path.exists() => false,
-            Err(_) => {
-                fs::rename(source, &path)?;
-                true
-            }
-        };
-        if source.exists() {
-            fs::remove_file(source)?;
-        }
-        if new {
-            let mut permissions = fs::metadata(&path)?.permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&path, permissions)?;
-        }
+        let new = link_new(source, &path)?;
         Ok(Stored {
             digest,
             size,
@@ -213,6 +212,30 @@ impl Cache {
             new,
         })
     }
+}
+
+/// links `source` to `path` unless something is there already, then removes `source`. says
+/// whether the link is new.
+fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
+    let new = match fs::hard_link(source, path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
+        // the first object under a prefix makes the prefix's folder
+        Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            return link_new(source, path);
+        }
+        // a filesystem without hardlinks gets a plain rename, guarded by a check
+        Err(_) if path.exists() => false,
+        Err(_) => {
+            fs::rename(source, path)?;
+            return Ok(true);
+        }
+    };
+    fs::remove_file(source)?;
+    Ok(new)
 }
 
 #[cfg(test)]
@@ -225,10 +248,10 @@ mod tests {
         (dir, cache)
     }
 
-    pub(super) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
-        let mut writer = cache.object_writer(false).unwrap();
-        writer.write_all(bytes).unwrap();
-        writer.close().unwrap().publish().unwrap()
+    pub(crate) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
+        let mut object = cache.new_object().unwrap();
+        object.write_all(bytes).unwrap();
+        object.publish().unwrap()
     }
 
     #[test]

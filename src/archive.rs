@@ -4,15 +4,14 @@
 mod detect;
 mod guard;
 mod names;
-mod publish;
+mod store;
 mod tar;
-mod tree;
 mod zip;
 
 use std::io::{self, Read};
 use std::path::Path;
 
-use crate::cache::Cache;
+use crate::cache::{Cache, Member, tree_hash};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
@@ -25,15 +24,6 @@ pub(crate) use detect::Format;
     )
 )]
 pub(crate) use detect::{Detected, detect};
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the sync loop calls these once it unpacks archives"
-    )
-)]
-pub(crate) use tree::common_top;
-pub(crate) use tree::tree_hash;
 
 use guard::{Guard, Meter};
 
@@ -61,15 +51,6 @@ impl Default for Limits {
     }
 }
 
-/// a file an archive unpacked to, stored in the cache under its SHA-256.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Member {
-    /// in NFC, with `/` between folders.
-    pub(crate) path: String,
-    pub(crate) size: u64,
-    pub(crate) sha256: Sha256,
-}
-
 /// every file an archive unpacked to, sorted by path, and the tree hash over them.
 #[derive(Debug)]
 pub(crate) struct Unpacked {
@@ -80,8 +61,8 @@ pub(crate) struct Unpacked {
 /// stores one file the guard let through, reading it from the archive.
 type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), Error> + 'k;
 
-/// unpacks every file in `archive` into the cache. no object is published unless the whole
-/// archive passes every check.
+/// unpacks every file in `archive` into the cache. an archive refused part way leaves no object
+/// behind.
 ///
 /// # Errors
 ///
@@ -96,39 +77,18 @@ pub(crate) fn unpack(
 ) -> Result<Unpacked, Error> {
     let meter = Meter::default();
     let mut guard = Guard::new(limits, stopped, &meter);
-    let mut pending = Vec::new();
-    let mut buffer = vec![0; BUFFER];
-    let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {
-        let mut writer = cache
-            .object_writer(false)
-            .map_err(|err| not_written(&path, &err))?;
-        guard.copy(&path, from, &mut writer, &mut buffer)?;
-        let closed = writer.close().map_err(|err| not_written(&path, &err))?;
-        pending.push((path, closed));
-        Ok(())
-    };
-    match format {
-        Format::Zip => zip::unpack(archive, &mut guard, &mut keep)?,
-        Format::Tar | Format::TarGz | Format::TarXz | Format::TarZst | Format::TarBz2 => {
-            tar::unpack(archive, format, &mut guard, &mut keep)?;
+    let mut members = store::store_all(cache, |writers| {
+        let mut buffer = vec![0; BUFFER];
+        let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {
+            writers.keep(guard, path, from, &mut buffer)
+        };
+        match format {
+            Format::Zip => zip::unpack(archive, &mut guard, &mut keep)?,
+            Format::Tar | Format::TarGz | Format::TarXz | Format::TarZst | Format::TarBz2 => {
+                tar::unpack(archive, format, &mut guard, &mut keep)?;
+            }
         }
-    }
-    guard.check_stopped()?;
-    let published = publish::in_parallel(pending, |(path, closed)| {
-        closed.sync()?;
-        let stored = closed.publish()?;
-        Ok(Member {
-            path,
-            size: stored.size,
-            sha256: stored.digest,
-        })
-    });
-    let mut members = published.map_err(|err| {
-        Error::new(
-            Kind::LocalIo,
-            format!("could not put unpacked files into the cache: {err}"),
-        )
-        .help("check that the cache's disk has room and that fetchloom may write to it")
+        guard.check_stopped()
     })?;
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     let tree = tree_hash(&members);
