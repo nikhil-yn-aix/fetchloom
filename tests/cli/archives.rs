@@ -257,3 +257,47 @@ fn add_with_no_extract_writes_extract_false() -> Result {
     assert_eq!(fs::read(folder.join("dataset.zip"))?, zip);
     Ok(())
 }
+
+#[test]
+fn removing_a_dataset_keeps_files_of_an_archive_the_cache_never_saw() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    let notes = Server::start("/files/notes.csv", vec![file(b"a,b\n", "\"n1\"")])?;
+    ok(&sandbox.run(&["add", &zip.url])?)?;
+    ok(&sandbox.run(&["add", &notes.url])?)?;
+    let removed = sandbox
+        .command_in(&sandbox.work(), &["remove", "notes"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
+        .output()?;
+    ok(&removed)?;
+    assert!(!sandbox.work().join("data").join("notes").exists());
+    holds_the_archive(&sandbox.work().join("data").join("dataset"))
+}
+
+#[test]
+fn an_archive_another_project_places_as_a_file_stays_in_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    // python-nested.zip holds python.zip, byte for byte, under nested/
+    let nested = Server::start(
+        "/files/nested.zip",
+        vec![file(&fixture("python-nested.zip")?, "\"n1\"")],
+    )?;
+    ok(&sandbox.run(&["add", &nested.url])?)?;
+    let other = sandbox.folder("other")?;
+    let zip = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    ok(&sandbox.command_in(&other, &["add", &zip.url]).output()?)?;
+    holds_the_archive(&other.join("data").join("dataset"))?;
+    assert!(zip_object(&sandbox.cache()).exists());
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    ok(&sandbox
+        .command_in(&clone, &["sync", "--offline"])
+        .output()?)?;
+    assert_eq!(
+        fs::read(clone.join("data").join("nested").join("python.zip"))?,
+        fixture("python.zip")?
+    );
+    Ok(())
+}

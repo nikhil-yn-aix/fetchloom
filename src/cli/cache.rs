@@ -204,3 +204,61 @@ fn add(needed: &mut Needed, cache: &Cache, lock: &Lock) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::Member;
+    use crate::cache::tests::store;
+    use crate::project::lock::{Locked, LockedFile};
+
+    #[test]
+    fn an_archive_stays_needed_while_a_file_it_unpacked_to_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let archive = store(&cache, b"the archive itself");
+        let first = store(&cache, b"first\n");
+        let second = store(&cache, b"second\n");
+        let members = [("a.txt", &first), ("b.txt", &second)].map(|(path, stored)| Member {
+            path: path.to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+        });
+        let tree = cache.record_unpacked(&archive.digest, &members).unwrap();
+        let lock = Lock {
+            datasets: vec![Locked {
+                name: "set".to_owned(),
+                reference: "https://example.org/set.zip".to_owned(),
+                spec: String::new(),
+                resolved: "https://example.org/set.zip".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                timestamp: String::new(),
+                files: vec![LockedFile {
+                    path: "set.zip".to_owned(),
+                    size: archive.size,
+                    sha256: archive.digest,
+                    md5: None,
+                    url: "https://example.org/set.zip".to_owned(),
+                    unpacks_to: Some(tree),
+                }],
+            }],
+        };
+        let mut whole = Needed::default();
+        add(&mut whole, &cache, &lock);
+        assert!(whole.objects.contains(&second.digest));
+        assert!(
+            !whole.objects.contains(&archive.digest),
+            "its files stand for it"
+        );
+
+        cache.drop_object(&second.digest).unwrap();
+        let mut missing = Needed::default();
+        add(&mut missing, &cache, &lock);
+        assert!(
+            missing.objects.contains(&archive.digest),
+            "unpacking it again is the only way back to b.txt"
+        );
+    }
+}
