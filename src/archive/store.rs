@@ -6,7 +6,7 @@
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -63,11 +63,12 @@ impl Writers<'_> {
 }
 
 /// runs `read` with writers that seal every member it keeps, then puts them all in place and
-/// returns them. when anything fails, what was sealed is removed and nothing is put in place.
+/// returns them, with how many of them were new to the cache. when anything fails, what was
+/// sealed is removed and nothing is put in place.
 pub(super) fn store_all(
     cache: &Cache,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
-) -> Result<Vec<Member>, Error> {
+) -> Result<(Vec<Member>, u64), Error> {
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
@@ -119,10 +120,11 @@ fn publish_all(
     cache: &Cache,
     sealed: Vec<(String, Sealed)>,
     threads: usize,
-) -> Result<Vec<Member>, Error> {
+) -> Result<(Vec<Member>, u64), Error> {
     let count = sealed.len();
     let queue = Mutex::new(sealed.into_iter());
     let members = Mutex::new(Vec::with_capacity(count));
+    let new = AtomicU64::new(0);
     let trouble = Mutex::new(None);
     thread::scope(|scope| {
         for _ in 0..threads.min(count) {
@@ -132,11 +134,16 @@ fn publish_all(
                         return;
                     };
                     match sealed.publish(cache) {
-                        Ok(stored) => locked(&members).push(Member {
-                            path,
-                            size: stored.size,
-                            sha256: stored.digest,
-                        }),
+                        Ok(stored) => {
+                            if stored.new {
+                                new.fetch_add(1, Ordering::Relaxed);
+                            }
+                            locked(&members).push(Member {
+                                path,
+                                size: stored.size,
+                                sha256: stored.digest,
+                            });
+                        }
                         Err(err) => {
                             locked(&trouble).get_or_insert(not_written(&path, &err));
                             return;
@@ -148,7 +155,10 @@ fn publish_all(
     });
     match trouble.into_inner().unwrap_or_else(PoisonError::into_inner) {
         Some(err) => Err(err),
-        None => Ok(members.into_inner().unwrap_or_else(PoisonError::into_inner)),
+        None => Ok((
+            members.into_inner().unwrap_or_else(PoisonError::into_inner),
+            new.into_inner(),
+        )),
     }
 }
 
@@ -224,6 +234,7 @@ mod tests {
             }
             Ok(())
         })
+        .map(|(members, _)| members)
     }
 
     #[test]

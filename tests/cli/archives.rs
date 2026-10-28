@@ -184,7 +184,12 @@ fn get_unpacks_a_zip_into_its_folder_and_a_second_run_moves_nothing() -> Result 
 fn the_cache_counts_an_archive_by_the_files_it_unpacked_to() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
-    ok(&sandbox.run(&["add", &server.url])?)?;
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    assert_eq!(
+        added["work"]["objects_written"],
+        FILES.len() + 1,
+        "the zip and each file it holds"
+    );
     let info = json(&sandbox.run(&["--json", "cache"])?)?;
     let bytes: usize = FILES.iter().map(|(_, bytes)| bytes.len()).sum();
     assert_eq!(info["result"]["needed"], bytes);
