@@ -390,6 +390,12 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
         "{}",
         text(&typo.stderr)?
     );
+    let swapped = sandbox.run(&["path", "irsi"])?;
+    assert!(
+        text(&swapped.stderr)?.contains("did you mean iris?"),
+        "{}",
+        text(&swapped.stderr)?
+    );
     Ok(())
 }
 
