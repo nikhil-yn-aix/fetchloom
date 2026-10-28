@@ -405,6 +405,10 @@ async fn sync_all(
         &work.cache,
         force,
     )?;
+    // gc keeps what registered projects need, so a failure here only risks a later download
+    if let Err(err) = work.cache.register(&work.project.root) {
+        tracing::debug!(%err, "could not register the project with the cache");
+    }
     Ok((changed, placement))
 }
 

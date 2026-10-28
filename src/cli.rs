@@ -1,6 +1,7 @@
 //! the command line: read the arguments, run the command, return the exit code.
 
 mod args;
+mod cache;
 mod fetch;
 mod get;
 mod logs;
@@ -177,6 +178,22 @@ pub(crate) fn run() -> ExitCode {
         }
         args::Command::Path(args) => {
             let outcome = block_on(&context, project::path(&context, args));
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache { action: None }) => {
+            let outcome = cache::info(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache {
+            action: Some(args::CacheAction::Gc),
+        }) => {
+            let outcome = cache::gc(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache {
+            action: Some(args::CacheAction::Verify),
+        }) => {
+            let outcome = cache::verify(&context);
             finish(&context, name, outcome, started)
         }
         args::Command::Get(args) => {

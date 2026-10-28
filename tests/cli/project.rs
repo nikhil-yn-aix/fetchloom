@@ -392,3 +392,36 @@ fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
     assert!(stderr.contains("`fetchloom add <link>`"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let info = json(&sandbox.run(&["--json", "cache"])?)?;
+    assert_eq!(info["result"]["objects"], 1);
+    assert_eq!(info["result"]["needed"], IRIS.len());
+    assert_eq!(
+        info["result"]["projects"][0],
+        sandbox.work().display().to_string()
+    );
+    let gc = sandbox.run(&["cache", "gc"])?;
+    assert_eq!(
+        text(&gc.stderr)?,
+        "✓ nothing to free. every object is needed by a project or newer than a day\n"
+    );
+    let verify = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(verify.status.code(), Some(0));
+    assert_eq!(
+        text(&verify.stderr)?,
+        "✓ verified 1 object · 32 B. every one is intact\n"
+    );
+    fs::remove_file(sandbox.work().join("data.toml"))?;
+    let forgotten = json(&sandbox.run(&["--json", "cache"])?)?;
+    assert_eq!(
+        forgotten["result"]["projects"].as_array().map(Vec::len),
+        Some(0),
+        "a project without data.toml is forgotten"
+    );
+    Ok(())
+}

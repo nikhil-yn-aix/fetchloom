@@ -2,6 +2,7 @@
 
 mod object;
 mod partial;
+mod upkeep;
 
 use std::ffi::OsString;
 use std::fs;
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use upkeep::{Checked, Freed};
 
 use crate::digest::{self, Md5, Sha256};
 
@@ -76,7 +78,7 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
-        for folder in ["objects", "partial", "urls", "stated", "tmp"] {
+        for folder in ["objects", "partial", "urls", "stated", "projects", "tmp"] {
             fs::create_dir_all(root.join(folder))?;
         }
         let cache = Cache { root };

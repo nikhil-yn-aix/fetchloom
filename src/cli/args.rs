@@ -110,6 +110,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE)]
     Path(Path),
 
+    /// show the cache, free what no project needs, or check every file in it
+    #[command(override_usage = "fetchloom cache [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command")]
+    Cache(Cache),
+
     /// fetch something once, without a project
     #[command(override_usage = "fetchloom get [options] <link>", help_template = TEMPLATE)]
     Get(Get),
@@ -125,9 +129,34 @@ impl Command {
             Command::Lock(_) => "lock",
             Command::Status => "status",
             Command::Path(_) => "path",
+            Command::Cache(Cache { action: None }) => "cache",
+            Command::Cache(Cache {
+                action: Some(CacheAction::Gc),
+            }) => "cache gc",
+            Command::Cache(Cache {
+                action: Some(CacheAction::Verify),
+            }) => "cache verify",
             Command::Get(_) => "get",
         }
     }
+}
+
+/// show the cache, free what no project needs, or check every file in it
+#[derive(Debug, clap::Args)]
+pub(crate) struct Cache {
+    #[command(subcommand)]
+    pub(crate) action: Option<CacheAction>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CacheAction {
+    /// free what no project needs, once it is a day old
+    #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE)]
+    Gc,
+
+    /// hash every file in the cache again and remove any that changed
+    #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE)]
+    Verify,
 }
 
 /// which files of a dataset to keep, for `add` and `get`.

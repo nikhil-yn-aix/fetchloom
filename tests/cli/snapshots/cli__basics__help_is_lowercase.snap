@@ -14,6 +14,7 @@ commands:
   lock    bring data.lock in line with data.toml without downloading what is pinned
   status  list files that are missing, changed by hand or extra
   path    print where a dataset or a file in it is, syncing first if needed
+  cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project
 
 options:
