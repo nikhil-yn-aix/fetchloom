@@ -263,6 +263,7 @@ pub(crate) fn with_dataset(
     reference: &str,
     select: &[String],
     exclude: &[String],
+    extract: bool,
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
     let blank_line_first = !document.as_table().is_empty();
@@ -286,6 +287,9 @@ pub(crate) fn with_dataset(
         if !patterns.is_empty() {
             table.insert(key, toml_edit::value(patterns.iter().collect::<Array>()));
         }
+    }
+    if !extract {
+        table.insert("extract", toml_edit::value(false));
     }
     if blank_line_first {
         table.decor_mut().set_prefix("\n");
@@ -443,13 +447,13 @@ mod tests {
     #[test]
     fn adding_keeps_comments_and_order() {
         let text = "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.b]\nref = \"zenodo:2\"\n";
-        let added = with_dataset(text, "a", "zenodo:1", &["*.csv".to_owned()], &[]).unwrap();
+        let added = with_dataset(text, "a", "zenodo:1", &["*.csv".to_owned()], &[], true).unwrap();
         assert_eq!(
             added,
             "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.b]\nref = \"zenodo:2\"\n\n[datasets.a]\nref = \"zenodo:1\"\nselect = [\"*.csv\"]\n"
         );
         assert_eq!(parse(&added).datasets.len(), 2);
-        let fresh = with_dataset("", "iris", "zenodo:3608990", &[], &[]).unwrap();
+        let fresh = with_dataset("", "iris", "zenodo:3608990", &[], &[], true).unwrap();
         assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
     }
 

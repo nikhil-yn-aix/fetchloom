@@ -133,6 +133,7 @@ impl Draft {
                 divert,
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
+                unpack: self.unpacks(file),
             };
             let job = Job {
                 fetch,

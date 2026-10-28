@@ -12,6 +12,7 @@ use super::args::{self, Add, Remove};
 use super::sync::place::{self, Placement};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
+use crate::archive::{self, Packed};
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::{Expect, Fetch, Net};
@@ -69,6 +70,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         &reference,
         &select,
         &args.filter.exclude,
+        !args.no_extract,
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
@@ -81,10 +83,17 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
     }
     if args.name.is_none() {
-        learn_name(context, &net, &cache, &mut listing).await?;
+        learn_name(context, &net, &cache, &mut listing, !args.no_extract).await?;
     }
     let name = choose_name(args.name.as_deref(), &listing, &parsed, &manifest)?;
-    let updated = manifest::with_dataset(&text, &name, &reference, &select, &args.filter.exclude)?;
+    let updated = manifest::with_dataset(
+        &text,
+        &name,
+        &reference,
+        &select,
+        &args.filter.exclude,
+        !args.no_extract,
+    )?;
     let new_manifest = Manifest::parse(&updated)?;
     project.write(manifest::FILE, updated.as_bytes())?;
     let work = Loop::new(context, &project, net, cache);
@@ -157,8 +166,8 @@ fn present(
         .map(|(name, _)| name.clone())
 }
 
-/// `add` of a dataset data.toml already has. with the same patterns nothing changes, so running
-/// the same `add` twice is safe; other patterns need a choice only the person can make.
+/// `add` of a dataset data.toml already has. with the same settings nothing changes, so running
+/// the same `add` twice is safe; other settings need a choice only the person can make.
 async fn again(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -168,16 +177,23 @@ async fn again(
     listing: &Listing,
 ) -> Result<Report, Error> {
     let existing = &manifest.datasets[name];
-    if existing.select != entry.select || existing.exclude != entry.exclude {
+    let differs = if existing.select != entry.select || existing.exclude != entry.exclude {
+        Some(("other patterns", "the patterns of"))
+    } else if existing.extract != entry.extract {
+        Some(("another extract setting", "extract on"))
+    } else {
+        None
+    };
+    if let Some((differs, setting)) = differs {
         return Err(Error::new(
             Kind::Usage,
             format!(
-                "{} is already in data.toml as {name}, with other patterns",
+                "{} is already in data.toml as {name}, with {differs}",
                 listing.resolved
             ),
         )
         .help(format!(
-            "change the patterns of {name} in data.toml, or pass --as <name> to add it a second time"
+            "change {setting} {name} in data.toml, or pass --as <name> to add it a second time"
         )));
     }
     let (lock_changed, placement) =
@@ -529,6 +545,7 @@ async fn learn_name(
     net: &Arc<Net>,
     cache: &crate::cache::Cache,
     listing: &mut Listing,
+    extract: bool,
 ) -> Result<(), Error> {
     let [remote] = listing.files.as_mut_slice() else {
         return Ok(());
@@ -548,6 +565,7 @@ async fn learn_name(
                 size: remote.size,
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
+            unpack: extract && archive::by_name(&remote.path) == Some(Packed::Archive),
         },
         label: remote.path.clone(),
         dataset: None,

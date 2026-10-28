@@ -154,7 +154,7 @@ impl<'a> Placing<'a> {
             data_dir,
             mut state,
             disk,
-            unknown: _,
+            unknown,
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
@@ -162,11 +162,11 @@ impl<'a> Placing<'a> {
         // removing first means a file that moved never collides with its own old copy
         remove_unwanted(
             project,
-            &data_dir,
             &mut placer,
             &mut state,
             &disk,
             &wanted,
+            &unknown,
             &mut placement,
         )?;
         let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
@@ -186,7 +186,9 @@ impl<'a> Placing<'a> {
                 }),
                 action @ (Action::Place | Action::Replace) => {
                     if matches!(action, Action::Replace) {
-                        fs::remove_file(&destination).map_err(|err| local(&destination, &err))?;
+                        placer
+                            .remove(&destination, false)
+                            .map_err(|err| local(&destination, &err))?;
                         placement.replaced += 1;
                     } else {
                         placement.placed += 1;
@@ -223,6 +225,7 @@ impl<'a> Placing<'a> {
             data_dir,
             mut state,
             disk,
+            unknown,
             ..
         } = self;
         let mut placement = Placement::default();
@@ -230,11 +233,11 @@ impl<'a> Placing<'a> {
         let mut placer = Placer::new(&data_dir);
         remove_unwanted(
             project,
-            &data_dir,
             &mut placer,
             &mut state,
             &disk,
             &wanted,
+            &unknown,
             &mut placement,
         )?;
         project.write_state(&state)?;
@@ -329,21 +332,26 @@ fn decide(
     }
 }
 
-/// deletes files fetchloom placed that no dataset needs now, unless someone changed them.
+/// deletes files fetchloom placed that no dataset needs now, unless someone changed them. the
+/// files of a dataset with an archive this machine never unpacked stay, since nothing tells which
+/// of them it still needs.
 fn remove_unwanted(
     project: &Project,
-    data_dir: &Path,
     placer: &mut Placer,
     state: &mut State,
     disk: &HashMap<String, Look>,
     wanted: &HashSet<&str>,
+    unknown: &[(&str, &LockedFile)],
     placement: &mut Placement,
 ) -> Result<(), Error> {
+    let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
     let unwanted: Vec<String> = state
         .files
-        .keys()
-        .filter(|path| !wanted.contains(path.as_str()))
-        .cloned()
+        .iter()
+        .filter(|(path, placed)| {
+            !wanted.contains(path.as_str()) && !unsure.contains(placed.dataset.as_str())
+        })
+        .map(|(path, _)| path.clone())
         .collect();
     for path in unwanted {
         let Some(before) = state.files.remove(&path) else {
@@ -354,10 +362,8 @@ fn remove_unwanted(
             Some(look) if *look == before.look => {
                 let file = project.root.join(&path);
                 placer
-                    .check_folders(&file, false)
-                    .and_then(|()| fs::remove_file(&file))
+                    .remove(&file, true)
                     .map_err(|err| local(&file, &err))?;
-                prune(file.parent(), data_dir);
                 placement.removed += 1;
             }
             Some(_) => placement.kept.push(Kept {
@@ -367,17 +373,6 @@ fn remove_unwanted(
         }
     }
     Ok(())
-}
-
-/// removes folders left empty, up to the data folder.
-fn prune(mut folder: Option<&Path>, data_dir: &Path) {
-    while let Some(current) = folder {
-        if current == data_dir || !current.starts_with(data_dir) || fs::remove_dir(current).is_err()
-        {
-            return;
-        }
-        folder = current.parent();
-    }
 }
 
 /// every file under the data folder and how it looks, by its path in the project. links are

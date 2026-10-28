@@ -1,22 +1,23 @@
 //! the threads that turn members into cache objects while one thread reads the archive. creating,
-//! flushing and linking a file costs far more than writing a few kilobytes into it, on windows
-//! most of all, so small members travel to the writers whole and are stored in parallel.
+//! flushing and closing a file costs far more than writing a few kilobytes into it, on windows
+//! most of all, so small members travel to the writers whole and are written in parallel. no
+//! object is put in place until the whole archive passed every check, so a refused archive leaves
+//! nothing in the cache, and an object another process already uses is never taken back.
 
-use std::fs;
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use super::guard::Guard;
 use super::not_written;
-use crate::cache::{Cache, Member, NewObject, Stored};
+use crate::cache::{Cache, Member, NewObject, Sealed};
 use crate::error::{Error, Kind};
 
 /// members up to this size reach a writer as bytes in memory. a larger one is written by the
-/// reading thread as it is read, and only flushed and linked by a writer.
+/// reading thread as it is read, and only flushed and closed by a writer.
 const SMALL: usize = 1 << 20;
 
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
@@ -61,8 +62,8 @@ impl Writers<'_> {
     }
 }
 
-/// runs `read` with writers that store every member it keeps, and returns what they stored. when
-/// anything fails, the objects this run added are removed again.
+/// runs `read` with writers that seal every member it keeps, then puts them all in place and
+/// returns them. when anything fails, what was sealed is removed and nothing is put in place.
 pub(super) fn store_all(
     cache: &Cache,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
@@ -73,30 +74,24 @@ pub(super) fn store_all(
     let (jobs, queue) = sync_channel::<Job>(threads * 2);
     let queue = Mutex::new(queue);
     let failed = AtomicBool::new(false);
-    let stored = Mutex::new(Vec::new());
+    let sealed = Mutex::new(Vec::new());
     let trouble = Mutex::new(None);
     let read = thread::scope(|scope| {
         for _ in 0..threads {
             scope.spawn(|| {
                 loop {
-                    let next = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                    let next = locked(&queue).recv();
                     // the queue closes once the reading thread is done and every job is taken
                     let Ok(job) = next else { return };
                     // after a failure, dropping a job removes its temporary file
                     if failed.load(Ordering::Relaxed) {
                         continue;
                     }
-                    match write(cache, job) {
-                        Ok(done) => stored
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .push(done),
+                    match seal(cache, job) {
+                        Ok(done) => locked(&sealed).push(done),
                         Err(err) => {
                             failed.store(true, Ordering::Relaxed);
-                            trouble
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .get_or_insert(err);
+                            locked(&trouble).get_or_insert(err);
                         }
                     }
                 }
@@ -109,26 +104,55 @@ pub(super) fn store_all(
         };
         read(&writers)
     });
-    let stored: Vec<(String, Stored)> = stored.into_inner().unwrap_or_else(PoisonError::into_inner);
+    let sealed = sealed.into_inner().unwrap_or_else(PoisonError::into_inner);
     let trouble = trouble.into_inner().unwrap_or_else(PoisonError::into_inner);
     // a writer's error is the cause, and the reading thread only saw the writers stop
-    let Some(failure) = trouble.or_else(|| read.err()) else {
-        return Ok(stored
-            .into_iter()
-            .map(|(path, stored)| Member {
-                path,
-                size: stored.size,
-                sha256: stored.digest,
-            })
-            .collect());
-    };
-    for (_, stored) in stored.iter().filter(|(_, stored)| stored.new) {
-        let _ = fs::remove_file(&stored.path);
+    if let Some(failure) = trouble.or_else(|| read.err()) {
+        return Err(failure);
     }
-    Err(failure)
+    publish_all(cache, sealed, threads)
 }
 
-fn write(cache: &Cache, job: Job) -> Result<(String, Stored), Error> {
+/// puts every sealed member in place on `threads` threads. what is left after a failure is
+/// removed, and what was put in place stays for others to use or for gc to free.
+fn publish_all(
+    cache: &Cache,
+    sealed: Vec<(String, Sealed)>,
+    threads: usize,
+) -> Result<Vec<Member>, Error> {
+    let count = sealed.len();
+    let queue = Mutex::new(sealed.into_iter());
+    let members = Mutex::new(Vec::with_capacity(count));
+    let trouble = Mutex::new(None);
+    thread::scope(|scope| {
+        for _ in 0..threads.min(count) {
+            scope.spawn(|| {
+                loop {
+                    let Some((path, sealed)) = locked(&queue).next() else {
+                        return;
+                    };
+                    match sealed.publish(cache) {
+                        Ok(stored) => locked(&members).push(Member {
+                            path,
+                            size: stored.size,
+                            sha256: stored.digest,
+                        }),
+                        Err(err) => {
+                            locked(&trouble).get_or_insert(not_written(&path, &err));
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    match trouble.into_inner().unwrap_or_else(PoisonError::into_inner) {
+        Some(err) => Err(err),
+        None => Ok(members.into_inner().unwrap_or_else(PoisonError::into_inner)),
+    }
+}
+
+fn seal(cache: &Cache, job: Job) -> Result<(String, Sealed), Error> {
     let (path, object) = match job {
         Job::Bytes(path, bytes) => {
             let object = cache.new_object().and_then(|mut object| {
@@ -139,10 +163,14 @@ fn write(cache: &Cache, job: Job) -> Result<(String, Stored), Error> {
         }
         Job::Written(path, object) => (path, Ok(*object)),
     };
-    match object.and_then(NewObject::publish) {
-        Ok(stored) => Ok((path, stored)),
+    match object.and_then(NewObject::seal) {
+        Ok(sealed) => Ok((path, sealed)),
         Err(err) => Err(not_written(&path, &err)),
     }
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// what the reading thread sees once a writer failed. the writer's own error is the one reported.
@@ -222,8 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_read_removes_what_was_stored() {
+    fn a_failed_read_puts_nothing_in_place() {
         let scratch = Scratch::new();
+        let kept = crate::cache::tests::store(&scratch.cache, b"0\n");
         let limits = Limits::default();
         let meter = Meter::default();
         let never = |_: u64| false;
@@ -242,6 +271,17 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(err.message, "refused at the end");
-        scratch.assert_empty();
+        assert_eq!(
+            scratch.cache.objects().len(),
+            1,
+            "only the object stored before"
+        );
+        assert!(scratch.cache.find(&kept.digest, Some(2)).is_some());
+        assert_eq!(
+            std::fs::read_dir(scratch.cache.root().join("tmp"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }

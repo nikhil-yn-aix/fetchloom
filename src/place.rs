@@ -94,28 +94,23 @@ impl Placer {
     }
 
     /// checks every folder between the root and `path`, refusing a link among them, so a link
-    /// inside the data folder can never send a file elsewhere or delete one there. with `make`,
-    /// missing folders are made one at a time. each folder is checked once.
+    /// inside the data folder can never send a file elsewhere. with `make`, missing folders are
+    /// made one at a time. each folder is checked once.
     pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
-        let path = std::path::absolute(path)?;
-        let Some(parent) = path.parent() else {
-            return Ok(());
-        };
-        if self.folders.contains(parent) {
+        let (_, parent) = self.within(path)?;
+        if self.folders.contains(&parent) {
             return Ok(());
         }
         if make && !self.folders.contains(&self.root) {
             fs::create_dir_all(&self.root)?;
             self.folders.insert(self.root.clone());
         }
-        let inside = parent.strip_prefix(&self.root).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{} is outside {}", path.display(), self.root.display()),
-            )
-        })?;
         let mut folder = self.root.clone();
-        for part in inside.components() {
+        for part in parent
+            .strip_prefix(&self.root)
+            .unwrap_or(&parent)
+            .components()
+        {
             folder.push(part);
             if !self.folders.contains(&folder) {
                 real_folder(&folder, make)?;
@@ -123,6 +118,48 @@ impl Placer {
             }
         }
         Ok(())
+    }
+
+    /// removes a file fetchloom placed. every folder on its way is checked again first, since a
+    /// deletion must not trust a check made before downloads ran. with `prune`, folders it leaves
+    /// empty go too, up to the root.
+    pub(crate) fn remove(&mut self, path: &Path, prune: bool) -> io::Result<()> {
+        let (path, parent) = self.within(path)?;
+        let mut folder = self.root.clone();
+        real_folder(&folder, false)?;
+        for part in parent
+            .strip_prefix(&self.root)
+            .unwrap_or(&parent)
+            .components()
+        {
+            folder.push(part);
+            real_folder(&folder, false)?;
+        }
+        fs::remove_file(&path)?;
+        let mut folder = path.parent();
+        while prune && let Some(current) = folder {
+            if current == self.root || fs::remove_dir(current).is_err() {
+                break;
+            }
+            self.folders.remove(current);
+            folder = current.parent();
+        }
+        Ok(())
+    }
+
+    /// `path` made absolute, and its folder, which must be the root or inside it.
+    fn within(&self, path: &Path) -> io::Result<(PathBuf, PathBuf)> {
+        let path = std::path::absolute(path)?;
+        match path.parent() {
+            Some(parent) if parent.starts_with(&self.root) => {
+                let parent = parent.to_path_buf();
+                Ok((path, parent))
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is outside {}", path.display(), self.root.display()),
+            )),
+        }
     }
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
@@ -485,5 +522,22 @@ mod tests {
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(target, link).is_ok();
         made
+    }
+
+    #[test]
+    fn a_folder_emptied_by_a_removal_is_made_again_for_the_next_file() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let mut placer = Placer::new(&root);
+        let first = root.join("set").join("inner").join("a.csv");
+        placer.place(&object, &first, false).unwrap();
+
+        placer.remove(&first, true).unwrap();
+        assert!(!root.join("set").exists(), "emptied folders go");
+        assert!(root.exists(), "the root stays");
+        let second = root.join("set").join("b.csv");
+        placer.place(&object, &second, false).unwrap();
+
+        assert_eq!(fs::read_to_string(&second).unwrap(), CONTENTS);
     }
 }

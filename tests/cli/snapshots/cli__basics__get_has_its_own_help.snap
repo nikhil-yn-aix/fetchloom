@@ -14,6 +14,7 @@ options:
   -o, --output <dir>    put the download in <dir> instead of a new folder named after it
       --select <glob>   keep only files matching this pattern, such as "**/*.csv". repeat it for more
       --exclude <glob>  leave out files matching this pattern. repeat it for more
+      --no-extract      keep zip and tar archives packed instead of unpacking them
   -q, --quiet           print only the answer and errors
   -v, --verbose...      say more: -v adds detail and counters, -vv adds debug logs
       --json            print one JSON document on stdout instead of the story

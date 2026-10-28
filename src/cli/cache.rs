@@ -10,6 +10,7 @@ use super::{Context, open_cache};
 use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
+use crate::project::lock::Lock;
 use crate::units;
 
 /// what `fetchloom cache` reports, as `--json` prints it.
@@ -25,7 +26,7 @@ pub(super) struct Info {
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed(&cache)?;
+    let (needed, projects) = needed(&cache, None)?;
     let objects = cache.objects();
     let bytes: u64 = objects.iter().map(|object| object.size).sum();
     let kept: u64 = objects
@@ -67,7 +68,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
 
 pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed(&cache)?;
+    let (needed, projects) = needed(&cache, None)?;
     let freed = cache.sweep(&needed, SystemTime::now());
     let output = &context.output;
     if freed.objects == 0 && freed.leftovers == 0 {
@@ -142,10 +143,14 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     Err(error.help("remove them by hand. if others write to this cache, check who changed them"))
 }
 
-/// every object a registered project's data.lock needs, following each archive to the files it
-/// unpacked to, and the projects still on disk. a project whose data.toml is gone is forgotten. a
-/// lock that cannot be read stops gc, so nothing a project needs is ever deleted by mistake.
-fn needed(cache: &Cache) -> Result<(Needed, Vec<PathBuf>), Error> {
+/// every object a registered project's data.lock, or `current`, needs, following each archive to
+/// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is
+/// forgotten. a lock that cannot be read is an error, so nothing a project needs is ever deleted
+/// by mistake.
+pub(super) fn needed(
+    cache: &Cache,
+    current: Option<&Lock>,
+) -> Result<(Needed, Vec<PathBuf>), Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
     for root in cache.projects() {
@@ -165,28 +170,37 @@ fn needed(cache: &Cache) -> Result<(Needed, Vec<PathBuf>), Error> {
             .detail(err.message)
             .help("fix that project's data.lock, or run `fetchloom lock` there, then try again")
         })?;
-        for file in lock
-            .iter()
-            .flat_map(|lock| &lock.datasets)
-            .flat_map(|dataset| &dataset.files)
-        {
-            let members = file
-                .unpacks_to
-                .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
-            match members {
-                Some(members) => {
-                    needed.unpacked.insert(file.sha256);
-                    needed
-                        .objects
-                        .extend(members.iter().map(|member| member.sha256));
-                }
-                // a plain file, or an archive not unpacked here yet, whose own bytes are needed
-                None => {
-                    needed.objects.insert(file.sha256);
-                }
-            }
+        if let Some(lock) = &lock {
+            add(&mut needed, cache, lock);
         }
         projects.push(project.root);
     }
+    if let Some(lock) = current {
+        add(&mut needed, cache, lock);
+    }
     Ok((needed, projects))
+}
+
+/// adds what one lock needs. an archive needs the files it unpacked to, and its own bytes too
+/// while this machine never unpacked it or lost a file it unpacked to, since unpacking again is
+/// the only way back.
+fn add(needed: &mut Needed, cache: &Cache, lock: &Lock) {
+    for file in lock.datasets.iter().flat_map(|dataset| &dataset.files) {
+        let members = file
+            .unpacks_to
+            .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
+        let Some(members) = members else {
+            needed.objects.insert(file.sha256);
+            continue;
+        };
+        needed.unpacked.insert(file.sha256);
+        let mut whole = true;
+        for member in &members {
+            needed.objects.insert(member.sha256);
+            whole &= cache.find(&member.sha256, Some(member.size)).is_some();
+        }
+        if !whole {
+            needed.objects.insert(file.sha256);
+        }
+    }
 }
