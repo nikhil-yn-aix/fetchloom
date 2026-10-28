@@ -12,7 +12,7 @@ use url::Url;
 
 use super::failure::{self, Failure, Retry};
 use super::headers::{self, if_range};
-use super::{CONNECT, IDLE, Net, RESPONSE, host};
+use super::{IDLE, Net, host};
 use crate::cache::{Cache, Claim, Partial, PartialWriter, Stored, UrlRecord, Validators};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -320,29 +320,24 @@ impl Net {
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| pinned || if_range(validators).is_some());
-        let mut request = self.request(from);
-        if let Some((received, validators)) = &earlier {
-            request = request.header(header::RANGE, format!("bytes={received}-"));
-            if let Some(check) = if_range(validators) {
-                request = request.header(header::IF_RANGE, check);
+        let conditions = |mut request: reqwest::RequestBuilder| {
+            if let Some((received, validators)) = &earlier {
+                request = request.header(header::RANGE, format!("bytes={received}-"));
+                if let Some(check) = if_range(validators) {
+                    request = request.header(header::IF_RANGE, check);
+                }
+            } else if let Some(known) = known {
+                if let Some(etag) = &known.etag {
+                    request = request.header(header::IF_NONE_MATCH, etag);
+                }
+                if let Some(date) = &known.last_modified {
+                    request = request.header(header::IF_MODIFIED_SINCE, date);
+                }
             }
-        } else if let Some(known) = known {
-            if let Some(etag) = &known.etag {
-                request = request.header(header::IF_NONE_MATCH, etag);
-            }
-            if let Some(date) = &known.last_modified {
-                request = request.header(header::IF_MODIFIED_SINCE, date);
-            }
-        }
-        Work::add(&self.work.requests, 1);
-        let response = tokio::select! {
-            sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
-                Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(from), (CONNECT + RESPONSE).as_secs()))),
-                Ok(Err(err)) => return Err(failure::classify(from, &err)),
-                Ok(Ok(response)) => response,
-            },
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(from))),
+            request
         };
+        Work::add(&self.work.requests, 1);
+        let response = self.send(from, conditions).await?;
         let status = response.status();
         tracing::debug!(url = %from, status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();

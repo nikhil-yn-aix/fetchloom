@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::StatusCode;
+use reqwest::header::{self, HeaderName, HeaderValue};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
@@ -19,6 +20,7 @@ pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
 
+use self::failure::Failure;
 use crate::error::{Error, Kind};
 use crate::stop::Stop;
 use crate::work::Work;
@@ -59,6 +61,7 @@ pub(crate) struct Net {
     client: reqwest::Client,
     offline: bool,
     typed: address::Typed,
+    proxies: address::Proxies,
     credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
@@ -77,7 +80,6 @@ impl Net {
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
         let typed = address::Typed::default();
-        let for_redirects = typed.clone();
         let client = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT)
@@ -85,15 +87,8 @@ impl Net {
                 typed.clone(),
                 options.offline,
             )))
-            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() >= REDIRECTS {
-                    attempt.error(address::Refused(format!("more than {REDIRECTS} redirects")))
-                } else if let Err(refused) = for_redirects.check(attempt.url()) {
-                    attempt.error(refused)
-                } else {
-                    attempt.follow()
-                }
-            }))
+            // `send` follows redirects itself, so that each hop is checked before it goes out
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| {
                 Error::new(
@@ -115,6 +110,7 @@ impl Net {
             client,
             offline: options.offline,
             typed,
+            proxies: address::Proxies::from_system(),
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
@@ -141,11 +137,58 @@ impl Net {
         self.offline
     }
 
-    /// a GET with the user agent, and the credential for this exact host when there is one.
-    fn request(&self, url: &Url) -> reqwest::RequestBuilder {
+    /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
+    /// hop is checked the way its connection will be made before it is sent. a credential goes
+    /// only to its own host, and never once a redirect has left the first one.
+    async fn send(
+        &self,
+        url: &Url,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
+        let mut hop = url.clone();
+        let mut redirects = 0;
+        let mut first_origin = true;
+        loop {
+            self.proxies
+                .check(&hop, &self.typed)
+                .await
+                .map_err(|reason| refused(&hop, reason))?;
+            first_origin &= hop.origin() == url.origin();
+            let request = shape(self.request(&hop, first_origin));
+            let response = tokio::select! {
+                sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
+                    Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
+                    Ok(Err(err)) => return Err(failure::classify(&hop, &err)),
+                    Ok(Ok(response)) => response,
+                },
+                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(&hop))),
+            };
+            let Some(next) = redirect_target(&hop, &response) else {
+                return Ok(response);
+            };
+            redirects += 1;
+            if redirects > REDIRECTS {
+                let reason = address::Refused(format!("more than {REDIRECTS} redirects"));
+                return Err(refused(url, reason));
+            }
+            self.typed
+                .check(&next)
+                .map_err(|reason| refused(&next, reason))?;
+            tracing::debug!(from = host(&hop), to = host(&next), "redirect");
+            hop = next;
+        }
+    }
+
+    /// a GET with the user agent and, when `credentials` allows, the credential for this exact
+    /// host.
+    fn request(&self, url: &Url, credentials: bool) -> reqwest::RequestBuilder {
         let mut request = self.client.get(url.clone());
         let secure = url.scheme() == "https" && url.port_or_known_default() == Some(443);
-        if secure && let Some(host) = url.host_str() {
+        if credentials
+            && secure
+            && let Some(host) = url.host_str()
+        {
             for (owner, name, value) in &self.credentials {
                 if host.eq_ignore_ascii_case(owner) {
                     request = request.header(name.clone(), value.clone());
@@ -183,4 +226,20 @@ impl Net {
 /// the host of a URL as people say it, for messages.
 pub(crate) fn host(url: &Url) -> &str {
     url.host_str().unwrap_or("the server")
+}
+
+/// where `response` redirects a request for `from`, when it is a redirect to an http or https
+/// link.
+fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
+    let redirect = matches!(
+        response.status(),
+        StatusCode::MOVED_PERMANENTLY
+            | StatusCode::FOUND
+            | StatusCode::SEE_OTHER
+            | StatusCode::TEMPORARY_REDIRECT
+            | StatusCode::PERMANENT_REDIRECT
+    );
+    let location = response.headers().get(header::LOCATION)?.to_str().ok()?;
+    let next = from.join(location).ok()?;
+    (redirect && matches!(next.scheme(), "http" | "https")).then_some(next)
 }

@@ -3,11 +3,12 @@
 //! or data.lock alone, may not reach private, loopback or link-local addresses, so a hostile
 //! server or a tampered lock cannot reach into a local network.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
+use hyper_util::client::proxy::matcher::Matcher;
 use url::{Host, Url};
 
 /// the hosts a person wrote.
@@ -83,6 +84,76 @@ impl fmt::Display for Offline {
 }
 
 impl std::error::Error for Offline {}
+
+/// the proxies this machine is set to use, chosen for each URL the way reqwest chooses them, and
+/// what looking up the hosts sent through them found.
+pub(crate) struct Proxies {
+    matcher: Matcher,
+    /// for each host looked up, why it was refused, if it was.
+    looked_up: Mutex<HashMap<String, Option<String>>>,
+}
+
+impl Proxies {
+    /// the proxies in the environment and, where reqwest reads them, the system settings.
+    pub(crate) fn from_system() -> Proxies {
+        Proxies {
+            matcher: Matcher::from_system(),
+            looked_up: Mutex::default(),
+        }
+    }
+
+    /// checks `url` before it is sent, when a proxy will carry it. the proxy resolves the name
+    /// itself, so fetchloom's resolver never sees the addresses, and a host nobody wrote is looked
+    /// up here first and refused when any of its addresses is private. a name this machine cannot
+    /// resolve is left to the proxy, since some networks resolve names only through it. the
+    /// proxy is trusted like a host a person wrote, since a person set it up.
+    pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
+        let Some(proxy) = url
+            .as_str()
+            .parse::<http::Uri>()
+            .ok()
+            .and_then(|uri| self.matcher.intercept(&uri))
+        else {
+            return Ok(());
+        };
+        if let Some(host) = proxy.uri().host() {
+            typed.add_host(host);
+        }
+        let Some(Host::Domain(name)) = url.host() else {
+            return Ok(());
+        };
+        let name = name.to_ascii_lowercase();
+        if typed.contains(&name) {
+            return Ok(());
+        }
+        let known = self.lock().get(&name).cloned();
+        let refused = if let Some(refused) = known {
+            refused
+        } else {
+            let port = url.port_or_known_default().unwrap_or(443);
+            let refused = private_address(&name, port).await;
+            self.lock().insert(name, refused.clone());
+            refused
+        };
+        refused.map_or(Ok(()), |reason| Err(Refused(reason)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<String>>> {
+        self.looked_up
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// why `name` may not go through a proxy, when this machine resolves it to a private address.
+async fn private_address(name: &str, port: u16) -> Option<String> {
+    let mut found = tokio::net::lookup_host((name, port)).await.ok()?;
+    let address = found.find(|address| is_private(address.ip()))?;
+    Some(format!(
+        "{name} resolves to the private address {}, and a proxy would reach it",
+        address.ip()
+    ))
+}
 
 /// resolves names for the HTTP client, dropping private addresses for hosts nobody typed.
 pub(crate) struct Resolver {

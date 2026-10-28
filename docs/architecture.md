@@ -87,7 +87,8 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - retries cover connection errors, timeouts, 408, 429 and 5xx, with jittered backoff up to 60 s and at most 5 attempts. `Retry-After` is a floor. when a host asks for more than 60 s, the next known location is tried, or the error says how long the host asked for.
 - resume is a range request from the last verified byte, used only when the file's identity is fixed by a pinned hash, an immutable version or a strong ETag. otherwise the download starts over.
 - credentials attach only to their own scheme, host and port, only over https, and are dropped on any redirect to another origin.
-- a URL that did not come from the command line may not reach a private, loopback or link-local address. the check runs on the address each connection actually uses, for the first request and every redirect, so a hostile `data.lock` cannot reach into a local network.
+- a URL that did not come from the command line may not reach a private, loopback or link-local address. the check runs on the address each connection actually uses, for the first request and every redirect, so a hostile `data.lock` cannot reach into a local network. fetchloom follows redirects itself, so each hop is checked before it goes out.
+- behind a proxy, which resolves names itself, a host nobody wrote is looked up here first and refused when any of its addresses is private. a name this machine cannot resolve is left to the proxy, and the proxy itself is trusted, since a person set it up.
 - URLs live in a type that hides tokens and signed query values whenever they are displayed or logged.
 - offline mode is enforced inside the client, so no source can forget it.
 - the user agent is `fetchloom/<version>`.

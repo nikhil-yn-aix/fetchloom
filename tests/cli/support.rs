@@ -218,6 +218,73 @@ impl Server {
     }
 }
 
+/// a forward proxy on this machine. it tunnels `CONNECT` and passes a request in absolute form on
+/// to its server, and keeps the first line of each request, lowercased.
+pub(crate) struct Proxy {
+    pub(crate) url: String,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl Proxy {
+    pub(crate) fn start() -> Result<Proxy> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        std::thread::spawn(move || {
+            for client in listener.incoming().flatten() {
+                let seen = seen.clone();
+                std::thread::spawn(move || relay(client, &seen));
+            }
+        });
+        Ok(Proxy { url, asked })
+    }
+
+    /// the first line of every request so far.
+    pub(crate) fn asked(&self) -> Vec<String> {
+        self.asked
+            .lock()
+            .map(|asked| asked.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// passes one client's request on, then copies bytes both ways until a side hangs up.
+fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>) {
+    let head = read_head(&mut client);
+    let line = head.lines().next().unwrap_or_default().to_owned();
+    if let Ok(mut seen) = seen.lock() {
+        seen.push(line.to_ascii_lowercase());
+    }
+    let mut words = line.split(' ');
+    let (method, target) = (
+        words.next().unwrap_or_default(),
+        words.next().unwrap_or_default(),
+    );
+    let (authority, forwarded) = if method == "CONNECT" {
+        (target.to_owned(), None)
+    } else {
+        let rest = target.strip_prefix("http://").unwrap_or(target);
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        (
+            authority.to_owned(),
+            Some(head.replacen(target, &format!("/{path}"), 1)),
+        )
+    };
+    let Ok(mut server) = TcpStream::connect(&authority) else {
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        return;
+    };
+    let _ = match forwarded {
+        Some(head) => server.write_all(head.as_bytes()),
+        None => client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n"),
+    };
+    if let (Ok(mut from_client), Ok(mut to_server)) = (client.try_clone(), server.try_clone()) {
+        std::thread::spawn(move || std::io::copy(&mut from_client, &mut to_server));
+        let _ = std::io::copy(&mut server, &mut client);
+    }
+}
+
 fn read_head(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];

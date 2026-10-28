@@ -5,4 +5,5 @@ mod basics;
 mod cache;
 mod get;
 mod project;
+mod proxy;
 mod support;
