@@ -3,10 +3,11 @@
 
 mod draft;
 pub(super) mod place;
+mod unpack;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use tokio::task::JoinSet;
@@ -17,6 +18,7 @@ use self::place::{Placement, Placing};
 use super::Context;
 use super::fetch::{self, Job};
 use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
@@ -52,20 +54,46 @@ pub(super) struct Loop<'a> {
     pub(super) project: &'a Project,
     pub(super) net: Arc<Net>,
     pub(super) cache: Cache,
+    /// archives this run unpacked, whose own bytes the cache may drop once their files are in.
+    unpacked: Mutex<Vec<Sha256>>,
 }
 
-impl Loop<'_> {
+impl<'a> Loop<'a> {
+    pub(super) fn new(
+        context: &'a Context,
+        project: &'a Project,
+        net: Arc<Net>,
+        cache: Cache,
+    ) -> Self {
+        Loop {
+            context,
+            project,
+            net,
+            cache,
+            unpacked: Mutex::default(),
+        }
+    }
+
     /// makes the data folder match `lock`. what each file needs is decided first, so only the
-    /// bytes placing lacks are downloaded.
+    /// bytes placing lacks are downloaded. archives this machine never unpacked are unpacked
+    /// first, since what they hold decides where files go.
     pub(super) async fn place(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         force: bool,
     ) -> Result<Placement, Error> {
-        let placing = Placing::new(self.project, manifest, lock, force)?;
-        let jobs = placing
+        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        let unknown = placing.unknown();
+        if !unknown.is_empty() {
+            self.unpack_locked(&unknown).await?;
+            placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        }
+        let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)
+            .into_iter()
+            .partition(|(_, file)| file.unpacks_to.is_some());
+        let jobs = files
             .into_iter()
             .map(|(dataset, file)| {
                 job(
@@ -81,6 +109,7 @@ impl Loop<'_> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
+        self.unpack_locked(&archives).await?;
         placing.apply(&self.context.output, &self.context.work, &self.cache)
     }
 
@@ -123,15 +152,18 @@ impl Loop<'_> {
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
         for (index, draft) in drafts.iter().enumerate() {
-            for (file, job) in draft.jobs() {
+            for (file, job) in draft.jobs(&self.cache) {
                 slots.push((index, file));
                 jobs.push(job);
             }
         }
         let fetched = self.download(jobs).await?;
         for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
-            drafts[draft].learn(file, &fetched);
+            if let Some(file) = file {
+                drafts[draft].learn(file, &fetched);
+            }
         }
+        self.unpack_drafts(&mut drafts).await?;
         let now = lock::timestamp(SystemTime::now());
         let mut datasets = kept;
         datasets.extend(drafts.into_iter().map(|draft| {

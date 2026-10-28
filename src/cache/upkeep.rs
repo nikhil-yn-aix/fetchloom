@@ -26,6 +26,15 @@ pub(crate) struct Object {
     modified: SystemTime,
 }
 
+/// what the projects using a cache need from it.
+#[derive(Debug, Default)]
+pub(crate) struct Needed {
+    /// objects a project places, and archives a project has not unpacked on this machine yet.
+    pub(crate) objects: HashSet<Sha256>,
+    /// archives whose record tells what a project places from them.
+    pub(crate) unpacked: HashSet<Sha256>,
+}
+
 /// what a sweep freed.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Freed {
@@ -112,18 +121,27 @@ impl Cache {
         objects
     }
 
-    /// removes every object not in `needed` that is older than a day, and the unfinished downloads
-    /// and temporary files left that long.
-    pub(crate) fn sweep(&self, needed: &HashSet<Sha256>, now: SystemTime) -> Freed {
+    /// removes every object not in `needed` that is older than a day, the records of archives no
+    /// project uses, and the unfinished downloads and temporary files left that long.
+    pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
         let mut freed = Freed::default();
         for object in self.objects() {
-            if !needed.contains(&object.digest)
+            if !needed.objects.contains(&object.digest)
                 && old(object.modified)
                 && fs::remove_file(&object.path).is_ok()
             {
                 freed.objects += 1;
                 freed.bytes += object.size;
+            }
+        }
+        for archive in self.unpacked_archives() {
+            let path = self.unpacked_path(&archive);
+            let stale = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(old);
+            if !needed.unpacked.contains(&archive) && stale {
+                let _ = fs::remove_file(path);
             }
         }
         freed.leftovers += self.sweep_partials(&old);
@@ -246,17 +264,35 @@ mod tests {
         let needed = store(&cache, b"needed");
         let unneeded = store(&cache, b"unneeded");
         let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        let keep = Needed {
+            objects: HashSet::from([needed.digest]),
+            ..Needed::default()
+        };
         assert_eq!(
-            cache
-                .sweep(&HashSet::from([needed.digest]), SystemTime::now())
-                .objects,
+            cache.sweep(&keep, SystemTime::now()).objects,
             0,
             "nothing is old yet"
         );
-        let freed = cache.sweep(&HashSet::from([needed.digest]), later);
+        let freed = cache.sweep(&keep, later);
         assert_eq!((freed.objects, freed.bytes), (1, 8));
         assert!(cache.find(&needed.digest, Some(6)).is_some());
         assert!(cache.find(&unneeded.digest, Some(8)).is_none());
+    }
+
+    #[test]
+    fn a_sweep_keeps_the_records_of_archives_in_use() {
+        let (_dir, cache) = cache();
+        let used = digest::sha256(b"used archive");
+        let unused = digest::sha256(b"unused archive");
+        for archive in [used, unused] {
+            cache.record_unpacked(&archive, &[]).unwrap();
+        }
+        let keep = Needed {
+            unpacked: HashSet::from([used]),
+            ..Needed::default()
+        };
+        cache.sweep(&keep, SystemTime::now() + GRACE + Duration::from_secs(60));
+        assert_eq!(cache.unpacked_archives(), [used]);
     }
 
     #[test]

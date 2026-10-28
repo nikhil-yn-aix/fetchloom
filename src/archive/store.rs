@@ -187,7 +187,7 @@ mod tests {
     fn stored(scratch: &Scratch, members: &[(&str, Vec<u8>)]) -> Result<Vec<Member>, Error> {
         let limits = Limits::default();
         let meter = Meter::default();
-        let never = || false;
+        let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         store_all(&scratch.cache, |writers| {
             let mut buffer = vec![0; 64 << 10];
@@ -226,7 +226,7 @@ mod tests {
         let scratch = Scratch::new();
         let limits = Limits::default();
         let meter = Meter::default();
-        let never = || false;
+        let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         let err = store_all(&scratch.cache, |writers| {
             let mut buffer = vec![0; 1024];

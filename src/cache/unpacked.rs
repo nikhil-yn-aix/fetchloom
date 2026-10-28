@@ -67,6 +67,13 @@ impl Cache {
         })
     }
 
+    /// the tree hash of what `archive` unpacked to on this machine, when it was recorded.
+    pub(crate) fn unpacked_tree(&self, archive: &Sha256) -> Option<Sha256> {
+        let bytes = fs::read(self.unpacked_path(archive)).ok()?;
+        parse(std::str::from_utf8(&bytes).ok()?)?;
+        Some(digest::sha256(&bytes))
+    }
+
     /// every archive with a record.
     pub(crate) fn unpacked_archives(&self) -> Vec<Sha256> {
         fs::read_dir(self.root.join("unpacked"))

@@ -31,7 +31,7 @@ impl Scratch {
     }
 
     pub(super) fn unpack(&self, format: Format, bytes: &[u8]) -> Result<Unpacked, Error> {
-        self.unpack_with(format, bytes, &Limits::default(), &|| false)
+        self.unpack_with(format, bytes, &Limits::default(), &|_| false)
     }
 
     pub(super) fn unpack_with(
@@ -39,10 +39,10 @@ impl Scratch {
         format: Format,
         bytes: &[u8],
         limits: &Limits,
-        stopped: &dyn Fn() -> bool,
+        watch: &dyn Fn(u64) -> bool,
     ) -> Result<Unpacked, Error> {
         let path = self.file("archive", bytes);
-        unpack(&path, format, limits, &self.cache, stopped)
+        unpack(&path, format, limits, &self.cache, watch)
     }
 
     /// unpacks an archive the guard must refuse, and checks it left nothing behind.

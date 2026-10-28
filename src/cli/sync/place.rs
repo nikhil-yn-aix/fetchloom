@@ -71,6 +71,7 @@ pub(crate) struct Placing<'a> {
     project: &'a Project,
     manifest: &'a Manifest,
     targets: Vec<Target<'a>>,
+    unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     data_dir: PathBuf,
     state: State,
@@ -78,19 +79,22 @@ pub(crate) struct Placing<'a> {
 }
 
 impl<'a> Placing<'a> {
-    /// compares the data folder with `lock`. only files fetchloom did not place are hashed, to
-    /// see whether they already hold the locked bytes.
+    /// compares the data folder with `lock`, with each archive standing for the files the cache
+    /// records it unpacked to. only files fetchloom did not place are hashed, to see whether
+    /// they already hold the locked bytes.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
         lock: &'a Lock,
+        cache: &Cache,
         force: bool,
     ) -> Result<Placing<'a>, Error> {
-        let targets = plan::targets(manifest, lock)?;
+        let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
         let state = project.state();
         let disk = scan(&project.root, &manifest.data_dir);
-        let actions = targets
+        let actions = plan
+            .targets
             .iter()
             .map(|target| {
                 decide(
@@ -105,7 +109,8 @@ impl<'a> Placing<'a> {
         Ok(Placing {
             project,
             manifest,
-            targets,
+            targets: plan.targets,
+            unknown: plan.unknown,
             actions,
             data_dir,
             state,
@@ -113,22 +118,27 @@ impl<'a> Placing<'a> {
         })
     }
 
+    /// the archives never unpacked on this machine, with the dataset each belongs to.
+    pub(crate) fn unknown(&self) -> Vec<(String, &'a LockedFile)> {
+        self.unknown
+            .iter()
+            .map(|(dataset, file)| ((*dataset).to_owned(), *file))
+            .collect()
+    }
+
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
-    /// dataset each belongs to.
+    /// dataset each belongs to. an archive is listed when a file it unpacks to is missing.
     pub(crate) fn missing(&self, cache: &Cache) -> Vec<(String, &'a LockedFile)> {
         let mut seen = HashSet::new();
         self.targets
             .iter()
             .zip(&self.actions)
             .filter(|(_, action)| matches!(action, Action::Place | Action::Replace))
-            .filter(|(target, _)| {
-                seen.insert(target.sha256)
-                    && cache.find(&target.sha256, Some(target.size)).is_none()
-            })
+            .filter(|(target, _)| cache.find(&target.sha256, Some(target.size)).is_none())
+            .filter(|(target, _)| seen.insert(target.locked.sha256))
             .map(|(target, _)| (target.dataset.clone(), target.locked))
             .collect()
     }
-
     /// removes what no dataset needs, places what is missing or outdated, and records it.
     pub(crate) fn apply(
         self,
@@ -144,6 +154,7 @@ impl<'a> Placing<'a> {
             data_dir,
             mut state,
             disk,
+            unknown: _,
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();

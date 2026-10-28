@@ -20,7 +20,9 @@ fn fixture(name: &str) -> Result<Unpacked, Error> {
         panic!("{name} is not detected as an archive");
     };
     let scratch = Scratch::new();
-    let unpacked = unpack(&path, format, &Limits::default(), &scratch.cache, &|| false);
+    let unpacked = unpack(&path, format, &Limits::default(), &scratch.cache, &|_| {
+        false
+    });
     if let Ok(unpacked) = &unpacked {
         for member in &unpacked.members {
             assert!(
@@ -122,12 +124,12 @@ fn the_member_limit_counts_every_entry() {
         let fits = archive(format, FILES);
         assert!(
             scratch
-                .unpack_with(format, &fits, &limits, &|| false)
+                .unpack_with(format, &fits, &limits, &|_| false)
                 .is_ok()
         );
         let over = archive(format, &[FILES, &[("e.csv", b"4")]].concat());
         let err = scratch
-            .unpack_with(format, &over, &limits, &|| false)
+            .unpack_with(format, &over, &limits, &|_| false)
             .unwrap_err();
         assert!(
             err.message.contains("more than 3 entries"),
@@ -146,7 +148,7 @@ fn the_byte_limit_counts_what_is_written() {
     for format in FAMILIES {
         let scratch = Scratch::new();
         let err = scratch
-            .unpack_with(format, &archive(format, FILES), &limits, &|| false)
+            .unpack_with(format, &archive(format, FILES), &limits, &|_| false)
             .unwrap_err();
         assert!(err.message.contains("past 2 B"), "{}", err.message);
         scratch.assert_empty();
@@ -157,7 +159,7 @@ fn the_byte_limit_counts_what_is_written() {
 fn a_stop_part_way_publishes_nothing() {
     for format in FAMILIES {
         let checks = Cell::new(0);
-        let stopped = || {
+        let stopped = |_: u64| {
             checks.set(checks.get() + 1);
             checks.get() > 3
         };
@@ -222,7 +224,7 @@ fn many_small_files() {
             Format::Zip,
             &Limits::default(),
             &scratch.cache,
-            &|| false,
+            &|_| false,
         )
         .unwrap();
         println!(
@@ -231,4 +233,56 @@ fn many_small_files() {
             started.elapsed().as_millis()
         );
     }
+}
+
+#[test]
+fn only_names_decide_what_may_unpack() {
+    for archive in [
+        "a.zip",
+        "dir/A.ZIP",
+        "x.tar",
+        "x.tar.gz",
+        "x.tgz",
+        "x.tar.xz",
+        "x.txz",
+        "x.tar.zst",
+        "x.tzst",
+        "x.tar.bz2",
+        "x.tbz2",
+        "x.tbz",
+    ] {
+        assert_eq!(
+            super::by_name(archive),
+            Some(super::Packed::Archive),
+            "{archive}"
+        );
+    }
+    assert_eq!(
+        super::by_name("a.7z"),
+        Some(super::Packed::Unsupported("7z"))
+    );
+    assert_eq!(
+        super::by_name("a.RAR"),
+        Some(super::Packed::Unsupported("rar"))
+    );
+    for whole in [
+        "reads.fastq.gz",
+        "data.csv",
+        "results.xlsx",
+        "weights.npz",
+        "model.pt",
+        "zip",
+        "a.zip.part",
+    ] {
+        assert_eq!(super::by_name(whole), None, "{whole}");
+    }
+}
+
+#[test]
+fn a_stem_drops_the_archive_ending() {
+    assert_eq!(super::stem("train.tar.gz"), "train");
+    assert_eq!(super::stem("Images.ZIP"), "Images");
+    assert_eq!(super::stem("x.tgz"), "x");
+    assert_eq!(super::stem(".zip"), ".zip");
+    assert_eq!(super::stem("notes.txt"), "notes.txt");
 }

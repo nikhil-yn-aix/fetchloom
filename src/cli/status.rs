@@ -30,6 +30,8 @@ pub(super) struct Status {
     outdated: Vec<String>,
     /// files in the data folder that no dataset places.
     extra: Vec<String>,
+    /// archives this machine has not unpacked yet, so the files they hold are missing.
+    not_unpacked: Vec<String>,
 }
 
 pub(super) fn run(context: &Context) -> Result<Status, Error> {
@@ -48,7 +50,13 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
             status.unlocked.push(name.clone());
         }
     }
-    let targets = plan::targets(&manifest, &lock)?;
+    let planned = plan::from_cache(&manifest, &lock, &super::open_cache()?)?;
+    status.not_unpacked = planned
+        .unknown
+        .iter()
+        .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
+        .collect();
+    let targets = planned.targets;
     let state = project.state();
     let disk = place::scan(&project.root, &manifest.data_dir);
     for target in &targets {
@@ -98,8 +106,15 @@ fn tell(context: &Context, status: &Status) {
             output.mark("", &format!("and {} more", paths.len() - SHOWN));
         }
     }
-    let differences =
-        status.unlocked.len() + lists.iter().map(|(_, paths)| paths.len()).sum::<usize>();
+    for archive in &status.not_unpacked {
+        output.mark(
+            "Missing",
+            &format!("{archive} · not unpacked on this machine yet"),
+        );
+    }
+    let differences = status.unlocked.len()
+        + status.not_unpacked.len()
+        + lists.iter().map(|(_, paths)| paths.len()).sum::<usize>();
     if differences == 0 {
         output.done("everything matches data.lock");
         return;
@@ -110,6 +125,7 @@ fn tell(context: &Context, status: &Status) {
     ));
     if !status.unlocked.is_empty()
         || !status.missing.is_empty()
+        || !status.not_unpacked.is_empty()
         || !status.outdated.is_empty()
         || !status.untracked.is_empty()
     {

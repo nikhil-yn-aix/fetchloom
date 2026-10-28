@@ -2,6 +2,7 @@
 //! filled in from earlier locks or from the bytes themselves.
 
 use super::super::fetch::Job;
+use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -17,6 +18,8 @@ pub(super) struct Draft {
     name: String,
     reference: String,
     spec: String,
+    /// whether archives unpack, as data.toml says.
+    extract: bool,
     listing: Listing,
     files: Vec<DraftFile>,
 }
@@ -27,6 +30,16 @@ struct DraftFile {
     /// the hash and size, once known: stated by the source, carried over from data.lock, or
     /// learned from the bytes.
     known: Option<(Sha256, u64)>,
+    /// for an archive, the tree hash of what it unpacks to, once known.
+    unpacks_to: Option<Sha256>,
+}
+
+/// an archive a draft needs unpacked to learn what it unpacks to.
+pub(super) struct ToUnpack {
+    pub(super) file: usize,
+    pub(super) archive: Sha256,
+    pub(super) size: u64,
+    pub(super) label: String,
 }
 
 impl Draft {
@@ -59,10 +72,15 @@ impl Draft {
                     Some(file) if remote.named_by_server => file.path.clone(),
                     _ => remote.path.clone(),
                 };
+                // the same bytes unpack to the same files, while the dataset still unpacks
+                let unpacks_to = earlier
+                    .filter(|file| entry.extract && known == Some((file.sha256, file.size)))
+                    .and_then(|file| file.unpacks_to);
                 DraftFile {
                     remote,
                     path,
                     known,
+                    unpacks_to,
                 }
             })
             .collect();
@@ -70,41 +88,60 @@ impl Draft {
             name: name.to_owned(),
             reference: entry.reference.clone(),
             spec: lock::spec(entry),
+            extract: entry.extract,
             listing,
             files,
         })
     }
 
-    /// the downloads that learn each unknown hash, with the index of the file each is for. a
-    /// file no checksum pins is asked about with what its URL served before, so bytes the cache
-    /// already holds are not sent again.
-    pub(super) fn jobs(&self) -> Vec<(usize, Job)> {
-        self.files
-            .iter()
-            .enumerate()
-            .filter(|(_, file)| file.known.is_none())
-            .map(|(index, file)| {
-                let remote = &file.remote;
-                let (from, divert) = source::fetch_plan(&remote.url);
-                let fetch = Fetch {
-                    url: remote.url.clone(),
-                    from,
-                    divert,
-                    expect: Expect {
+    /// the downloads this dataset needs, each with the index of the file whose hash it learns:
+    /// every file whose hash is unknown, and every archive whose bytes must be unpacked to learn
+    /// what it unpacks to. a file no checksum pins is asked about with what its URL served
+    /// before, so bytes the cache already holds are not sent again.
+    pub(super) fn jobs(&self, cache: &Cache) -> Vec<(Option<usize>, Job)> {
+        let mut jobs = Vec::new();
+        for (index, file) in self.files.iter().enumerate() {
+            let remote = &file.remote;
+            let (expect, learn) = match file.known {
+                None => (
+                    Expect {
                         sha256: remote.sha256,
                         md5: remote.md5,
                         size: remote.size,
                     },
-                    revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-                };
-                let job = Job {
-                    fetch,
-                    label: format!("{}/{}", self.name, file.path),
-                    dataset: Some(self.name.clone()),
-                };
-                (index, job)
-            })
-            .collect()
+                    true,
+                ),
+                Some((sha256, size))
+                    if self.unpacks(file)
+                        && file.unpacks_to.is_none()
+                        && cache.unpacked_tree(&sha256).is_none()
+                        && cache.find(&sha256, Some(size)).is_none() =>
+                {
+                    let expect = Expect {
+                        sha256: Some(sha256),
+                        md5: remote.md5,
+                        size: Some(size),
+                    };
+                    (expect, false)
+                }
+                Some(_) => continue,
+            };
+            let (from, divert) = source::fetch_plan(&remote.url);
+            let fetch = Fetch {
+                url: remote.url.clone(),
+                from,
+                divert,
+                expect,
+                revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
+            };
+            let job = Job {
+                fetch,
+                label: format!("{}/{}", self.name, file.path),
+                dataset: Some(self.name.clone()),
+            };
+            jobs.push((learn.then_some(index), job));
+        }
+        jobs
     }
 
     /// records what the bytes of file `index` turned out to be.
@@ -116,6 +153,55 @@ impl Draft {
         {
             file.path = given;
         }
+    }
+
+    /// the archives that must be unpacked to learn what they unpack to. an archive this machine
+    /// unpacked before is known from its record and needs no unpacking.
+    pub(super) fn unknown_archives(&mut self, cache: &Cache) -> Vec<ToUnpack> {
+        let mut todo = Vec::new();
+        for index in 0..self.files.len() {
+            let file = &self.files[index];
+            let Some((archive, size)) = file.known else {
+                continue;
+            };
+            if !self.unpacks(file) || file.unpacks_to.is_some() {
+                continue;
+            }
+            match cache.unpacked_tree(&archive) {
+                Some(tree) => self.files[index].unpacks_to = Some(tree),
+                None => todo.push(ToUnpack {
+                    file: index,
+                    archive,
+                    size,
+                    label: format!("{}/{}", self.name, file.path),
+                }),
+            }
+        }
+        todo
+    }
+
+    /// records what file `index` unpacked to, or that its bytes are no archive after all.
+    pub(super) fn unpacked(&mut self, index: usize, tree: Option<Sha256>) {
+        self.files[index].unpacks_to = tree;
+    }
+
+    /// archives in this dataset that fetchloom leaves packed, each with its format.
+    pub(super) fn left_packed(&self) -> Vec<(String, &'static str)> {
+        self.files
+            .iter()
+            .filter(|_| self.extract)
+            .filter_map(|file| match archive::by_name(&file.path) {
+                Some(Packed::Unsupported(format)) => {
+                    Some((format!("{}/{}", self.name, file.path), format))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// whether the file is an archive that unpacks, by its name and data.toml.
+    fn unpacks(&self, file: &DraftFile) -> bool {
+        self.extract && archive::by_name(&file.path) == Some(Packed::Archive)
     }
 
     /// the dataset's entry in data.lock.
@@ -131,7 +217,7 @@ impl Draft {
                     sha256,
                     md5: file.remote.md5,
                     url: file.remote.url.to_string(),
-                    unpacks_to: None,
+                    unpacks_to: file.unpacks_to,
                 })
             })
             .collect();

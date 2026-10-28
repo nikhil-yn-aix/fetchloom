@@ -26,7 +26,7 @@ impl Meter {
 
 pub(super) struct Guard<'a> {
     limits: &'a Limits,
-    stopped: &'a dyn Fn() -> bool,
+    watch: &'a dyn Fn(u64) -> bool,
     meter: &'a Meter,
     names: Names,
     entries: u64,
@@ -34,10 +34,14 @@ pub(super) struct Guard<'a> {
 }
 
 impl<'a> Guard<'a> {
-    pub(super) fn new(limits: &'a Limits, stopped: &'a dyn Fn() -> bool, meter: &'a Meter) -> Self {
+    pub(super) fn new(
+        limits: &'a Limits,
+        watch: &'a dyn Fn(u64) -> bool,
+        meter: &'a Meter,
+    ) -> Self {
         Guard {
             limits,
-            stopped,
+            watch,
             meter,
             names: Names::default(),
             entries: 0,
@@ -92,7 +96,7 @@ impl<'a> Guard<'a> {
     }
 
     pub(super) fn check_stopped(&self) -> Result<(), Error> {
-        if (self.stopped)() {
+        if (self.watch)(self.meter.compressed.get()) {
             return Err(Error::new(
                 Kind::Interrupted,
                 "stopped while unpacking the archive",
@@ -127,7 +131,7 @@ mod tests {
 
     fn guarded(limits: Limits, test: impl FnOnce(&mut Guard<'_>, &Meter)) {
         let meter = Meter::default();
-        let never = || false;
+        let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         test(&mut guard, &meter);
     }
@@ -195,7 +199,7 @@ mod tests {
     fn a_stop_ends_the_copy() {
         let meter = Meter::default();
         let limits = Limits::default();
-        let stopped = || true;
+        let stopped = |_: u64| true;
         let mut guard = Guard::new(&limits, &stopped, &meter);
         let err = copy(&mut guard, b"abc").unwrap_err();
         assert_eq!(err.kind, Kind::Interrupted);

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) use object::NewObject;
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 pub(crate) use unpacked::{Member, tree_hash};
-pub(crate) use upkeep::{Checked, Freed};
+pub(crate) use upkeep::{Checked, Freed, Needed};
 
 use crate::digest::{self, Md5, Sha256};
 
@@ -111,6 +111,15 @@ impl Cache {
         let path = self.object_path(digest);
         let metadata = fs::metadata(&path).ok()?;
         (metadata.is_file() && size.is_none_or(|size| metadata.len() == size)).then_some(path)
+    }
+
+    /// removes an object the cache no longer needs to hold, such as an archive whose files are
+    /// all unpacked. files placed from it keep their bytes.
+    pub(crate) fn drop_object(&self, digest: &Sha256) -> io::Result<()> {
+        match fs::remove_file(self.object_path(digest)) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            removed => removed,
+        }
     }
 
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
