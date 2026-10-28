@@ -46,8 +46,14 @@ impl Project {
 
     /// data.toml's text and what it says.
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
-        let text = fs::read_to_string(self.manifest_path())
-            .map_err(|err| self.unreadable(manifest::FILE, &err))?;
+        let text = fs::read_to_string(self.manifest_path()).map_err(|err| {
+            if err.kind() == io::ErrorKind::InvalidData {
+                Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
+                    .help("save it as UTF-8, then run the command again")
+            } else {
+                self.unreadable(manifest::FILE, &err)
+            }
+        })?;
         let manifest = Manifest::parse(&text)?;
         Ok((text, manifest))
     }

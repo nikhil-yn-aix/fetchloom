@@ -74,3 +74,39 @@ fn patterns_are_loosened_where_they_were_given() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do() -> Result {
+    let sandbox = Sandbox::new()?;
+    let elsewhere = sandbox.run(&["-C", "no-such-folder", "status"])?;
+    assert_eq!(elsewhere.status.code(), Some(2));
+    let stderr = text(&elsewhere.stderr)?;
+    assert!(
+        stderr.ends_with("help: give -C a folder that exists and that you may open\n"),
+        "{stderr}"
+    );
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(&manifest, "[datasets.iris\nref = \"zenodo:3608990\"\n")?;
+    let broken = sandbox.run(&["status"])?;
+    assert_eq!(broken.status.code(), Some(50));
+    let stderr = text(&broken.stderr)?;
+    assert!(stderr.contains("data.toml:1   [datasets.iris"), "{stderr}");
+    assert!(
+        stderr.ends_with("help: fix that line, then run the command again\n"),
+        "{stderr}"
+    );
+    // notepad's "unicode" is UTF-16, which no TOML reader takes
+    let wide: Vec<u8> = [0xff, 0xfe]
+        .into_iter()
+        .chain("[datasets]\n".encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    fs::write(&manifest, wide)?;
+    let wide = sandbox.run(&["status"])?;
+    assert_eq!(wide.status.code(), Some(50));
+    let stderr = text(&wide.stderr)?;
+    assert_eq!(
+        stderr,
+        "✗ data.toml is not UTF-8 text\n  help: save it as UTF-8, then run the command again\n"
+    );
+    Ok(())
+}

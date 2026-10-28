@@ -147,7 +147,8 @@ pub(crate) fn run() -> ExitCode {
         let error = Error::new(
             Kind::Usage,
             format!("cannot work in {}: {err}", folder.display()),
-        );
+        )
+        .help("give -C a folder that exists and that you may open");
         return finish::<()>(&context, name, Err(error), started);
     }
     let Some(command) = args.command else {
