@@ -74,7 +74,11 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         &units::count(files.len() as u64, "file", "files"),
         size,
     )?;
-    let jobs = files.iter().map(|remote| job(remote, extract)).collect();
+    let jobs = files
+        .iter()
+        .zip(&names)
+        .map(|(remote, name)| job(remote, name, extract))
+        .collect();
     let started = Instant::now();
     let fetched = fetch::all(context, &net, &cache, jobs).await?;
     let paths: Vec<String> = files
@@ -144,12 +148,6 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     })
 }
 
-/// whether a listed file may be an archive this run unpacks: one named like an archive, or one
-/// whose name only the server gives, so its unpacked files can stand for it in the cache.
-fn unpacks(remote: &Remote, extract: bool) -> bool {
-    extract && (remote.named_by_server || archive::by_name(&remote.path) == Some(Packed::Archive))
-}
-
 /// the names the files will have, and the paths they will take in the folder when the cache
 /// already knows them: a file the server names keeps the name it gave last time, and an archive
 /// this machine unpacked before stands for its files. the paths are none while an archive among
@@ -192,13 +190,14 @@ fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Opti
 }
 
 /// unpacks each archive among the fetched files that this machine has not unpacked before, and
-/// returns the archives this run unpacked.
+/// returns every archive whose files are now in the cache, so its own bytes can go.
 async fn unpack(
     context: &Context,
     cache: &Cache,
     files: &mut [LockedFile],
     extract: bool,
 ) -> Result<Vec<Sha256>, Error> {
+    let mut done = Vec::new();
     let mut slots = Vec::new();
     let mut todo = Vec::new();
     for (index, file) in files.iter_mut().enumerate() {
@@ -215,6 +214,7 @@ async fn unpack(
         }
         if cache.holds_unpacked(&file.sha256, None) {
             file.unpacks_to = cache.unpacked_tree(&file.sha256);
+            done.push(file.sha256);
             continue;
         }
         slots.push(index);
@@ -225,14 +225,13 @@ async fn unpack(
         });
     }
     let results = unpacking::unpack_all(context, cache, todo).await?;
-    let mut unpacked = Vec::new();
     for (index, result) in slots.into_iter().zip(results) {
         if let Some(result) = result {
             files[index].unpacks_to = Some(result.tree);
-            unpacked.push(files[index].sha256);
+            done.push(files[index].sha256);
         }
     }
-    Ok(unpacked)
+    Ok(done)
 }
 
 /// where every file lands in the folder, each archive standing for the files it unpacked to.
@@ -296,9 +295,10 @@ fn folder_for(
     PathBuf::from(name)
 }
 
-/// the download of one listed file. a file no checksum pins is asked about again on later runs,
-/// so a changed file is noticed and an unchanged one moves no bytes.
-fn job(remote: &Remote, extract: bool) -> Job {
+/// the download of one listed file, which will be called `name`. a file no checksum pins is asked
+/// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
+/// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
+fn job(remote: &Remote, name: &str, extract: bool) -> Job {
     let (from, divert) = source::fetch_plan(&remote.url);
     Job {
         fetch: Fetch {
@@ -311,7 +311,7 @@ fn job(remote: &Remote, extract: bool) -> Job {
                 size: remote.size,
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-            unpack: unpacks(remote, extract),
+            unpack: extract && archive::by_name(name) == Some(Packed::Archive),
         },
         label: remote.path.clone(),
         dataset: None,

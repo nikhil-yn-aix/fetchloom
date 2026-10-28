@@ -306,3 +306,52 @@ fn an_archive_another_project_places_as_a_file_stays_in_the_cache() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn get_drops_an_archive_it_unpacked_on_an_earlier_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"z1\"")], b"");
+    let server = Server::start(
+        PATH,
+        vec![file(&fixture("python.zip")?, "\"z1\""), unchanged],
+    )?;
+    let taken = sandbox.work().join("dataset");
+    fs::create_dir(&taken)?;
+    fs::write(taken.join("notes.txt"), "mine")?;
+    let refused = sandbox.run(&["get", &server.url])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stderr)?
+    );
+    assert!(
+        zip_object(&sandbox.cache()).exists(),
+        "refused before placing"
+    );
+    ok(&sandbox.run(&["get", &server.url, "-o", "fresh"])?)?;
+    holds_the_archive(&sandbox.work().join("fresh"))?;
+    assert!(
+        !zip_object(&sandbox.cache()).exists(),
+        "its files are in, so its own bytes go"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_file_the_server_never_named_an_archive_needs_its_own_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let named = Server::start(PATH, vec![file(&zip, "\"z1\"")])?;
+    ok(&sandbox.run(&["get", &named.url])?)?;
+    let bare = Server::start("/download/12345", vec![file(&zip, "\"z1\"")])?;
+    ok(&sandbox.run(&["get", &bare.url])?)?;
+    assert_eq!(fs::read(sandbox.work().join("12345").join("12345"))?, zip);
+    // as cache gc would, once the object is a day old
+    fs::remove_file(zip_object(&sandbox.cache()))?;
+    let offline = sandbox.run(&["--offline", "get", &bare.url, "-o", "fresh"])?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains("is not in the cache"), "{stderr}");
+    Ok(())
+}
