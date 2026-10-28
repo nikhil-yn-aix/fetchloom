@@ -2,17 +2,20 @@
 //! before when the lock moved on, remove what no dataset needs, and leave alone every file
 //! someone changed or added.
 
+mod put;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use self::put::{Tally, put_all};
+use super::disk::scan;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
-use crate::place::{Method, Placer};
+use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
@@ -55,14 +58,6 @@ enum Action {
     Replace,
     Adopt(Look),
     Leave(Reason),
-}
-
-/// what one dataset's placing cost, for its summary line.
-#[derive(Default)]
-struct Tally {
-    files: u64,
-    links: u64,
-    copied: u64,
 }
 
 /// the data folder compared with a lock, with what each file needs decided before anything
@@ -129,16 +124,37 @@ impl<'a> Placing<'a> {
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing.
     pub(crate) fn missing(&self, cache: &Cache) -> Vec<(String, &'a LockedFile)> {
-        let mut seen = HashSet::new();
-        self.targets
+        let needed: Vec<&Target> = self
+            .targets
             .iter()
             .zip(&self.actions)
             .filter(|(_, action)| matches!(action, Action::Place | Action::Replace))
-            .filter(|(target, _)| cache.find(&target.sha256, Some(target.size)).is_none())
-            .filter(|(target, _)| seen.insert(target.locked.sha256))
-            .map(|(target, _)| (target.dataset.clone(), target.locked))
+            .map(|(target, _)| target)
+            .collect();
+        let mut unique = HashSet::new();
+        let objects: Vec<(Sha256, u64)> = needed
+            .iter()
+            .filter(|target| unique.insert(target.sha256))
+            .map(|target| (target.sha256, target.size))
+            .collect();
+        let found = place::run_all(&objects, |(digest, size)| {
+            cache.find(digest, Some(*size)).is_some()
+        });
+        let present: HashSet<Sha256> = objects
+            .iter()
+            .zip(found)
+            .filter(|(_, found)| *found)
+            .map(|((digest, _), _)| *digest)
+            .collect();
+        let mut seen = HashSet::new();
+        needed
+            .into_iter()
+            .filter(|target| !present.contains(&target.sha256))
+            .filter(|target| seen.insert(target.locked.sha256))
+            .map(|target| (target.dataset.clone(), target.locked))
             .collect()
     }
+
     /// removes what no dataset needs, places what is missing or outdated, and records it.
     pub(crate) fn apply(
         self,
@@ -169,9 +185,8 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
+        let mut todo = Vec::new();
         for (target, action) in targets.iter().zip(actions) {
-            let destination = project.root.join(&target.path);
             match action {
                 Action::Keep => placement.unchanged += 1,
                 Action::Adopt(seen) => {
@@ -184,34 +199,25 @@ impl<'a> Placing<'a> {
                     path: target.path.clone(),
                     reason,
                 }),
-                action @ (Action::Place | Action::Replace) => {
-                    if matches!(action, Action::Replace) {
-                        placer
-                            .remove(&destination, false)
-                            .map_err(|err| local(&destination, &err))?;
-                        placement.replaced += 1;
-                    } else {
-                        placement.placed += 1;
-                    }
-                    let method = put(&mut placer, cache, target, &destination)?;
-                    let seen = Look::of(
-                        &fs::metadata(&destination).map_err(|err| local(&destination, &err))?,
-                    );
-                    state
-                        .files
-                        .insert(target.path.clone(), placed(target, method, seen));
-                    count(work, method);
-                    let tally = tallies.entry(target.dataset.as_str()).or_default();
-                    tally.files += 1;
-                    if method == Method::Copy {
-                        tally.copied += target.size;
-                    } else {
-                        tally.links += 1;
-                    }
+                Action::Replace => {
+                    let destination = project.root.join(&target.path);
+                    placer
+                        .remove(&destination, false)
+                        .map_err(|err| local(&destination, &err))?;
+                    placement.replaced += 1;
+                    todo.push(target);
+                }
+                Action::Place => {
+                    placement.placed += 1;
+                    todo.push(target);
                 }
             }
         }
+        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, &mut state, work);
         project.write_state(&state)?;
+        if let Some(error) = failure {
+            return Err(error);
+        }
         tell(output, manifest, &placer, &tallies, &placement);
         Ok(placement)
     }
@@ -244,53 +250,6 @@ impl<'a> Placing<'a> {
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
     }
-}
-
-fn put(
-    placer: &mut Placer,
-    cache: &Cache,
-    target: &Target,
-    destination: &Path,
-) -> Result<Method, Error> {
-    let object = cache
-        .find(&target.sha256, Some(target.size))
-        .ok_or_else(|| {
-            Error::new(
-                Kind::LocalIo,
-                format!("the cache lost {} while placing it", target.path),
-            )
-            .help("run the same command again to download it")
-        })?;
-    placer
-        .place(&object, destination, target.copy)
-        .map_err(|err| local(destination, &err))
-}
-
-/// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
-/// through a hardlink also changes the cached object, which is then dropped and fetched again,
-/// so it never spreads to other projects.
-pub(crate) fn audit(project: &Project, manifest: &Manifest, cache: &Cache) -> Result<(), Error> {
-    let state = project.state();
-    let edited: Vec<&Placed> = state
-        .files
-        .values()
-        .filter(|placed| placed.method == Method::Hardlink)
-        .collect();
-    if edited.is_empty() {
-        return Ok(());
-    }
-    let disk = scan(&project.root, &manifest.data_dir);
-    for (path, placed) in &state.files {
-        if placed.method == Method::Hardlink
-            && disk.get(path).is_some_and(|seen| *seen != placed.look)
-            && !cache
-                .verify(&placed.sha256)
-                .map_err(|err| local(&project.root.join(path), &err))?
-        {
-            tracing::debug!(%path, "an edit through a hardlink changed its cached object");
-        }
-    }
-    Ok(())
 }
 
 fn decide(
@@ -375,32 +334,6 @@ fn remove_unwanted(
     Ok(())
 }
 
-/// every file under the data folder and how it looks, by its path in the project. links are
-/// neither followed nor touched.
-pub(crate) fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
-    let mut found = HashMap::new();
-    let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
-    while let Some((folder, relative)) = folders.pop() {
-        let Ok(entries) = fs::read_dir(&folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let path = format!("{relative}/{}", entry.file_name().to_string_lossy());
-            if kind.is_dir() {
-                folders.push((entry.path(), path));
-            } else if kind.is_file()
-                && let Ok(metadata) = entry.metadata()
-            {
-                found.insert(path, Look::of(&metadata));
-            }
-        }
-    }
-    found
-}
-
 fn placed(target: &Target, method: Method, look: Look) -> Placed {
     Placed {
         dataset: target.dataset.clone(),
@@ -408,15 +341,6 @@ fn placed(target: &Target, method: Method, look: Look) -> Placed {
         method,
         look,
     }
-}
-
-fn count(work: &Work, method: Method) {
-    let counter = match method {
-        Method::Reflink => &work.reflinks,
-        Method::Hardlink => &work.hardlinks,
-        Method::Copy => &work.copies,
-    };
-    Work::add(counter, 1);
 }
 
 fn tell(
@@ -478,7 +402,7 @@ fn tell(
     }
 }
 
-fn local(path: &Path, err: &std::io::Error) -> Error {
+pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
     Error::new(
         Kind::LocalIo,
         format!("could not place {}: {err}", path.display()),

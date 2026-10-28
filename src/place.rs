@@ -5,9 +5,20 @@ mod synced;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+/// the most threads that place files or look up objects at once. creating a link or opening a
+/// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
+/// other's waits; more than eight only add contention.
+const THREADS: usize = 8;
+
+/// the fewest items worth a thread of their own, since starting a thread costs more than a few
+/// calls.
+const PER_THREAD: usize = 64;
 
 /// how a file was placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,9 +38,16 @@ pub(crate) struct Placer {
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
-    can_reflink: bool,
-    can_hardlink: bool,
-    other_volume: bool,
+    can_reflink: AtomicBool,
+    can_hardlink: AtomicBool,
+    other_volume: AtomicBool,
+}
+
+/// one file to place: the object, where it goes, and whether it must be a writable copy.
+pub(crate) struct Order<'a> {
+    pub(crate) object: &'a Path,
+    pub(crate) destination: &'a Path,
+    pub(crate) writable: bool,
 }
 
 impl Placer {
@@ -46,9 +64,9 @@ impl Placer {
             root,
             folders: HashSet::new(),
             synced,
-            can_reflink: first == Method::Reflink,
-            can_hardlink: first != Method::Copy,
-            other_volume: false,
+            can_reflink: AtomicBool::new(first == Method::Reflink),
+            can_hardlink: AtomicBool::new(first != Method::Copy),
+            other_volume: AtomicBool::new(false),
         }
     }
 
@@ -60,7 +78,7 @@ impl Placer {
     /// whether links failed because the cache sits on another drive, which a cache on the same
     /// drive would fix.
     pub(crate) fn other_volume(&self) -> bool {
-        self.other_volume
+        self.other_volume.load(Ordering::Relaxed)
     }
 
     /// puts `object` at `destination`, which must not exist yet. creates missing parent folders.
@@ -72,7 +90,38 @@ impl Placer {
         writable: bool,
     ) -> io::Result<Method> {
         self.check_folders(destination, true)?;
-        if self.can_reflink {
+        self.put(object, destination, writable)
+    }
+
+    /// places every order and says how each went, in order. the first goes alone, so it learns
+    /// which methods the filesystem allows before the rest go several at once.
+    pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<Method>> {
+        let mut results = Vec::with_capacity(orders.len());
+        let mut ready = Vec::with_capacity(orders.len());
+        for (index, order) in orders.iter().enumerate() {
+            match self.check_folders(order.destination, true) {
+                Ok(()) => ready.push((index, order)),
+                Err(err) => results.push((index, Err(err))),
+            }
+        }
+        let this = &*self;
+        let put = |(index, order): &(usize, &Order)| {
+            (
+                *index,
+                this.put(order.object, order.destination, order.writable),
+            )
+        };
+        if let Some((first, rest)) = ready.split_first() {
+            results.push(put(first));
+            results.extend(run_all(rest, put));
+        }
+        results.sort_unstable_by_key(|(index, _)| *index);
+        results.into_iter().map(|(_, result)| result).collect()
+    }
+
+    /// tries each method the filesystem may allow, best first.
+    fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
+        if self.can_reflink.load(Ordering::Relaxed) {
             match reflink_copy::reflink(object, destination) {
                 Ok(()) => {
                     seal(destination, writable)?;
@@ -82,7 +131,7 @@ impl Placer {
             }
         }
         // sync clients break hardlinks or upload every link as a full file.
-        if self.can_hardlink && !writable && self.synced.is_none() {
+        if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
             match fs::hard_link(object, destination) {
                 Ok(()) => return Ok(Method::Hardlink),
                 Err(error) => self.learn(Method::Hardlink, error)?,
@@ -164,22 +213,60 @@ impl Placer {
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
     /// again, and an error no other method can avoid, such as an existing destination, is returned.
-    fn learn(&mut self, method: Method, error: io::Error) -> io::Result<()> {
+    fn learn(&self, method: Method, error: io::Error) -> io::Result<()> {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
         }
         if is_refusal(&error) {
             match method {
-                Method::Reflink => self.can_reflink = false,
+                Method::Reflink => self.can_reflink.store(false, Ordering::Relaxed),
                 Method::Hardlink => {
-                    self.can_hardlink = false;
-                    self.other_volume = error.kind() == io::ErrorKind::CrossesDevices;
+                    self.can_hardlink.store(false, Ordering::Relaxed);
+                    let elsewhere = error.kind() == io::ErrorKind::CrossesDevices;
+                    self.other_volume.store(elsewhere, Ordering::Relaxed);
                 }
                 Method::Copy => {}
             }
         }
         Ok(())
     }
+}
+
+/// runs `job` on every item, on a few threads when there are many, and returns the results in
+/// the order of `items`.
+pub(crate) fn run_all<T: Sync, R: Send>(items: &[T], job: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let threads = threads.min(THREADS).min(items.len() / PER_THREAD);
+    if threads < 2 {
+        return items.iter().map(job).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            return done;
+                        };
+                        done.push((index, job(item)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    });
+    done.sort_unstable_by_key(|(index, _)| *index);
+    done.into_iter().map(|(_, result)| result).collect()
 }
 
 /// whether `error` means the filesystem refuses the method that failed for every file, not only

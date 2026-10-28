@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::args::{self, Add, Remove};
+use super::sync::disk;
 use super::sync::place::{self, Placement};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
@@ -433,7 +434,7 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
         return Ok(false);
     }
     let state = project.state();
-    let disk = place::scan(&project.root, &manifest.data_dir);
+    let disk = disk::scan(&project.root, &manifest.data_dir);
     let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(false);
@@ -458,7 +459,7 @@ async fn sync_all(
     force: bool,
     given: Option<(String, Listing)>,
 ) -> Result<(bool, Placement), Error> {
-    place::audit(work.project, manifest, &work.cache)?;
+    disk::audit(work.project, manifest, &work.cache)?;
     let empty = Lock::default();
     let lock = work
         .relock(manifest, old.unwrap_or(&empty), upgrade, given)

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::Context;
-use super::sync::place;
+use super::sync::disk;
 use crate::error::Error;
 use crate::plan;
 use crate::project::lock;
@@ -58,7 +58,7 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
         .collect();
     let targets = planned.targets;
     let state = project.state();
-    let disk = place::scan(&project.root, &manifest.data_dir);
+    let disk = disk::scan(&project.root, &manifest.data_dir);
     for target in &targets {
         let list = match (disk.get(&target.path), state.files.get(&target.path)) {
             (None, _) => &mut status.missing,

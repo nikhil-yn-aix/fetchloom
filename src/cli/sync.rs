@@ -1,6 +1,7 @@
 //! the loop at the heart of a project: resolve what data.toml changed, learn every file's hash,
 //! put what the lock names in the cache, then write data.lock.
 
+pub(super) mod disk;
 mod draft;
 pub(super) mod place;
 pub(super) mod unpack;
