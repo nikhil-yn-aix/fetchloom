@@ -246,11 +246,15 @@ fn link(text: &str) -> Result<Parsed, Error> {
             hf::Repo::from_link(&url).map(|(repo, file)| (Reference::HuggingFace(repo), file))
         })
         .or_else(|| {
-            kaggle::Dataset::from_link(&url).map(|dataset| (Reference::Kaggle(dataset), None))
+            kaggle::Dataset::from_link(&url)
+                .map(|(dataset, file)| (Reference::Kaggle(dataset), file))
         })
         .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
         .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)));
     let Some((reference, file)) = routed else {
+        if let Some(competition) = kaggle::competition_link(&url) {
+            return Err(competition);
+        }
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,

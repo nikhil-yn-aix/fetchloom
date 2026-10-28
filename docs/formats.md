@@ -143,7 +143,7 @@ v0.1 has no config file. flags and environment variables cover every setting, an
 | `FETCHLOOM_TRACE` | write a timeline of the run to this file, for perfetto | unset |
 | `NO_COLOR` | no colors | unset |
 
-credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `~/.kaggle/kaggle.json` or `KAGGLE_USERNAME` and `KAGGLE_KEY`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `DATAVERSE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `DATAVERSE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 ## the JSON document
 
