@@ -465,6 +465,28 @@ fn status_lists_what_differs() -> Result {
 }
 
 #[test]
+fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let inner = sandbox.work().join("data").join("iris");
+    let calm = sandbox.command_in(&inner, &[]).output()?;
+    assert_eq!(calm.status.code(), Some(0));
+    assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
+    assert_eq!(text(&calm.stderr)?, "✓ everything matches data.lock\n");
+    fs::remove_file(inner.join("iris.csv"))?;
+    let missing = sandbox.run(&[])?;
+    assert_eq!(
+        text(&missing.stderr)?,
+        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs, and `fetchloom sync` brings it in line\n"
+    );
+    let document = json(&sandbox.run(&["--json"])?)?;
+    assert_eq!(document["command"], "status");
+    assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
+    Ok(())
+}
+
+#[test]
 fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
     let output = Sandbox::new()?.run(&["sync"])?;
     assert_eq!(output.status.code(), Some(50));

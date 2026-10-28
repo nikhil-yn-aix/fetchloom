@@ -15,10 +15,6 @@ the bar: someone who is nervous in a terminal runs fetchloom for the first time 
 $ fetchloom
 fetchloom 0.1.0
 
-get a first dataset into this folder:
-
-  fetchloom add zenodo:3608990
-
   fetchloom add <link>    add a dataset, pin it and download it into data/
   fetchloom sync          make data/ match data.lock on this machine
   fetchloom status        see what changed
@@ -26,6 +22,10 @@ get a first dataset into this folder:
   fetchloom get <link>    fetch something once, without a project
 
 <link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+
+get a first dataset into this folder:
+
+  fetchloom add zenodo:3608990
 ```
 
 ```

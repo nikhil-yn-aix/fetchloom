@@ -151,7 +151,7 @@ pub(crate) fn run() -> ExitCode {
         return finish::<()>(&context, name, Err(error), started);
     }
     let Some(command) = args.command else {
-        return about(&context, &welcome(), started);
+        return alone(&context, started);
     };
     match jobs(&var) {
         Ok(jobs) => context.jobs = jobs,
@@ -225,6 +225,21 @@ fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
     };
     finish(context, None, Ok(about), started)
 }
+
+/// `fetchloom` alone: a short status inside a project, and the welcome outside one.
+fn alone(context: &Context, started: Instant) -> ExitCode {
+    match project::find() {
+        Ok(project) => {
+            let outcome = status::brief(context, &project);
+            finish(context, Some("status"), outcome, started)
+        }
+        Err(_) => about(
+            context,
+            &format!("fetchloom {}\n\n{WELCOME}", env!("CARGO_PKG_VERSION")),
+            started,
+        ),
+    }
+}
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.
 fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
@@ -292,12 +307,19 @@ fn finish<T: Serialize>(
     }
 }
 
-fn welcome() -> String {
-    format!(
-        "fetchloom {}\n\nput the exact data a project needs onto any machine with one command.\n\n  fetchloom get <link>    fetch something once, without a project\n\n`fetchloom --help` lists every option.",
-        env!("CARGO_PKG_VERSION")
-    )
-}
+/// what `fetchloom` alone prints outside a project, below the version. it ends with a command to
+/// copy.
+const WELCOME: &str = "  fetchloom add <link>    add a dataset, pin it and download it into data/
+  fetchloom sync          make data/ match data.lock on this machine
+  fetchloom status        see what changed
+  fetchloom path <name>   print where a dataset is, for scripts
+  fetchloom get <link>    fetch something once, without a project
+
+<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+
+get a first dataset into this folder:
+
+  fetchloom add zenodo:3608990";
 
 /// help goes to stdout as clap writes it, even with `--json`, since it is for people. a mistake
 /// on the command line becomes one of our own errors, so it reads like every other failure and

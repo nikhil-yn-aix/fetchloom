@@ -48,7 +48,13 @@ fn get_has_its_own_help() -> Result {
 fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
-    insta::assert_snapshot!(text(&output.stdout)?);
+    let stdout = text(&output.stdout)?;
+    assert_eq!(
+        stdout.lines().last(),
+        Some("  fetchloom add zenodo:3608990"),
+        "the welcome ends with a command to copy"
+    );
+    insta::assert_snapshot!(stdout);
     Ok(())
 }
 

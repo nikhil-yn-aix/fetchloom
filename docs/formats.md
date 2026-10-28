@@ -153,7 +153,7 @@ with `--json`, every run prints one document on stdout and nothing else, even a 
 {"schema": 1, "command": "sync", "status": "ok", "result": {}, "warnings": [], "errors": [], "work": {}}
 ```
 
-- `command` is the command the command line names, such as `sync` or `cache gc`, or null when it names none. `--version` and `fetchloom` alone give `{"version": "0.1.0"}` as `result`.
+- `command` is the command the command line names, such as `sync` or `cache gc`, or null when it names none. `fetchloom` alone reports as `status` inside a project. outside one, and with `--version`, `result` is `{"version": "0.1.0"}`.
 - `status` is `ok`, `partial` or `error`.
 - each error carries `kind`, `message`, `help` and the dataset or path it concerns. a mistake on the command line is kind `usage`.
 - `work` holds the counters: requests, bytes downloaded, files placed, cache hits, time per phase.
