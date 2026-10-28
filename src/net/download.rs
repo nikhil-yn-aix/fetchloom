@@ -563,19 +563,8 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         )
         .detail(format!("expected {size} bytes, got {}", stored.size)));
     }
-    if let (Some(stated), Some(got)) = (expect.md5, stored.md5)
-        && stated != got
-    {
-        return Err(Error::new(
-            Kind::IntegrityMismatch,
-            format!(
-                "{} sent bytes whose MD5 is not the one it states for {url}",
-                host(url)
-            ),
-        )
-        .detail(format!("stated md5 {stated}, got {got}"))
-        .help("try again later. if it keeps happening, the copy on the server may be damaged"));
-    }
+    // a pinned SHA-256 decides first: bytes it rejects changed upstream, which the caller knows
+    // how to fix, while an MD5 alone that disagrees means the source contradicts itself
     if let Some(expected) = expect.sha256
         && expected != stored.digest
     {
@@ -588,6 +577,19 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
             expected.short(),
             stored.digest.short()
         )));
+    }
+    if let (Some(stated), Some(got)) = (expect.md5, stored.md5)
+        && stated != got
+    {
+        return Err(Error::new(
+            Kind::IntegrityMismatch,
+            format!(
+                "{} sent bytes whose MD5 is not the one it states for {url}",
+                host(url)
+            ),
+        )
+        .detail(format!("stated md5 {stated}, got {got}"))
+        .help("try again later. if it keeps happening, the copy on the server may be damaged"));
     }
     Ok(())
 }
