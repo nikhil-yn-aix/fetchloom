@@ -4,96 +4,69 @@ the reader is a researcher who wants their data, or a contributor opening the co
 
 ## prose
 
-- lowercase, headings too. capitals only for acronyms (DOI, URL, HPC, JSON), single letters like R, and code.
+- use lowercase prose and headings. preserve acronyms, code, literal program output, personal names and legal names.
 - write to one reader and call them "you".
-- lead with the point or the command, then explain only what the reader needs.
-- short sentences, active voice, plain words: "use" over "utilize", "lets you" over "enables you to".
-- one idea per paragraph. use a table when several things share the same fields.
-- every sentence adds something new. cut what repeats the heading, the previous paragraph or the obvious.
-- no meta writing: never "this document describes", "in this section", "as mentioned above" or "in conclusion".
-- no hype. a claim carries a number, a command or a link.
-- links name where they go: "see [formats](formats.md)", never "click here".
+- lead with the point or command. use short sentences, active voice and plain words.
+- give each paragraph one job. use a table when entries share fields.
+- every sentence adds a fact or an instruction. cut what repeats the heading, the previous paragraph or the obvious.
+- describe current behavior. mark unbuilt work as pending and put its status in [plan](plan.md).
+- replace a vague promise with an exact example, a number with its measurement conditions, or a link to the implementation.
+- keep each fact in the doc that owns it. link from the others.
+- links name their destination: [formats](formats.md), never "click here".
 
 ## what we cut
 
-| cut | why |
+| cut | use instead |
 |---|---|
-| em dashes | a known machine-writing habit. use a comma, a colon or a new sentence |
-| "not X but Y" and "it's not just X, it's Y" | they stage a contrast instead of stating the fact |
-| lists of three by habit | use as many items as the facts have |
-| delve, leverage, seamless, robust, crucial, pivotal, comprehensive, streamline, empower, utilize, showcase, foster, underscore, testament, tapestry, vibrant | inflated words that carry no information |
-| "serves as", "stands as", "acts as" | say "is" |
-| simply, just, easily, obviously | they blame the reader when it isn't simple |
-| bold labels at the start of list items, bold sprinkled through text | formatting by rule |
-| emoji, exclamation marks, "let's", "happy coding" | noise |
-| "it's worth noting", "arguably", "might potentially" | say it plainly or cut it |
+| em dashes | a comma, colon or new sentence |
+| "not X but Y" contrasts and one-line dramatic closers | the fact itself |
+| lists of three by habit | as many entries as the facts need |
+| delve, leverage, seamless, robust, crucial, pivotal, comprehensive, streamline, empower, utilize, showcase, foster, underscore, testament, tapestry, vibrant, powerful | a concrete verb or noun |
+| "serves as", "stands as", "acts as" | "is" |
+| simply, just, easily, obviously | the instruction without judging its difficulty |
+| "this document describes", "in this section", "as mentioned above", "in conclusion" | the information |
+| bold labels, decorative headings, emoji and exclamation marks | plain text |
+| "it's worth noting", "arguably", "might potentially" | the supported claim, with one qualification if needed |
+
+## examples and claims
+
+copy program output from a real run or a matching snapshot. do not invent verbs, spacing, prompts, hashes or error text. keep placeholders outside transcripts, or label them as placeholders. a snapshot's `[time]` or `[port]` is a test filter, not text the program prints.
+
+show the command and only the output needed to teach its behavior. say when an excerpt is stderr, when a result depends on cached data, and when a method depends on the filesystem. do not promise zero requests when only file-body bytes were avoided.
+
+examples of `data.toml`, `data.lock` and JSON must use accepted keys and values. show complete hashes in valid file examples. do not silently turn a known limitation into a guarantee.
 
 ## code comments
 
-a comment says what the code cannot: why it is written this way, a rule that comes from outside (a server quirk, an OS behavior, a spec), or a trap waiting for the next reader. when a comment would only repeat the code, rename something instead.
+a comment explains a reason, an outside constraint or a trap the code cannot express. if it repeats the code, rename the item or remove the comment.
 
-- lowercase sentences with normal punctuation, one or two of them, written the way you would explain it to a colleague.
-- no banners, no ASCII art, no decorative symbols, no labels like `NOTE:` or `IMPORTANT:`.
-- no commented-out code and no `TODO`. open an issue instead.
-
-```rust
-// windows refuses to rename over a read-only file, so placing an object is
-// one rename that fails when the name exists, never a replace.
-```
+- use lowercase sentences with normal punctuation.
+- keep comments to one or two sentences where possible.
+- no banners, decorative symbols or labels such as `NOTE:`.
+- no commented-out code or `TODO` notes. track unfinished work in an issue.
 
 ```rust
-// NFS leaves a .nfs file beside any file deleted while still open.
-// it belongs to the NFS client, so gc walks past it.
+// a second ctrl-c means now
 ```
 
-these say nothing the code doesn't, so they don't exist:
+this explains why the second signal bypasses cleanup. a comment saying "increment the retry counter" adds nothing beside an increment.
 
-```rust
-// increment the retry counter
-retries += 1;
-```
+## docstrings and names
 
-## docstrings
+public items need a short description from the caller's side. add `# Errors` for non-obvious failure cases. rust doc examples can run through `cargo test --doc`; use them when a call teaches more than a signature.
 
-- every public item gets one line saying what it is or does, from the caller's side: `/// path of the cached object for this digest.`
-- add `# Errors` when a function returns `Result` and the failure cases are not obvious from its name.
-- an example belongs only where it shows why you would call the item. examples run as tests.
-- python follows the same rules: one imperative line, then `Args:` and `Returns:` only when they add something.
+use whole words for names. `url`, `id`, `len` and `io` are familiar exceptions. booleans read as statements, such as `is_offline`. name a module for what it owns, not `utils`, `helpers`, `manager` or `common`.
 
-```python
-def path(name: str) -> Path:
-    """return the local path of a dataset, syncing it first if needed."""
-```
+## commits and pull requests
 
-## names
+commit messages are one line, lowercase and imperative, fewer than 60 characters, with no closing period. say what changed: `retry downloads that stall mid-file`.
 
-- whole words: `download`, `object`, `location`. common short forms are fine: `url`, `id`, `len`, `io`.
-- booleans read as statements: `is_offline`, `has_checksum`.
-- no `utils`, `helpers`, `manager` or `common` modules. a module is named for what it owns.
+no prefixes, emoji, trailers, co-author lines or mention of assistants or tools. keep one logical change per commit. check the behavior affected by that change before committing.
 
-## commits
+a pull request title says what changed. its body explains what and why in two or three plain sentences. include measurements when the change claims a performance improvement. do not add stock checklists or footers.
 
-- one line, lowercase, imperative, at most 60 characters, no closing period.
-- say what changed for someone reading `git log`: `add resumable downloads`, `refuse archives with escaping links`.
-- no prefixes like `feat:`, no emoji, no trailers, no co-author lines, no mention of tools or assistants.
-- one logical change per commit, and the tree builds and passes tests after each one.
+## checks in place
 
-## pull requests
+cargo configures rust and clippy lints, including missing public documentation warnings. one CLI test compares the scope doc's option sentence with command help. snapshots check the program's output separately.
 
-the title says what landed. the body is two or three plain sentences on what changed and why. a milestone's pull request also carries its plan and its measured numbers, as [plan](plan.md) describes. no checklists, no footers.
-
-## how it is enforced
-
-- `typos` checks spelling in code and docs.
-- a `vale` style holds the cut list and runs on every markdown file.
-- a ripgrep check rejects em dashes and the cut words in comments and docstrings.
-- `clippy` requires docs on public items.
-- examples in docs and docstrings run as tests, so they cannot go stale.
-
-## before and after
-
-| before | after |
-|---|---|
-| fetchloom is a powerful, seamless tool that leverages rust to streamline research data management | fetchloom puts the exact data a project needs onto any machine with one command |
-| Error: Failed to process the request due to an unexpected issue. | could not reach zenodo.org after 5 tries. check your connection, or run `fetchloom sync --offline` to use what is cached |
-| `Updated download logic to improve robustness` | `retry downloads that stall mid-file` |
+typos, vale and comment-prose checks are not configured. markdown transcripts are not run as tests. review their wording and examples against the code; [engineering](engineering.md#checks) lists the checks available now.
