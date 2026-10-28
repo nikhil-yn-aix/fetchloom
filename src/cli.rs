@@ -125,6 +125,7 @@ pub(crate) fn run() -> ExitCode {
     let logs = logs::start(level, style.color, &var);
     let output = Arc::new(Output::new(style, level, global.json, logs.on_stderr()));
     let name = command.name();
+    let _command = tracing::debug_span!("command", name).entered();
     let context = match jobs(&var) {
         Ok(jobs) => Context {
             output,

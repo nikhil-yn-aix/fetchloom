@@ -65,6 +65,7 @@ pub(crate) fn plan<'a>(
     lock: &'a Lock,
     members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
+    let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
     let mut folders = Vec::new();
     for dataset in &lock.datasets {
@@ -84,6 +85,7 @@ pub(crate) fn plan<'a>(
     }
     overlapping(&folders)?;
     check(&plan.targets, Patterns::InDataToml)?;
+    span.record("files", plan.targets.len());
     Ok(plan)
 }
 

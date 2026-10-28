@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
+use tracing::Instrument as _;
 
 use super::args::{self, Add, Remove};
 use super::sync::disk::{self, Survey};
@@ -471,6 +472,7 @@ async fn sync_all(
     let empty = Lock::default();
     let lock = work
         .relock(manifest, old.unwrap_or(&empty), upgrade, given)
+        .instrument(tracing::debug_span!("relock"))
         .await?;
     let changed = work.write_lock(old, &lock)?;
     let placement = work.place(manifest, &lock, force, survey).await?;

@@ -89,6 +89,7 @@ impl<'a> Placing<'a> {
         let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
         let Survey { state, disk } = survey;
+        let _span = tracing::debug_span!("decide").entered();
         let actions = plan
             .targets
             .iter()
@@ -146,6 +147,7 @@ impl<'a> Placing<'a> {
             .filter(|target| unique.insert(target.sha256))
             .map(|target| (target.sha256, target.size))
             .collect();
+        let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
         let found = place::run_all(&objects, |(digest, size)| {
             cache.find(digest, Some(*size)).is_some()
         });
@@ -171,6 +173,7 @@ impl<'a> Placing<'a> {
         work: &Work,
         cache: &Cache,
     ) -> Result<Placement, Error> {
+        let _span = tracing::debug_span!("place").entered();
         let Placing {
             project,
             manifest,
@@ -216,6 +219,7 @@ impl<'a> Placing<'a> {
 
     /// removes only what no dataset needs, and places nothing, so `remove` never downloads.
     pub(crate) fn remove_only(self, output: &Output) -> Result<Placement, Error> {
+        let _span = tracing::debug_span!("remove").entered();
         let Placing {
             project,
             manifest,

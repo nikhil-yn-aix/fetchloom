@@ -191,6 +191,7 @@ impl<'a> Loop<'a> {
         if old == Some(lock) {
             return Ok(false);
         }
+        let _span = tracing::debug_span!("write_lock").entered();
         self.project.write(lock::FILE, lock.render().as_bytes())?;
         let output = &self.context.output;
         let pinned: Vec<&Locked> = lock

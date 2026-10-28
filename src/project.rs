@@ -46,6 +46,7 @@ impl Project {
 
     /// data.toml's text and what it says.
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
+        let _span = tracing::debug_span!("read_manifest").entered();
         let text = fs::read_to_string(self.manifest_path())
             .map_err(|err| self.unreadable(manifest::FILE, &err))?;
         let manifest = Manifest::parse(&text)?;
@@ -54,16 +55,24 @@ impl Project {
 
     /// data.lock, or nothing when the project has none yet.
     pub(crate) fn lock(&self) -> Result<Option<Lock>, Error> {
+        let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
-            Ok(text) => Lock::parse(&text).map(Some),
+            Ok(text) => {
+                span.record("bytes", text.len());
+                Lock::parse(&text).map(Some)
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(self.unreadable(lock::FILE, &err)),
         }
     }
 
     pub(crate) fn state(&self) -> State {
+        let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
         fs::read(self.root.join(FOLDER).join("state"))
-            .map(|bytes| State::parse(&bytes))
+            .map(|bytes| {
+                span.record("bytes", bytes.len());
+                State::parse(&bytes)
+            })
             .unwrap_or_default()
     }
 
@@ -74,6 +83,7 @@ impl Project {
     }
 
     pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
+        let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
         write_atomically(&folder.join("state"), &state.render()).map_err(|err| {
             Error::new(

@@ -113,3 +113,37 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_trace_shows_each_phase_of_a_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let trace = sandbox.folder("traces")?.join("sync.json");
+    let output = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let events = fs::read_to_string(&trace)?;
+    for phase in [
+        "command",
+        "read_manifest",
+        "read_lock",
+        "read_state",
+        "scan",
+        "audit",
+        "relock",
+        "plan",
+        "decide",
+        "find_objects",
+        "place",
+    ] {
+        assert!(
+            events.contains(&format!("\"name\":\"{phase}\"")),
+            "{phase}: {events}"
+        );
+    }
+    Ok(())
+}

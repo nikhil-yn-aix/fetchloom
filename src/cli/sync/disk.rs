@@ -32,6 +32,7 @@ impl Survey {
 /// every file under the data folder and how it looks, by its path in the project. links are
 /// neither followed nor touched.
 fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
+    let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut found = HashMap::new();
     let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
     while let Some((folder, relative)) = folders.pop() {
@@ -52,6 +53,7 @@ fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
             }
         }
     }
+    span.record("files", found.len());
     found
 }
 
@@ -59,6 +61,7 @@ fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
 /// through a hardlink also changes the cached object, which is then dropped and fetched again,
 /// so it never spreads to other projects.
 pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result<(), Error> {
+    let _span = tracing::debug_span!("audit").entered();
     for (path, placed) in &survey.state.files {
         if placed.method == Method::Hardlink
             && survey

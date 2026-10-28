@@ -81,6 +81,7 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
+        let _span = tracing::debug_span!("open_cache").entered();
         for folder in [
             "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
         ] {
