@@ -46,9 +46,14 @@ impl State {
     }
 
     pub(crate) fn render(&self) -> Vec<u8> {
-        let state = State {
+        #[derive(Serialize)]
+        struct Written<'a> {
+            version: u32,
+            files: &'a BTreeMap<String, Placed>,
+        }
+        let state = Written {
             version: VERSION,
-            files: self.files.clone(),
+            files: &self.files,
         };
         serde_json::to_vec(&state).unwrap_or_default()
     }

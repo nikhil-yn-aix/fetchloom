@@ -94,3 +94,22 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let written = |name: &str| fs::metadata(sandbox.work().join(name))?.modified();
+    let before = (written("data.lock")?, written(".fetchloom/state")?);
+    // a rewrite now would carry a later time
+    std::thread::sleep(Duration::from_millis(50));
+    let output = sandbox.run(&["sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        (written("data.lock")?, written(".fetchloom/state")?),
+        before
+    );
+    Ok(())
+}

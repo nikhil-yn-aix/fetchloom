@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use self::put::{Tally, put_all};
-use super::disk::scan;
+use super::disk::Survey;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -75,20 +75,20 @@ pub(crate) struct Placing<'a> {
 }
 
 impl<'a> Placing<'a> {
-    /// compares the data folder with `lock`, with each archive standing for the files the cache
-    /// records it unpacked to. only files fetchloom did not place are hashed, to see whether
-    /// they already hold the locked bytes.
+    /// compares the data folder, as `survey` saw it, with `lock`, with each archive standing for
+    /// the files the cache records it unpacked to. only files fetchloom did not place are hashed,
+    /// to see whether they already hold the locked bytes.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
         lock: &'a Lock,
         cache: &Cache,
         force: bool,
+        survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
-        let state = project.state();
-        let disk = scan(&project.root, &manifest.data_dir);
+        let Survey { state, disk } = survey;
         let actions = plan
             .targets
             .iter()
@@ -112,6 +112,14 @@ impl<'a> Placing<'a> {
             state,
             disk,
         })
+    }
+
+    /// what the data folder held when this placing was decided, to decide again from.
+    pub(crate) fn into_survey(self) -> Survey {
+        Survey {
+            state: self.state,
+            disk: self.disk,
+        }
     }
 
     /// the archives never unpacked on this machine, with the dataset each belongs to.
@@ -177,7 +185,7 @@ impl<'a> Placing<'a> {
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir);
         // removing first means a file that moved never collides with its own old copy
-        remove_unwanted(
+        let removed = remove_unwanted(
             project,
             &mut placer,
             &mut state,
@@ -186,51 +194,19 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        let mut todo = Vec::new();
-        for (target, action) in targets.iter().zip(actions) {
-            match action {
-                Action::Keep => placement.unchanged += 1,
-                Action::Adopt(seen) => {
-                    state
-                        .files
-                        .insert(target.path.clone(), placed(target, Method::Copy, seen));
-                    placement.unchanged += 1;
-                }
-                Action::Leave(reason) => placement.kept.push(Kept {
-                    path: target.path.clone(),
-                    reason,
-                }),
-                Action::Replace => {
-                    let destination = project.root.join(&target.path);
-                    match now(&destination) {
-                        Some(look) if disk.get(&target.path) != Some(&look) => {
-                            let reason = if state.files.contains_key(&target.path) {
-                                Reason::Changed
-                            } else {
-                                Reason::Foreign
-                            };
-                            placement.kept.push(Kept {
-                                path: target.path.clone(),
-                                reason,
-                            });
-                            continue;
-                        }
-                        Some(_) => placer
-                            .remove(&destination, false)
-                            .map_err(|err| local(&destination, &err))?,
-                        None => {}
-                    }
-                    placement.replaced += 1;
-                    todo.push(target);
-                }
-                Action::Place => {
-                    placement.placed += 1;
-                    todo.push(target);
-                }
-            }
-        }
+        let (todo, adopted) = settle(
+            project,
+            &mut placer,
+            &mut state,
+            &disk,
+            &targets,
+            actions,
+            &mut placement,
+        )?;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, &mut state, work);
-        project.write_state(&state)?;
+        if removed || adopted || !tallies.is_empty() {
+            project.write_state(&state)?;
+        }
         if let Some(error) = failure {
             return Err(error);
         }
@@ -253,7 +229,7 @@ impl<'a> Placing<'a> {
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir);
-        remove_unwanted(
+        let removed = remove_unwanted(
             project,
             &mut placer,
             &mut state,
@@ -262,10 +238,72 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        project.write_state(&state)?;
+        if removed {
+            project.write_state(&state)?;
+        }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
     }
+}
+
+/// carries out every decision short of placing files: counts what stays, records files found to
+/// hold the locked bytes, and removes files about to be replaced unless they changed since the
+/// scan. returns the targets left to place, and whether the state gained a file.
+fn settle<'t, 'a>(
+    project: &Project,
+    placer: &mut Placer,
+    state: &mut State,
+    disk: &HashMap<String, Look>,
+    targets: &'t [Target<'a>],
+    actions: Vec<Action>,
+    placement: &mut Placement,
+) -> Result<(Vec<&'t Target<'a>>, bool), Error> {
+    let mut todo = Vec::new();
+    let mut adopted = false;
+    for (target, action) in targets.iter().zip(actions) {
+        match action {
+            Action::Keep => placement.unchanged += 1,
+            Action::Adopt(seen) => {
+                state
+                    .files
+                    .insert(target.path.clone(), placed(target, Method::Copy, seen));
+                placement.unchanged += 1;
+                adopted = true;
+            }
+            Action::Leave(reason) => placement.kept.push(Kept {
+                path: target.path.clone(),
+                reason,
+            }),
+            Action::Replace => {
+                let destination = project.root.join(&target.path);
+                match now(&destination) {
+                    Some(look) if disk.get(&target.path) != Some(&look) => {
+                        let reason = if state.files.contains_key(&target.path) {
+                            Reason::Changed
+                        } else {
+                            Reason::Foreign
+                        };
+                        placement.kept.push(Kept {
+                            path: target.path.clone(),
+                            reason,
+                        });
+                        continue;
+                    }
+                    Some(_) => placer
+                        .remove(&destination, false)
+                        .map_err(|err| local(&destination, &err))?,
+                    None => {}
+                }
+                placement.replaced += 1;
+                todo.push(target);
+            }
+            Action::Place => {
+                placement.placed += 1;
+                todo.push(target);
+            }
+        }
+    }
+    Ok((todo, adopted))
 }
 
 fn decide(
@@ -309,7 +347,7 @@ fn decide(
 
 /// deletes files fetchloom placed that no dataset needs now, unless someone changed them. the
 /// files of a dataset with an archive this machine never unpacked stay, since nothing tells which
-/// of them it still needs.
+/// of them it still needs. says whether the state lost a file.
 fn remove_unwanted(
     project: &Project,
     placer: &mut Placer,
@@ -318,7 +356,7 @@ fn remove_unwanted(
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
     placement: &mut Placement,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
     let unwanted: Vec<String> = state
         .files
@@ -328,6 +366,7 @@ fn remove_unwanted(
         })
         .map(|(path, _)| path.clone())
         .collect();
+    let changed = !unwanted.is_empty();
     for path in unwanted {
         let Some(before) = state.files.remove(&path) else {
             continue;
@@ -356,7 +395,7 @@ fn remove_unwanted(
             }),
         }
     }
-    Ok(())
+    Ok(changed)
 }
 
 /// how the file at `path` looks right now. a file is read again right before it is deleted,

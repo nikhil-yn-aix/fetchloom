@@ -14,6 +14,7 @@ use std::time::{Instant, SystemTime};
 use tokio::task::JoinSet;
 use url::Url;
 
+use self::disk::Survey;
 use self::draft::Draft;
 use self::place::{Placement, Placing};
 use super::Context;
@@ -75,20 +76,22 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// makes the data folder match `lock`. what each file needs is decided first, so only the
-    /// bytes placing lacks are downloaded. archives this machine never unpacked are unpacked
-    /// first, since what they hold decides where files go.
+    /// makes the data folder match `lock`, starting from `survey` of it. what each file needs is
+    /// decided first, so only the bytes placing lacks are downloaded. archives this machine never
+    /// unpacked are unpacked first, since what they hold decides where files go.
     pub(super) async fn place(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         force: bool,
+        survey: Survey,
     ) -> Result<Placement, Error> {
-        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
             self.unpack_locked(&unknown).await?;
-            placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+            let survey = placing.into_survey();
+            placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         }
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)
