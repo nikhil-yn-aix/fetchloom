@@ -72,7 +72,7 @@ the set of sources is closed and lives in this repository, so a source is an enu
 - the first placement from the cache into a folder tries reflink, then hardlink, then copy, and remembers what worked for that volume for the rest of the run.
 - a reflink shares blocks but is its own file, so editing it is safe. APFS, btrfs, XFS, ReFS and dev drives support it.
 - a hardlink costs no space and no extra inode, but it is the cached file itself, so objects are read-only. a file can carry about 1,000 hardlinks on NTFS and 65,000 on ext4. past that, the file falls back to the next method.
-- when a placed file turns out to have changed, its object is hashed before anything uses it again. an object that changed is deleted and fetched again.
+- when a placed file turns out to have changed, its object is hashed before anything uses it again. an object that changed is deleted, fetched again, and noted in the cache's `changed/` folder, so another project holding a hardlink to the same bytes puts its copy back at its next sync. on windows that project cannot see the edit by listing its own folder: NTFS refreshes only the directory entry a file was opened through, so its other names keep the old size and time. `sync --force` reads every hardlink through its own name there.
 - inside a folder that onedrive, dropbox or icloud drive syncs, files are copied, never hardlinked, because those tools break hardlinks or upload every link as a full file.
 - a copy is said out loud, with the bytes it cost and how to avoid it.
 - a dataset with `copy = true` gets writable copies, for tools that write into their inputs.

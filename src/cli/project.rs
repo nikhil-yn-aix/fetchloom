@@ -442,8 +442,10 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
     if !fresh {
         return Ok(false);
     }
-    let Survey { state, disk } = Survey::read(project, &manifest.data_dir);
-    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
+    let survey = Survey::read(project, &manifest.data_dir);
+    let cache = open_cache()?;
+    let elsewhere = survey.edited_elsewhere(&cache);
+    let planned = plan::from_cache(manifest, &lock, &cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(false);
     }
@@ -452,9 +454,11 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
         .iter()
         .filter(|target| target.dataset == name)
         .all(|target| {
-            state.files.get(&target.path).is_some_and(|placed| {
-                placed.sha256 == target.sha256 && disk.get(&target.path) == Some(&placed.look)
-            })
+            !elsewhere.contains(&target.path)
+                && survey.state.files.get(&target.path).is_some_and(|placed| {
+                    placed.sha256 == target.sha256
+                        && survey.disk.get(&target.path) == Some(&placed.look)
+                })
         }))
 }
 
@@ -467,7 +471,8 @@ async fn sync_all(
     force: bool,
     given: Option<(String, Listing)>,
 ) -> Result<(bool, Placement), Error> {
-    let survey = Survey::read(work.project, &manifest.data_dir);
+    let mut survey = Survey::read(work.project, &manifest.data_dir);
+    survey.look_again(&work.project.root, &work.cache, force);
     disk::audit(work.project, &survey, &work.cache)?;
     let empty = Lock::default();
     let lock = work

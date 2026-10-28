@@ -1,7 +1,7 @@
 //! what the data folder holds, read once per command by listing its folders, and the objects
 //! behind hardlinks someone edited.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -17,6 +17,9 @@ pub(crate) struct Survey {
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
+    /// files placed as hardlinks whose bytes were changed through another project's link, which
+    /// sync puts back without --force.
+    pub(crate) elsewhere: HashSet<String>,
 }
 
 impl Survey {
@@ -25,6 +28,59 @@ impl Survey {
         Survey {
             state: project.state(),
             disk: scan(&project.root, data_dir),
+            elsewhere: HashSet::new(),
+        }
+    }
+
+    /// files placed as hardlinks whose object the cache found changed after they were placed,
+    /// while their listing here still shows them as placed. on windows a folder's listing keeps
+    /// the old size and time of a hardlink changed through another name, so this is the only
+    /// sign of an edit made through another project.
+    pub(crate) fn edited_elsewhere(&self, cache: &Cache) -> Vec<String> {
+        let changed = cache.changed();
+        if changed.is_empty() {
+            return Vec::new();
+        }
+        self.state
+            .files
+            .iter()
+            .filter(|(path, placed)| {
+                placed.method == Method::Hardlink
+                    && changed
+                        .get(&placed.sha256)
+                        .is_some_and(|found| *found > placed.look.modified)
+                    && self.disk.get(*path) == Some(&placed.look)
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    /// reads hardlinks again by name, which windows answers from the file itself where a listing
+    /// may be stale: those edited elsewhere, and with `force` every one, since --force asks for
+    /// every edit to be undone. what changed is remembered, for audit and for placing.
+    pub(crate) fn look_again(&mut self, root: &Path, cache: &Cache, force: bool) {
+        let paths = if force && cfg!(windows) {
+            self.state
+                .files
+                .iter()
+                .filter(|(_, placed)| placed.method == Method::Hardlink)
+                .map(|(path, _)| path.clone())
+                .collect()
+        } else {
+            self.edited_elsewhere(cache)
+        };
+        for path in paths {
+            let Some(placed) = self.state.files.get(&path) else {
+                continue;
+            };
+            let Ok(metadata) = fs::symlink_metadata(root.join(&path)) else {
+                continue;
+            };
+            let look = Look::of(&metadata);
+            if look != placed.look && !force {
+                self.elsewhere.insert(path.clone());
+            }
+            self.disk.insert(path, look);
         }
     }
 }

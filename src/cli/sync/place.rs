@@ -3,14 +3,16 @@
 //! someone changed or added.
 
 mod put;
+mod tell;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use self::put::{Tally, put_all};
+use self::put::put_all;
+use self::tell::tell;
 use super::disk::Survey;
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -21,8 +23,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, State};
-use crate::units;
+use crate::project::state::{Look, Placed};
 use crate::work::Work;
 
 /// what placing did.
@@ -34,6 +35,8 @@ pub(crate) struct Placement {
     pub(crate) unchanged: u64,
     /// files left alone: changed by hand, or never placed by fetchloom.
     pub(crate) kept: Vec<Kept>,
+    /// files replaced because another project changed the bytes they shared through a link.
+    pub(crate) restored: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,8 +73,7 @@ pub(crate) struct Placing<'a> {
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     data_dir: PathBuf,
-    state: State,
-    disk: HashMap<String, Look>,
+    survey: Survey,
 }
 
 impl<'a> Placing<'a> {
@@ -88,7 +90,6 @@ impl<'a> Placing<'a> {
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
-        let Survey { state, disk } = survey;
         let _span = tracing::debug_span!("decide").entered();
         let actions = plan
             .targets
@@ -96,9 +97,9 @@ impl<'a> Placing<'a> {
             .map(|target| {
                 decide(
                     target,
-                    disk.get(&target.path),
-                    state.files.get(&target.path),
-                    force,
+                    survey.disk.get(&target.path),
+                    survey.state.files.get(&target.path),
+                    force || survey.elsewhere.contains(&target.path),
                     &project.root.join(&target.path),
                 )
             })
@@ -110,17 +111,13 @@ impl<'a> Placing<'a> {
             unknown: plan.unknown,
             actions,
             data_dir,
-            state,
-            disk,
+            survey,
         })
     }
 
     /// what the data folder held when this placing was decided, to decide again from.
     pub(crate) fn into_survey(self) -> Survey {
-        Survey {
-            state: self.state,
-            disk: self.disk,
-        }
+        self.survey
     }
 
     /// the archives never unpacked on this machine, with the dataset each belongs to.
@@ -180,8 +177,7 @@ impl<'a> Placing<'a> {
             targets,
             actions,
             data_dir,
-            mut state,
-            disk,
+            mut survey,
             unknown,
         } = self;
         let mut placement = Placement::default();
@@ -191,8 +187,7 @@ impl<'a> Placing<'a> {
         let removed = remove_unwanted(
             project,
             &mut placer,
-            &mut state,
-            &disk,
+            &mut survey,
             &wanted,
             &unknown,
             &mut placement,
@@ -200,15 +195,15 @@ impl<'a> Placing<'a> {
         let (todo, adopted) = settle(
             project,
             &mut placer,
-            &mut state,
-            &disk,
+            &mut survey,
             &targets,
             actions,
             &mut placement,
         )?;
-        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, &mut state, work);
+        let state = &mut survey.state;
+        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, work);
         if removed || adopted || !tallies.is_empty() {
-            project.write_state(&state)?;
+            project.write_state(state)?;
         }
         if let Some(error) = failure {
             return Err(error);
@@ -225,8 +220,7 @@ impl<'a> Placing<'a> {
             manifest,
             targets,
             data_dir,
-            mut state,
-            disk,
+            mut survey,
             unknown,
             ..
         } = self;
@@ -236,14 +230,13 @@ impl<'a> Placing<'a> {
         let removed = remove_unwanted(
             project,
             &mut placer,
-            &mut state,
-            &disk,
+            &mut survey,
             &wanted,
             &unknown,
             &mut placement,
         )?;
         if removed {
-            project.write_state(&state)?;
+            project.write_state(&survey.state)?;
         }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
@@ -256,8 +249,7 @@ impl<'a> Placing<'a> {
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
-    state: &mut State,
-    disk: &HashMap<String, Look>,
+    survey: &mut Survey,
     targets: &'t [Target<'a>],
     actions: Vec<Action>,
     placement: &mut Placement,
@@ -268,7 +260,8 @@ fn settle<'t, 'a>(
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
-                state
+                survey
+                    .state
                     .files
                     .insert(target.path.clone(), placed(target, Method::Copy, seen));
                 placement.unchanged += 1;
@@ -281,8 +274,8 @@ fn settle<'t, 'a>(
             Action::Replace => {
                 let destination = project.root.join(&target.path);
                 match now(&destination) {
-                    Some(look) if disk.get(&target.path) != Some(&look) => {
-                        let reason = if state.files.contains_key(&target.path) {
+                    Some(look) if survey.disk.get(&target.path) != Some(&look) => {
+                        let reason = if survey.state.files.contains_key(&target.path) {
                             Reason::Changed
                         } else {
                             Reason::Foreign
@@ -297,6 +290,9 @@ fn settle<'t, 'a>(
                         .remove(&destination, false)
                         .map_err(|err| local(&destination, &err))?,
                     None => {}
+                }
+                if survey.elsewhere.contains(&target.path) {
+                    placement.restored.push(target.path.clone());
                 }
                 placement.replaced += 1;
                 todo.push(target);
@@ -355,14 +351,14 @@ fn decide(
 fn remove_unwanted(
     project: &Project,
     placer: &mut Placer,
-    state: &mut State,
-    disk: &HashMap<String, Look>,
+    survey: &mut Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
     placement: &mut Placement,
 ) -> Result<bool, Error> {
     let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
-    let unwanted: Vec<String> = state
+    let unwanted: Vec<String> = survey
+        .state
         .files
         .iter()
         .filter(|(path, placed)| {
@@ -372,10 +368,10 @@ fn remove_unwanted(
         .collect();
     let changed = !unwanted.is_empty();
     for path in unwanted {
-        let Some(before) = state.files.remove(&path) else {
+        let Some(before) = survey.state.files.remove(&path) else {
             continue;
         };
-        match disk.get(&path) {
+        match survey.disk.get(&path) {
             None => {}
             Some(look) if *look == before.look => {
                 let file = project.root.join(&path);
@@ -417,65 +413,6 @@ fn placed(target: &Target, method: Method, look: Look) -> Placed {
         sha256: target.sha256,
         method,
         look,
-    }
-}
-
-fn tell(
-    output: &Output,
-    manifest: &Manifest,
-    placer: &Placer,
-    tallies: &BTreeMap<&str, Tally>,
-    placement: &Placement,
-) {
-    for (dataset, tally) in tallies {
-        let how = match (tally.links, tally.copied) {
-            (_, 0) => "linked, no extra disk".to_owned(),
-            (0, copied) => format!("copied, {}", units::size(copied)),
-            (_, copied) => format!("partly copied, {}", units::size(copied)),
-        };
-        output.step(
-            "Placed",
-            &format!(
-                "{} · {} {how}",
-                plan::folder(manifest, dataset),
-                units::count(tally.files, "file", "files")
-            ),
-        );
-    }
-    if placement.removed > 0 {
-        output.step(
-            "Removed",
-            &units::count(
-                placement.removed,
-                "file no dataset needs",
-                "files no dataset needs",
-            ),
-        );
-    }
-    if let Some(client) = placer.synced()
-        && tallies.values().any(|tally| tally.copied > 0)
-    {
-        output.warn(&format!(
-            "{} is inside {client}, which breaks links, so files were copied. a project outside {client} uses no extra disk",
-            manifest.data_dir
-        ));
-    }
-    for kept in &placement.kept {
-        let message = match kept.reason {
-            Reason::Changed => format!(
-                "{} was changed by hand, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
-            ),
-            Reason::Foreign => format!(
-                "{} was not placed by fetchloom and holds other bytes, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
-            ),
-            Reason::Unneeded => format!(
-                "{} is no longer needed, but it was changed by hand, so it stays. delete it if you do not need it",
-                kept.path
-            ),
-        };
-        output.warn(&message);
     }
 }
 

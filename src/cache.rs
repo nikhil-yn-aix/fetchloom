@@ -1,5 +1,6 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
+mod changed;
 mod object;
 mod partial;
 mod unpacked;
@@ -124,17 +125,27 @@ impl Cache {
     }
 
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
-    /// edited, is removed so the next run downloads it again. says whether it was intact.
+    /// edited, is removed so the next run downloads it again, and remembered as changed so other
+    /// projects linking to it put their copies back. says whether it was intact.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
+                self.remember_changed(digest);
                 fs::remove_file(&path)?;
                 Ok(false)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
+        }
+    }
+
+    /// marks an object as changed. a mark that cannot be written only means other projects learn
+    /// of the change later, from their own files.
+    fn remember_changed(&self, digest: &Sha256) {
+        if let Err(err) = self.mark_changed(digest) {
+            tracing::debug!(%err, "could not remember a changed object");
         }
     }
 

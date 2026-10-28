@@ -28,6 +28,9 @@ pub(super) struct Status {
     untracked: Vec<String>,
     /// files fetchloom placed for an older lock, which `sync` replaces.
     outdated: Vec<String>,
+    /// files placed as links whose bytes another project changed through its own link, which
+    /// `sync` puts back.
+    edited_elsewhere: Vec<String>,
     /// files in the data folder that no dataset places.
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -50,17 +53,21 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
             status.unlocked.push(name.clone());
         }
     }
-    let planned = plan::from_cache(&manifest, &lock, &super::open_cache()?)?;
+    let cache = super::open_cache()?;
+    let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
         .unknown
         .iter()
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     let targets = planned.targets;
-    let Survey { state, disk } = Survey::read(&project, &manifest.data_dir);
+    let survey = Survey::read(&project, &manifest.data_dir);
+    let elsewhere: HashSet<String> = survey.edited_elsewhere(&cache).into_iter().collect();
     for target in &targets {
-        let list = match (disk.get(&target.path), state.files.get(&target.path)) {
+        let seen = survey.disk.get(&target.path);
+        let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => &mut status.missing,
+            (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
             (Some(seen), Some(record)) if record.look == *seen => {
                 if record.sha256 == target.sha256 {
                     continue;
@@ -73,7 +80,8 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
         list.push(target.path.clone());
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    status.extra = disk
+    status.extra = survey
+        .disk
         .into_keys()
         .filter(|path| !wanted.contains(path.as_str()))
         .collect();
@@ -111,8 +119,19 @@ fn tell(context: &Context, status: &Status) {
             &format!("{archive} · not unpacked on this machine yet"),
         );
     }
+    for path in status.edited_elsewhere.iter().take(SHOWN) {
+        output.mark(
+            "Edited",
+            &format!("{path} · through a link in another project"),
+        );
+    }
+    if status.edited_elsewhere.len() > SHOWN {
+        let more = status.edited_elsewhere.len() - SHOWN;
+        output.mark("", &format!("and {more} more"));
+    }
     let differences = status.unlocked.len()
         + status.not_unpacked.len()
+        + status.edited_elsewhere.len()
         + lists.iter().map(|(_, paths)| paths.len()).sum::<usize>();
     if differences == 0 {
         output.done("everything matches data.lock");
@@ -127,6 +146,7 @@ fn tell(context: &Context, status: &Status) {
         || !status.not_unpacked.is_empty()
         || !status.outdated.is_empty()
         || !status.untracked.is_empty()
+        || !status.edited_elsewhere.is_empty()
     {
         output.hint(
             "`fetchloom sync` brings the rest in line. edited and extra files stay as they are",

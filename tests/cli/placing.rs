@@ -147,3 +147,99 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
     }
     Ok(())
 }
+
+/// a project in `work` and a second one in `other`, both holding iris as a link to one cached
+/// file, with iris then edited through the first project's link.
+fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let other = sandbox.folder("other")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(
+        &sandbox.work().join("data").join("iris").join("iris.csv"),
+        &edited,
+    )?;
+    Ok(other)
+}
+
+#[test]
+fn sync_force_puts_back_a_link_another_project_edited() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let other = shared_and_edited(&sandbox, &server)?;
+    let forced = sandbox.command_in(&other, &["sync", "--force"]).output()?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1
+    );
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed object is fetched again"
+    );
+    Ok(())
+}
+
+#[test]
+fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let other = shared_and_edited(&sandbox, &server)?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+    let status = sandbox.command_in(&other, &["status"]).output()?;
+    let stderr = text(&status.stderr)?;
+    assert!(stderr.contains("Edited data/iris/iris.csv"), "{stderr}");
+    Ok(())
+}
+
+/// on windows a folder's listing keeps the old size and time of a hardlink edited through another
+/// name, so nothing in the other project's folder shows the edit. once the cache has found the
+/// object changed, that project's next sync puts its copy back without --force.
+#[cfg(windows)]
+#[test]
+fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let other = shared_and_edited(&sandbox, &server)?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("data/iris/iris.csv was changed through a link in another project"),
+        "{stderr}"
+    );
+    let edited = fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?;
+    assert_eq!(edited[0], b'S', "the project that made the edit keeps it");
+    Ok(())
+}

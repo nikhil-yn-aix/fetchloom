@@ -114,12 +114,14 @@ one per machine by default, any folder when `FETCHLOOM_CACHE` points elsewhere.
   unpacked/             the file list each archive unpacked to
   stated/md5/ab/...     maps an MD5 a source stated to the object holding those bytes
   projects/             one small file per project that synced from here, for gc
+  changed/              one empty file per object found changed, named by its SHA-256
   tmp/                  files being written
 ```
 
 - the default folder is `~/.cache/fetchloom` on linux, `~/Library/Caches/fetchloom` on macos and `%LOCALAPPDATA%\fetchloom` on windows.
 - once an archive is unpacked and verified, its own object is deleted, unless a project on this machine keeps that archive packed. the lock still names it, so another machine downloads and unpacks the same bytes.
 - `stated/` exists because zenodo, figshare and dataverse state only MD5. it lets a new project find bytes the cache already holds without downloading them again.
+- `changed/` is written when `cache verify` or a sync finds an object whose bytes no longer match its name. a project holding a hardlink placed before that time holds the changed bytes too, and its next sync puts its copy back. gc forgets an entry once no project needs that object.
 
 ## the .fetchloom folder
 
