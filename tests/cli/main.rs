@@ -5,4 +5,5 @@ mod basics;
 mod get;
 mod moved;
 mod project;
+mod secrets;
 mod support;

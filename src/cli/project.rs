@@ -49,6 +49,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     };
     let manifest = Manifest::parse(&text)?;
     let parsed = Reference::parse(&args.link)?;
+    parsed.reference.check_shareable()?;
     let net = Arc::new(net(context, &manifest)?);
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);

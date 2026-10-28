@@ -6,6 +6,7 @@ mod api;
 mod download;
 mod failure;
 mod headers;
+mod shown;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -18,6 +19,7 @@ use url::Url;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
+pub(crate) use shown::{Shown, secret};
 
 use crate::error::{Error, Kind};
 use crate::stop::Stop;

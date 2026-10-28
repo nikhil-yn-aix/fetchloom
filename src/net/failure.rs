@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap};
 use url::Url;
 
-use super::{Net, Notice, address, host};
+use super::{Net, Notice, Shown, address, host};
 use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
@@ -99,17 +99,17 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
     let error = match status {
         StatusCode::NOT_FOUND | StatusCode::GONE => Error::new(
             Kind::ReferenceUnresolved,
-            format!("{} has nothing at {url} ({code})", host(url)),
+            format!("{} has nothing at {} ({code})", host(url), Shown(url)),
         )
         .help("check the link in a browser. it may have moved or been removed"),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Error::new(
             Kind::AuthRequired,
-            format!("{} refused access to {url} ({code})", host(url)),
+            format!("{} refused access to {} ({code})", host(url), Shown(url)),
         )
         .help("if the link needs a login, check that it opens in a browser while signed in"),
         _ => Error::new(
             Kind::NetworkStatus,
-            format!("{} answered {code} for {url}", host(url)),
+            format!("{} answered {code} for {}", host(url), Shown(url)),
         ),
     };
     Failure::Final(error)
@@ -139,7 +139,7 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error) -> Failure {
 pub(super) fn offline(url: &Url) -> Error {
     Error::new(
         Kind::OfflineMissing,
-        format!("offline, and {url} is not in the cache"),
+        format!("offline, and {} is not in the cache", Shown(url)),
     )
     .help("run the same command without --offline to download it")
 }
@@ -147,7 +147,7 @@ pub(super) fn offline(url: &Url) -> Error {
 pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
     Error::new(
         Kind::NetworkRefused,
-        format!("fetchloom will not follow {url}: {reason}"),
+        format!("fetchloom will not follow {}: {reason}", Shown(url)),
     )
     .help("only links typed on the command line may reach this machine or its local network")
 }

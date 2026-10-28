@@ -122,6 +122,23 @@ impl Reference {
         }
     }
 
+    /// refuses a link that carries a value granting access, such as a token or the signature of
+    /// a presigned storage link: data.toml and data.lock would keep it, git would share it, and a
+    /// signature stops working within days anyway.
+    pub(crate) fn check_shareable(&self) -> Result<(), Error> {
+        let Reference::Url(url) = self else {
+            return Ok(());
+        };
+        match crate::net::secret(url) {
+            None => Ok(()),
+            Some(key) => Err(Error::new(
+                Kind::ReferenceInvalid,
+                format!("this link carries {key}, a secret that data.toml and data.lock would keep and share"),
+            )
+            .help("use a link that works without it, or download the file once with `fetchloom get`")),
+        }
+    }
+
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {

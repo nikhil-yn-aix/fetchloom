@@ -230,6 +230,10 @@ impl<'a> Loop<'a> {
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
+            parsed
+                .reference
+                .check_shareable()
+                .map_err(|err| cite(err, entry, "ref"))?;
             let net = self.net.clone();
             tasks.spawn(async move {
                 let listing = parsed.reference.resolve(&*net).await;
