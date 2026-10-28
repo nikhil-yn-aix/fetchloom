@@ -52,7 +52,11 @@ fn patterns_are_loosened_where_they_were_given() -> Result {
     let server = Server::start("/iris.csv", Vec::new())?;
     for command in ["add", "get"] {
         let output = sandbox.run(&[command, &server.url, "--exclude", "*"])?;
-        assert_eq!(output.status.code(), Some(50), "{command}");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{command}: the command line was wrong"
+        );
         let stderr = text(&output.stderr)?;
         assert!(
             stderr.ends_with("help: loosen the patterns given to --select and --exclude\n"),

@@ -122,6 +122,14 @@ impl Reference {
         }
     }
 
+    /// the reference as messages and logs show it, a secret in a link masked.
+    pub(crate) fn shown(&self) -> String {
+        match self {
+            Reference::Url(url) => crate::net::Shown(url).to_string(),
+            other => other.to_string(),
+        }
+    }
+
     /// refuses a link that carries a value granting access, such as a token or the signature of
     /// a presigned storage link: data.toml and data.lock would keep it, git would share it, and a
     /// signature stops working within days anyway.
@@ -142,11 +150,7 @@ impl Reference {
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let shown = match self {
-            Reference::Url(url) => crate::net::Shown(url).to_string(),
-            other => other.to_string(),
-        };
-        let span = tracing::debug_span!("resolve", reference = %shown);
+        let span = tracing::debug_span!("resolve", reference = %self.shown());
         let listing = async {
             match self {
                 Reference::Doi(doi) => {

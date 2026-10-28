@@ -90,3 +90,15 @@ fn a_refused_redirect_never_shows_the_token() -> Result {
     assert!(!stderr.contains("abc123"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn patterns_that_leave_nothing_never_show_the_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![])?;
+    let link = format!("{}?token=abc123", server.url);
+    let output = sandbox.run(&["get", &link, "--exclude", "*"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(!stderr.contains("abc123"), "{stderr}");
+    Ok(())
+}

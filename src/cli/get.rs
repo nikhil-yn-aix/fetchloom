@@ -270,7 +270,7 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     )?)?;
     let mut entry = alone.datasets["get"].clone();
     entry.lines.clear();
-    engine::filter(&parsed.reference.to_string(), &entry, listing)
+    engine::filter(&parsed.reference.shown(), &entry, listing)
 }
 
 /// where the files go: the folder asked for, else one named after the file or the dataset.

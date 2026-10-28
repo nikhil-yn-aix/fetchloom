@@ -279,7 +279,7 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
         .collect();
     if kept.is_empty() {
         let mut error = Error::new(
-            Kind::ProjectInvalid,
+            kind(entry),
             format!("select and exclude leave no file of {name}"),
         );
         if let Some(line) = entry.lines.get("exclude") {
@@ -303,9 +303,17 @@ fn written(entry: &Entry) -> Patterns {
     }
 }
 
+/// a pattern that keeps no file is a mistake on the command line, or in data.toml.
+fn kind(entry: &Entry) -> Kind {
+    match written(entry) {
+        Patterns::OnCommandLine => Kind::Usage,
+        Patterns::InDataToml => Kind::ProjectInvalid,
+    }
+}
+
 fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error {
     let mut error = Error::new(
-        Kind::ProjectInvalid,
+        kind(entry),
         format!(
             "the pattern \"{}\" matched no file in {name}",
             glob.as_str()

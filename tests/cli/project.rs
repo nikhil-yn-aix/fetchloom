@@ -498,7 +498,7 @@ fn a_pattern_that_matches_nothing_explains_why_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let output = sandbox.run(&["add", &server.url, "--select", "*.txt"])?;
-    assert_eq!(output.status.code(), Some(50));
+    assert_eq!(output.status.code(), Some(2), "the command line was wrong");
     assert!(
         !sandbox.work().join("data.toml").exists(),
         "a failed add leaves no data.toml behind"
