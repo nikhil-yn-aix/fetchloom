@@ -139,6 +139,7 @@ impl Draft {
                 fetch,
                 label: format!("{}/{}", self.name, file.path),
                 dataset: Some(self.name.clone()),
+                again: None,
             };
             jobs.push((learn.then_some(index), job));
         }

@@ -569,6 +569,7 @@ async fn learn_name(
         },
         label: remote.path.clone(),
         dataset: None,
+        again: None,
     };
     let started = std::time::Instant::now();
     let fetched = fetch::all(context, net, cache, vec![job]).await?;

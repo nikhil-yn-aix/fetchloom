@@ -315,6 +315,7 @@ fn job(remote: &Remote, extract: bool) -> Job {
         },
         label: remote.path.clone(),
         dataset: None,
+        again: None,
     }
 }
 

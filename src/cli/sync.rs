@@ -16,14 +16,14 @@ use url::Url;
 use self::draft::Draft;
 use self::place::{Placement, Placing};
 use super::Context;
-use super::fetch::{self, Job};
+use super::fetch::{self, Again, Job};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
 use crate::project::Project;
-use crate::project::lock::{self, Lock, Locked};
+use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::{self, Listing, Reference, Remote};
 use crate::units;
@@ -86,7 +86,7 @@ impl<'a> Loop<'a> {
         let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
-            self.unpack_locked(&unknown).await?;
+            self.unpack_locked(lock, &unknown).await?;
             placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
         }
         let (archives, files): (Vec<_>, Vec<_>) = placing
@@ -95,21 +95,10 @@ impl<'a> Loop<'a> {
             .partition(|(_, file)| file.unpacks_to.is_some());
         let jobs = files
             .into_iter()
-            .map(|(dataset, file)| {
-                job(
-                    &dataset,
-                    &file.path,
-                    &file.url,
-                    Expect {
-                        sha256: Some(file.sha256),
-                        md5: file.md5,
-                        size: Some(file.size),
-                    },
-                )
-            })
+            .map(|(dataset, file)| job(lock, &dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
-        self.unpack_locked(&archives).await?;
+        self.unpack_locked(lock, &archives).await?;
         placing.apply(&self.context.output, &self.context.work, &self.cache)
     }
 
@@ -343,27 +332,41 @@ fn pinned(entry: &Entry, previous: Option<&Locked>, upgrading: bool) -> String {
     }
 }
 
-/// the download of one locked or listed file.
-fn job(dataset: &str, path: &str, url: &str, expect: Expect) -> Result<Job, Error> {
-    let url = Url::parse(url).map_err(|err| {
+/// the download of one locked file. when its recorded link is dead, the source is asked again
+/// at the version the lock pins.
+fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
+    let url = Url::parse(&file.url).map_err(|err| {
         Error::new(
             Kind::ProjectInvalid,
-            format!("data.lock has a broken link for {dataset}/{path}: {err}"),
+            format!(
+                "data.lock has a broken link for {dataset}/{}: {err}",
+                file.path
+            ),
         )
         .help("run `fetchloom lock` to write it again")
     })?;
+    let pinned = lock.datasets.iter().find(|locked| locked.name == dataset);
     let (from, divert) = source::fetch_plan(&url);
     Ok(Job {
         fetch: Fetch {
             url,
             from,
             divert,
-            expect,
+            expect: Expect {
+                sha256: Some(file.sha256),
+                md5: file.md5,
+                size: Some(file.size),
+            },
             revalidate: false,
             unpack: false,
         },
-        label: format!("{dataset}/{path}"),
+        label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
+        again: pinned.map(|locked| Again {
+            resolved: locked.resolved.clone(),
+            path: file.path.clone(),
+            alone: locked.files.len() == 1,
+        }),
     })
 }
 

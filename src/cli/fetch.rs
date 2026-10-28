@@ -1,11 +1,14 @@
 //! many downloads at once: a bar for each running one, one bar for them all, and a stop at the
 //! first failure that keeps what already arrived for the next run.
 
+mod again;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tokio::task::JoinSet;
 
+pub(super) use self::again::Again;
 use super::Context;
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
@@ -18,6 +21,8 @@ pub(super) struct Job {
     pub(super) fetch: Fetch,
     pub(super) label: String,
     pub(super) dataset: Option<String>,
+    /// where to ask again when the file is pinned and its recorded link is dead.
+    pub(super) again: Option<Again>,
 }
 
 /// downloads every job within the network's limits and returns what each fetched, in the jobs'
@@ -42,16 +47,18 @@ pub(super) async fn all(
     let mut done = 0;
     // a file whose size only its headers tell is asked about there, once per run
     let asked = Arc::new(AtomicBool::new(false));
+    let listings = again::Listings::default();
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
-            let (net, cache, output, overall, asked) = (
+            let (net, cache, output, overall, asked, listings) = (
                 net.clone(),
                 cache.clone(),
                 context.output.clone(),
                 overall.clone(),
                 asked.clone(),
+                listings.clone(),
             );
             let yes = context.yes;
             tasks.spawn(async move {
@@ -85,7 +92,12 @@ pub(super) async fn all(
                     }
                     Ok(())
                 };
-                let fetched = net.download(&job.fetch, &cache, &on).await;
+                let fetched = match net.download(&job.fetch, &cache, &on).await {
+                    Err(err) => {
+                        again::recover(&net, &cache, &output, &listings, &job, err, &on).await
+                    }
+                    fetched => fetched,
+                };
                 (index, fetched.map_err(|err| explain(err, &job)))
             });
         }
