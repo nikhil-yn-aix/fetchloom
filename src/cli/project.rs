@@ -396,16 +396,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                     .iter()
                     .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
                     .collect();
-                let error = Error::new(
-                    Kind::Usage,
-                    format!("{name} has no file or folder called {file}"),
-                );
-                return Err(match name::closest(file, inside.iter().copied()) {
-                    Some(best) => {
-                        error.help(format!("did you mean `fetchloom path {name}/{best}`?"))
-                    }
-                    None => error.help(format!("`fetchloom status` lists what {name} holds")),
-                });
+                return Err(not_in(name, file, &inside));
             }
             wanted
         }
@@ -415,6 +406,34 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
     context.output.answer(&path.display().to_string());
     Ok(path)
+}
+
+/// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to
+/// what was asked.
+fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        format!("{name} has no file or folder called {file}"),
+    );
+    if let Some(best) = name::closest(file, inside.iter().copied()) {
+        return error.help(format!("did you mean `fetchloom path {name}/{best}`?"));
+    }
+    let near = name::nearest(file, inside.iter().copied(), 3);
+    let shown = match near.as_slice() {
+        [] => return error.help(format!("{name} holds no files")),
+        [only] => (*only).to_owned(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    };
+    let holds = if inside.len() > near.len() {
+        let files = crate::units::count(inside.len() as u64, "file", "files");
+        format!("{name} holds {files}, such as {shown}")
+    } else {
+        format!("{name} holds {shown}")
+    };
+    error.detail(holds).help(format!(
+        "name a path it holds, such as `fetchloom path {name}/{}`",
+        near[0]
+    ))
 }
 
 /// whether a dataset is locked as data.toml asks and every file of it sits unchanged where it

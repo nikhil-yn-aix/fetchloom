@@ -87,6 +87,24 @@ pub(crate) fn closest<'a>(
         .map(|(_, candidate)| candidate)
 }
 
+/// the `most` candidates nearest to `word`, nearest first, however far that is.
+pub(crate) fn nearest<'a>(
+    word: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    most: usize,
+) -> Vec<&'a str> {
+    let mut ranked: Vec<(usize, &str)> = candidates
+        .into_iter()
+        .map(|candidate| (distance(word, candidate), candidate))
+        .collect();
+    ranked.sort_unstable();
+    ranked
+        .into_iter()
+        .take(most)
+        .map(|(_, candidate)| candidate)
+        .collect()
+}
+
 /// the number of edits that turn `a` into `b`: adding, dropping or changing a character, or
 /// swapping two neighbours, the most common typo of all.
 fn distance(a: &str, b: &str) -> usize {
@@ -377,6 +395,10 @@ mod tests {
             closest("irxy", ["iris"]),
             None,
             "two changed letters of four are not close"
+        );
+        assert_eq!(
+            nearest("iris.csv", ["b.txt", "iris.tsv", "a.csv"], 2),
+            ["iris.tsv", "a.csv"]
         );
     }
 }

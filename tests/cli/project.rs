@@ -400,6 +400,31 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
 }
 
 #[test]
+fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("archives")
+        .join("python.zip");
+    let server = Server::start("/files/dataset.zip", vec![file(&fs::read(zip)?, "\"z1\"")])?;
+    added(&sandbox, &server)?;
+    let typo = sandbox.run(&["path", "dataset/data/trian.csv"])?;
+    assert_eq!(typo.status.code(), Some(2));
+    assert!(
+        text(&typo.stderr)?.contains("did you mean `fetchloom path dataset/data/train.csv`?"),
+        "{}",
+        text(&typo.stderr)?
+    );
+    let unknown = sandbox.run(&["path", "dataset/not-a-file.csv"])?;
+    assert_eq!(unknown.status.code(), Some(2));
+    let stderr = text(&unknown.stderr)?;
+    assert!(!stderr.contains("fetchloom status"), "{stderr}");
+    insta::assert_snapshot!(stderr);
+    Ok(())
+}
+
+#[test]
 fn path_syncs_first_when_the_files_are_not_there() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
