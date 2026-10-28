@@ -1,6 +1,7 @@
-//! where a request may go. a URL the user typed may reach any address, a lab server included.
-//! a URL that came from a file or a server may not reach private, loopback or link-local
-//! addresses, so a hostile `data.lock` cannot reach into a local network.
+//! where a request may go. a host a person wrote, on the command line or in data.toml, may be
+//! any address, a lab server included. a URL nobody wrote, from a source's listing, a redirect
+//! or data.lock alone, may not reach private, loopback or link-local addresses, so a hostile
+//! server or a tampered lock cannot reach into a local network.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -9,18 +10,28 @@ use std::sync::{Arc, Mutex};
 
 use url::{Host, Url};
 
-/// the hosts the user typed on the command line.
+/// the hosts a person wrote.
 #[derive(Clone, Default)]
 pub(crate) struct Typed(Arc<Mutex<HashSet<String>>>);
 
 impl Typed {
     pub(crate) fn add(&self, url: &Url) {
         if let Some(host) = url.host_str() {
-            self.hosts().insert(host.to_ascii_lowercase());
+            self.add_host(host);
         }
     }
 
+    /// trusts a host a person wrote down, such as a dataverse install on a university network.
+    pub(crate) fn add_host(&self, host: &str) {
+        self.hosts().insert(
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_ascii_lowercase(),
+        );
+    }
+
     fn contains(&self, host: &str) -> bool {
+        let host = host.trim_start_matches('[').trim_end_matches(']');
         self.hosts().contains(&host.to_ascii_lowercase())
     }
 

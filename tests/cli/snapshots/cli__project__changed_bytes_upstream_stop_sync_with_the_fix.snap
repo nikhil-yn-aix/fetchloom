@@ -1,0 +1,8 @@
+---
+source: tests/cli/project.rs
+assertion_line: 229
+expression: stderr
+---
+✗ iris/iris.csv is not the file that was locked
+  expected 32 bytes, got 15
+  help: if the new version is intended, run `fetchloom lock --upgrade iris`

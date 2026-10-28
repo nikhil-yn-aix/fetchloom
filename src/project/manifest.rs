@@ -1,0 +1,476 @@
+//! `data.toml`: the datasets a project needs. people write it, and `add` and `remove` edit it in
+//! place, keeping comments, order and spacing.
+
+use std::collections::BTreeMap;
+use std::ops::Range;
+
+use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike};
+
+use crate::error::{Error, Kind};
+use crate::glob::Glob;
+use crate::name;
+
+pub(crate) const FILE: &str = "data.toml";
+const DATA_DIR: &str = "data";
+const TOP_KEYS: [&str; 2] = ["project", "datasets"];
+const PROJECT_KEYS: [&str; 1] = ["data_dir"];
+const DATASET_KEYS: [&str; 6] = ["ref", "select", "exclude", "extract", "copy", "path"];
+
+#[derive(Clone, Debug)]
+pub(crate) struct Manifest {
+    /// where datasets land, relative to the project, with `/` between folders.
+    pub(crate) data_dir: String,
+    pub(crate) datasets: BTreeMap<String, Entry>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Entry {
+    pub(crate) reference: String,
+    pub(crate) select: Vec<Glob>,
+    pub(crate) exclude: Vec<Glob>,
+    pub(crate) extract: bool,
+    pub(crate) copy: bool,
+    /// where the dataset lands inside the data folder, when not under its name.
+    pub(crate) path: Option<String>,
+    /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
+    pub(crate) lines: BTreeMap<&'static str, String>,
+}
+
+impl Manifest {
+    pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let reader = Reader { text };
+        let document = Document::parse(text).map_err(|err| {
+            let message = err
+                .message()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            reader.error(
+                err.span(),
+                format!("data.toml is not valid TOML: {message}"),
+            )
+        })?;
+        let root = document.as_table();
+        reader.known(root, &TOP_KEYS, "")?;
+        let data_dir = match root.get("project") {
+            None => DATA_DIR.to_owned(),
+            Some(item) => {
+                let project = item.as_table_like().ok_or_else(|| {
+                    reader.error(
+                        item.span(),
+                        "[project] in data.toml must be a table".to_owned(),
+                    )
+                })?;
+                reader.known(project, &PROJECT_KEYS, " in [project]")?;
+                match project.get("data_dir") {
+                    None => DATA_DIR.to_owned(),
+                    Some(item) => reader.relative(item, "data_dir")?,
+                }
+            }
+        };
+        let mut datasets = BTreeMap::new();
+        if let Some(item) = root.get("datasets") {
+            let table = item.as_table_like().ok_or_else(|| {
+                reader.error(
+                    item.span(),
+                    "datasets in data.toml must be a table".to_owned(),
+                )
+            })?;
+            for (name, item) in table.iter() {
+                let entry = reader.entry(table, name, item)?;
+                datasets.insert(name.to_owned(), entry);
+            }
+        }
+        Ok(Manifest { data_dir, datasets })
+    }
+}
+
+/// reads data.toml's items into types, pointing at the line of any mistake.
+struct Reader<'a> {
+    text: &'a str,
+}
+
+impl Reader<'_> {
+    fn entry(&self, datasets: &dyn TableLike, name: &str, item: &Item) -> Result<Entry, Error> {
+        let key_span = datasets.key(name).and_then(Key::span);
+        if !name::is_dataset_name(name) {
+            let error = self.error(key_span, format!("\"{name}\" is not a valid dataset name"));
+            return Err(match name::dataset_name(name) {
+                Some(suggested) => error.help(format!(
+                    "use lowercase letters, digits, - and _, such as \"{suggested}\""
+                )),
+                None => error.help("use lowercase letters, digits, - and _"),
+            });
+        }
+        let table = item.as_table_like().ok_or_else(|| {
+            self.error(
+                item.span(),
+                format!("datasets.{name} in data.toml must be a table with a ref"),
+            )
+        })?;
+        self.known(table, &DATASET_KEYS, &format!(" in datasets.{name}"))?;
+        let mut lines = BTreeMap::new();
+        for key in DATASET_KEYS {
+            if let Some(span) = table.key(key).and_then(Key::span) {
+                lines.insert(key, self.cite(span.start));
+            }
+        }
+        let Some(reference) = table.get("ref") else {
+            return Err(self
+                .error(
+                    item.span().or(key_span),
+                    format!("datasets.{name} in data.toml has no ref"),
+                )
+                .help("add a line such as ref = \"zenodo:3608990\""));
+        };
+        let reference = self.string(reference, "ref")?.trim().to_owned();
+        if reference.is_empty() {
+            return Err(self.error(
+                table.get("ref").and_then(Item::span),
+                format!("datasets.{name} has an empty ref"),
+            ));
+        }
+        Ok(Entry {
+            reference,
+            select: self.patterns(table.get("select"), "select")?,
+            exclude: self.patterns(table.get("exclude"), "exclude")?,
+            extract: self.boolean(table.get("extract"), "extract", true)?,
+            copy: self.boolean(table.get("copy"), "copy", false)?,
+            path: table
+                .get("path")
+                .map(|item| self.relative(item, "path"))
+                .transpose()?,
+            lines,
+        })
+    }
+
+    /// refuses any key not in `known`, suggesting the closest one.
+    fn known(&self, table: &dyn TableLike, known: &[&str], within: &str) -> Result<(), Error> {
+        for (key, _) in table.iter() {
+            if !known.contains(&key) {
+                let error = self.error(
+                    table.key(key).and_then(Key::span),
+                    format!("data.toml has a key fetchloom does not know: \"{key}\"{within}"),
+                );
+                return Err(match name::closest(key, known.iter().copied()) {
+                    Some(best) => error.help(format!("did you mean `{best}`?")),
+                    None => error.help(format!("the keys here are {}", known.join(", "))),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn string<'b>(&self, item: &'b Item, key: &str) -> Result<&'b str, Error> {
+        item.as_str().ok_or_else(|| {
+            self.error(
+                item.span(),
+                format!("{key} in data.toml must be a string in quotes"),
+            )
+        })
+    }
+
+    fn boolean(&self, item: Option<&Item>, key: &str, default: bool) -> Result<bool, Error> {
+        item.map_or(Ok(default), |item| {
+            item.as_bool().ok_or_else(|| {
+                self.error(
+                    item.span(),
+                    format!("{key} in data.toml must be true or false"),
+                )
+            })
+        })
+    }
+
+    /// a path inside the project, which may not climb out of it.
+    fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
+        let text = self.string(item, key)?.trim().trim_end_matches('/');
+        match name::escapes(text) {
+            None => Ok(text.to_owned()),
+            Some(reason) => Err(self
+                .error(
+                    item.span(),
+                    format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
+                )
+                .help("use a folder inside the project, with / between folders")),
+        }
+    }
+
+    /// one pattern or a list of them.
+    fn patterns(&self, item: Option<&Item>, key: &str) -> Result<Vec<Glob>, Error> {
+        let Some(item) = item else {
+            return Ok(Vec::new());
+        };
+        let texts: Vec<(&str, Option<Range<usize>>)> = if let Some(text) = item.as_str() {
+            vec![(text, item.span())]
+        } else if let Some(array) = item.as_array() {
+            array
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(|text| (text, value.span()))
+                        .ok_or_else(|| {
+                            self.error(
+                                value.span(),
+                                format!("every pattern in {key} must be a string in quotes"),
+                            )
+                        })
+                })
+                .collect::<Result<_, _>>()?
+        } else {
+            return Err(self.error(
+                item.span(),
+                format!("{key} in data.toml must be a pattern or a list of patterns"),
+            ));
+        };
+        texts
+            .into_iter()
+            .map(|(text, span)| {
+                Glob::new(text)
+                    .map_err(|reason| self.error(span, format!("the {key} pattern {reason}")))
+            })
+            .collect()
+    }
+
+    fn error(&self, span: Option<Range<usize>>, message: String) -> Error {
+        let error = Error::new(Kind::ProjectInvalid, message);
+        match span {
+            Some(span) => error.detail(self.cite(span.start)),
+            None => error,
+        }
+    }
+
+    /// the line holding `offset`, as `data.toml:7   select = ["*.edf"]`.
+    fn cite(&self, offset: usize) -> String {
+        let offset = offset.min(self.text.len());
+        let before = &self.text[..offset];
+        let number = before.matches('\n').count() + 1;
+        let start = before.rfind('\n').map_or(0, |at| at + 1);
+        let end = self.text[start..]
+            .find('\n')
+            .map_or(self.text.len(), |at| start + at);
+        format!("{FILE}:{number}   {}", self.text[start..end].trim())
+    }
+}
+
+/// data.toml's text with one more dataset, or a new file holding just that dataset.
+pub(crate) fn with_dataset(
+    text: &str,
+    name: &str,
+    reference: &str,
+    select: &[String],
+    exclude: &[String],
+) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let blank_line_first = !document.as_table().is_empty();
+    let datasets = document.entry("datasets").or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    let Some(datasets) = datasets.as_table_mut() else {
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            "data.toml writes its datasets inline, so fetchloom cannot add to them",
+        )
+        .help(format!(
+            "add [datasets.{name}] with ref = \"{reference}\" by hand"
+        )));
+    };
+    let mut table = Table::new();
+    table.insert("ref", toml_edit::value(reference));
+    for (key, patterns) in [("select", select), ("exclude", exclude)] {
+        if !patterns.is_empty() {
+            table.insert(key, toml_edit::value(patterns.iter().collect::<Array>()));
+        }
+    }
+    if blank_line_first {
+        table.decor_mut().set_prefix("\n");
+    }
+    datasets.insert(name, Item::Table(table));
+    Ok(document.to_string())
+}
+
+/// data.toml's text without one dataset. comments touching its header go with it, and comments
+/// a blank line above stay, such as a note at the top of the file.
+pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let Some(datasets) = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_like_mut)
+    else {
+        return Ok(document.to_string());
+    };
+    let removed = datasets.get(name).and_then(Item::as_table).map(|table| {
+        let prefix = table
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default();
+        let kept = prefix
+            .rfind("\n\n")
+            .map_or("", |at| &prefix[..at + 2])
+            .to_owned();
+        (table.position(), kept)
+    });
+    datasets.remove(name);
+    if datasets.is_empty() {
+        document.remove("datasets");
+    }
+    if let Some((Some(position), kept)) = removed
+        && !kept.trim().is_empty()
+    {
+        if let Some(table) = next_table(&mut document, position) {
+            let prefix = table
+                .decor()
+                .prefix()
+                .and_then(|prefix| prefix.as_str())
+                .unwrap_or_default();
+            let joined = format!("{kept}{}", prefix.trim_start_matches('\n'));
+            table.decor_mut().set_prefix(joined);
+        } else {
+            let trailing = document.trailing().as_str().unwrap_or_default().to_owned();
+            document.set_trailing(format!("{}\n{trailing}", kept.trim_end()));
+        }
+    }
+    Ok(document.to_string().trim_start_matches('\n').to_owned())
+}
+
+/// the first table written after `position`.
+fn next_table(document: &mut DocumentMut, position: isize) -> Option<&mut Table> {
+    let mut tables: Vec<&mut Table> = Vec::new();
+    for (_, item) in document.iter_mut() {
+        if let Some(table) = item.as_table_mut() {
+            if table.is_implicit() {
+                tables.extend(table.iter_mut().filter_map(|(_, item)| item.as_table_mut()));
+            } else {
+                tables.push(table);
+            }
+        }
+    }
+    tables
+        .into_iter()
+        .filter(|table| table.position().is_some_and(|at| at > position))
+        .min_by_key(|table| table.position())
+}
+
+fn editable(text: &str) -> Result<DocumentMut, Error> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    text.parse::<DocumentMut>().map_err(|err| {
+        let message = err.message().lines().next().unwrap_or_default().to_owned();
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("data.toml is not valid TOML: {message}"),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> Manifest {
+        Manifest::parse(text).unwrap()
+    }
+
+    fn fails(text: &str) -> Error {
+        Manifest::parse(text).unwrap_err()
+    }
+
+    #[test]
+    fn a_full_manifest_reads_with_defaults() {
+        let manifest = parse(
+            "\u{feff}[project]\ndata_dir = \"inputs/\"\n\n[datasets.eeg]\nref = \"osf:abc12\"\nselect = [\"**/*.edf\", \"participants.tsv\"]\nexclude = \"**/derivatives/**\"\n\n[datasets.weights]\nref = \" https://example.org/w.bin \"\nextract = false\ncopy = true\npath = \"models/w\"\n",
+        );
+        assert_eq!(manifest.data_dir, "inputs");
+        let eeg = &manifest.datasets["eeg"];
+        assert_eq!(eeg.reference, "osf:abc12");
+        assert_eq!(
+            eeg.select.iter().map(Glob::as_str).collect::<Vec<_>>(),
+            ["**/*.edf", "participants.tsv"]
+        );
+        assert_eq!(eeg.exclude.len(), 1);
+        assert!(eeg.extract && !eeg.copy && eeg.path.is_none());
+        assert_eq!(
+            eeg.lines["select"],
+            "data.toml:6   select = [\"**/*.edf\", \"participants.tsv\"]"
+        );
+        let weights = &manifest.datasets["weights"];
+        assert_eq!(weights.reference, "https://example.org/w.bin");
+        assert!(!weights.extract && weights.copy);
+        assert_eq!(weights.path.as_deref(), Some("models/w"));
+        assert_eq!(parse("").data_dir, "data");
+        assert!(parse("").datasets.is_empty());
+        assert_eq!(
+            parse("datasets.iris = { ref = \"zenodo:3608990\" }\n")
+                .datasets
+                .len(),
+            1,
+            "inline tables work too"
+        );
+    }
+
+    #[test]
+    fn mistakes_point_at_their_line_and_suggest_a_fix() {
+        let typo = fails("[datasets.eeg]\nref = \"osf:abc12\"\nselct = [\"*.edf\"]\n");
+        assert_eq!(typo.kind, Kind::ProjectInvalid);
+        assert_eq!(typo.details, ["data.toml:3   selct = [\"*.edf\"]"]);
+        assert_eq!(typo.help.as_deref(), Some("did you mean `select`?"));
+        let no_ref = fails("[datasets.eeg]\nselect = \"*\"\n");
+        assert!(no_ref.message.contains("has no ref"), "{}", no_ref.message);
+        let name = fails("[datasets.EEG]\nref = \"osf:abc12\"\n");
+        assert!(
+            name.help
+                .as_deref()
+                .is_some_and(|help| help.contains("\"eeg\""))
+        );
+        for bad in [
+            "[datasets.x]\nref = 3\n",
+            "[datasets.x]\nref = \"a\"\ncopy = \"yes\"\n",
+            "[datasets.x]\nref = \"a\"\nselect = [\"[abc\"]\n",
+            "[datasets.x]\nref = \"a\"\npath = \"../outside\"\n",
+            "[project]\ndata_dir = \"/abs\"\n",
+            "[datasets.x\nref = \"a\"\n",
+            "[datasets.x]\nref = \"\"\n",
+        ] {
+            assert_eq!(fails(bad).kind, Kind::ProjectInvalid, "{bad}");
+        }
+    }
+
+    #[test]
+    fn adding_keeps_comments_and_order() {
+        let text = "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.b]\nref = \"zenodo:2\"\n";
+        let added = with_dataset(text, "a", "zenodo:1", &["*.csv".to_owned()], &[]).unwrap();
+        assert_eq!(
+            added,
+            "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.b]\nref = \"zenodo:2\"\n\n[datasets.a]\nref = \"zenodo:1\"\nselect = [\"*.csv\"]\n"
+        );
+        assert_eq!(parse(&added).datasets.len(), 2);
+        let fresh = with_dataset("", "iris", "zenodo:3608990", &[], &[]).unwrap();
+        assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
+    }
+
+    #[test]
+    fn removing_keeps_everything_else() {
+        let text = "# my thesis data\n\n# the classic one\n[datasets.a]\nref = \"zenodo:1\" # first\n\n[datasets.b]\nref = \"zenodo:2\"\n";
+        assert_eq!(
+            without_dataset(text, "a").unwrap(),
+            "# my thesis data\n\n[datasets.b]\nref = \"zenodo:2\"\n"
+        );
+        assert_eq!(
+            without_dataset(text, "b").unwrap(),
+            "# my thesis data\n\n# the classic one\n[datasets.a]\nref = \"zenodo:1\" # first\n"
+        );
+        assert_eq!(
+            without_dataset("[datasets.a]\nref = \"x\"\n", "a").unwrap(),
+            ""
+        );
+        assert_eq!(
+            without_dataset("# only\n\n[datasets.a]\nref = \"x\"\n", "a").unwrap(),
+            "# only\n"
+        );
+    }
+}

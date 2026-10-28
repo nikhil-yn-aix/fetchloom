@@ -1,0 +1,9 @@
+---
+source: tests/cli/project.rs
+assertion_line: 379
+expression: stderr
+---
+    Missing data/iris/iris.csv
+      Extra data/iris/notes.txt
+✓ found 2 differences from data.lock
+  hint: `fetchloom sync` brings the rest in line. edited and extra files stay as they are

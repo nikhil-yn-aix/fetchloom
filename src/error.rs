@@ -21,6 +21,10 @@ pub(crate) enum Kind {
     AuthRequired,
     LocalIo,
     LocalNotEmpty,
+    /// data.toml, data.lock or the project's folders are not in a state fetchloom can work with.
+    ProjectInvalid,
+    /// a check found data.lock out of date with data.toml.
+    Outdated,
     Interrupted,
 }
 
@@ -42,6 +46,8 @@ impl Kind {
             Kind::AuthRequired => "auth.required",
             Kind::LocalIo => "local.io",
             Kind::LocalNotEmpty => "local.not_empty",
+            Kind::ProjectInvalid => "project.invalid",
+            Kind::Outdated => "lock.outdated",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -49,7 +55,7 @@ impl Kind {
     /// the exit code a run ends with when this kind stops it.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
-            Kind::Unconfirmed => 1,
+            Kind::Unconfirmed | Kind::Outdated => 1,
             Kind::Usage => 2,
             Kind::ReferenceInvalid | Kind::ReferenceUnresolved | Kind::SourceInvalid => 10,
             Kind::NetworkUnreachable
@@ -59,7 +65,7 @@ impl Kind {
             | Kind::OfflineMissing => 20,
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
-            Kind::LocalIo | Kind::LocalNotEmpty => 50,
+            Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid => 50,
             Kind::Interrupted => 130,
         }
     }

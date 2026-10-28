@@ -43,6 +43,11 @@ impl Style {
     pub(crate) fn warned(self) -> &'static str {
         if self.unicode { "!" } else { "[!]" }
     }
+
+    /// what ends text that was cut short.
+    pub(crate) fn more(self) -> &'static str {
+        if self.unicode { "…" } else { "..." }
+    }
 }
 
 fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {

@@ -1,8 +1,13 @@
 //! the command line: read the arguments, run the command, return the exit code.
 
 mod args;
+mod cache;
+mod fetch;
 mod get;
 mod logs;
+mod project;
+mod status;
+mod sync;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -25,6 +30,9 @@ use crate::work::Work;
 /// downloads running at once when `FETCHLOOM_JOBS` says nothing. downloads wait on the network,
 /// not the processor, so the number does not follow the core count.
 const JOBS: usize = 8;
+
+/// a download larger than this asks first.
+const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
 
 /// what every command gets: where to print, the settings, the counters and the stop signal.
 struct Context {
@@ -116,9 +124,7 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let output = Arc::new(Output::new(style, level, global.json, logs.on_stderr()));
-    let name = match &command {
-        args::Command::Get(_) => "get",
-    };
+    let name = command.name();
     let context = match jobs(&var) {
         Ok(jobs) => Context {
             output,
@@ -150,10 +156,71 @@ pub(crate) fn run() -> ExitCode {
         return finish::<()>(&context, name, Err(error), started);
     }
     match command {
-        args::Command::Get(get) => {
-            let outcome = block_on(&context, get::run(&context, get));
+        args::Command::Add(args) => {
+            let outcome = block_on(&context, project::add(&context, args));
             finish(&context, name, outcome, started)
         }
+        args::Command::Remove(args) => {
+            let outcome = block_on(&context, project::remove(&context, args));
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Sync(args) => {
+            let outcome = block_on(&context, project::sync(&context, args));
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Lock(args) => {
+            let outcome = block_on(&context, project::lock(&context, args));
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Status => {
+            let outcome = status::run(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Path(args) => {
+            let outcome = block_on(&context, project::path(&context, args));
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache { action: None }) => {
+            let outcome = cache::info(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache {
+            action: Some(args::CacheAction::Gc),
+        }) => {
+            let outcome = cache::gc(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Cache(args::Cache {
+            action: Some(args::CacheAction::Verify),
+        }) => {
+            let outcome = cache::verify(&context);
+            finish(&context, name, outcome, started)
+        }
+        args::Command::Get(args) => {
+            let outcome = block_on(&context, get::run(&context, args));
+            finish(&context, name, outcome, started)
+        }
+    }
+}
+
+/// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
+/// it stops and names the flag.
+fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
+    if yes || bytes <= ASK_ABOVE {
+        return Ok(());
+    }
+    let size = units::size(bytes);
+    match output.confirm(&format!("download {what} ({size})?")) {
+        Some(true) => Ok(()),
+        Some(false) => Err(Error::new(
+            Kind::Unconfirmed,
+            format!("did not download {what}"),
+        )),
+        None => Err(Error::new(
+            Kind::Unconfirmed,
+            format!("downloading {what} needs {size}, and there is no terminal to ask first"),
+        )
+        .help("add --yes to download anyway")),
     }
 }
 

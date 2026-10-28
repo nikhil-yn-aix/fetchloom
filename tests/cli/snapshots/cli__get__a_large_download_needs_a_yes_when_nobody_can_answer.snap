@@ -1,6 +1,7 @@
 ---
 source: tests/cli/get.rs
+assertion_line: 270
 expression: stderr
 ---
-✗ huge.bin is 2.0 GiB, and there is no terminal to ask before downloading it
-  help: add --yes to download it
+✗ downloading huge.bin needs 2.0 GiB, and there is no terminal to ask first
+  help: add --yes to download anyway

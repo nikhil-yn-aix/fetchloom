@@ -30,6 +30,20 @@ impl Sandbox {
         self.root.path().join("work")
     }
 
+    /// another folder in the sandbox, such as a second clone of a project.
+    pub(crate) fn folder(&self, name: &str) -> Result<PathBuf> {
+        let path = self.root.path().join(name);
+        std::fs::create_dir_all(&path)?;
+        Ok(path)
+    }
+
+    /// the command, run in `folder` instead of the work folder.
+    pub(crate) fn command_in(&self, folder: &std::path::Path, args: &[&str]) -> Command {
+        let mut command = self.command(args);
+        command.current_dir(folder);
+        command
+    }
+
     pub(crate) fn command(&self, args: &[&str]) -> Command {
         let home = self.root.path().join("home");
         let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
@@ -68,8 +82,10 @@ impl Sandbox {
         Ok(self.command(args).output()?)
     }
 
-    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports,
-    /// timings and rates. backslashes become slashes so windows matches the other platforms.
+    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports and
+    /// timings. a rate shows only once a download takes a second, which a busy machine or a
+    /// retry wait can cause, so rates are dropped whole. backslashes become slashes so windows
+    /// matches the other platforms.
     pub(crate) fn filters(&self) -> insta::Settings {
         let mut settings = insta::Settings::clone_current();
         settings.add_filter(
@@ -78,7 +94,7 @@ impl Sandbox {
         );
         settings.add_filter(r"\\", "/");
         settings.add_filter(r"127\.0\.0\.1:\d+", "127.0.0.1:[port]");
-        settings.add_filter(r"\d+(\.\d)? [KMGT]?i?B/s", "[rate]");
+        settings.add_filter(r" · \d+(\.\d)? [KMGT]?i?B/s", "");
         settings.add_filter(r"\d+ min \d+ s|\d+(\.\d)? m?s\b", "[time]");
         settings
     }

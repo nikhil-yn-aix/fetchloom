@@ -2,6 +2,7 @@
 
 mod object;
 mod partial;
+mod upkeep;
 
 use std::ffi::OsString;
 use std::fs;
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use upkeep::{Checked, Freed};
 
 use crate::digest::{self, Md5, Sha256};
 
@@ -76,7 +78,7 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
-        for folder in ["objects", "partial", "urls", "stated", "tmp"] {
+        for folder in ["objects", "partial", "urls", "stated", "projects", "tmp"] {
             fs::create_dir_all(root.join(folder))?;
         }
         let cache = Cache { root };
@@ -104,6 +106,21 @@ impl Cache {
         let path = self.object_path(digest);
         let metadata = fs::metadata(&path).ok()?;
         (metadata.is_file() && size.is_none_or(|size| metadata.len() == size)).then_some(path)
+    }
+
+    /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
+    /// edited, is removed so the next run downloads it again. says whether it was intact.
+    pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
+        let path = self.object_path(digest);
+        match Sha256::of_file(&path) {
+            Ok(actual) if actual == *digest => Ok(true),
+            Ok(_) => {
+                fs::remove_file(&path)?;
+                Ok(false)
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {

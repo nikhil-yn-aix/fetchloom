@@ -18,6 +18,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
+use tracing::Instrument as _;
 use url::Url;
 
 use crate::digest::{Md5, Sha256};
@@ -111,19 +112,33 @@ impl Reference {
         }
     }
 
+    /// the host a person names by writing this reference, when it is not one of the fixed public
+    /// services. such a host may be on a private network.
+    pub(crate) fn written_host(&self) -> Option<String> {
+        match self {
+            Reference::Url(url) => url.host_str().map(str::to_owned),
+            Reference::Dataverse(dataset) => Some(dataset.host_name().to_owned()),
+            _ => None,
+        }
+    }
+
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let _span = tracing::debug_span!("resolve", reference = %self).entered();
-        let listing = match self {
-            Reference::Doi(doi) => {
-                let target = doi.locate(api).await?;
-                let mut listing = target.resolve_direct(api).await?;
-                listing.doi.get_or_insert_with(|| doi.name().to_owned());
-                listing
+        let span = tracing::debug_span!("resolve", reference = %self);
+        let listing = async {
+            match self {
+                Reference::Doi(doi) => {
+                    let target = doi.locate(api).await?;
+                    let mut listing = target.resolve_direct(api).await?;
+                    listing.doi.get_or_insert_with(|| doi.name().to_owned());
+                    Ok(listing)
+                }
+                other => other.resolve_direct(api).await,
             }
-            other => other.resolve_direct(api).await?,
-        };
+        }
+        .instrument(span)
+        .await?;
         check(self, listing)
     }
 
