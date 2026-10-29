@@ -236,7 +236,9 @@ impl Project {
 
 /// replaces `path` in one step, so a reader sees the old file or the new one, never half.
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let own = parent.join(FOLDER);
+    let folder = if own.is_dir() { own.as_path() } else { parent };
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let (temporary, file) = loop {
         let temporary = folder.join(format!(".{name}.{:08x}.tmp", fastrand::u32(..)));
@@ -331,6 +333,79 @@ mod tests {
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "target\n/data/\n"
         );
+    }
+
+    #[test]
+    fn interrupted_metadata_writes_leave_no_staging_file_in_the_root() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        const CHILD: &str = "FETCHLOOM_TEST_METADATA_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let project = Project {
+                root: PathBuf::from(root),
+            };
+            project.write("data.lock", &vec![b'x'; 64 << 20]).unwrap();
+            return;
+        }
+        let (_dir, project) = project(&[("data.lock", "old")]);
+        let own = project.inner().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "project::tests::interrupted_metadata_writes_leave_no_staging_file_in_the_root",
+            ])
+            .env(CHILD, &project.root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let staged_in = |folder: &Path| {
+            fs::read_dir(folder).unwrap().flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".data.lock.")
+            })
+        };
+        let started = Instant::now();
+        let staged = loop {
+            if staged_in(&project.root) || staged_in(&own) {
+                break true;
+            }
+            if child.try_wait().unwrap().is_some() || started.elapsed() > Duration::from_secs(30) {
+                break false;
+            }
+            std::thread::yield_now();
+        };
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            staged,
+            "the write never started: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !staged_in(&project.root),
+            "an interrupted metadata write left a temporary in the project root"
+        );
+        let contents = fs::read(project.root.join("data.lock")).unwrap();
+        assert!(
+            contents == b"old"
+                || (contents.len() == 64 << 20 && contents.iter().all(|byte| *byte == b'x'))
+        );
+    }
+
+    #[test]
+    fn a_lock_can_be_written_before_the_own_folder_exists() {
+        let (_dir, project) = project(&[]);
+        project.write("data.lock", b"standalone lock").unwrap();
+        assert_eq!(
+            fs::read(project.root.join("data.lock")).unwrap(),
+            b"standalone lock"
+        );
+        assert!(!project.own_folder().exists());
+        assert_eq!(fs::read_dir(&project.root).unwrap().count(), 1);
     }
 
     #[cfg(windows)]
