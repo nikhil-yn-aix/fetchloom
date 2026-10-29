@@ -133,7 +133,7 @@ impl Cache {
     /// removes an object the cache no longer needs to hold, such as an archive whose files are
     /// all unpacked. files placed from it keep their bytes.
     pub(crate) fn drop_object(&self, digest: &Sha256) -> io::Result<()> {
-        match fs::remove_file(self.object_path(digest)) {
+        match self.volume.remove(&self.object_path(digest)) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             removed => removed,
         }
@@ -416,6 +416,15 @@ pub(crate) mod tests {
             assert!(fs::metadata(&first.path).unwrap().permissions().readonly());
             let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
             assert_eq!(leftovers, 0, "nothing is left behind in tmp");
+        }
+    }
+
+    #[test]
+    fn a_dropped_object_leaves_the_cache() {
+        for (_dir, cache) in [cache(), fat()] {
+            let archive = store(&cache, b"an archive whose files are unpacked");
+            cache.drop_object(&archive.digest).unwrap();
+            assert_eq!(cache.find(&archive.digest, None), None);
         }
     }
 
