@@ -119,7 +119,7 @@ paths below are relative to the dataset folder, or the `get` output folder:
 | `train.zip` and another file | only `a.csv` | `a.csv` |
 | `train.zip` and another file | `a.csv`, `b.csv` | `train/a.csv`, `train/b.csv` |
 
-a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file comes out as named; otherwise the members go under the archive's stem. the archive's parent path is retained. colliding destinations fail. an archive with no regular-file members creates no new output or dataset folder.
+a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file comes out as named; otherwise the members go under the archive's stem. the archive's parent path is retained. colliding destinations fail. an archive with no regular-file members creates no dataset folder in a project; `get` still makes its output folder, empty.
 
 members enter the cache before placement. the packed object can then be removed unless a registered project still needs it packed. see [archive checks and limits](architecture.md#archives) and the [tree record](formats.md#the-tree-hash).
 

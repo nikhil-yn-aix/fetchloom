@@ -260,9 +260,10 @@ impl Cache {
     }
 
     /// links `source` to `path` unless the object is there already, then removes `source`. says
-    /// whether the link is new. a file at `path` that [`Cache::find`] would refuse, such as one
-    /// whose size an edit through a writable hardlink changed, is marked as changed and replaced,
-    /// since keeping it would place the edit in every project instead of these bytes.
+    /// whether the link is new. a file at `path` that does not hold these bytes, such as one an
+    /// edit through a writable hardlink changed, is marked as changed and replaced, since keeping
+    /// it would place the edit in every project instead of these bytes. one that cannot be read
+    /// stays: nothing shows it changed.
     fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
         let volume = &self.volume;
         let new = match volume.hard_link(source, path) {
@@ -287,7 +288,10 @@ impl Cache {
         };
         if !new {
             match fs::metadata(path) {
-                Ok(found) if found.is_file() && found.len() == size => {}
+                Ok(found)
+                    if found.is_file()
+                        && found.len() == size
+                        && !Sha256::of_file(path).is_ok_and(|actual| actual != *digest) => {}
                 found => {
                     if found.is_ok() {
                         self.remember_changed(digest);
@@ -501,9 +505,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// appends a byte to the object at `path`, as an edit through a hardlink someone made writable
-    /// does.
-    fn grow(path: &Path) {
+    /// writes `bytes` over the object at `path`, as an edit through a hardlink someone made
+    /// writable does.
+    fn rewrite(path: &Path, bytes: &[u8]) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         #[expect(
             clippy::permissions_set_readonly_false,
@@ -511,12 +515,7 @@ pub(crate) mod tests {
         )]
         permissions.set_readonly(false);
         fs::set_permissions(path, permissions).unwrap();
-        OpenOptions::new()
-            .append(true)
-            .open(path)
-            .unwrap()
-            .write_all(b"X")
-            .unwrap();
+        fs::write(path, bytes).unwrap();
     }
 
     #[test]
@@ -524,7 +523,28 @@ pub(crate) mod tests {
         for (_dir, cache) in [cache(), fat()] {
             let first = store(&cache, b"abc");
             let object = cache.object_path(&first.digest);
-            grow(&object);
+            rewrite(&object, b"abcX");
+            let again = store(&cache, b"abc");
+            assert_eq!(
+                String::from_utf8(fs::read(&object).unwrap()).unwrap(),
+                "abc"
+            );
+            assert!(again.new);
+            assert!(fs::metadata(&object).unwrap().permissions().readonly());
+            assert_eq!(
+                cache.changed().into_keys().collect::<Vec<_>>(),
+                [first.digest],
+                "projects linking to the changed bytes can learn it"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_stored_again_replace_an_object_whose_bytes_changed_in_place() {
+        for (_dir, cache) in [cache(), fat()] {
+            let first = store(&cache, b"abc");
+            let object = cache.object_path(&first.digest);
+            rewrite(&object, b"abX");
             let again = store(&cache, b"abc");
             assert_eq!(
                 String::from_utf8(fs::read(&object).unwrap()).unwrap(),
@@ -544,7 +564,7 @@ pub(crate) mod tests {
     fn bytes_are_stored_only_once_they_hold_their_name() {
         let (_dir, cache) = cache();
         let object = cache.object_path(&store(&cache, b"abc").digest);
-        grow(&object);
+        rewrite(&object, b"abcX");
         let held = hold(&object);
         let mut again = cache.new_object().unwrap();
         again.write_all(b"abc").unwrap();
