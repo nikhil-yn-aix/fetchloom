@@ -6,6 +6,15 @@ use super::*;
 use crate::net::Options;
 use crate::source::recorded::block_on;
 
+#[test]
+fn a_cache_write_the_disk_refuses_says_what_to_do() {
+    let full = local(&io::ErrorKind::StorageFull.into());
+    assert_eq!(
+        full.help.as_deref(),
+        Some("free some space on that disk, then run the command again")
+    );
+}
+
 /// a server on this machine that answers each connection with the next response, and the request
 /// line of each connection it took.
 fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {

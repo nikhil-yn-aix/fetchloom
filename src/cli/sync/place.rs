@@ -16,7 +16,7 @@ use self::tell::tell;
 use super::disk::Survey;
 use crate::cache::Cache;
 use crate::digest::Sha256;
-use crate::error::{Error, Kind};
+use crate::error::Error;
 use crate::output::Output;
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
@@ -422,8 +422,22 @@ fn now_writable(path: &Path) -> bool {
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
-    Error::new(
-        Kind::LocalIo,
-        format!("could not place {}: {err}", path.display()),
-    )
+    Error::io(format_args!("could not place {}", path.display()), err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_placement_the_disk_refuses_says_what_to_do() {
+        let full = local(
+            Path::new("data/iris/iris.csv"),
+            &std::io::ErrorKind::StorageFull.into(),
+        );
+        assert_eq!(
+            full.help.as_deref(),
+            Some("free some space on that disk, then run the command again")
+        );
+    }
 }

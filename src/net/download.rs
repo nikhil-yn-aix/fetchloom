@@ -653,10 +653,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
 }
 
 fn local(err: &io::Error) -> Error {
-    Error::new(
-        Kind::LocalIo,
-        format!("could not write to the cache: {err}"),
-    )
+    Error::io("could not write to the cache", err)
 }
 
 /// opens the writing end of a download on a blocking thread, since continuing one hashes the

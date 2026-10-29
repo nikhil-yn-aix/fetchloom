@@ -258,15 +258,24 @@ fn copy_hint(why: Unlinked, folder: &Path, things: &str) -> String {
 }
 
 fn local(path: &Path, err: &io::Error) -> Error {
-    Error::new(
-        Kind::LocalIo,
-        format!("could not write {}: {err}", path.display()),
-    )
+    Error::io(format_args!("could not write {}", path.display()), err)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_write_the_disk_refuses_says_what_to_do() {
+        let full = local(
+            Path::new("iris/iris.csv"),
+            &io::ErrorKind::StorageFull.into(),
+        );
+        assert_eq!(
+            full.help.as_deref(),
+            Some("free some space on that disk, then run the command again")
+        );
+    }
 
     #[test]
     fn a_file_copied_onto_a_drive_that_links_nothing_says_why() {
