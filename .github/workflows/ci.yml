@@ -35,3 +35,35 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      # research data often sits on exfat or fat32 drives, which have no links and refuse to
+      # delete a read-only file the way ntfs allows. every test runs again with its folders on
+      # each. windows runners are admin, which diskpart needs
+      - name: cargo test on exfat and fat32
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($fs in 'exfat', 'fat32') {
+            $vhd = "$env:RUNNER_TEMP\$fs.vhdx"
+            $letter = if ($fs -eq 'exfat') { 'X' } else { 'Y' }
+            $script = "$env:RUNNER_TEMP\$fs.txt"
+            Set-Content $script -Encoding ascii -Value @(
+              "create vdisk file=`"$vhd`" maximum=4096 type=expandable"
+              "select vdisk file=`"$vhd`""
+              "attach vdisk"
+              "create partition primary"
+              "format fs=$fs quick label=$fs"
+              "assign letter=$letter"
+            )
+            diskpart /s $script
+            if ($LASTEXITCODE) { throw "diskpart could not make the $fs volume" }
+            New-Item -ItemType Directory "${letter}:\tmp" | Out-Null
+            $env:TMP = "${letter}:\tmp"
+            $env:TEMP = $env:TMP
+            Write-Output "::group::cargo test on $fs"
+            cargo test --locked
+            if ($LASTEXITCODE) { $failed = $true }
+            Write-Output "::endgroup::"
+          }
+          if ($failed) { exit 1 }
