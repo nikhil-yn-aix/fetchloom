@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, delete, file, reply, text};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -342,7 +342,7 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
         .join(&digest[..2])
         .join(&digest[2..]);
     let destination = project.join(path);
-    fs::remove_file(&destination)?;
+    delete(&destination)?;
     fs::hard_link(object, &destination)?;
     let metadata = fs::symlink_metadata(destination)?;
     let modified = u64::try_from(

@@ -126,6 +126,25 @@ pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
 }
 
+/// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
+/// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
+/// alone, since a placed hardlink shares it with the cached object.
+pub(crate) fn delete(path: &Path) -> Result {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut permissions = std::fs::metadata(path)?.permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the file is deleted next"
+            )]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions)?;
+            Ok(std::fs::remove_file(path)?)
+        }
+        removed => Ok(removed?),
+    }
+}
+
 /// makes `link` name the folder `target` the way a user can without admin: a junction on
 /// windows, a symlink elsewhere. says whether the filesystem allowed it.
 pub(crate) fn link_folder(target: &Path, link: &Path) -> bool {

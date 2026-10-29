@@ -5,7 +5,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, Server, file, reply, text};
+use crate::support::{Result, Sandbox, Server, delete, file, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -148,7 +148,7 @@ fn hand_edits_survive_sync_until_forced() -> Result {
     added(&sandbox, &server)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     // editors save by writing a new file in place of the old one
-    fs::remove_file(&placed)?;
+    delete(&placed)?;
     fs::write(&placed, "my own notes\n")?;
     let status = sandbox.run(&["status"])?;
     assert!(
@@ -518,7 +518,7 @@ fn status_lists_what_differs() -> Result {
         text(&sandbox.run(&["status"])?.stderr)?,
         "✓ everything matches data.lock\n"
     );
-    fs::remove_file(folder.join("iris.csv"))?;
+    delete(&folder.join("iris.csv"))?;
     fs::write(folder.join("notes.txt"), "mine")?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0));
@@ -537,7 +537,7 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     assert_eq!(calm.status.code(), Some(0));
     assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
     assert_eq!(text(&calm.stderr)?, "✓ everything matches data.lock\n");
-    fs::remove_file(inner.join("iris.csv"))?;
+    delete(&inner.join("iris.csv"))?;
     let missing = sandbox.run(&[])?;
     assert_eq!(
         text(&missing.stderr)?,
@@ -693,7 +693,7 @@ fn a_project_whose_metadata_passes_260_characters_syncs_and_answers_path() -> Re
     assert!(deep.join(".fetchloom").join("state").is_file());
     let placed = deep.join("data").join("iris").join("iris.csv");
     assert_eq!(fs::read(&placed)?, IRIS);
-    fs::remove_file(&placed)?;
+    delete(&placed)?;
     let output = sandbox
         .command_in(&deep, &["path", "iris/iris.csv"])
         .output()?;
