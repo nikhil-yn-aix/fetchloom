@@ -34,7 +34,7 @@ fetchloom reads the URL value from doi.org's handles API, then parses that URL a
 
 ## 9. finish the shared-link sources before release
 
-hugging face, kaggle, drive and dropbox remain in the release scope because the first users fetch from those hosts as well as repositories. that is scope, not a completion claim: [plan](plan.md#milestones) separates parsers and direct-link paths from finished adapters.
+hugging face, kaggle, drive and dropbox remain in the release scope because the first users fetch from those hosts as well as repositories. that is scope, not a completion claim: [plan](plan.md#milestones) records what each adapter does today.
 
 ## 10. keep `fetchloom` and `fl`
 

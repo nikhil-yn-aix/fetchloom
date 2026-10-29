@@ -4,25 +4,27 @@
 
 | # | milestone | built | left |
 |---|---|---|---|
-| 1 | command shell | both executables, welcome and project status, help, colors, JSON, errors, progress and interruption | a first passing CI run on all three platforms, and release dry runs |
-| 2 | one file | URL `get`, cache objects, conditional requests, retries, checkpointed resume, placement | tighten destination ownership and interrupted replacement |
-| 3 | project loop | add, remove, sync, lock, upgrade, check, status and path; offline use and hand-edit reporting | fix writable-placement transitions and stale reads around concurrent locking |
-| 4 | archives | zip and the tar family, member checks, tree hashes, staged publication, placement and packed-object cleanup | run the corpus on the platform matrix |
-| 5 | main source adapters | zenodo listing; hugging face and kaggle parsers; drive file URL routing | hugging face and kaggle listing and credentials; drive folders, confirmation and quota handling |
-| 6 | other source adapters | DOI handles, figshare versions, dataverse datasets, OSF folders and file GUIDs, dropbox download-link rewriting | dataverse file pages, dropbox page handling and common source conformance cases |
-| 7 | cache and recovery | inspection, gc, verification, integrity failures, re-resolution after a locked 404 or 410 | close publication races and shared-hardlink integrity gaps |
+| 1 | command shell | both executables, welcome and project status, help, colors, JSON, errors, progress and interruption | the first ctrl-c while a download question waits, help that follows color settings, progress lines on narrow terminals |
+| 2 | one file | URL `get`, cache objects, conditional requests, retries, resume that starts over when a server answers with another version, copies published only once complete | |
+| 3 | project loop | add, remove, sync, lock, upgrade, check, status and path; offline use, hand-edit reporting, interrupted replacements adopted when they hold the locked bytes | one project used from windows and WSL at the same time; paths that differ only by case or unicode form on case-insensitive or normalizing filesystems |
+| 4 | archives | zip and the tar family, member checks, tree hashes, staged publication, placement and packed-object cleanup, run on ntfs, refs, exfat, fat32, apfs, btrfs and xfs in CI | staged members after a hard kill wait 24 hours for gc |
+| 5 | main source adapters | zenodo, hugging face and kaggle listings at pinned revisions, drive files and folders with confirmation and quota handling | |
+| 6 | other source adapters | DOI handles, figshare versions, dataverse datasets and file pages, OSF folders and file GUIDs, dropbox files and folder zips | |
+| 7 | cache and recovery | inspection, gc, verification that tells unreadable from changed, change marks that are hashed before use, re-resolution after a locked 404 or 410 | flushing copies before the state that vouches for them |
 | 8 | distribution | source install and first-use docs | python `path()` wrapper, wheels, binaries and installers, publishing and release checks |
 
-source work and cache work have landed before the automation and packaging milestones. a working command does not imply its release checks are in place.
+every source was checked against the live service, and CI runs every test on linux, macos and windows.
 
 ## next
 
-1. finish the source adapters and test their access failures, paging and filename discovery. parsing a source reference is not enough to mark that source done.
-2. close the data-safety gaps: atomic file replacement, ownership of adopted and one-off files, writable-copy transitions, changed MD5 carry-forward, and project reads under the project lock. hardlink reuse and the cache's rename fallback need their own regression cases.
-3. get [CI](../.github/workflows/ci.yml) passing on windows, macos and linux. it runs the source fixtures and archive corpora, so a platform counts as supported only once its job passes.
-4. add a python wrapper around `path --json` and test the installed wheel. build standalone release artifacts and installers. publishing and attestations need configured workflows, not only a version tag convention.
-5. measure release builds against [performance](performance.md), with cache state, placement method and hardware recorded. fix excess requests and copies before setting speed claims.
-6. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
+1. lock one project across windows and WSL. both take their own OS lock on `.fetchloom/lock` and do not see each other's. a `.fetchloom/owner` record both sides honor closes it: stale when its os is this one and this process holds the OS lock, or when it is empty and older than ten seconds; any other record means wait and name the path to delete.
+2. track placed files by the filesystem's identity where names alias: a case-only rename on ntfs or apfs, an NFD name from a source on apfs, a `data_dir` whose case changed. today such a file reads as missing plus extra, and `sync --force` stops at the existing name.
+3. flush copied files before the state is written, if a measurement shows the cost is small; clean staged archive members from a killed run without waiting a day.
+4. answer a waiting download question with exit 130 on the first ctrl-c, make help follow `--color` and `NO_COLOR`, and keep the file name when a terminal is too narrow for the whole progress line.
+5. close the budget misses [performance](performance.md#budgets) records: placing 10,000 files on windows takes 2.7 s where bare links take 1.3 s; adding 100,000 files peaks at 162 MiB on linux; small archive members cost one flush each on linux, where one flush after a batch, as git's batch mode does, would cut 7.7 s to well under a second; a 1 GiB download runs at half of curl's speed on this machine, bound by hashing and the flush.
+6. merge the duplicate test helpers and the two `real_folder` functions, drop the cache's unread `layout` marker, and remove doc comments that restate their item.
+7. add a python wrapper around `path --json` and test the installed wheel. build standalone release artifacts and installers. publishing and attestations need configured workflows, not only a version tag convention. the install section of the README names the default branch, which holds the old project until the rebuild replaces it.
+8. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
 
 ## a release is ready when
 
