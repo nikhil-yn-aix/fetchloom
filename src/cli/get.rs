@@ -265,6 +265,7 @@ async fn unpack(
             archive: file.sha256,
             size: file.size,
             label: file.path.clone(),
+            tree: None,
         });
     }
     let results = unpacking::unpack_all(context, cache, todo).await?;

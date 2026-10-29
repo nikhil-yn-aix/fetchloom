@@ -67,7 +67,7 @@ source tests implement `Api` with in-memory recorded responses from `tests/fixtu
 
 objects are read-only files named by SHA-256. an ordinary download writes to a partial file, computes its hash, flushes and seals it, then publishes under that hash. the caller checks expected size and checksums after publication; a rejected transfer can leave an unreferenced object for gc.
 
-publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee. a rename that fails because another writer published the object since the check counts the bytes as already cached.
+publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee. a rename that fails because another writer published the object since the check counts the bytes as already cached. a file at the name that lookup would refuse, such as an object whose size an edit through a writable hardlink changed, is marked as changed and replaced by the new bytes; when it cannot be removed, the write fails.
 
 partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and are saved about once a second. resuming rehashes that prefix before appending.
 
@@ -120,7 +120,7 @@ retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transien
 
 OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
 
-resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
+resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified` when the server sent no `ETag`. unsuitable responses restart from zero, and so does a range answer that states another `ETag` or `Last-Modified` than the saved bytes came with, since a server that ignores `If-Range` sends the rest of its current version. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
 
 a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
 
@@ -154,7 +154,7 @@ links, devices, fifos, sparse tar files, encrypted zip entries and unsupported z
 
 members are written and sealed in staging files. none is published until the archive passes its checks. a publication IO failure can leave already published members for reuse or gc. the downloaded packed object can also remain after a refused extraction.
 
-successful unpacking records a sorted member tree under the archive hash. a locked tree hash is compared before placement. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
+unpacking records a sorted member tree under the archive hash, unless data.lock pins another tree. a locked tree hash is compared before placement. an archive that unpacks to another tree than the lock pins is hashed first: when its bytes changed in the cache, as a plain tar's can without any error, it is marked, dropped and downloaded again, and only an intact archive fails with advice to pin what this version unpacks. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
 
 ## project coordination and observability
 

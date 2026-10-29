@@ -233,7 +233,7 @@ impl Cache {
         written
     }
 
-    /// moves a sealed file into the cache under its hash. the link never replaces an existing
+    /// moves a sealed file into the cache under its hash. the link never replaces an intact
     /// object, so of two processes racing for the same bytes exactly one places them.
     fn link_object(
         &self,
@@ -250,7 +250,7 @@ impl Cache {
             }
             self.checked[first].store(true, Ordering::Relaxed);
         }
-        let new = link_new(&self.volume, source, &path)?;
+        let new = self.link_new(source, &path, &digest, size)?;
         Ok(Stored {
             digest,
             size,
@@ -258,33 +258,50 @@ impl Cache {
             new,
         })
     }
-}
 
-/// links `source` to `path` unless something is there already, then removes `source`. says
-/// whether the link is new.
-fn link_new(volume: &Volume, source: &Path, path: &Path) -> io::Result<bool> {
-    let new = match volume.hard_link(source, path) {
-        Ok(()) => true,
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
-        // something removed the object's folder since this run checked it
-        Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
-            if let Some(parent) = path.parent() {
-                real_folder(parent)?;
+    /// links `source` to `path` unless the object is there already, then removes `source`. says
+    /// whether the link is new. a file at `path` that [`Cache::find`] would refuse, such as one
+    /// whose size an edit through a writable hardlink changed, is marked as changed and replaced,
+    /// since keeping it would place the edit in every project instead of these bytes.
+    fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
+        let volume = &self.volume;
+        let new = match volume.hard_link(source, path) {
+            Ok(()) => true,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
+            // something removed the object's folder since this run checked it
+            Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
+                if let Some(parent) = path.parent() {
+                    real_folder(parent)?;
+                }
+                return self.link_new(source, path, digest, size);
             }
-            return link_new(volume, source, path);
-        }
-        // a filesystem without hardlinks gets a plain rename, guarded by a check
-        Err(_) if path.exists() => false,
-        Err(_) => match volume.rename(source, path) {
-            Ok(()) => return Ok(true),
-            // another writer published the object since the check, and the rename could not
-            // replace it
+            // a filesystem without hardlinks gets a plain rename, guarded by a check
             Err(_) if path.exists() => false,
-            Err(err) => return Err(err),
-        },
-    };
-    volume.remove(source)?;
-    Ok(new)
+            Err(_) => match volume.rename(source, path) {
+                Ok(()) => return Ok(true),
+                // another writer published the object since the check, and the rename could not
+                // replace it
+                Err(_) if path.exists() => false,
+                Err(err) => return Err(err),
+            },
+        };
+        if !new {
+            match fs::metadata(path) {
+                Ok(found) if found.is_file() && found.len() == size => {}
+                found => {
+                    if found.is_ok() {
+                        self.remember_changed(digest);
+                    }
+                    match volume.remove(path) {
+                        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                        _ => return self.link_new(source, path, digest, size),
+                    }
+                }
+            }
+        }
+        volume.remove(source)?;
+        Ok(new)
+    }
 }
 
 /// writes `bytes` into the new file at `temporary`, flushes them to disk and moves the file to
@@ -482,6 +499,60 @@ pub(crate) mod tests {
             cache.drop_object(&archive.digest).unwrap();
             assert_eq!(cache.find(&archive.digest, None), None);
         }
+    }
+
+    /// appends a byte to the object at `path`, as an edit through a hardlink someone made writable
+    /// does.
+    fn grow(path: &Path) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test damages an object on purpose"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"X")
+            .unwrap();
+    }
+
+    #[test]
+    fn bytes_stored_again_replace_an_object_whose_size_changed() {
+        for (_dir, cache) in [cache(), fat()] {
+            let first = store(&cache, b"abc");
+            let object = cache.object_path(&first.digest);
+            grow(&object);
+            let again = store(&cache, b"abc");
+            assert_eq!(
+                String::from_utf8(fs::read(&object).unwrap()).unwrap(),
+                "abc"
+            );
+            assert!(again.new);
+            assert!(fs::metadata(&object).unwrap().permissions().readonly());
+            assert_eq!(
+                cache.changed().into_keys().collect::<Vec<_>>(),
+                [first.digest],
+                "projects linking to the changed bytes can learn it"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_are_stored_only_once_they_hold_their_name() {
+        let (_dir, cache) = cache();
+        let object = cache.object_path(&store(&cache, b"abc").digest);
+        grow(&object);
+        let held = hold(&object);
+        let mut again = cache.new_object().unwrap();
+        again.write_all(b"abc").unwrap();
+        let published = again.seal().unwrap().publish(&cache);
+        drop(held);
+        // root on unix removes the changed object anyway
+        let holds = fs::read(&object).unwrap() == b"abc";
+        assert_eq!(published.is_ok(), holds, "{published:?}");
     }
 
     #[test]

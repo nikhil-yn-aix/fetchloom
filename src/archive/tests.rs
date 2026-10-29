@@ -190,6 +190,34 @@ fn names_unpack_in_nfc() {
     }
 }
 
+/// a tar holds no checksum over its files, so bytes that changed in the cache unpack to another
+/// tree without any error. what the archive unpacked to when data.lock pinned it must survive.
+#[test]
+fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
+    let scratch = Scratch::new();
+    let archive = crate::cache::tests::store(&scratch.cache, &tar_of(FILES));
+    let pinned = scratch
+        .cache
+        .record_unpacked(
+            &archive.digest,
+            &[crate::cache::Member {
+                path: "a.csv".to_owned(),
+                size: 1,
+                sha256: crate::digest::sha256(b"0"),
+            }],
+        )
+        .unwrap();
+    super::unpack_cached(
+        &scratch.cache,
+        &archive.digest,
+        archive.size,
+        Some(&pinned),
+        &|_| false,
+    )
+    .unwrap();
+    assert_eq!(scratch.cache.unpacked_tree(&archive.digest), Some(pinned));
+}
+
 #[test]
 fn names_that_collide_refuse_the_whole_archive() {
     let pairs: [&[(&str, &[u8])]; 2] = [

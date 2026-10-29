@@ -362,6 +362,43 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
     Ok(())
 }
 
+/// an edit through one project's hardlink that changes the size leaves the cached object at the
+/// wrong size, so a new project downloads the file. the fresh bytes take the object's place.
+#[test]
+fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let mut grown = V1.to_vec();
+    grown.extend_from_slice(b"6.3,edited\n");
+    edit(
+        &sandbox.work().join("data").join("iris").join("iris.csv"),
+        &grown,
+    )?;
+    let other = sandbox.folder("other")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        text(&fs::read(other.join("data").join("iris").join("iris.csv"))?)?,
+        text(V1)?
+    );
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}
+
 #[test]
 fn sync_force_puts_back_a_link_another_project_edited() -> Result {
     let sandbox = Sandbox::new()?;
