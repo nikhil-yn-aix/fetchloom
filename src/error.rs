@@ -86,7 +86,10 @@ impl Error {
             kind,
             message: message.into(),
             details: Vec::new(),
-            help: None,
+            help: (kind == Kind::NetworkStatus).then(|| {
+                "check the link in a browser, or ask its owner for a direct download link"
+                    .to_owned()
+            }),
         }
     }
 

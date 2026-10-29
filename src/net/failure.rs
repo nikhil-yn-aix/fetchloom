@@ -239,6 +239,24 @@ mod tests {
     }
 
     #[test]
+    fn a_permanent_http_status_says_what_to_do_without_retrying() {
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        for code in [400, 402, 418, 422, 451] {
+            let status = StatusCode::from_u16(code).unwrap();
+            let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+                panic!("a permanent HTTP {code} must not be retried");
+            };
+            assert_eq!(error.kind, Kind::NetworkStatus);
+            let help = error.help.as_deref();
+            assert!(
+                help.is_some_and(|text| text.contains("browser")),
+                "HTTP {code} needs a next step, got {help:?}"
+            );
+            assert!(!help.unwrap().contains("retry"), "{help:?}");
+        }
+    }
+
+    #[test]
     fn retry_after_reads_seconds_and_dates() {
         let mut headers = HeaderMap::new();
         assert_eq!(retry_after(&headers), None);
