@@ -85,7 +85,7 @@ never make a hardlinked input writable to edit it. that edits the cached object 
 
 `plan` rejects overlapping dataset folders, file/folder clashes and folded-name collisions. its fold is ASCII lowercase, or NFC followed by uppercase then lowercase for unicode. path components longer than 255 UTF-8 bytes are refused on every platform. windows additionally rejects device names, trailing dots or spaces, and forbidden characters.
 
-manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks its destination folder and child directories and refuses links or junctions; deletion rechecks its parent chain. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
+manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; a project's data folder is checked again, while the folder `get` writes into may itself be a link. deletion rechecks its parent chain the same way. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
 
 metadata files use a sibling file, flush and rename. data-file replacement is different: the old file is removed first, and copies write directly to their destination. a hard interruption can leave a missing or partial destination. a later sync may preserve a partial copy as an edit, so inspect `status` before forcing replacement.
 

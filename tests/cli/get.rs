@@ -1,6 +1,7 @@
 //! `fetchloom get`: one link into one folder, through the cache.
 
 use std::fs;
+use std::path::Path;
 use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -420,5 +421,41 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         fs::read(sandbox.work().join("second").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+/// makes `link` name the folder `target` in a way that needs no admin: a junction on windows, a
+/// symlink elsewhere. says whether the filesystem allowed it.
+fn link_folder(target: &Path, link: &Path) -> Result<bool> {
+    #[cfg(windows)]
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()?
+        .status
+        .success();
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    Ok(made)
+}
+
+/// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
+/// into a home folder.
+#[test]
+fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
+    let sandbox = Sandbox::new()?;
+    let newer = b"sepal_length,species\n5.1,setosa\n";
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
+    let real = sandbox.folder("real")?;
+    if !link_folder(&real, &sandbox.work().join("linked"))? {
+        return Ok(());
+    }
+    for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
+        let output = sandbox.run(&["get", &server.url, "-o", "linked"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{run} run: {stderr}");
+        assert_eq!(fs::read(real.join("iris.csv"))?, bytes, "{run} run");
+    }
     Ok(())
 }

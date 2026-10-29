@@ -87,7 +87,7 @@ fetchloom get https://example.org/files/train.zip -o training
 fetchloom get https://example.org/files/train.zip --no-extract
 ```
 
-`get` uses the same cache without writing a manifest, lock or project state. stdout is the absolute output folder. a single file uses its filename stem for the folder; several files use a name made from the dataset title or reference. `-o` selects a folder instead.
+`get` uses the same cache without writing a manifest, lock or project state. stdout is the absolute output folder. a single file uses its filename stem for the folder; several files use a name made from the dataset title or reference. `-o` selects a folder instead. the output folder may be a link to a folder elsewhere; links below it are refused.
 
 for direct downloads, a `Content-Disposition` filename replaces the URL's guessed name. unsafe filename characters are replaced. names are shortened to 200 bytes before a reserved windows device name gets an extra `_` prefix.
 

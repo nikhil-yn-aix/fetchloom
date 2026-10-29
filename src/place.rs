@@ -38,6 +38,9 @@ pub(crate) enum Method {
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
     root: PathBuf,
+    /// whether the root itself must be a real folder, as a project's data folder must. a folder
+    /// someone named for `get` may be a link to one.
+    checks_root: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
@@ -54,17 +57,28 @@ pub(crate) struct Order<'a> {
 }
 
 impl Placer {
-    /// prepares placement under `root`, and notes whether `root` sits inside a folder a sync client owns.
+    /// prepares placement under `root`, which must be a real folder, and notes whether `root`
+    /// sits inside a folder a sync client owns.
     pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
         Placer::starting_at(root, Method::Reflink, synced)
     }
 
+    /// prepares placement under a folder someone named, which may be a link to a folder. the
+    /// folders below it must still be real.
+    pub(crate) fn in_named_folder(root: &Path) -> Placer {
+        Placer {
+            checks_root: false,
+            ..Placer::new(root)
+        }
+    }
+
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
             root,
+            checks_root: true,
             folders: HashSet::new(),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
@@ -157,7 +171,9 @@ impl Placer {
             if make {
                 fs::create_dir_all(&self.root)?;
             }
-            real_folder(&self.root, false)?;
+            if self.checks_root {
+                real_folder(&self.root, false)?;
+            }
             self.folders.insert(self.root.clone());
         }
         let mut folder = self.root.clone();
@@ -181,7 +197,9 @@ impl Placer {
     pub(crate) fn remove(&mut self, path: &Path, prune: bool) -> io::Result<()> {
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
-        real_folder(&folder, false)?;
+        if self.checks_root {
+            real_folder(&folder, false)?;
+        }
         for part in parent
             .strip_prefix(&self.root)
             .unwrap_or(&parent)
