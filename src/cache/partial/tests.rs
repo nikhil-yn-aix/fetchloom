@@ -1,6 +1,6 @@
 //! resuming a download, what an earlier run left behind, and one process per download.
 
-use super::super::tests::{cache, fat, seal, store};
+use super::super::tests::{cache, fat, hardlinks, seal, store};
 use super::*;
 
 fn owned(cache: &Cache, url: &str) -> Partial {
@@ -69,7 +69,12 @@ fn bytes_that_differ_from_their_record_are_never_continued() {
 
 #[test]
 fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
-    let (_dir, cache) = cache();
+    let (dir, cache) = cache();
+    // FAT32 and exFAT cannot hardlink, so there a sealed download is never a second name of its
+    // object, and a_sealed_download_is_dropped_on_fat covers them
+    if !hardlinks(dir.path()) {
+        return;
+    }
     let url = "https://example.org/sealed";
     let object = store(&cache, b"abc");
     let partial = owned(&cache, url);

@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use super::tests::hardlinks;
 use super::{Cache, Claim, Validators};
 
 fn link_folder(target: &Path, link: &Path) {
@@ -39,6 +40,10 @@ fn owned(cache: &Cache, url: &str) -> super::Partial {
 
 #[test]
 fn cache_folders_cannot_be_links_to_another_folder() {
+    // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
+    if !hardlinks(tempfile::tempdir().unwrap().path()) {
+        return;
+    }
     for name in [
         "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
     ] {
@@ -59,6 +64,10 @@ fn cache_folders_cannot_be_links_to_another_folder() {
 #[test]
 fn replacing_a_partial_folder_never_redirects_writes() {
     let (dir, cache) = super::tests::cache();
+    // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
+    if !hardlinks(dir.path()) {
+        return;
+    }
     let outside = dir.path().join("outside");
     fs::create_dir(&outside).unwrap();
     let partial = cache.root.join("partial");
@@ -75,6 +84,10 @@ fn replacing_a_partial_folder_never_redirects_writes() {
 #[test]
 fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
     let (dir, cache) = super::tests::cache();
+    // FAT32 and exFAT cannot hardlink, so nobody can swap in a second name of a file
+    if !hardlinks(dir.path()) {
+        return;
+    }
     let url = "https://example.org/data";
     let outside = dir.path().join("outside");
     fs::write(&outside, b"abc").unwrap();
