@@ -191,6 +191,11 @@ mod tests {
     #[test]
     fn a_folder_named_through_a_link_is_still_inside() {
         let home = tempfile::tempdir().unwrap();
+        // FAT32 and exFAT can make neither a junction nor a hardlink, so no folder there is
+        // named through a link
+        if !crate::place::tests::makes_hardlinks(home.path()) {
+            return;
+        }
         let onedrive = home.path().join("OneDrive");
         fs::create_dir(&onedrive).unwrap();
         let link = home.path().join("linked");

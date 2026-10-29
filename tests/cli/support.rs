@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -74,6 +74,26 @@ impl Sandbox {
         Ok(links)
     }
 
+    /// waits until a file written in the sandbox now carries a later time than `time`. a
+    /// filesystem stamps times in steps, two seconds on FAT32, so a file written right after
+    /// another can carry the same time.
+    pub(crate) fn wait_for_a_later_time(&self, time: SystemTime) -> Result {
+        let probe = self.root.join(".clock");
+        let started = Instant::now();
+        loop {
+            std::fs::write(&probe, b"")?;
+            let stamped = std::fs::metadata(&probe)?.modified()?;
+            std::fs::remove_file(&probe)?;
+            if stamped > time {
+                return Ok(());
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                return Err("the filesystem's clock never passed the time".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// the command, run in `folder` instead of the work folder.
     pub(crate) fn command_in(&self, folder: &std::path::Path, args: &[&str]) -> Command {
         let mut command = self.command(args);
@@ -124,6 +144,25 @@ impl Sandbox {
 
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
+}
+
+/// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
+/// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
+/// alone, since a placed hardlink shares it with the cached object.
+pub(crate) fn delete(path: &Path) -> Result {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut permissions = std::fs::metadata(path)?.permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the file is deleted next"
+            )]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions)?;
+            Ok(std::fs::remove_file(path)?)
+        }
+        removed => Ok(removed?),
+    }
 }
 
 /// makes `link` name the folder `target` the way a user can without admin: a junction on

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, delete, file, reply, text};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -122,6 +122,9 @@ fn a_sync_settles_files_as_new_as_the_state_and_then_hashes_nothing() -> Result 
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let second = same_second(&sandbox.work())?;
+    // the file settles only once the state is written in a later tick than the file's time,
+    // which a clock as coarse as FAT32's takes up to two seconds to reach
+    sandbox.wait_for_a_later_time(second)?;
     let state_path = sandbox.work().join(".fetchloom").join("state");
     let traces = sandbox.folder("traces")?;
     let sync = |name: &str| -> Result<String> {
@@ -237,14 +240,15 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let written = |name: &str| fs::metadata(sandbox.work().join(name))?.modified();
     // a coarse clock, such as the tick linux stamps files with, can give the file placed last the
-    // state's own time, and the first sync settles it by writing the state again
+    // state's own time, and the first sync settles it by writing the state again in a later tick
+    sandbox.wait_for_a_later_time(written(".fetchloom/state")?)?;
     let settled = sandbox.run(&["sync"])?;
     assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
-    let written = |name: &str| fs::metadata(sandbox.work().join(name))?.modified();
     let before = (written("data.lock")?, written(".fetchloom/state")?);
     // a rewrite now would carry a later time
-    std::thread::sleep(Duration::from_millis(50));
+    sandbox.wait_for_a_later_time(before.0.max(before.1))?;
     let trace = sandbox.folder("traces")?.join("sync.json");
     let output = sandbox
         .command(&["sync"])
@@ -342,7 +346,7 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
         .join(&digest[..2])
         .join(&digest[2..]);
     let destination = project.join(path);
-    fs::remove_file(&destination)?;
+    delete(&destination)?;
     fs::hard_link(object, &destination)?;
     let metadata = fs::symlink_metadata(destination)?;
     let modified = u64::try_from(

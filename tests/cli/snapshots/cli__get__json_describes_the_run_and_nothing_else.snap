@@ -9,7 +9,7 @@ expression: pretty
   "result": {
     "files": [
       {
-        "method": "[link]",
+        "method": "[method]",
         "origin": "network",
         "path": "iris.csv",
         "sha256": "d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d",
@@ -26,7 +26,7 @@ expression: pretty
   "work": {
     "bytes_down": 81,
     "cache_hits": 0,
-    "copies": 0,
+    "copies": "[varies]",
     "elapsed_ms": "[varies]",
     "hardlinks": "[varies]",
     "objects_written": 1,

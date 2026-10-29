@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::volume::{Volume, crosses_volumes, refuses_links};
+
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
 /// other's waits. placing 10,000 files on windows took 7.5 s on four threads and 5.1 s on eight,
@@ -47,6 +49,8 @@ pub(crate) struct Placer {
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
+    /// the volume under the root, which may refuse to remove a read-only file.
+    volume: Volume,
 }
 
 /// one file to place: the object, where it goes, and whether it must be a writable copy.
@@ -71,25 +75,32 @@ pub(crate) enum Unlinked {
 
 impl Placer {
     /// prepares placement under `root`, which must be a real folder, and notes whether `root`
-    /// sits inside a folder a sync client owns.
-    pub(crate) fn new(root: &Path) -> Placer {
+    /// sits inside a folder a sync client owns. `scratch` is a folder of fetchloom's own on the
+    /// same volume, such as the project's `.fetchloom`, where a removal may test whether the
+    /// volume can hardlink.
+    pub(crate) fn new(root: &Path, scratch: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
-        Placer::starting_at(root, Method::Reflink, synced)
+        Placer {
+            volume: Volume::new(scratch.to_path_buf()),
+            ..Placer::starting_at(root, Method::Reflink, synced)
+        }
     }
 
     /// prepares placement under a folder someone named, which may be a link to a folder. the
-    /// folders below it must still be real.
+    /// folders below it must still be real. it is the one folder fetchloom writes to on its
+    /// volume, so a removal tests there, with a hidden file, whether the volume can hardlink.
     pub(crate) fn in_named_folder(root: &Path) -> Placer {
         Placer {
             checks_root: false,
-            ..Placer::new(root)
+            ..Placer::new(root, root)
         }
     }
 
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
+            volume: Volume::new(root.clone()),
             root,
             checks_root: true,
             folders: HashSet::new(),
@@ -207,10 +218,17 @@ impl Placer {
         Ok(())
     }
 
-    /// removes a file fetchloom placed. every folder on its way is checked again first, since a
-    /// deletion must not trust a check made before downloads ran. with `prune`, folders it leaves
-    /// empty go too, up to the root.
-    pub(crate) fn remove(&mut self, path: &Path, prune: bool) -> io::Result<()> {
+    /// removes a file fetchloom placed, by `placed` when fetchloom recorded how. every folder on
+    /// its way is checked again first, since a deletion must not trust a check made before
+    /// downloads ran. with `prune`, folders it leaves empty go too, up to the root. a file
+    /// recorded as a hardlink is the cached object under another name, so it never has its
+    /// read-only flag cleared; any other follows the volume's rule for read-only files.
+    pub(crate) fn remove(
+        &mut self,
+        path: &Path,
+        prune: bool,
+        placed: Option<Method>,
+    ) -> io::Result<()> {
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
         if self.checks_root {
@@ -224,7 +242,11 @@ impl Placer {
             folder.push(part);
             real_folder(&folder, false)?;
         }
-        fs::remove_file(&path)?;
+        if placed == Some(Method::Hardlink) {
+            self.volume.remove_hardlink(&path)?;
+        } else {
+            self.volume.remove(&path)?;
+        }
         let mut folder = path.parent();
         while prune && let Some(current) = folder {
             if current == self.root || fs::remove_dir(current).is_err() {
@@ -253,20 +275,27 @@ impl Placer {
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
     /// again, and an error no other method can avoid, such as an existing destination, is returned.
+    /// a hardlink refusal holds for every file only once the volume's own probe agrees, since one
+    /// file can be refused alone, as linux's `protected_hardlinks` refuses another user's object.
     fn learn(&self, method: Method, error: io::Error) -> io::Result<()> {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
         }
-        if is_refusal(&error) {
-            match method {
-                Method::Reflink => self.can_reflink.store(false, Ordering::Relaxed),
-                Method::Hardlink => {
-                    self.can_hardlink.store(false, Ordering::Relaxed);
-                    let elsewhere = error.kind() == io::ErrorKind::CrossesDevices;
-                    self.other_volume.store(elsewhere, Ordering::Relaxed);
-                }
-                Method::Copy => {}
+        let links_nothing = || self.volume.can_hardlink() == Some(false);
+        match method {
+            Method::Reflink if refuses_links(&error) || crosses_volumes(&error) => {
+                self.can_reflink.store(false, Ordering::Relaxed);
             }
+            Method::Hardlink if crosses_volumes(&error) => {
+                self.can_hardlink.store(false, Ordering::Relaxed);
+                // a cache on this drive helps only where this drive makes links
+                self.other_volume.store(!links_nothing(), Ordering::Relaxed);
+            }
+            Method::Hardlink if refuses_links(&error) && links_nothing() => {
+                self.can_hardlink.store(false, Ordering::Relaxed);
+                self.other_volume.store(false, Ordering::Relaxed);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -326,44 +355,6 @@ fn spread<'o, 'p>(orders: Vec<(usize, &'o Order<'p>)>) -> Vec<(usize, &'o Order<
         .collect();
     ranked.sort_by_key(|(rank, _)| *rank);
     ranked.into_iter().map(|(_, item)| item).collect()
-}
-
-/// whether `error` means the filesystem refuses the method that failed for every file, not only
-/// for this one.
-fn is_refusal(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::Unsupported | io::ErrorKind::CrossesDevices
-    ) || error.raw_os_error().is_some_and(is_refusal_code)
-}
-
-/// whether a windows error code says the volume cannot link or clone at all.
-#[cfg(windows)]
-fn is_refusal_code(code: i32) -> bool {
-    const INVALID_FUNCTION: u32 = 1;
-    const NOT_SAME_DEVICE: u32 = 17;
-    const NOT_SUPPORTED: u32 = 50;
-    // reflink-copy reports windows errors as HRESULTs, which keep the code in their low 16 bits.
-    let code = code.cast_unsigned();
-    let code = if code >> 16 == 0x8007 {
-        code & 0xffff
-    } else {
-        code
-    };
-    matches!(code, INVALID_FUNCTION | NOT_SAME_DEVICE | NOT_SUPPORTED)
-}
-
-/// whether a mac error code is `ENOTSUP`, which clonefile answers on a volume that cannot clone
-/// and which std leaves uncategorized.
-#[cfg(target_os = "macos")]
-fn is_refusal_code(code: i32) -> bool {
-    code == 45
-}
-
-/// linux reports every refusal with a code std already calls unsupported or cross-device.
-#[cfg(not(any(windows, target_os = "macos")))]
-fn is_refusal_code(_code: i32) -> bool {
-    false
 }
 
 /// checks that `folder` is a real folder, not a link to one, and makes it when `make` asks and it
@@ -550,10 +541,15 @@ mod tests {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+        let expected = if makes_hardlinks(folder.path()) {
+            Method::Hardlink
+        } else {
+            Method::Copy
+        };
 
         let method = placer.place(&object, &destination, false).unwrap();
 
-        assert_eq!(method, Method::Hardlink);
+        assert_eq!(method, expected);
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     }
 
@@ -606,6 +602,10 @@ mod tests {
     #[test]
     fn a_hardlink_keeps_the_objects_read_only_flag() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT make no hardlinks
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let destination = folder.path().join("placed.csv");
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
@@ -643,6 +643,10 @@ mod tests {
     #[test]
     fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT cannot hardlink, so nobody can swap in a second name of a file
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let destination = folder.path().join("placed.csv");
         let outside = folder.path().join("outside.csv");
         fs::write(&outside, "someone else's file").unwrap();
@@ -694,6 +698,10 @@ mod tests {
     #[test]
     fn the_whole_ladder_never_copies_within_one_volume() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT link nothing, so there every rung ends in a copy
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
 
         for name in ["first.csv", "second.csv"] {
@@ -709,6 +717,9 @@ mod tests {
         let refusals = [
             io::Error::from(io::ErrorKind::Unsupported),
             io::Error::from(io::ErrorKind::CrossesDevices),
+            // how FAT32 and exFAT refuse a hardlink: ERROR_INVALID_FUNCTION on windows, EPERM on
+            // linux
+            io::Error::from_raw_os_error(1),
             // how NTFS refuses a reflink: "incorrect function", wrapped in an HRESULT.
             #[cfg(windows)]
             io::Error::from_raw_os_error(0x8007_0001_u32.cast_signed()),
@@ -720,6 +731,8 @@ mod tests {
             let (folder, object) = cache(true);
             let mut placer =
                 Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+            // a volume whose own probe agrees that it links nothing
+            placer.volume = Volume::refusing(folder.path().to_path_buf(), false);
             let described = refusal.to_string();
 
             placer.learn(Method::Hardlink, refusal).unwrap();
@@ -732,8 +745,34 @@ mod tests {
     }
 
     #[test]
+    fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
+        let (folder, object) = cache(true);
+        // FAT32 and exFAT link nothing, so there no refusal is for one file only
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+
+        // code 1 is EPERM on linux, which protected_hardlinks answers for another user's object
+        // on a volume that links
+        placer
+            .learn(Method::Hardlink, io::Error::from_raw_os_error(1))
+            .unwrap();
+        let method = placer
+            .place(&object, &folder.path().join("placed.csv"), false)
+            .unwrap();
+
+        assert_eq!(method, Method::Hardlink);
+        assert_eq!(placer.unlinked(), None);
+    }
+
+    #[test]
     fn too_many_links_falls_back_for_that_file_alone() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT make no hardlinks to fall back from
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         placer
@@ -755,7 +794,8 @@ mod tests {
 
         let linking = placer(None);
         assert_eq!(linking.unlinked(), None);
-        let no_links = placer(None);
+        let mut no_links = placer(None);
+        no_links.volume = Volume::refusing(folder.path().to_path_buf(), false);
         no_links.learn(Method::Reflink, refused()).unwrap();
         no_links.learn(Method::Hardlink, refused()).unwrap();
         assert_eq!(no_links.unlinked(), Some(Unlinked::NoLinks));
@@ -764,15 +804,37 @@ mod tests {
         elsewhere
             .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
             .unwrap();
-        assert_eq!(elsewhere.unlinked(), Some(Unlinked::OtherDrive));
+        // a cache on this drive helps only where this drive makes links, which FAT does not
+        let blamed = if makes_hardlinks(folder.path()) {
+            Unlinked::OtherDrive
+        } else {
+            Unlinked::NoLinks
+        };
+        assert_eq!(elsewhere.unlinked(), Some(blamed));
         let synced = placer(Some("onedrive"));
         synced.learn(Method::Reflink, refused()).unwrap();
         assert_eq!(synced.unlinked(), Some(Unlinked::Synced("onedrive")));
     }
 
+    #[test]
+    fn a_cache_elsewhere_is_not_blamed_for_a_drive_that_links_nothing() {
+        let folder = TempDir::new().unwrap();
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
+        placer.volume = Volume::refusing(folder.path().to_path_buf(), false);
+
+        placer
+            .learn(Method::Reflink, io::ErrorKind::CrossesDevices.into())
+            .unwrap();
+        placer
+            .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
+            .unwrap();
+
+        assert_eq!(placer.unlinked(), Some(Unlinked::NoLinks));
+    }
+
     /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
     /// and exFAT do not.
-    fn makes_hardlinks(folder: &Path) -> bool {
+    pub(super) fn makes_hardlinks(folder: &Path) -> bool {
         let original = folder.join("probe");
         let link = folder.join("probe-link");
         fs::write(&original, CONTENTS).unwrap();
@@ -882,7 +944,7 @@ mod tests {
         if !link_folder(&outside, &root) {
             return;
         }
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
 
         let error = placer
             .place(&object, &root.join("placed.csv"), false)
@@ -903,7 +965,7 @@ mod tests {
         if !link_folder(&outside, &link) {
             return;
         }
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
 
         let error = placer
             .place(&object, &link.join("placed.csv"), false)
@@ -932,16 +994,83 @@ mod tests {
     fn a_folder_emptied_by_a_removal_is_made_again_for_the_next_file() {
         let (folder, object) = cache(true);
         let root = folder.path().join("data");
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
         let first = root.join("set").join("inner").join("a.csv");
-        placer.place(&object, &first, false).unwrap();
+        let method = placer.place(&object, &first, false).unwrap();
 
-        placer.remove(&first, true).unwrap();
+        placer.remove(&first, true, Some(method)).unwrap();
         assert!(!root.join("set").exists(), "emptied folders go");
         assert!(root.exists(), "the root stays");
         let second = root.join("set").join("b.csv");
         placer.place(&object, &second, false).unwrap();
 
         assert_eq!(fs::read_to_string(&second).unwrap(), CONTENTS);
+    }
+
+    /// a placer that copies into `root` as if `root` sat on FAT32 or exFAT, with `scratch` as
+    /// fetchloom's own folder there.
+    fn on_fat(root: &Path, scratch: &Path) -> Placer {
+        let mut placer = Placer::starting_at(root.to_path_buf(), Method::Copy, None);
+        placer.volume = Volume::refusing(scratch.to_path_buf(), false);
+        placer
+    }
+
+    #[test]
+    fn a_placed_read_only_file_is_removed_on_fat() {
+        for recorded in [Some(Method::Copy), Some(Method::Reflink), None] {
+            let (folder, object) = cache(true);
+            let root = folder.path().join("data");
+            let own = folder.path().join(".fetchloom");
+            fs::create_dir(&own).unwrap();
+            let mut placer = on_fat(&root, &own);
+            let destination = root.join("placed.csv");
+            placer.place(&object, &destination, false).unwrap();
+            assert!(is_read_only(&destination));
+
+            placer.remove(&destination, false, recorded).unwrap();
+
+            assert!(!destination.exists(), "{recorded:?}");
+            assert_eq!(
+                fs::read_dir(&own).unwrap().count(),
+                0,
+                "the probe leaves nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_removal_on_fat_leaves_nothing_else_in_a_named_folder() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("fetched");
+        let mut placer = on_fat(&root, &root);
+        for name in ["kept.csv", "replaced.csv"] {
+            placer.place(&object, &root.join(name), false).unwrap();
+        }
+
+        placer
+            .remove(&root.join("replaced.csv"), false, None)
+            .unwrap();
+
+        let left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["kept.csv"]);
+    }
+
+    #[test]
+    fn a_recorded_hardlink_keeps_its_flag_even_on_fat() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let mut placer = on_fat(&root, folder.path());
+        let destination = root.join("placed.csv");
+        placer.place(&object, &destination, false).unwrap();
+
+        let refused = placer
+            .remove(&destination, false, Some(Method::Hardlink))
+            .unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert!(is_read_only(&destination));
     }
 }

@@ -174,7 +174,7 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir);
+        let mut placer = Placer::new(&data_dir, &project.own_folder());
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
@@ -219,7 +219,7 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir);
+        let mut placer = Placer::new(&data_dir, &project.own_folder());
         let removed = remove_unwanted(
             project,
             &mut placer,
@@ -278,9 +278,12 @@ fn settle<'t, 'a>(
                         });
                         continue;
                     }
-                    Some(_) => placer
-                        .remove(&destination, false)
-                        .map_err(|err| local(&destination, &err))?,
+                    Some(_) => {
+                        let recorded = survey.state.files.get(&target.path);
+                        placer
+                            .remove(&destination, false, recorded.map(|placed| placed.method))
+                            .map_err(|err| local(&destination, &err))?;
+                    }
                     None => {}
                 }
                 if survey.elsewhere.contains(&target.path) {
@@ -374,7 +377,7 @@ fn remove_unwanted(
                 match now(&file) {
                     Some(current) if current == *look => {
                         placer
-                            .remove(&file, true)
+                            .remove(&file, true, Some(before.method))
                             .map_err(|err| local(&file, &err))?;
                         placement.removed += 1;
                     }

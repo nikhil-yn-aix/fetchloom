@@ -1,19 +1,19 @@
-//! the volume under the cache. FAT32 and exFAT cannot hardlink, and on windows they refuse to
-//! remove a read-only file, which every object is.
+//! the volume under a folder fetchloom writes to: the cache, a project's data folder or the folder
+//! `get` fills. FAT32 and exFAT cannot hardlink, and on windows they refuse to remove a read-only
+//! file, which every object and, by default, every placed file is.
 
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::partial::is_plain;
-
-/// how the volume under the cache links, renames and removes files, and whether it can hardlink
-/// at all, learned the first time a removal needs to know.
+/// how a volume links, renames and removes files, and whether it can hardlink at all, learned
+/// the first time a removal needs to know.
 #[derive(Debug)]
-pub(super) struct Volume {
-    /// the cache's `tmp/`, where the probe link is made.
-    tmp: PathBuf,
+pub(crate) struct Volume {
+    /// a folder of fetchloom's own on the volume, where the probe link is made: the cache's
+    /// `tmp/`, a project's `.fetchloom`, or the folder `get` fills.
+    scratch: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
     rename: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
@@ -21,9 +21,9 @@ pub(super) struct Volume {
 }
 
 impl Volume {
-    pub(super) fn new(tmp: PathBuf) -> Volume {
+    pub(crate) fn new(scratch: PathBuf) -> Volume {
         Volume {
-            tmp,
+            scratch,
             hard_link: |original, link| fs::hard_link(original, link),
             rename: |from, to| fs::rename(from, to),
             remove_file: |path| fs::remove_file(path),
@@ -31,11 +31,11 @@ impl Volume {
         }
     }
 
-    pub(super) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
+    pub(crate) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
         (self.hard_link)(original, link)
     }
 
-    pub(super) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+    pub(crate) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         (self.rename)(from, to)
     }
 
@@ -44,13 +44,19 @@ impl Volume {
     /// it is made writable for a second try. on a volume that can hardlink the refusal stands:
     /// read-only belongs to the file rather than one name, and clearing it could make a
     /// project's placed hardlink of an object writable.
-    pub(super) fn remove(&self, path: &Path) -> io::Result<()> {
+    pub(crate) fn remove(&self, path: &Path) -> io::Result<()> {
         match (self.remove_file)(path) {
             Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => {
                 self.remove_read_only(path).unwrap_or(Err(refused))
             }
             removed => removed,
         }
+    }
+
+    /// removes the file at `path`, which fetchloom recorded as a hardlink of a cached object. its
+    /// read-only flag is the object's too, so it is never cleared, whatever the volume.
+    pub(crate) fn remove_hardlink(&self, path: &Path) -> io::Result<()> {
+        (self.remove_file)(path)
     }
 
     /// clears the read-only flag of the plain file at `path` and removes it, putting the flag
@@ -71,17 +77,17 @@ impl Volume {
         Some(removed)
     }
 
-    /// whether the volume can hardlink, learned once by linking a new file in `tmp/`. none when
-    /// the probe failed in a way that says nothing about links.
-    fn can_hardlink(&self) -> Option<bool> {
+    /// whether the volume can hardlink, learned once by linking a new hidden file in the scratch
+    /// folder. none when the probe failed in a way that says nothing about links.
+    pub(crate) fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
         }
         let [probe, link] = ["probe", "link"].map(|ending| {
-            self.tmp
-                .join(format!("{:016x}.{ending}", fastrand::u64(..)))
+            self.scratch
+                .join(format!(".fetchloom-{:016x}.{ending}", fastrand::u64(..)))
         });
-        File::create_new(&probe).ok()?;
+        create_hidden(&probe).ok()?;
         let linked = (self.hard_link)(&probe, &link);
         let _ = fs::remove_file(&probe);
         let links = match linked {
@@ -96,10 +102,76 @@ impl Volume {
     }
 }
 
-/// whether `err`, from linking a new file in `tmp/`, says the volume cannot hardlink at all.
-/// FAT32 and exFAT answer code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on linux.
-fn refuses_links(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::Unsupported || err.raw_os_error() == Some(1)
+/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link at all.
+/// FAT32 and exFAT refuse hardlinks with code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on
+/// linux. `EPERM` can also refuse one file alone, such as another user's under linux's
+/// `protected_hardlinks`, which only a probe on a file of fetchloom's own tells apart.
+pub(crate) fn refuses_links(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
+}
+
+/// whether `err` says the two files sit on different volumes, as a link from a cache on another
+/// drive does.
+pub(crate) fn crosses_volumes(err: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        const NOT_SAME_DEVICE: u32 = 17;
+        if err
+            .raw_os_error()
+            .is_some_and(|code| win32(code) == NOT_SAME_DEVICE)
+        {
+            return true;
+        }
+    }
+    err.kind() == io::ErrorKind::CrossesDevices
+}
+
+/// `ERROR_INVALID_FUNCTION` and `ERROR_NOT_SUPPORTED`, the codes of a windows volume that cannot
+/// link or clone at all.
+#[cfg(windows)]
+fn refusal_code(code: i32) -> bool {
+    const INVALID_FUNCTION: u32 = 1;
+    const NOT_SUPPORTED: u32 = 50;
+    matches!(win32(code), INVALID_FUNCTION | NOT_SUPPORTED)
+}
+
+/// the windows error code `code` carries. reflink-copy reports windows errors as HRESULTs, which
+/// keep the code in their low 16 bits.
+#[cfg(windows)]
+fn win32(code: i32) -> u32 {
+    let code = code.cast_unsigned();
+    if code >> 16 == 0x8007 {
+        code & 0xffff
+    } else {
+        code
+    }
+}
+
+/// `EPERM`, and `ENOTSUP`, which clonefile answers on a volume that cannot clone and which std
+/// leaves uncategorized.
+#[cfg(target_os = "macos")]
+fn refusal_code(code: i32) -> bool {
+    matches!(code, 1 | 45)
+}
+
+/// `EPERM`. linux reports the other refusals with codes std already calls unsupported.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn refusal_code(code: i32) -> bool {
+    code == 1
+}
+
+/// makes a new empty file that file browsers do not show: windows hides it by its attribute,
+/// other systems by the dot its name starts with.
+fn create_hidden(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 2;
+        options.attributes(FILE_ATTRIBUTE_HIDDEN);
+    }
+    options.open(path)
 }
 
 /// opens `path` only to read and change its attributes, never following a link at its end.
@@ -127,6 +199,19 @@ fn open_attributes(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
+/// whether `metadata` describes a plain file, not a link, a folder or a device.
+pub(crate) fn is_plain(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    metadata.file_type().is_file()
+}
+
 /// `permissions` that let the file's owner write it.
 fn writable(mut permissions: Permissions) -> Permissions {
     #[cfg(unix)]
@@ -147,7 +232,7 @@ fn writable(mut permissions: Permissions) -> Permissions {
 impl Volume {
     /// a volume that refuses to remove a read-only file, as FAT32 and exFAT do on windows, and
     /// that hardlinks only when `links` says so, which FAT cannot.
-    pub(super) fn refusing(tmp: PathBuf, links: bool) -> Volume {
+    pub(crate) fn refusing(scratch: PathBuf, links: bool) -> Volume {
         let hard_link: fn(&Path, &Path) -> io::Result<()> = if links {
             |original, link| fs::hard_link(original, link)
         } else {
@@ -155,7 +240,7 @@ impl Volume {
             |_, _| Err(io::Error::from_raw_os_error(1))
         };
         Volume {
-            tmp,
+            scratch,
             hard_link,
             rename: |from, to| fs::rename(from, to),
             remove_file: |path| {
@@ -171,7 +256,7 @@ impl Volume {
     /// this volume, losing every rename to another writer: just before the rename, that writer
     /// publishes the same file read-only at the destination, and the rename is then refused, as
     /// windows refuses to rename over a read-only file.
-    pub(super) fn losing_renames(self) -> Volume {
+    pub(crate) fn losing_renames(self) -> Volume {
         Volume {
             rename: |from, to| {
                 fs::copy(from, to)?;

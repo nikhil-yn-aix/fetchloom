@@ -110,8 +110,9 @@ fn put(
             )
             .help("move it away to fetch this file, or choose another folder with -o"));
         }
+        // get keeps no record of how it placed a file, so only the volume says how to remove it
         placer
-            .remove(destination, false)
+            .remove(destination, false, None)
             .map_err(|err| local(destination, &err))?;
         replaced = true;
     }

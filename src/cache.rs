@@ -5,7 +5,6 @@ mod object;
 mod partial;
 mod unpacked;
 mod upkeep;
-mod volume;
 
 #[cfg(test)]
 mod link_tests;
@@ -23,9 +22,9 @@ pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
-use volume::Volume;
 
 use crate::digest::{self, Md5, Sha256};
+use crate::volume::Volume;
 
 const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
@@ -354,7 +353,7 @@ pub(crate) mod tests {
     }
 
     /// makes the file at `path` read-only, as every object is.
-    pub(super) fn seal(path: &Path) {
+    pub(crate) fn seal(path: &Path) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         permissions.set_readonly(true);
         fs::set_permissions(path, permissions).unwrap();
@@ -362,7 +361,7 @@ pub(crate) mod tests {
 
     /// keeps `path` from being removed while the result lives.
     #[cfg(windows)]
-    pub(super) fn hold(path: &Path) -> impl Sized {
+    pub(crate) fn hold(path: &Path) -> impl Sized {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_SHARE_READ: u32 = 1;
         OpenOptions::new()
@@ -373,7 +372,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(unix)]
-    pub(super) fn hold(path: &Path) -> impl Sized {
+    pub(crate) fn hold(path: &Path) -> impl Sized {
         use std::os::unix::fs::PermissionsExt;
         struct Locked(PathBuf);
         impl Drop for Locked {

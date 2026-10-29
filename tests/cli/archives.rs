@@ -7,7 +7,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, Server, file, reply, text};
+use crate::support::{Result, Sandbox, Server, delete, file, reply, text};
 
 const PATH: &str = "/files/dataset.zip";
 /// the tree python computed over the files in tests/fixtures/archives/python.zip.
@@ -348,7 +348,7 @@ fn a_file_the_server_never_named_an_archive_needs_its_own_bytes() -> Result {
     ok(&sandbox.run(&["get", &bare.url])?)?;
     assert_eq!(fs::read(sandbox.work().join("12345").join("12345"))?, zip);
     // as cache gc would, once the object is a day old
-    fs::remove_file(zip_object(&sandbox.cache()))?;
+    delete(&zip_object(&sandbox.cache()))?;
     let offline = sandbox.run(&["--offline", "get", &bare.url, "-o", "fresh"])?;
     let stderr = text(&offline.stderr)?;
     assert_eq!(offline.status.code(), Some(20), "{stderr}");

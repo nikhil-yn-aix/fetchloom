@@ -219,6 +219,7 @@ archive bytes may be deleted after successful unpacking when no registered proje
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
 | `.fetchloom/lock` | OS project lock; file contents are unused |
 | `.fetchloom/state` | compact JSON describing tracked placements |
+| `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
 inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
 
