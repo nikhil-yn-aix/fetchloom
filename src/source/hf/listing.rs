@@ -301,7 +301,7 @@ mod tests {
             jobs: 4,
             credentials: Vec::new(),
         };
-        let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {})).unwrap();
+        let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
         let reference = Reference::parse("hf:datasets/stanfordnlp/imdb")
             .unwrap()
             .reference;

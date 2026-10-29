@@ -53,7 +53,7 @@ struct Got {
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     let parsed = Reference::parse(&args.link)?;
     let cache = open_cache()?;
-    let net = Arc::new(context.net()?);
+    let net = Arc::new(context.net());
     net.trust(parsed.reference.written_host());
     let listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
     engine::tell_resolved(&context.output, &listing);

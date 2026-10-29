@@ -363,8 +363,7 @@ mod tests {
             work.clone(),
             Arc::default(),
             Arc::new(|_| {}),
-        )
-        .unwrap();
+        );
         let start = Instant::now();
         let reference = Reference::parse("zenodo:3608990").unwrap().reference;
         let listing = block_on(reference.resolve(&net)).unwrap();

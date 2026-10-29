@@ -58,7 +58,7 @@ impl Context {
 
     /// the network, with credentials from where each source keeps them, and retries reported as
     /// warnings.
-    fn net(&self) -> Result<Net, Error> {
+    fn net(&self) -> Net {
         let output = self.output.clone();
         let notify: net::Notify = Arc::new(move |notice| match notice {
             Notice::Retrying { reason, wait, next } => {

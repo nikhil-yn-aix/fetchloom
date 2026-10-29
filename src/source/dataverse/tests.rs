@@ -238,8 +238,7 @@ fn live_dataverse() {
         work.clone(),
         Arc::default(),
         Arc::new(|_| {}),
-    )
-    .unwrap();
+    );
     let start = Instant::now();
     let reference = Reference::parse("dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0")
         .unwrap()
