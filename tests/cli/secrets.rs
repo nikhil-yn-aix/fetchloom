@@ -33,6 +33,9 @@ fn sync_refuses_a_token_written_into_data_toml() -> Result {
     let stderr = text(&output.stderr)?;
     assert!(stderr.contains("carries token"), "{stderr}");
     assert!(stderr.contains("data.toml:2"), "{stderr}");
+    assert!(!stderr.contains("abc123"), "{stderr}");
+    let json = sandbox.run(&["--json", "sync"])?;
+    assert!(!text(&json.stdout)?.contains("abc123"));
     assert!(!sandbox.work().join("data.lock").exists());
     Ok(())
 }

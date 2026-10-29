@@ -1,160 +1,339 @@
 # formats
 
-`data.toml` and `data.lock` are TOML in UTF-8. a byte order mark is accepted on read and never written. an unknown key is an error that names the closest valid key.
+`data.toml` and `data.lock` are UTF-8 TOML. both accept a byte order mark on read and omit it on write. unknown keys fail. the manifest suggests a nearby spelling when it finds one; the lock parser lists allowed fields.
 
 ## data.toml
-
-you write this file. `fetchloom add` and `fetchloom remove` edit it in place and keep your comments, order and spacing.
 
 ```toml
 [project]
 data_dir = "data"
 
+[datasets.iris]
+ref = "zenodo:3608990"
+
 [datasets.eeg]
 ref = "osf:abc12"
 select = ["**/*.edf", "participants.tsv"]
-exclude = ["**/derivatives/**"]
-
-[datasets.imdb]
-ref = "hf:datasets/stanfordnlp/imdb"
-
-[datasets.weights]
-ref = "https://drive.google.com/file/d/1AbCdEf/view?usp=sharing"
+exclude = "**/derivatives/**"
 extract = false
 copy = true
+path = "signals"
 ```
+
+`project` and `datasets` are optional tables. each dataset entry has these keys:
 
 | key | meaning | default |
 |---|---|---|
-| `project.data_dir` | where datasets land: a real folder inside the project, with no symlink or junction on the way | `data` |
-| `ref` | where the data comes from: a link, a DOI or an id, as listed in [scope](scope.md#sources) | required |
-| `select` | globs of files to keep, matched against the whole path inside the dataset | every file |
-| `exclude` | globs of files to drop | none |
-| `extract` | unpack zip and tar archives | `true` |
-| `copy` | place real, writable copies instead of links, for tools that write into their inputs | `false` |
-| `path` | where the dataset lands inside `data_dir` | its name |
+| `project.data_dir` | folder relative to the project root | `"data"` |
+| `ref` | a reference from [scope](scope.md#sources) | required, nonempty string |
+| `select` | keep files matching any of these patterns | all files |
+| `exclude` | drop files matching any of these patterns | none |
+| `extract` | unpack recognized archive names | `true` |
+| `copy` | request writable placement by reflink or copy, never hardlink | `false` |
+| `path` | folder relative to `data_dir` | the dataset name |
 
-dataset names use `a-z`, `0-9`, `-` and `_`. `select` and `exclude` match the files the source lists, before anything downloads, and every member of a downloaded archive is unpacked. a select pattern that matches no file is an error that shows a few real paths, so the shape of the paths is visible.
+names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit. generated names are at most 40 characters.
 
-machine settings never go in `data.toml`, since it travels through git to other machines.
+`data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](architecture.md#placing-files).
+
+`add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
+
+`copy = true` applies when a file is placed. an existing read-only fallback copy is not made writable by changing this setting; recreate that file to apply it. save any edits first.
+
+### patterns
+
+`select` and `exclude` each accept a string or an array of strings. an empty array has the default meaning. matching is case-sensitive and covers the whole source path. leading `/` is ignored.
+
+| pattern | matches |
+|---|---|
+| `*.csv` | CSV files at the top of the dataset |
+| `**/*.csv` | CSV files at any depth, including the top |
+| `sub-??/data.[ct]sv` | two characters after `sub-`, then `data.csv` or `data.tsv` |
+| `**/[!0-9]*` | a file name not starting with a digit, at any depth |
+
+`*`, `?` and character sets stay within one path component. sets accept ranges and `!` or `^` for negation. `**` must be a whole component. backslashes and empty components are errors; braces have no special meaning.
+
+each select pattern must match at least one listed file before exclusions. an unmatched pattern shows one example path. a selection that leaves no files fails. listing limits apply before selection.
+
+patterns select the files a source lists, before download and before a server-supplied name replaces a guessed name. they do not select members inside an archive. see [archives](cli.md#archives) for where those members land.
 
 ## data.lock
 
-only fetchloom writes this file. the same inputs always give the same bytes: datasets sorted by name and files by path, so a diff shows exactly what changed.
+for a 32-byte file at `https://example.org/iris.csv`, with no filters:
 
 ```toml
 version = 1
 
 [[dataset]]
 name = "iris"
-ref = "zenodo:3608990"
-spec = "sha256:1c9e04a7b2f1c6d8..."
-resolved = "zenodo:3608990"
-title = "DatasetIris"
-license = "CC-BY-4.0"
-doi = "10.5281/zenodo.3608990"
-locked = "2026-10-27T17:30:00Z"
+ref = "https://example.org/iris.csv"
+spec = "sha256:84ec087f04e4cd2214221199d51bd1e493d3589043f4e871b5af7ba7072181e8"
+resolved = "https://example.org/iris.csv"
+locked = "2026-10-28T00:00:00Z"
 files = [
-  { path = "iris.csv", size = 4177, sha256 = "b1f0b46c3e27...", md5 = "5bd7e2c4...", url = "https://zenodo.org/records/3608990/files/iris.csv" },
-]
-
-[[dataset]]
-name = "images"
-ref = "figshare:34744689"
-spec = "sha256:9a2b..."
-resolved = "figshare:34744689@1"
-locked = "2026-10-27T17:31:12Z"
-files = [
-  { path = "images.zip", size = 1830400221, sha256 = "77d1...", md5 = "4adb...", url = "https://ndownloader.figshare.com/files/12345", unpacks_to = "sha256:3e5f..." },
+  { path = "iris.csv", size = 32, sha256 = "8b1ffd452ff4bb8e22402d04ac3f2eab66202dd50aee35e61d420bdd99b285eb", url = "https://example.org/iris.csv" },
 ]
 ```
 
-| key | meaning |
+| field | value |
 |---|---|
-| `version` | the format version. a `data.lock` in a newer format is refused with advice to update fetchloom |
-| `spec` | hash of the entry's `ref`, `select`, `exclude` and `extract`. while it matches, the dataset is not resolved again. when it changes, the dataset is resolved again at the version already locked |
-| `resolved` | the exact version the reference pointed to, in the form listed below |
-| `title`, `license`, `doi` | as the source states them |
-| `locked` | when the dataset was last resolved, in UTC |
-| `files` | every downloaded file: path, size, SHA-256, the checksum the source stated, and its stable URL |
-| `unpacks_to` | for an archive, the tree hash of what it unpacks to, defined below |
+| `version` | integer `1` |
+| `dataset` | array of dataset tables; omitted for an empty lock |
+| `dataset[].name` | name in `data.toml` |
+| `dataset[].ref` | the manifest reference |
+| `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
+| `dataset[].resolved` | the source reference used to list the files |
+| `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
+| `dataset[].locked` | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ` |
+| `dataset[].files` | selected source files, including archives as single files |
+| `files[].path` | relative path inside the dataset, with `/` separators |
+| `files[].size` | byte count, unsigned 64-bit integer |
+| `files[].sha256` | 64 hex digits, without a prefix |
+| `files[].md5` | optional source checksum, 32 hex digits |
+| `files[].url` | download URL recorded before redirects |
+| `files[].unpacks_to` | optional `sha256:` plus the 64-digit archive tree hash |
 
-- only `fetchloom lock --upgrade` moves a dataset to a newer version. `copy` and `path` change where files go, never what is downloaded.
-- the lock lists what was downloaded, not what an archive contains. an archive of 100,000 images is one line.
-- a URL that carries a password, a token or a signature is never written. a source that redirects to signed storage is recorded by the stable URL before the redirect, and asked again on each download.
+hashes are written in lowercase. datasets sort by name and files by path. the writer uses the field order above, inline file tables, LF newlines and a final newline. identical lock contents render identically; a fresh resolution can have a different timestamp.
+
+`locked` stays unchanged when `resolved` and `files` stay unchanged, even after re-resolution. `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
+
+a newer lock version asks you to update fetchloom. a broken or older lock must be restored from git, or deleted before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
+
+### the spec hash
+
+SHA-256 hashes this UTF-8 text, with a final newline:
+
+```text
+ref=<manifest ref>
+select=<first select pattern>
+select=<next select pattern>
+exclude=<first exclude pattern>
+extract=true
+```
+
+there is one line per pattern, in written order; empty pattern lists add no lines. the last value is `true` or `false`. `copy`, `path` and `project.data_dir` are excluded.
+
+an unchanged spec keeps the existing lock entry unless an upgrade is requested. filter or extraction edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
+
+`resolved` is not always immutable. plain URLs, drive links, dropbox links and OSF nodes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
 
 ### what each source records
 
-| source | `resolved` | `url` of each file |
+| source | `resolved` | file `url` |
 |---|---|---|
-| URL | the URL | the URL |
-| zenodo | `zenodo:<record>`, since a record id is one version | the file's API URL |
-| figshare | `figshare:<id>@<version>` | the file's download URL |
-| dataverse | `dataverse:<host>/<doi>@<version>` | the access URL with the file id |
-| osf | `osf:<project>` | the download URL of the file's locked version |
-| hugging face | `hf:<repo>@<commit>` | `/resolve/<commit>/<path>` |
-| kaggle | `kaggle:<owner>/<dataset>@<version>` | the API download URL for that version |
-| google drive | `drive:<file or folder id>` | `https://drive.google.com/uc?id=<file id>` |
-| dropbox | the shared link | the shared link with `dl=1` |
+| plain URL | the parsed URL | the same URL |
+| zenodo | `zenodo:<concrete record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
+| figshare | `figshare:<id>@<version>` | the API's download URL |
+| dataverse | `dataverse:<host>/<persistent id>@<version>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| OSF | `osf:<node or file id>` | the download link with a file version |
+| drive file | `drive:<id>` | `https://drive.google.com/uc?id=<id>` |
+| dropbox | the shared URL with `dl=1` | the same URL |
+
+DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+
+source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
+
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and local cache records keep those URLs verbatim, so do not share them. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 
-an archive's `unpacks_to` is the SHA-256 of one line per unpacked file, sorted by path: the path in NFC with `/` between folders, a tab, the size in bytes, a tab, the file's SHA-256 in hex, and a newline. folders, times and permissions are not part of it, so the same archive gives the same tree hash on every platform. any change to this encoding changes the lock's `version`.
+`unpacked/<archive sha256>` contains one UTF-8 line per file, sorted by path:
+
+```text
+<path>\t<size in bytes>\t<file sha256>\n
+```
+
+`\t` and `\n` above mean a literal tab and LF. paths are NFC, with `/` separators and leading `./` removed. SHA-256 of these exact bytes is `unpacks_to`. there is no header or byte order mark. an empty tree hashes zero bytes.
+
+paths in this record retain their archive folders; placement may strip a shared top folder. directory entries, times and permissions are absent. empty directories are not placed.
 
 ## the cache
 
-one per machine by default, any folder when `FETCHLOOM_CACHE` points elsewhere.
+| platform | default root |
+|---|---|
+| linux | `$XDG_CACHE_HOME/fetchloom`, else `$HOME/.cache/fetchloom` |
+| macos | `$HOME/Library/Caches/fetchloom` |
+| windows | `%LOCALAPPDATA%\fetchloom` |
 
-```
+nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`.
+
+```text
 <cache>/
-  CACHEDIR.TAG          tells backup tools to skip this folder
-  layout                the cache layout version
-  objects/ab/cdef...    one read-only file per object, named by its SHA-256
-  partial/              unfinished downloads and what they need to resume
-  unpacked/             the file list each archive unpacked to
-  stated/md5/ab/...     maps an MD5 a source stated to the object holding those bytes
-  projects/             one small file per project that synced from here, for gc
-  tmp/                  files being written
+  CACHEDIR.TAG
+  layout
+  objects/<first 2 sha256 digits>/<remaining 62 digits>
+  partial/<sha256 of URL>.part
+  partial/<sha256 of URL>.json
+  partial/<sha256 of URL>.lock
+  urls/<sha256 of URL>.json
+  stated/md5/<first 2 md5 digits>/<remaining 30 digits>
+  unpacked/<archive sha256>
+  projects/<sha256 of project root>.json
+  tmp/
 ```
 
-- the default folder is `~/.cache/fetchloom` on linux, `~/Library/Caches/fetchloom` on macos and `%LOCALAPPDATA%\fetchloom` on windows.
-- once an archive is unpacked and verified, its own object is deleted, unless a project on this machine keeps that archive packed. the lock still names it, so another machine downloads and unpacks the same bytes.
-- `stated/` exists because zenodo, figshare and dataverse state only MD5. it lets a new project find bytes the cache already holds without downloading them again.
+`layout` is created with `1\n`. an existing value is not validated or migrated. `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache.
+
+objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, and private downloads when file locking is unavailable. these records are local cache indexes, not files to commit.
+
+### URL and partial records
+
+`urls/` records are JSON written for revalidated, unpinned URLs:
+
+| field | value |
+|---|---|
+| `url` | original download URL, also the UTF-8 input to the filename hash |
+| `sha256` | full object hash |
+| `size` | total bytes |
+| `name` | server-supplied file name, or null |
+| `validators.etag` | `ETag` string, or null |
+| `validators.last_modified` | `Last-Modified` string, or null |
+
+partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. progress is saved about once a second while writing. resumption truncates bytes past the checkpoint and rehashes the prefix.
+
+the `.lock` file coordinates writers; its contents are unused. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
+
+### other indexes
+
+- an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
+- an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
+- a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
+
+archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
 ## the .fetchloom folder
 
-each project keeps a small `.fetchloom/` folder beside `data.toml`. it never goes into git; `fetchloom add` adds it and the data folder to `.gitignore` inside a git repository and says so.
-
-| path | holds |
+| path | contents |
 |---|---|
-| `state` | size, modification time and file identity of every placed file, so `status` needs no hashing |
-| `lock` | held while a command changes the project |
+| `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
+| `.fetchloom/lock` | OS project lock; file contents are unused |
+| `.fetchloom/state` | compact JSON describing tracked placements |
+
+inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
+
+state fields:
+
+| field | value |
+|---|---|
+| `version` | integer `1` |
+| `files` | object keyed by project-relative path, using `/` |
+| `files[path].dataset` | dataset name |
+| `files[path].sha256` | locked member or file hash, 64 hex digits |
+| `files[path].method` | `reflink`, `hardlink` or `copy` |
+| `files[path].look.size` | byte count |
+| `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
+
+there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
 ## settings
 
-v0.1 has no config file. flags and environment variables cover every setting, and a flag wins over a variable.
+there is no config file. [CLI options](cli.md#options) set per-run behavior.
 
-| variable | meaning | default |
-|---|---|---|
-| `FETCHLOOM_CACHE` | the cache folder | per platform, see [the cache](#the-cache) |
-| `FETCHLOOM_OFFLINE` | `1` behaves like `--offline` | unset |
-| `FETCHLOOM_JOBS` | downloads running at once | 8 |
-| `FETCHLOOM_LOG` | log filter for debugging, such as `debug` | unset |
-| `FETCHLOOM_TRACE` | write a timeline of the run to this file, for perfetto | unset |
-| `NO_COLOR` | no colors | unset |
+| variable | effect |
+|---|---|
+| `FETCHLOOM_CACHE` | nonempty cache root override |
+| `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it |
+| `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
+| `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
+| `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
+| `NO_COLOR` | nonempty value disables automatic color |
+| `CLICOLOR_FORCE` | nonempty value other than `0` forces automatic color unless `NO_COLOR` wins |
+| `CLICOLOR` | `0` disables automatic color |
+| `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
+| `CI` | nonempty value disables automatic color and interactivity |
+| `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
+
+explicit `--color always` or `--color never` overrides color variables, not interactivity. in automatic mode the color order is `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0`, `TERM=dumb`, `CI`, then whether stderr is a terminal.
+
+an invalid jobs value fails a named command even when it does not download. welcome, bare-project status, help and version bypass that check. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
+
+synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and known icloud and macos `CloudStorage` locations. system proxy settings and proxy environment variables are read by the HTTP stack.
 
 credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `DATAVERSE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 ## the JSON document
 
-with `--json`, every run prints one document on stdout and nothing else, even a run that stops at a mistake on the command line. `--help` still prints text, since it is for people.
+`--json` prints one document on stdout, including usage errors, welcome and version. `--help` still prints text. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
 
-```json
-{"schema": 1, "command": "sync", "status": "ok", "result": {}, "warnings": [], "errors": [], "work": {}}
-```
+| field | value |
+|---|---|
+| `schema` | integer `1` |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
+| `status` | `ok` or `error` |
+| `result` | command result on success; null on failure |
+| `warnings` | array of strings, including in quiet mode |
+| `errors` | empty on success; one error object on failure |
+| `errors[].kind` | one of the names in [exit codes](#exit-codes) |
+| `errors[].message` | summary string |
+| `errors[].details` | array of supporting strings |
+| `errors[].help` | string or null |
+| `work` | counters below, present on success and failure |
 
-- `command` is the command the command line names, such as `sync` or `cache gc`, or null when it names none. `fetchloom` alone reports as `status` inside a project. outside one, and with `--version`, `result` is `{"version": "0.1.0"}`.
-- `status` is `ok`, `partial` or `error`.
-- each error carries `kind`, `message`, `help` and the dataset or path it concerns. a mistake on the command line is kind `usage`.
-- `work` holds the counters: requests, bytes downloaded, files placed, cache hits, time per phase.
-- a key keeps its meaning for as long as `schema` stays the same.
+there are no structured dataset or path fields in an error. SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
+
+bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0"}`. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
+
+### command results
+
+| command | result fields |
+|---|---|
+| `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
+| `get` | `folder`: absolute path; `files`: file records below |
+| `path` | absolute path string, for a dataset, file or subfolder |
+| `status` | `project`: absolute path; seven arrays below |
+| `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
+| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
+| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array |
+
+project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
+
+placement has integer counts `placed`, `replaced`, `removed`, `unchanged`, and `kept`, an array of `{path, reason}`. paths are project-relative. reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+
+`get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
+
+status arrays:
+
+| field | entries |
+|---|---|
+| `unlocked` | dataset names missing from the lock or with a changed spec |
+| `missing` | absent target paths |
+| `edited` | managed paths whose size or modification time changed |
+| `untracked` | existing target paths without state records |
+| `outdated` | unchanged managed paths pinned to other hashes now |
+| `extra` | scanned paths outside the known targets |
+| `not_unpacked` | archive paths whose member records are unavailable on this machine |
+
+status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
+
+`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding a changed or unreadable object returns an error and exit 30, so `result` is null; its successful `changed` and `stuck` arrays are always empty.
+
+### work counters
+
+all counts and byte quantities are unsigned integers. timestamps and large counters can exceed javascript's exact integer range.
+
+| field | counts |
+|---|---|
+| `requests` | explicit metadata or file request attempts, including retries; redirect hops are not counted separately |
+| `bytes_down` | body bytes read, including metadata and unsuccessful attempts; excludes headers and the saved resume prefix |
+| `retries` | scheduled retry waits |
+| `resumes` | accepted nonzero range starts |
+| `objects_written` | new objects counted after successful downloads and archive unpacking |
+| `cache_hits` | download-layer hash or MD5 shortcuts, not every object used by placement |
+| `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
+| `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
+
+a warm project can place cached files with zero cache hits. there are no phase timings or bytes-written counters. cache scans silently omit directory and metadata read failures, so their counts can cover fewer objects than the cache contains.
+
+### exit codes
+
+| exit | error kinds |
+|---|---|
+| 0 | success |
+| 1 | `unconfirmed`, `lock.outdated` |
+| 2 | `usage` |
+| 10 | `reference.invalid`, `reference.unresolved`, `source.invalid` |
+| 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
+| 30 | `integrity.mismatch`, including size mismatches and failed cache verification |
+| 40 | `auth.required` |
+| 50 | `local.io`, `local.not_empty`, `project.invalid` |
+| 130 | `interrupted` |

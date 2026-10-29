@@ -111,6 +111,21 @@ fn a_download_belongs_to_one_process_at_a_time() {
 }
 
 #[test]
+fn a_writer_keeps_its_download_claimed_until_it_stops() {
+    let (_dir, cache) = cache();
+    let url = "https://example.org/held";
+    let partial = owned(&cache, url);
+    let writer = partial
+        .writer(0, None, Validators::default(), false)
+        .unwrap();
+    // a stopped run drops its claim while a writer thread may still be writing
+    drop(partial);
+    assert!(matches!(cache.claim(url).unwrap(), Claim::Busy));
+    drop(writer);
+    assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+}
+
+#[test]
 fn a_published_object_can_be_read_while_its_download_is_still_claimed() {
     let (_dir, cache) = cache();
     let url = "https://example.org/a";
