@@ -360,7 +360,7 @@ fn the_server_can_name_the_file() -> Result {
 }
 
 #[test]
-fn a_synced_folder_gets_a_copy_and_says_why() -> Result {
+fn a_synced_folder_gets_a_reflink_or_a_copy() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let output = sandbox
@@ -369,7 +369,16 @@ fn a_synced_folder_gets_a_copy_and_says_why() -> Result {
         .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    // sync clients keep a reflink like any file of its own but break a hardlink, so a filesystem
+    // without reflinks gets a copy, and the copy is explained
+    let name = if sandbox.links()?.reflink {
+        "a_synced_folder_gets_a_reflink"
+    } else {
+        "a_synced_folder_gets_a_copy_and_says_why"
+    };
+    sandbox
+        .filters()
+        .bind(|| insta::assert_snapshot!(name, stderr));
     Ok(())
 }
 

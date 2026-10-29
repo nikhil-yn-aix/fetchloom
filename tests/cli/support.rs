@@ -14,31 +14,64 @@ pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Erro
 /// a working folder, a cache and a home of its own, so no test sees another's state or the
 /// machine's.
 pub(crate) struct Sandbox {
-    root: tempfile::TempDir,
+    /// the folder as fetchloom sees it. unix resolves links in a working folder, as getcwd does,
+    /// so a macos temporary folder under `/var` shows as `/private/var`.
+    root: PathBuf,
+    /// removes the folder when the sandbox goes.
+    _folder: tempfile::TempDir,
+}
+
+/// which links the sandbox's filesystem makes, so a test expects what fetchloom can do here
+/// rather than what one filesystem does.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Links {
+    pub(crate) reflink: bool,
+    pub(crate) hardlink: bool,
 }
 
 impl Sandbox {
     pub(crate) fn new() -> Result<Sandbox> {
-        let root = tempfile::tempdir()?;
-        for folder in ["work", "home"] {
-            std::fs::create_dir(root.path().join(folder))?;
+        let folder = tempfile::tempdir()?;
+        let root = if cfg!(unix) {
+            std::fs::canonicalize(folder.path())?
+        } else {
+            folder.path().to_path_buf()
+        };
+        for name in ["work", "home"] {
+            std::fs::create_dir(root.join(name))?;
         }
-        Ok(Sandbox { root })
+        Ok(Sandbox {
+            root,
+            _folder: folder,
+        })
     }
 
     pub(crate) fn work(&self) -> PathBuf {
-        self.root.path().join("work")
+        self.root.join("work")
     }
 
     pub(crate) fn cache(&self) -> PathBuf {
-        self.root.path().join("cache")
+        self.root.join("cache")
     }
 
     /// another folder in the sandbox, such as a second clone of a project.
     pub(crate) fn folder(&self, name: &str) -> Result<PathBuf> {
-        let path = self.root.path().join(name);
+        let path = self.root.join(name);
         std::fs::create_dir_all(&path)?;
         Ok(path)
+    }
+
+    /// tries each link fetchloom places with, between two files in the sandbox.
+    pub(crate) fn links(&self) -> Result<Links> {
+        let probe = self.folder(".links")?;
+        let original = probe.join("original");
+        std::fs::write(&original, b"links")?;
+        let links = Links {
+            reflink: reflink_copy::reflink(&original, probe.join("reflink")).is_ok(),
+            hardlink: std::fs::hard_link(&original, probe.join("hardlink")).is_ok(),
+        };
+        std::fs::remove_dir_all(&probe)?;
+        Ok(links)
     }
 
     /// the command, run in `folder` instead of the work folder.
@@ -49,7 +82,7 @@ impl Sandbox {
     }
 
     pub(crate) fn command(&self, args: &[&str]) -> Command {
-        let home = self.root.path().join("home");
+        let home = self.root.join("home");
         let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
         // nothing from the machine running the tests may reach fetchloom: its own settings,
         // proxies, colors, synced folders or any source's credentials
@@ -80,10 +113,7 @@ impl Sandbox {
     /// matches the other platforms.
     pub(crate) fn filters(&self) -> insta::Settings {
         let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            &literal(&self.root.path().display().to_string()),
-            "[sandbox]",
-        );
+        settings.add_filter(&literal(&self.root.display().to_string()), "[sandbox]");
         settings.add_filter(r"\\", "/");
         settings.add_filter(r"127\.0\.0\.1:\d+", "127.0.0.1:[port]");
         settings.add_filter(r" · \d+(\.\d)? [KMGT]?i?B/s", "");

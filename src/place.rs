@@ -837,7 +837,7 @@ mod tests {
     }
 
     /// makes `link` point at the folder `target`: a junction on windows, which needs no admin.
-    fn link_folder(target: &Path, link: &Path) -> bool {
+    pub(super) fn link_folder(target: &Path, link: &Path) -> bool {
         #[cfg(windows)]
         let made = std::process::Command::new("cmd")
             .args(["/c", "mklink", "/J"])
