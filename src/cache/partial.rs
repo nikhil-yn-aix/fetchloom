@@ -163,7 +163,7 @@ impl Partial {
                 ));
             }
             None => {
-                if let Err(err) = fs::remove_file(&self.bytes)
+                if let Err(err) = self.cache.volume.remove(&self.bytes)
                     && err.kind() != io::ErrorKind::NotFound
                 {
                     return Err(err);
