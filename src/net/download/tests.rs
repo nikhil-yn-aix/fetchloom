@@ -7,6 +7,41 @@ use crate::net::Options;
 use crate::source::recorded::block_on;
 
 #[test]
+fn integrity_errors_mask_query_secrets() {
+    let url = Url::parse("https://example.org/data?token=abc&download=1").unwrap();
+    let stored = Stored {
+        digest: crate::digest::sha256(b"data"),
+        size: 4,
+        md5: Md5::from_hex("8d777f385d3dfec8815d20f7496026dc"),
+        new: true,
+    };
+    for expect in [
+        Expect {
+            size: Some(5),
+            ..Expect::default()
+        },
+        Expect {
+            sha256: Some(crate::digest::sha256(b"other")),
+            ..Expect::default()
+        },
+        Expect {
+            md5: Md5::from_hex("00000000000000000000000000000000"),
+            ..Expect::default()
+        },
+    ] {
+        let error = verify(&url, &expect, &stored).unwrap_err();
+        assert_eq!(error.kind, Kind::IntegrityMismatch);
+        assert!(
+            error.message.contains("token=***"),
+            "integrity error exposed its query: {}",
+            error.message
+        );
+        assert!(!error.message.contains("abc"), "{}", error.message);
+        assert!(error.message.contains("download=1"), "{}", error.message);
+    }
+}
+
+#[test]
 fn a_cache_write_the_disk_refuses_says_what_to_do() {
     let full = local(&io::ErrorKind::StorageFull.into());
     assert_eq!(
@@ -141,6 +176,39 @@ fn an_html_file_the_server_names_is_the_file() {
     let fetched = download(&url.join("file").unwrap(), refuse).unwrap();
     assert_eq!(fetched.name.as_deref(), Some("index.html"));
     assert_eq!(fetched.size, 13);
+}
+
+#[test]
+fn bidi_controls_are_refused_in_server_names() {
+    for disposition in [
+        "attachment; filename=\"report\u{202e}txt.exe\"",
+        "attachment; filename*=UTF-8''report%E2%80%AEtxt.exe",
+    ] {
+        let (url, _) = serve(vec![reply(
+            "200 OK",
+            &[("Content-Disposition", disposition)],
+            "bytes",
+        )]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let fetch = Fetch::new(url.clone());
+        let result = block_on(net(&url).download(&fetch, &cache, &|_| Ok(())));
+        assert!(result.is_err(), "accepted bidi server filename");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(
+            error.message.contains("control character"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("report\\u{202e}txt.exe"),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains('\u{202e}'), "{}", error.message);
+        assert!(cache.objects().is_empty());
+    }
 }
 
 #[test]

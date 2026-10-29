@@ -143,7 +143,7 @@ impl Reference {
     pub(crate) fn shown(&self) -> String {
         match self {
             Reference::Url(url) => crate::net::Shown(url).to_string(),
-            other => other.to_string(),
+            other => net::mask_query(&other.to_string()).into_owned(),
         }
     }
 
@@ -263,7 +263,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
     let url = Url::parse(text).map_err(|err| {
         Error::new(
             Kind::ReferenceInvalid,
-            format!("\"{text}\" is not a valid link: {err}"),
+            format!("\"{}\" is not a valid link: {err}", net::mask_query(text)),
         )
         .help("copy the link again from the browser's address bar")
     })?;
@@ -277,7 +277,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
     if url.host_str().is_none_or(str::is_empty) {
         return Err(Error::new(
             Kind::ReferenceInvalid,
-            format!("\"{text}\" names no host"),
+            format!("\"{}\" names no host", net::mask_query(text)),
         ));
     }
     let routed = doi::Doi::from_link(&url)
@@ -308,7 +308,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,
-                format!("fetchloom does not know this kind of {source} link: {url}"),
+                format!(
+                    "fetchloom does not know this kind of {source} link: {}",
+                    net::Shown(&url)
+                ),
             )
             .help("paste the link of the dataset's own page, or its id, such as zenodo:3608990"));
         }
@@ -357,6 +360,7 @@ fn single(url: &Url) -> Listing {
 /// a listing is hostile input: every path must stay inside the dataset, and no path may appear
 /// twice.
 fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
+    let reference = reference.shown();
     let count = listing.files.len() + listing.unavailable.len();
     if count > MOST_FILES {
         return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {count} entries, more than the {MOST_FILES} fetchloom handles in one dataset"))
@@ -365,6 +369,7 @@ fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
     let mut seen = HashSet::with_capacity(count);
     for path in listing.paths() {
         if let Some(reason) = name::escapes(path) {
+            let path = path.escape_debug();
             return Err(Error::new(
                 Kind::SourceInvalid,
                 format!(
@@ -388,6 +393,8 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
     reference: &dyn fmt::Display,
     response: &Response,
 ) -> Result<T, Error> {
+    let reference = reference.to_string();
+    let reference = net::mask_query(&reference);
     match response.status {
         200..=299 => response.json(),
         404 | 410 => Err(Error::new(Kind::ReferenceUnresolved, format!("{reference} does not exist, or is not public"))
@@ -399,12 +406,14 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
 }
 
 fn unknown(text: &str) -> Error {
+    let text = net::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
         .help("use a link, a DOI, or an id such as zenodo:3608990, hf:datasets/org/name or kaggle:owner/name")
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
 fn malformed(text: &str, expected: &str) -> Error {
+    let text = net::mask_query(text);
     Error::new(
         Kind::ReferenceInvalid,
         format!("\"{text}\" is not a valid reference"),
@@ -522,6 +531,109 @@ mod tests {
         ] {
             let err = Reference::parse(text).unwrap_err();
             assert_eq!(err.kind, Kind::ReferenceInvalid, "{text}");
+        }
+    }
+
+    #[test]
+    fn reference_errors_mask_query_secrets() {
+        for text in [
+            "https://huggingface.co/settings?token=abc",
+            "https://huggingface.co/settings?%74oken=abc&download=1#readme",
+            "https://[invalid]/data?token=abc",
+            "ftp://example.org/data?token=abc",
+            "zenodo:bad?token=abc",
+        ] {
+            let error = Reference::parse(text).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid);
+            assert!(
+                error.message.contains("token=***"),
+                "reference error exposed its query: {}",
+                error.message
+            );
+            assert!(!error.message.contains("abc"), "{}", error.message);
+        }
+        let ordinary = "https://huggingface.co/settings?download=1#readme";
+        assert!(
+            Reference::parse(ordinary)
+                .unwrap_err()
+                .message
+                .contains(ordinary)
+        );
+    }
+
+    #[test]
+    fn listing_errors_mask_query_secrets() {
+        for text in [
+            "https://example.org/data?token=abc",
+            "https://www.dropbox.com/s/id/data.csv?token=abc",
+        ] {
+            let reference = parse(text).reference;
+            assert!(reference.to_string().contains("token=abc"));
+            let mut listing = single(&Url::parse(text).unwrap());
+            listing.files[0].path = "../outside".to_owned();
+            let error = check(&reference, listing).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(
+                error.message.contains("token=***"),
+                "listing error exposed its query: {}",
+                error.message
+            );
+            assert!(!error.message.contains("abc"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn response_errors_mask_query_secrets() {
+        let url = Url::parse("https://example.org/data?token=abc").unwrap();
+        let reference = Reference::Url(url.clone());
+        for status in [404, 403, 500, 200] {
+            let response = Response {
+                status,
+                url: url.clone(),
+                next: None,
+                body: b"not json".to_vec(),
+            };
+            let error = json::<serde_json::Value>(&reference, &response).unwrap_err();
+            let text = format!("{} {}", error.message, error.details.join(" "));
+            assert!(
+                text.contains("token=***"),
+                "response error exposed its query: {text}"
+            );
+            assert!(!text.contains("abc"), "{text}");
+        }
+    }
+
+    #[test]
+    fn bidi_controls_are_refused_in_listings() {
+        let url = Url::parse("https://example.org/x").unwrap();
+        let reference = Reference::Url(url.clone());
+        for unavailable in [false, true] {
+            let mut listing = single(&url);
+            let path = "report\u{202e}txt.exe".to_owned();
+            if unavailable {
+                listing.files.clear();
+                listing.unavailable.push(Unavailable {
+                    path,
+                    reason: "not downloadable".to_owned(),
+                });
+            } else {
+                listing.files[0].path = path;
+            }
+            let result = check(&reference, listing);
+            assert!(result.is_err(), "accepted bidi listed path");
+            let error = result.unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(
+                error.message.contains("control character"),
+                "{}",
+                error.message
+            );
+            assert!(
+                error.message.contains("report\\u{202e}txt.exe"),
+                "{}",
+                error.message
+            );
+            assert!(!error.message.contains('\u{202e}'), "{}", error.message);
         }
     }
 

@@ -175,6 +175,14 @@ impl Reader<'_> {
     /// a path inside the project, which may not climb out of it.
     fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
         let text = self.string(item, key)?.trim().trim_end_matches('/');
+        if let Some(reason) = name::metadata(text) {
+            return Err(self
+                .error(
+                    item.span(),
+                    format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
+                )
+                .help(format!("choose a {key} outside the repository's metadata")));
+        }
         match name::escapes(text) {
             None => Ok(text.to_owned()),
             Some(reason) => Err(self
@@ -261,6 +269,7 @@ pub(crate) fn with_dataset(
         Item::Table(table)
     });
     let Some(datasets) = datasets.as_table_mut() else {
+        let reference = crate::net::mask_query(reference);
         return Err(Error::new(
             Kind::ProjectInvalid,
             "data.toml writes its datasets inline, so fetchloom cannot add to them",
@@ -435,6 +444,89 @@ mod tests {
         ] {
             assert_eq!(fails(bad).kind, Kind::ProjectInvalid, "{bad}");
         }
+    }
+
+    const METADATA_COMPONENTS: &[&str] = &[
+        ".git",
+        ".GIT",
+        ".hg",
+        ".HG",
+        ".svn",
+        ".SVN",
+        ".fetchloom",
+        ".FETCHLOOM",
+        ".git.",
+        ".git ",
+        ".git. ",
+        ".hg.",
+        ".hg ",
+        ".svn.",
+        ".svn ",
+        ".fetchloom.",
+        ".fetchloom ",
+        "git~1",
+        "GIT~1",
+        "hg~1",
+        "svn~1",
+        "fetchl~1",
+        ".git:stream",
+        ".git::$INDEX_ALLOCATION",
+        ".hg:stream",
+        ".svn:stream",
+        ".fetchloom:stream",
+        ".GiT. :stream",
+        "git~1:stream",
+    ];
+
+    fn refuses_metadata(key: &str, table: &str) {
+        for path in [".github", ".gitignore", "data/git", "data/.hgdata"] {
+            let text = format!("{table}\n{key} = \"{path}\"\n");
+            assert!(
+                Manifest::parse(&text).is_ok(),
+                "refused data folder: {path}"
+            );
+        }
+        for component in METADATA_COMPONENTS {
+            for path in [(*component).to_owned(), format!("nested/{component}/files")] {
+                let text = format!("{table}\n{key} = \"{path}\"\n");
+                let result = Manifest::parse(&text);
+                assert!(result.is_err(), "accepted metadata {key}: {path:?}");
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, Kind::ProjectInvalid);
+                assert!(error.message.contains(path.trim()), "{}", error.message);
+                assert!(error.message.contains("metadata"), "{}", error.message);
+                assert!(error.help.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_data_dirs_are_refused() {
+        refuses_metadata("data_dir", "[project]");
+    }
+
+    #[test]
+    fn metadata_dataset_paths_are_refused() {
+        refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");
+    }
+
+    #[test]
+    fn reference_help_masks_query_secrets() {
+        let error = with_dataset(
+            "datasets = {}\n",
+            "data",
+            "https://example.org/data?token=abc",
+            &[],
+            &[],
+            true,
+        )
+        .unwrap_err();
+        let help = error.help.unwrap();
+        assert!(
+            help.contains("token=***"),
+            "manifest help exposed its query: {help}"
+        );
+        assert!(!help.contains("abc"), "{help}");
     }
 
     #[test]

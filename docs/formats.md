@@ -36,6 +36,10 @@ names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character 
 
 `data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](architecture.md#placing-files).
 
+`data_dir`, `path` and every placed file path refuse repository metadata components: `.git`, `.hg`, `.svn` and `.fetchloom`, ignoring case. this includes trailing dots or spaces, a `:` stream suffix, and the windows short names `git~1`, `hg~1`, `svn~1` and `fetchl~1`. the rule also covers source listings, unpacked archive members and paths inside a `get` folder. names such as `.github` and `.gitignore` remain usable.
+
+file paths refuse control characters, including the bidi controls U+061C, U+200E, U+200F, U+202A to U+202E and U+2066 to U+2069. this covers manifest paths, source listings and archive members. server-supplied file names with bidi controls are refused too, including names decoded from `Content-Disposition`. ordinary right-to-left letters remain usable.
+
 `add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
 
 `copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. turning it off leaves writable files as they are.
@@ -142,7 +146,7 @@ dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs mask recognized query secrets. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask recognized query secrets, including errors for malformed links. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 
@@ -213,6 +217,8 @@ the `.lock` file coordinates writers; its contents are unused. without OS file l
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
 ## the .fetchloom folder
+
+`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, state or ignore file.
 
 | path | contents |
 |---|---|

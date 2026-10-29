@@ -1,6 +1,7 @@
 //! links as fetchloom shows them. a query value that grants access by itself, such as a token or
 //! the signature of a presigned storage link, never reaches a message or a log.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use url::Url;
@@ -43,25 +44,32 @@ pub(crate) struct Shown<'a>(pub(crate) &'a Url);
 
 impl fmt::Display for Shown<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if secret(self.0).is_none() {
-            return f.write_str(self.0.as_str());
-        }
-        let pairs: Vec<(String, String)> = self
-            .0
-            .query_pairs()
-            .map(|(key, value)| {
-                let value = if is_secret(&key) {
-                    "***".to_owned()
-                } else {
-                    value.into_owned()
-                };
-                (key.into_owned(), value)
-            })
-            .collect();
-        let mut url = self.0.clone();
-        url.query_pairs_mut().clear().extend_pairs(pairs);
-        f.write_str(url.as_str())
+        f.write_str(&mask_query(self.0.as_str()))
     }
+}
+
+/// masks secret query values in a reference, even when it is not a valid URL yet.
+pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
+    let (head, fragment) = text.find('#').map_or((text, ""), |at| text.split_at(at));
+    let Some((address, query)) = head.split_once('?') else {
+        return Cow::Borrowed(text);
+    };
+    let pairs = url::form_urlencoded::parse(query.as_bytes());
+    if !pairs.clone().any(|(key, _)| is_secret(&key)) {
+        return Cow::Borrowed(text);
+    }
+    let pairs = pairs.map(|(key, value)| {
+        let value = if is_secret(&key) {
+            Cow::Borrowed("***")
+        } else {
+            value
+        };
+        (key, value)
+    });
+    let mut encoded = url::form_urlencoded::Serializer::new(String::new());
+    encoded.extend_pairs(pairs);
+    let query = encoded.finish();
+    Cow::Owned(format!("{address}?{query}{fragment}"))
 }
 
 #[cfg(test)]

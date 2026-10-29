@@ -215,10 +215,35 @@ impl Project {
     /// the .fetchloom folder, which tells git to ignore it the first time it is made.
     fn inner(&self) -> Result<PathBuf, Error> {
         let folder = self.root.join(FOLDER);
-        if !folder.is_dir() {
-            fs::create_dir_all(&folder).map_err(|err| {
-                Error::io(format_args!("could not create {}", folder.display()), &err)
-            })?;
+        let created = match fs::create_dir(&folder) {
+            Ok(()) => true,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(err) => {
+                return Err(Error::io(
+                    format_args!("could not create {}", folder.display()),
+                    &err,
+                ));
+            }
+        };
+        let found = fs::symlink_metadata(&folder)
+            .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))?
+            .file_type();
+        if found.is_symlink() || !found.is_dir() {
+            let what = if found.is_symlink() {
+                "a link"
+            } else {
+                "a file"
+            };
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "{} is {what}, and fetchloom needs a real folder for project metadata",
+                    folder.display()
+                ),
+            )
+            .help("replace .fetchloom with a real folder before running this command"));
+        }
+        if created {
             write_atomically(&folder.join(".gitignore"), b"*\n").map_err(|err| {
                 Error::io(format_args!("could not write {}", folder.display()), &err)
             })?;
@@ -302,6 +327,49 @@ mod tests {
         assert_eq!(
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_links_cannot_redirect_writes() {
+        let (_dir, project) = project(&[("data.toml", "")]);
+        // FAT32 and exFAT can make neither a hardlink nor a junction.
+        if fs::hard_link(project.manifest_path(), project.root.join("link-probe")).is_err() {
+            return;
+        }
+        let outside = tempfile::tempdir().unwrap();
+        let link = project.own_folder();
+        let output = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let held = project.hold();
+        let written = project.write_state(&State::default());
+        assert!(held.is_err(), "linked .fetchloom accepted a project lock");
+        assert!(written.is_err(), "linked .fetchloom accepted project state");
+        for error in [held.err().unwrap(), written.unwrap_err()] {
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert!(
+                error.message.contains(&link.display().to_string()),
+                "{}",
+                error.message
+            );
+            assert!(error.message.contains("link"), "{}", error.message);
+            assert!(error.help.is_some());
+        }
+        assert_eq!(
+            fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "metadata writes escaped through .fetchloom"
         );
     }
 

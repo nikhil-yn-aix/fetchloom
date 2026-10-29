@@ -380,7 +380,7 @@ impl Net {
             status => return Err(failure::refusal(from, status, &head)),
         };
         let total = headers::total_length(&head, status);
-        let name = headers::file_name(&head);
+        let name = server_name(&head)?;
         let validators = headers::validators(&head);
         let body = Body {
             offset,
@@ -573,6 +573,25 @@ impl Net {
     }
 }
 
+fn server_name(head: &header::HeaderMap) -> Result<Option<String>, Failure> {
+    let name = headers::file_name(head);
+    if let Some(given) = name.as_deref()
+        && given.contains(crate::name::is_bidi_control)
+    {
+        return Err(Failure::Final(
+            Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "the server supplied a file name with a bidi control character: \"{}\"",
+                    given.escape_debug()
+                ),
+            )
+            .help("ask the file's publisher to remove the control character from its name"),
+        ));
+    }
+    Ok(name)
+}
+
 /// whether an answer is a page in place of the file: HTML that names no file to save, sent as a
 /// success or as a refusal that asking again would not change.
 fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
@@ -585,13 +604,14 @@ fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
 
 /// checks a finished download against what was expected of it.
 fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
+    let shown = super::Shown(url);
     if let Some(size) = expect.size
         && size != stored.size
     {
         return Err(Error::new(
             Kind::IntegrityMismatch,
             format!(
-                "{} sent {} for {url}, where {} were expected",
+                "{} sent {} for {shown}, where {} were expected",
                 host(url),
                 units::size(stored.size),
                 units::size(size)
@@ -606,7 +626,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     {
         return Err(Error::new(
             Kind::IntegrityMismatch,
-            format!("{} sent other bytes than expected for {url}", host(url)),
+            format!("{} sent other bytes than expected for {shown}", host(url)),
         )
         .detail(format!(
             "expected sha256 {}, got {}",
@@ -620,7 +640,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         return Err(Error::new(
             Kind::IntegrityMismatch,
             format!(
-                "{} sent bytes whose MD5 is not the one it states for {url}",
+                "{} sent bytes whose MD5 is not the one it states for {shown}",
                 host(url)
             ),
         )
