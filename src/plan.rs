@@ -219,6 +219,13 @@ pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error>
     let mut files: HashMap<String, &Target> = HashMap::with_capacity(targets.len());
     let mut folders: HashMap<String, &Target> = HashMap::new();
     for target in targets {
+        if let Some(reason) = name::metadata(&target.path) {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!("{} is refused because {reason}", target.path),
+            )
+            .help(leave_out("it", target, patterns)));
+        }
         if let Some(reason) = name::unstorable(&target.path) {
             return Err(Error::new(
                 Kind::ProjectInvalid,
@@ -466,6 +473,53 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn metadata_targets_are_refused() {
+        for path in [
+            ".git/hooks/x",
+            ".hg/store/x",
+            ".svn/entries",
+            ".fetchloom/state",
+            "data/a/.GIT/hooks/x",
+            "nested/.git. /hooks/x",
+            "GIT~1/hooks/x",
+            "nested/.git:stream/hooks/x",
+        ] {
+            let locked = lock(&[("a", &[path])]);
+            let mut planned = Plan::default();
+            expand(
+                &mut planned,
+                "a",
+                "",
+                false,
+                &locked.datasets[0].files,
+                &|_| None,
+            );
+            for patterns in [Patterns::InDataToml, Patterns::OnCommandLine] {
+                let result = check(&planned.targets, patterns);
+                assert!(result.is_err(), "accepted metadata target: {path}");
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, Kind::ProjectInvalid);
+                assert!(error.message.contains(path), "{}", error.message);
+                assert!(error.message.contains("metadata"), "{}", error.message);
+                assert!(error.help.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_archive_targets_are_refused() {
+        let manifest = manifest(ONE);
+        let mut locked = lock(&[("a", &["x.zip"])]);
+        locked.datasets[0].files[0].unpacks_to = Some(digest::sha256(b"tree"));
+        let members = vec![member(".git/hooks/x"), member("readme.txt")];
+        let result = plan(&manifest, &locked, &|_| Some(members.clone()));
+        assert!(result.is_err(), "accepted metadata from archive members");
+        let error = result.unwrap_err();
+        assert!(error.message.contains(".git/hooks/x"), "{}", error.message);
+        assert!(error.message.contains("metadata"), "{}", error.message);
     }
 
     #[test]

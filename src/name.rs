@@ -182,6 +182,33 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     None
 }
 
+/// why a data path names repository metadata, including spellings windows treats as aliases.
+pub(crate) fn metadata(path: &str) -> Option<&'static str> {
+    for part in path.split('/') {
+        let part = part
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ' ']);
+        if [
+            ".git",
+            ".hg",
+            ".svn",
+            ".fetchloom",
+            "git~1",
+            "hg~1",
+            "svn~1",
+            "fetchl~1",
+        ]
+        .iter()
+        .any(|reserved| part.eq_ignore_ascii_case(reserved))
+        {
+            return Some("it names repository metadata");
+        }
+    }
+    None
+}
+
 /// why this machine's disks cannot store a path, if they cannot. checked before anything is
 /// written, since other platforms may store the same path fine.
 pub(crate) fn unstorable(path: &str) -> Option<String> {
