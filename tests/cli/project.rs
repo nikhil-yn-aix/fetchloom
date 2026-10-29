@@ -176,7 +176,7 @@ fn hand_edits_survive_sync_until_forced() -> Result {
 }
 
 #[test]
-fn an_edit_through_a_hardlink_never_spreads_to_other_projects() -> Result {
+fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
@@ -194,11 +194,11 @@ fn an_edit_through_a_hardlink_never_spreads_to_other_projects() -> Result {
     let output = sandbox.run(&["sync", "--force"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(fs::read(&placed)?, IRIS, "the locked bytes are back");
-    assert_eq!(
-        server.requests().len(),
-        2,
-        "the damaged object was downloaded again"
-    );
+    // only a hardlink is the cached object itself, so only an edit through one damages the
+    // object, which the next sync then downloads again
+    let links = sandbox.links()?;
+    let hardlinked = links.hardlink && !links.reflink;
+    assert_eq!(server.requests().len(), if hardlinked { 2 } else { 1 });
     let other = clone(&sandbox, "other")?;
     sandbox.command_in(&other, &["sync"]).output()?;
     assert_eq!(
