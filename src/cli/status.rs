@@ -27,7 +27,8 @@ pub(super) struct Status {
     edited: Vec<String>,
     /// files where the lock places one, which fetchloom did not place.
     untracked: Vec<String>,
-    /// files fetchloom placed for an older lock, which `sync` replaces.
+    /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
+    /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
     /// files placed as links whose bytes another project changed through its own link, which
     /// `sync` puts back.
@@ -100,7 +101,7 @@ fn check(project: &Project) -> Result<Status, Error> {
             (None, _) => &mut status.missing,
             (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
             (Some(seen), Some(record)) if record.look == *seen => {
-                if record.sha256 == target.sha256 {
+                if record.sha256 == target.sha256 && (!target.copy || record.writable) {
                     continue;
                 }
                 &mut status.outdated

@@ -391,3 +391,39 @@ fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Resul
     assert_eq!(server.requests().len(), 1, "the cache still holds iris");
     Ok(())
 }
+
+/// asking for writable copies after the files were placed read-only leaves them waiting for a
+/// sync, which status shows and path does before it answers.
+#[test]
+fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    assert!(fs::metadata(&placed)?.permissions().readonly());
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(stderr.contains("Outdated data/iris/iris.csv"), "{stderr}");
+    let document: serde_json::Value =
+        serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
+    assert_eq!(
+        document["result"]["outdated"],
+        serde_json::json!(["data/iris/iris.csv"])
+    );
+    let path = sandbox.run(&["path", "iris"])?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    assert!(
+        !fs::metadata(&placed)?.permissions().readonly(),
+        "path answered before making iris writable"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    let after = sandbox.run(&["status"])?;
+    assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
+    Ok(())
+}

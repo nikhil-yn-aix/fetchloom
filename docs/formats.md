@@ -38,7 +38,7 @@ names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character 
 
 `add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
 
-`copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; an edited file stays. turning it off leaves writable files as they are.
+`copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. turning it off leaves writable files as they are.
 
 ### patterns
 
@@ -302,7 +302,7 @@ status arrays:
 | `missing` | absent target paths |
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
-| `outdated` | unchanged managed paths pinned to other hashes now |
+| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
 | `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after they were placed; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
