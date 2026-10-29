@@ -93,7 +93,7 @@ for direct downloads, a `Content-Disposition` filename replaces the URL's guesse
 
 on another run, a known SHA-256 or MD5 can find cached bytes. an unpinned URL is checked again with `ETag` or `Last-Modified` validators when available. a 304 response downloads no file body; without validators the file may be downloaded again. changed bytes are accepted by `get`, unlike a locked project. repository references may still need metadata requests even when all file bytes are cached.
 
-a destination with unrelated top-level entries is refused. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
+a destination with unrelated top-level entries is refused. hidden `.fetchloom-<16 hex digits>.copy` files left by interrupted copies are ignored. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
 
 ## archives
 

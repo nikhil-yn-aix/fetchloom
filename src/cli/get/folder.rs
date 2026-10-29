@@ -48,6 +48,10 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
     let mut others: Vec<String> = fs::read_dir(folder)
         .map_err(|err| local(folder, &err))?
         .filter_map(Result::ok)
+        .filter(|entry| {
+            !entry.file_type().is_ok_and(|kind| kind.is_file())
+                || !crate::place::is_copy_temporary(&entry.file_name().to_string_lossy())
+        })
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| !tops.contains(name.as_str()))
         .collect();
@@ -264,6 +268,25 @@ fn local(path: &Path, err: &io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_interrupted_copy_does_not_block_a_later_get() {
+        let folder = tempfile::tempdir().unwrap();
+        let leftover = folder.path().join(".fetchloom-0123456789abcdef.copy");
+        fs::write(&leftover, b"a partial copy").unwrap();
+        let paths = ["iris.csv".to_owned()];
+
+        assert!(
+            check(folder.path(), Some(&paths)).is_ok(),
+            "get must ignore its unfinished copies"
+        );
+        assert_eq!(fs::read(&leftover).unwrap(), b"a partial copy");
+        fs::write(folder.path().join(".fetchloom-not-a-copy.copy"), b"keep").unwrap();
+        assert_eq!(
+            check(folder.path(), Some(&paths)).unwrap_err().kind,
+            Kind::LocalNotEmpty
+        );
+    }
 
     #[test]
     fn a_write_the_disk_refuses_says_what_to_do() {
