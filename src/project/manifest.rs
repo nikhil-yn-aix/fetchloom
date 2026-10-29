@@ -269,6 +269,7 @@ pub(crate) fn with_dataset(
         Item::Table(table)
     });
     let Some(datasets) = datasets.as_table_mut() else {
+        let reference = crate::net::mask_query(reference);
         return Err(Error::new(
             Kind::ProjectInvalid,
             "data.toml writes its datasets inline, so fetchloom cannot add to them",
@@ -507,6 +508,25 @@ mod tests {
     #[test]
     fn metadata_dataset_paths_are_refused() {
         refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");
+    }
+
+    #[test]
+    fn reference_help_masks_query_secrets() {
+        let error = with_dataset(
+            "datasets = {}\n",
+            "data",
+            "https://example.org/data?token=abc",
+            &[],
+            &[],
+            true,
+        )
+        .unwrap_err();
+        let help = error.help.unwrap();
+        assert!(
+            help.contains("token=***"),
+            "manifest help exposed its query: {help}"
+        );
+        assert!(!help.contains("abc"), "{help}");
     }
 
     #[test]

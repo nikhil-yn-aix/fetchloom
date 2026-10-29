@@ -146,7 +146,7 @@ dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs mask recognized query secrets. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask recognized query secrets, including errors for malformed links. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 

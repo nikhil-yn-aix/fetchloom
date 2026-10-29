@@ -604,13 +604,14 @@ fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
 
 /// checks a finished download against what was expected of it.
 fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
+    let shown = super::Shown(url);
     if let Some(size) = expect.size
         && size != stored.size
     {
         return Err(Error::new(
             Kind::IntegrityMismatch,
             format!(
-                "{} sent {} for {url}, where {} were expected",
+                "{} sent {} for {shown}, where {} were expected",
                 host(url),
                 units::size(stored.size),
                 units::size(size)
@@ -625,7 +626,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     {
         return Err(Error::new(
             Kind::IntegrityMismatch,
-            format!("{} sent other bytes than expected for {url}", host(url)),
+            format!("{} sent other bytes than expected for {shown}", host(url)),
         )
         .detail(format!(
             "expected sha256 {}, got {}",
@@ -639,7 +640,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         return Err(Error::new(
             Kind::IntegrityMismatch,
             format!(
-                "{} sent bytes whose MD5 is not the one it states for {url}",
+                "{} sent bytes whose MD5 is not the one it states for {shown}",
                 host(url)
             ),
         )

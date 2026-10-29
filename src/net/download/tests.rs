@@ -7,6 +7,41 @@ use crate::net::Options;
 use crate::source::recorded::block_on;
 
 #[test]
+fn integrity_errors_mask_query_secrets() {
+    let url = Url::parse("https://example.org/data?token=abc&download=1").unwrap();
+    let stored = Stored {
+        digest: crate::digest::sha256(b"data"),
+        size: 4,
+        md5: Md5::from_hex("8d777f385d3dfec8815d20f7496026dc"),
+        new: true,
+    };
+    for expect in [
+        Expect {
+            size: Some(5),
+            ..Expect::default()
+        },
+        Expect {
+            sha256: Some(crate::digest::sha256(b"other")),
+            ..Expect::default()
+        },
+        Expect {
+            md5: Md5::from_hex("00000000000000000000000000000000"),
+            ..Expect::default()
+        },
+    ] {
+        let error = verify(&url, &expect, &stored).unwrap_err();
+        assert_eq!(error.kind, Kind::IntegrityMismatch);
+        assert!(
+            error.message.contains("token=***"),
+            "integrity error exposed its query: {}",
+            error.message
+        );
+        assert!(!error.message.contains("abc"), "{}", error.message);
+        assert!(error.message.contains("download=1"), "{}", error.message);
+    }
+}
+
+#[test]
 fn a_cache_write_the_disk_refuses_says_what_to_do() {
     let full = local(&io::ErrorKind::StorageFull.into());
     assert_eq!(

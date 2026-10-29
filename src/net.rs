@@ -20,7 +20,7 @@ use url::Url;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
-pub(crate) use shown::{Shown, secret};
+pub(crate) use shown::{Shown, mask_query, secret};
 
 use self::failure::Failure;
 use crate::error::{Error, Kind};
