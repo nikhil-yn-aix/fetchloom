@@ -287,12 +287,11 @@ impl Cache {
             },
         };
         if !new {
-            match fs::metadata(path) {
-                Ok(found)
-                    if found.is_file()
-                        && found.len() == size
-                        && !Sha256::of_file(path).is_ok_and(|actual| actual != *digest) => {}
-                found => {
+            let found = fs::metadata(path);
+            match existing(&found, size, || Sha256::of_file(path), digest) {
+                Existing::Keep => {}
+                Existing::Gone => return self.link_new(source, path, digest, size),
+                Existing::Changed => {
                     if found.is_ok() {
                         self.remember_changed(digest);
                     }
@@ -305,6 +304,36 @@ impl Cache {
         }
         volume.remove(source)?;
         Ok(new)
+    }
+}
+
+/// what is at an object's path when a new copy of its bytes arrives.
+enum Existing {
+    /// these bytes, or a file that cannot be read, which is no proof that it changed
+    Keep,
+    /// something else: other bytes, another size or not a file
+    Changed,
+    /// nothing, since another process took it away
+    Gone,
+}
+
+/// judges what `found` at an object's path holds, hashing it with `hash` only when its size
+/// matches.
+fn existing(
+    found: &io::Result<fs::Metadata>,
+    size: u64,
+    hash: impl FnOnce() -> io::Result<Sha256>,
+    digest: &Sha256,
+) -> Existing {
+    match found {
+        Ok(found) if found.is_file() && found.len() == size => match hash() {
+            Ok(actual) if actual == *digest => Existing::Keep,
+            Ok(_) => Existing::Changed,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Existing::Gone,
+            Err(_) => Existing::Keep,
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Existing::Gone,
+        _ => Existing::Changed,
     }
 }
 
@@ -558,6 +587,48 @@ pub(crate) mod tests {
                 "projects linking to the changed bytes can learn it"
             );
         }
+    }
+
+    #[test]
+    fn an_object_found_in_place_is_kept_only_while_it_holds_these_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("object");
+        fs::write(&path, b"abc").unwrap();
+        let found = fs::metadata(&path);
+        let digest = crate::digest::sha256(b"abc");
+        let hashed = |result: io::Result<Sha256>| move || result;
+        let failed = |kind: io::ErrorKind| hashed(Err(io::Error::from(kind)));
+        assert!(matches!(
+            existing(&found, 3, hashed(Ok(digest)), &digest),
+            Existing::Keep
+        ));
+        assert!(matches!(
+            existing(&found, 3, hashed(Ok(crate::digest::sha256(b"abX"))), &digest),
+            Existing::Changed
+        ));
+        assert!(matches!(
+            existing(&found, 4, hashed(Ok(digest)), &digest),
+            Existing::Changed
+        ));
+        assert!(
+            matches!(
+                existing(&found, 3, failed(io::ErrorKind::PermissionDenied), &digest),
+                Existing::Keep
+            ),
+            "bytes that cannot be read are no proof of change"
+        );
+        assert!(
+            matches!(
+                existing(&found, 3, failed(io::ErrorKind::NotFound), &digest),
+                Existing::Gone
+            ),
+            "another process took it away while it was hashed"
+        );
+        let missing = fs::metadata(dir.path().join("missing"));
+        assert!(matches!(
+            existing(&missing, 3, hashed(Ok(digest)), &digest),
+            Existing::Gone
+        ));
     }
 
     #[test]
