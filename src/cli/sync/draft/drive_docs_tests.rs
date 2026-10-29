@@ -7,6 +7,17 @@ const ID: &str = "12zxlvJtuHFV6awc3AINaNHnfvRttPv0i";
 const URL: &str =
     "https://drive.google.com/embeddedfolderview?id=12zxlvJtuHFV6awc3AINaNHnfvRttPv0i";
 
+const REASON: &str = "google docs exports can change between downloads, so a lock cannot pin them";
+const DOC_NAMES: [&str; 7] = [
+    "gdown",
+    "notes",
+    "methods",
+    "readme",
+    "license",
+    "appendix",
+    "references",
+];
+
 fn listing(body: Vec<u8>) -> Listing {
     let recorded = Recorded::default().on(URL, 200, body);
     let reference = Reference::parse(&format!("drive:folders/{ID}"))
@@ -17,6 +28,22 @@ fn listing(body: Vec<u8>) -> Listing {
 
 fn mixed() -> Listing {
     listing(fixture_bytes("drive/folder-select-mixed.html"))
+}
+
+fn docs(count: usize, has_files: bool) -> Listing {
+    let mut listing = mixed();
+    let reason = listing.unavailable[0].reason.clone();
+    listing.unavailable = DOC_NAMES[..count]
+        .iter()
+        .map(|name| crate::source::Unavailable {
+            path: (*name).to_owned(),
+            reason: reason.clone(),
+        })
+        .collect();
+    if !has_files {
+        listing.files.clear();
+    }
+    listing
 }
 
 fn entry(select: &[&str], exclude: &[&str], cli: bool) -> Entry {
@@ -56,12 +83,7 @@ fn a_selected_doc_is_refused_with_its_exclusion_flag() {
     for select in [&[][..], &["gdown"][..]] {
         let error = filter("docs", &entry(select, &[], true), &mixed()).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(
-            error
-                .details
-                .iter()
-                .any(|line| line.contains("gdown") && line.contains("exports"))
-        );
+        assert_eq!(error.details, ["gdown", REASON]);
         let help = error.help.unwrap();
         assert!(help.contains("--exclude \"gdown\""), "{help}");
         assert!(help.contains("pdf or csv"), "{help}");
@@ -198,7 +220,7 @@ fn only_unavailable_entries_left_selected_are_named() {
     assert!(help.contains("--exclude \"gdown\""));
     assert!(help.contains("--exclude \"notes\""));
     let one = filter("docs", &entry(&[], &["gdown"], true), &listing).unwrap_err();
-    assert_eq!(one.details.len(), 1);
+    assert_eq!(one.details.len(), 2);
     assert!(one.details[0].contains("notes"));
     assert!(!one.help.unwrap().contains("gdown"));
     assert_eq!(
@@ -206,5 +228,101 @@ fn only_unavailable_entries_left_selected_are_named() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[test]
+fn one_doc_refusal_keeps_its_exact_flag_and_separates_the_reason() {
+    let error = filter("docs", &entry(&[], &[], true), &docs(1, true)).unwrap_err();
+    assert_eq!(
+        error.message,
+        "docs has 1 selected entry that fetchloom cannot download"
+    );
+    assert_eq!(error.details, ["gdown", REASON]);
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "add --exclude \"gdown\" to fetch the other files, or ask the owner to add it as a file such as pdf or csv"
+        )
+    );
+}
+
+#[test]
+fn seven_doc_refusal_keeps_every_path_and_lists_the_reason_once() {
+    let error = filter("docs", &entry(&[], &[], true), &docs(7, true)).unwrap_err();
+    assert_eq!(
+        error.message,
+        "docs has 7 selected entries that fetchloom cannot download"
+    );
+    assert_eq!(
+        error.details,
+        [
+            "gdown",
+            "notes",
+            "methods",
+            "readme",
+            "license",
+            "appendix",
+            "references",
+            REASON
+        ]
+    );
+    assert_eq!(
+        error
+            .details
+            .iter()
+            .filter(|line| line.as_str() == REASON)
+            .count(),
+        1
+    );
+    let help = error.help.unwrap();
+    assert_eq!(
+        help,
+        "add an --exclude for each entry above to fetch the other files, or ask the owner to add them as files such as pdf or csv"
+    );
+    assert!(!help.contains("--exclude \""));
+}
+
+#[test]
+fn five_entries_have_exact_flags_but_six_do_not() {
+    let five = filter("docs", &entry(&[], &[], true), &docs(5, true)).unwrap_err();
+    let help = five.help.unwrap();
+    for name in &DOC_NAMES[..5] {
+        assert!(help.contains(&format!("--exclude \"{name}\"")), "{help}");
+    }
+    assert_eq!(help.matches("--exclude \"").count(), 5);
+    let six = filter("docs", &entry(&[], &[], true), &docs(6, true)).unwrap_err();
+    let help = six.help.unwrap();
+    assert!(!help.contains("--exclude \""));
+    assert!(help.starts_with("add an --exclude for each entry above"));
+}
+
+#[test]
+fn distinct_refusal_reasons_keep_first_seen_order() {
+    let mut listing = docs(3, true);
+    listing.unavailable[0].reason = "the first reason".to_owned();
+    listing.unavailable[1].reason = "another reason".to_owned();
+    listing.unavailable[2].reason = "the first reason".to_owned();
+    let error = filter("docs", &entry(&[], &[], true), &listing).unwrap_err();
+    assert_eq!(
+        error.details,
+        [
+            "gdown",
+            "notes",
+            "methods",
+            "the first reason",
+            "another reason"
+        ]
+    );
+}
+
+#[test]
+fn large_doc_only_refusals_do_not_promise_other_files() {
+    let error = filter("docs", &entry(&[], &[], true), &docs(7, false)).unwrap_err();
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "add an --exclude for each entry above to leave the selected entries out, or ask the owner to add them as files such as pdf or csv"
+        )
     );
 }

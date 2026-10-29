@@ -95,7 +95,7 @@ on another run, a known SHA-256 or MD5 can find cached bytes. an unpinned URL is
 
 a destination with unrelated top-level entries is refused. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
 
-in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error gives the flag that leaves it out, such as `--exclude "gdown"`. `add` records that exclusion in `data.toml`. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
+in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
 
 ## archives
 

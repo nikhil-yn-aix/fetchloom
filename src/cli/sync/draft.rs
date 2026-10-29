@@ -1,6 +1,8 @@
 //! a dataset on its way into data.lock: resolved and filtered, with every hash no source states
 //! filled in from earlier locks or from the bytes themselves.
 
+use std::collections::HashSet;
+
 use super::super::fetch::Job;
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
@@ -328,13 +330,23 @@ fn unavailable_selection(
         ),
     );
     for entry in entries {
-        error = error.detail(format!("{}: {}", entry.path, entry.reason));
+        error = error.detail(entry.path.clone());
     }
-    let flags = entries
-        .iter()
-        .map(|entry| exclusion_flag(&entry.path))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut reasons = HashSet::new();
+    for entry in entries {
+        if reasons.insert(entry.reason.as_str()) {
+            error = error.detail(entry.reason.clone());
+        }
+    }
+    let flags = if entries.len() <= 5 {
+        entries
+            .iter()
+            .map(|entry| exclusion_flag(&entry.path))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        "an --exclude for each entry above".to_owned()
+    };
     let purpose = if has_files {
         "to fetch the other files"
     } else {

@@ -136,7 +136,7 @@ DOIs route to one of these sources. hugging face resolves a branch or tag to its
 
 drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
 
-drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs exports can change between downloads. select and exclude match those entries too; only a doc that remains selected stops the command. the error names it and gives an exact exclusion flag, or you can ask the owner to upload a fixed file.
+drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs exports can change between downloads. select and exclude match those entries too; only a doc that remains selected stops the command. the error names each selected doc and explains how to exclude it, or you can ask the owner to upload a fixed file.
 
 dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins the zip; extraction adds its tree hash. an unnamed HTML answer fails instead of entering the cache as dataset bytes.
 

@@ -92,7 +92,7 @@ impl Walk {
             match entry.link {
                 None => self.unavailable.push(Unavailable {
                     path,
-                    reason: "google docs exports can change between downloads".to_owned(),
+                    reason: "google docs exports can change between downloads, so a lock cannot pin them".to_owned(),
                 }),
                 Some((key, true)) => {
                     if !self.seen.insert(key.id.clone()) {

@@ -98,7 +98,8 @@ fn google_docs_stay_listed_beside_stored_files() {
         listing.unavailable,
         [crate::source::Unavailable {
             path: "gdown".to_owned(),
-            reason: "google docs exports can change between downloads".to_owned(),
+            reason: "google docs exports can change between downloads, so a lock cannot pin them"
+                .to_owned(),
         }]
     );
     assert_eq!(recorded.asked(), [page(id)]);
