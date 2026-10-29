@@ -1,6 +1,7 @@
 ---
 source: tests/cli/basics.rs
+assertion_line: 103
 expression: text(&output.stderr)?
 ---
-✗ there is no option called "--verison"
+✗ unexpected argument "--verison"
   help: did you mean `--version`?
