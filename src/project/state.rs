@@ -1,5 +1,6 @@
 //! `.fetchloom/state`: every file fetchloom placed and how it looked right after, so `status` and
-//! `sync` notice hand edits without hashing anything.
+//! `sync` notice hand edits without hashing, except for a file as new as the state itself, whose
+//! size and time a coarse clock cannot vouch for.
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;

@@ -1,5 +1,6 @@
 //! `fetchloom status`: what differs between the data folder and data.lock. it changes nothing,
-//! downloads nothing and hashes nothing, so it answers at once even for large projects.
+//! downloads nothing and hashes only files as new as the state itself, so it answers at once even
+//! for large projects.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -100,7 +101,9 @@ fn check(project: &Project) -> Result<Status, Error> {
         let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => &mut status.missing,
             (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
-            (Some(seen), Some(record)) if record.look == *seen => {
+            (Some(seen), Some(record))
+                if record.look == *seen && !survey.edited.contains(&target.path) =>
+            {
                 if record.sha256 == target.sha256 && (!target.copy || record.writable) {
                     continue;
                 }

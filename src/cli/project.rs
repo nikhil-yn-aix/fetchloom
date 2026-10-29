@@ -493,6 +493,7 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
                 && survey.state.files.get(&target.path).is_some_and(|placed| {
                     placed.sha256 == target.sha256
                         && survey.disk.get(&target.path) == Some(&placed.look)
+                        && !survey.edited.contains(&target.path)
                         && (!target.copy || placed.writable)
                 })
         }))
