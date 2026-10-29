@@ -89,7 +89,7 @@ manifest and locked paths reject traversal. the project validates the `data_dir`
 
 metadata files use a sibling file, flush and rename. data-file replacement is different: the old file is removed first, and copies write directly to their destination. a hard interruption can leave a missing or partial destination. a later sync may preserve a partial copy as an edit, so inspect `status` before forcing replacement.
 
-sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays.
+sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays. state records each placed file's size and time as read right after that file is placed, so an edit made while later files are placed shows as an edit too.
 
 state stores hash, method, size, modification time and whether the file was placed writable, with no file id. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
 

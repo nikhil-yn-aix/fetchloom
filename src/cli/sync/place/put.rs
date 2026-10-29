@@ -1,7 +1,6 @@
-//! placing many files at once and recording each one the way later scans will see it.
+//! placing many files at once and recording how each one looked right after it was placed.
 
-use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -50,18 +49,12 @@ pub(super) fn put_all<'t>(
         })
         .collect();
     let results = placer.place_all(&orders);
-    let done = todo
-        .iter()
-        .zip(&results)
-        .filter(|(_, result)| result.is_ok())
-        .map(|(target, _)| target.path.as_str());
-    let looks = looks(&project.root, done);
     let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
     let mut failure = None;
     for (index, result) in results.into_iter().enumerate() {
         let target = todo[index];
-        let method = match result {
-            Ok(method) => method,
+        let (method, metadata) = match result {
+            Ok(done) => done,
             Err(err) => {
                 failure = failure
                     .or_else(|| Some(failed(target, &objects[index], &destinations[index], &err)));
@@ -70,11 +63,10 @@ pub(super) fn put_all<'t>(
         };
         // the placer seals a reflink or copy writable exactly when the dataset asks for copies
         let writable = target.copy && method != Method::Hardlink;
-        if let Some(look) = looks.get(target.path.as_str()) {
-            state
-                .files
-                .insert(target.path.clone(), placed(target, method, *look, writable));
-        }
+        let look = Look::of(&metadata);
+        state
+            .files
+            .insert(target.path.clone(), placed(target, method, look, writable));
         count(work, method);
         let tally = tallies.entry(target.dataset.as_str()).or_default();
         tally.files += 1;
@@ -99,41 +91,6 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
     local(destination, err)
 }
 
-/// how each newly placed file looks, read the way every later scan reads it. on windows a
-/// folder's listing carries every file's size and time, where reading one file costs an open
-/// that antivirus scanners inspect; elsewhere a listing has names only, so each file is read.
-fn looks<'p>(root: &Path, paths: impl Iterator<Item = &'p str>) -> HashMap<&'p str, Look> {
-    if !cfg!(windows) {
-        return paths
-            .filter_map(|path| {
-                let metadata = fs::symlink_metadata(root.join(path)).ok()?;
-                Some((path, Look::of(&metadata)))
-            })
-            .collect();
-    }
-    let mut folders: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
-    for path in paths {
-        let (folder, name) = path.rsplit_once('/').unwrap_or(("", path));
-        folders.entry(folder).or_default().insert(name, path);
-    }
-    let mut found = HashMap::new();
-    for (folder, names) in folders {
-        for entry in fs::read_dir(root.join(folder))
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            let name = entry.file_name();
-            if let Some(path) = name.to_str().and_then(|name| names.get(name))
-                && let Ok(metadata) = entry.metadata()
-            {
-                found.insert(*path, Look::of(&metadata));
-            }
-        }
-    }
-    found
-}
-
 fn count(work: &Work, method: Method) {
     let counter = match method {
         Method::Reflink => &work.reflinks,
@@ -141,4 +98,69 @@ fn count(work: &Work, method: Method) {
         Method::Copy => &work.copies,
     };
     Work::add(counter, 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::project::lock::LockedFile;
+
+    #[test]
+    fn an_edit_made_while_later_files_are_placed_is_not_recorded_as_placed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        let stored = crate::cache::tests::store(&cache, bytes);
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        // enough writable copies that the rest take a while once the first is in place
+        let targets: Vec<Target> = (0..1000)
+            .map(|index| Target {
+                dataset: "weather".to_owned(),
+                path: format!("data/weather/{index:04}.csv"),
+                sha256: stored.digest,
+                size: bytes.len() as u64,
+                copy: true,
+                locked: &locked,
+            })
+            .collect();
+        let todo: Vec<&Target> = targets.iter().collect();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let mut placer = Placer::new(&project.root.join("data"));
+        let mut state = State::default();
+        let work = Work::default();
+        let first = project.root.join(&targets[0].path);
+        let second = project.root.join(&targets[1].path);
+
+        std::thread::scope(|scope| {
+            let placing =
+                scope.spawn(|| put_all(&project, &mut placer, &cache, &todo, &mut state, &work));
+            // the first file is placed alone, so it is in place once the second appears
+            let started = Instant::now();
+            while !second.exists() {
+                assert!(started.elapsed() < Duration::from_mins(1), "nothing placed");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            fs::write(&first, "edited while the rest were placed\n").unwrap();
+            let (_, failure) = placing.join().unwrap();
+            assert!(failure.is_none());
+        });
+
+        assert_eq!(
+            state.files[&targets[0].path].look.size,
+            bytes.len() as u64,
+            "the edit was recorded as the placed file"
+        );
+    }
 }

@@ -3,7 +3,7 @@
 mod synced;
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, Permissions};
+use std::fs::{self, File, Metadata, Permissions};
 use std::io;
 #[cfg(not(target_os = "linux"))]
 use std::io::{Read, Write};
@@ -110,9 +110,11 @@ impl Placer {
         self.put(object, destination, writable)
     }
 
-    /// places every order and says how each went, in order. the first goes alone, so it learns
-    /// which methods the filesystem allows before the rest go several at once.
-    pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<Method>> {
+    /// places every order and says how each went, in order, with the metadata of each placed file
+    /// read right after it was placed, so a later edit is never taken for the placed file. the
+    /// first goes alone, so it learns which methods the filesystem allows before the rest go
+    /// several at once.
+    pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<(Method, Metadata)>> {
         let mut results = Vec::with_capacity(orders.len());
         let mut ready = Vec::with_capacity(orders.len());
         for (index, order) in orders.iter().enumerate() {
@@ -124,10 +126,10 @@ impl Placer {
         let ready = spread(ready);
         let this = &*self;
         let put = |(index, order): &(usize, &Order)| {
-            (
-                *index,
-                this.put(order.object, order.destination, order.writable),
-            )
+            let placed = this
+                .put(order.object, order.destination, order.writable)
+                .and_then(|method| Ok((method, fs::symlink_metadata(order.destination)?)));
+            (*index, placed)
         };
         if let Some((first, rest)) = ready.split_first() {
             results.push(put(first));
@@ -789,7 +791,7 @@ mod tests {
                     result.as_ref().unwrap_err().kind(),
                     io::ErrorKind::AlreadyExists
                 ),
-                _ => assert_eq!(result.as_ref().unwrap(), &expected, "{index}"),
+                _ => assert_eq!(result.as_ref().unwrap().0, expected, "{index}"),
             }
         }
         for destination in &destinations {
