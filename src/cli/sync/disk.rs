@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::SystemTime;
 
 use super::place::local;
 use crate::cache::Cache;
@@ -11,10 +12,12 @@ use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::{self, Method};
 use crate::project::Project;
-use crate::project::state::{Look, State};
+use crate::project::state::{Look, State, nanos};
 
 /// the data folder as fetchloom recorded placing it and as it is now.
 pub(crate) struct Survey {
+    /// the scan's start, so marks written while placing files still put them in doubt.
+    pub(crate) started: u64,
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
@@ -22,7 +25,7 @@ pub(crate) struct Survey {
     /// project's link. sync puts them back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
     /// hardlinks a mark put in doubt whose bytes hashing found intact, which sync keeps, recording
-    /// when they were checked.
+    /// the scan's start.
     pub(crate) vouched: HashSet<String>,
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
@@ -36,8 +39,10 @@ impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
     pub(crate) fn read(project: &Project, data_dir: &str) -> Survey {
+        let started = nanos(SystemTime::now());
         let (state, written) = project.state();
         let mut survey = Survey {
+            started,
             state,
             disk: scan(&project.root, data_dir),
             elsewhere: HashSet::new(),

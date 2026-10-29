@@ -242,7 +242,7 @@ state fields:
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
-| `files[path].checked` | when fetchloom last knew the file held its locked bytes, in nanoseconds since 1970: when it placed or adopted the file, or when hashing proved them after the cache marked its object changed |
+| `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 

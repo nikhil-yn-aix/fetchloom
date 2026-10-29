@@ -29,6 +29,7 @@ pub(super) fn put_all<'t>(
     cache: &Cache,
     todo: &[&'t Target],
     state: &mut State,
+    checked: u64,
     work: &Work,
 ) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
     let objects: Vec<PathBuf> = todo
@@ -64,9 +65,10 @@ pub(super) fn put_all<'t>(
         // the placer seals a reflink or copy writable exactly when the dataset asks for copies
         let writable = target.copy && method != Method::Hardlink;
         let look = Look::of(&metadata);
-        state
-            .files
-            .insert(target.path.clone(), placed(target, method, look, writable));
+        state.files.insert(
+            target.path.clone(),
+            placed(target, method, look, writable, checked),
+        );
         count(work, method);
         let tally = tallies.entry(target.dataset.as_str()).or_default();
         tally.files += 1;
@@ -145,7 +147,7 @@ mod tests {
 
         std::thread::scope(|scope| {
             let placing =
-                scope.spawn(|| put_all(&project, &mut placer, &cache, &todo, &mut state, &work));
+                scope.spawn(|| put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work));
             // the first file is placed alone, so it is in place once the second appears
             let started = Instant::now();
             while !second.exists() {
