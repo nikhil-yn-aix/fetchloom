@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
+use icu_normalizer::ComposingNormalizerBorrowed;
 use percent_encoding::percent_decode_str;
-use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
 /// the longest name kept, in bytes. most filesystems stop at 255.
@@ -219,7 +219,10 @@ pub(crate) fn fold(path: &str) -> String {
     if path.is_ascii() {
         return path.to_ascii_lowercase();
     }
-    path.nfc().collect::<String>().to_uppercase().to_lowercase()
+    ComposingNormalizerBorrowed::new_nfc()
+        .normalize(path)
+        .to_uppercase()
+        .to_lowercase()
 }
 
 fn shorten(name: &str) -> String {
