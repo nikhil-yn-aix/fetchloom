@@ -603,7 +603,12 @@ pub(crate) mod tests {
             Existing::Keep
         ));
         assert!(matches!(
-            existing(&found, 3, hashed(Ok(crate::digest::sha256(b"abX"))), &digest),
+            existing(
+                &found,
+                3,
+                hashed(Ok(crate::digest::sha256(b"abX"))),
+                &digest
+            ),
             Existing::Changed
         ));
         assert!(matches!(
