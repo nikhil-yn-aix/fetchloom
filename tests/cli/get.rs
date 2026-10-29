@@ -413,3 +413,20 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_large_unknown_size_needs_approval_before_reading_the_body() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/large.bin",
+        vec![reply("200 OK", &[("Content-Length", "1073741825")], b"")],
+    )?;
+    let output = sandbox.run(&["--json", "get", &server.url])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
+    assert_eq!(document["work"]["bytes_down"], 0);
+    assert_eq!(document["work"]["objects_written"], 0);
+    assert!(!sandbox.work().join("large").exists());
+    Ok(())
+}
