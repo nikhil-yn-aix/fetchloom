@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{Listing, malformed};
 use crate::error::{Error, Kind};
-use crate::net::Api;
+use crate::net::{Api, Response};
 
 /// a dataset or one of its files, at a version or at its newest published one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,8 +122,18 @@ impl Dataset {
             return file::resolve(self, id, api).await;
         }
         let response = api.get(&self.url()?).await?;
-        let answer: version::Answer = super::json(self, &response)?;
+        let answer: version::Answer = self.answer(&response)?;
         answer.listing(self)
+    }
+
+    fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
+        super::json(self, response).map_err(|error| {
+            if error.kind == Kind::AuthRequired {
+                error.help("ask the dataset's owner for a public copy. fetchloom does not sign in to dataverse")
+            } else {
+                error
+            }
+        })
     }
 
     fn url(&self) -> Result<Url, Error> {

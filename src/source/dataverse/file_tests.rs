@@ -235,3 +235,15 @@ fn a_restricted_file_answered_with_success_is_still_refused() {
     );
     assert!(error.help.unwrap().contains("dataset's owner"));
 }
+
+#[test]
+fn file_access_errors_do_not_suggest_unscoped_credentials() {
+    for status in [401, 403] {
+        let recorded =
+            Recorded::default().on(FILE, status, fixture_bytes("dataverse/refused.json"));
+        let file = Dataset::parse("dataverse.harvard.edu/file:6867336").unwrap();
+        let error = block_on(file.resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert!(error.help.unwrap().contains("public copy"));
+    }
+}

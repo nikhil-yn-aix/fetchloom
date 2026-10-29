@@ -29,7 +29,7 @@ struct Described {
 /// asks for, or at the newest published one.
 pub(super) async fn resolve(dataset: &Dataset, id: &str, api: &impl Api) -> Result<Listing, Error> {
     let response = api.get(&url(dataset, id)?).await?;
-    let answer: Answer = crate::source::json(dataset, &response)?;
+    let answer: Answer = dataset.answer(&response)?;
     if answer.status != "OK" {
         return Err(dataset.invalid("the API did not return an OK answer"));
     }

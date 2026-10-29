@@ -245,3 +245,6 @@ fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
     let next = from.join(location).ok()?;
     (redirect && matches!(next.scheme(), "http" | "https")).then_some(next)
 }
+
+#[cfg(test)]
+mod credential_tests;
