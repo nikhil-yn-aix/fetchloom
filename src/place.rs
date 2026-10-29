@@ -397,7 +397,12 @@ fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
 /// a link swapped in for the name `output` claimed is never written through.
 fn fill(object: &Path, output: &File, writable: bool) -> io::Result<()> {
     transfer(File::open(object)?, output)?;
-    output.set_permissions(writable_as(output.metadata()?.permissions(), writable))
+    let before = output.metadata()?.permissions();
+    let after = writable_as(before.clone(), writable);
+    if before != after {
+        output.set_permissions(after)?;
+    }
+    Ok(())
 }
 
 /// linux copies from file to file inside the kernel, with `copy_file_range`, which a network
@@ -662,6 +667,67 @@ mod tests {
         let copied = folder.path().join("claimed.csv");
         assert_eq!(fs::read_to_string(&copied).unwrap(), CONTENTS);
         assert!(is_read_only(&copied));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_writable_copy_needs_no_permission_change() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_DATA: u32 = 2;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+
+        let (folder, object) = cache(true);
+        let destination = folder.path().join("placed.csv");
+        let output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .access_mode(FILE_WRITE_DATA | FILE_READ_ATTRIBUTES)
+            .open(&destination)
+            .unwrap();
+
+        let result = fill(&object, &output, true);
+
+        assert!(
+            result.is_ok(),
+            "unchanged permissions need no write access to attributes: {result:?}"
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert!(!is_read_only(&destination));
+        let readonly = undo_on_error(fill(&object, &output, false), &destination);
+        assert!(
+            readonly.is_err(),
+            "a real permission change must still fail"
+        );
+        drop(output);
+        assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_copy_works_where_the_mount_refuses_chmod() {
+        let Some(root) = std::env::var_os("FETCHLOOM_TEST_NOOP_CHMOD") else {
+            return;
+        };
+        let destination_folder = TempDir::new_in(root).unwrap();
+        let (_source_folder, object) = cache(true);
+        let probe = destination_folder.path().join("probe");
+        fs::write(&probe, b"writable").unwrap();
+        let permissions = fs::metadata(&probe).unwrap().permissions();
+        assert_eq!(
+            fs::set_permissions(&probe, permissions).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&probe).unwrap();
+        let destination = destination_folder.path().join("placed.csv");
+
+        copy(&object, &destination, true).unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert!(!is_read_only(&destination));
+        assert!(is_read_only(&object));
+        let readonly = destination_folder.path().join("readonly.csv");
+        assert!(copy(&object, &readonly, false).is_err());
+        assert!(!readonly.exists());
     }
 
     #[test]
