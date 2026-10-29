@@ -138,8 +138,9 @@ impl Cache {
     }
 
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
-    /// edited, is removed so the next run downloads it again, and remembered as changed so other
-    /// projects linking to it put their copies back. says whether it was intact.
+    /// edited, is removed so the next run downloads it again, and marked as changed so other
+    /// projects whose links to it still look as placed put their copies back. says whether it was
+    /// intact.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {
@@ -154,8 +155,8 @@ impl Cache {
         }
     }
 
-    /// marks an object as changed. a mark that cannot be written only means other projects learn
-    /// of the change later, from their own files.
+    /// marks an object as changed. without the mark, another project sees the change only where
+    /// its own listing shows it, which on windows it may not.
     fn remember_changed(&self, digest: &Sha256) {
         if let Err(err) = self.mark_changed(digest) {
             tracing::debug!(%err, "could not remember a changed object");

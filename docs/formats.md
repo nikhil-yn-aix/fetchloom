@@ -303,7 +303,7 @@ status arrays:
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
-| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after they were placed; `sync` puts them back |
+| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after that time; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
