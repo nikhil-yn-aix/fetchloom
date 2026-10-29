@@ -72,6 +72,14 @@ pub(super) fn store_all(
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
+    #[cfg(target_os = "linux")]
+    let batch = cache
+        .batch()
+        .map_err(|err| Error::io("could not open the cache to flush what is unpacked", &err))?;
+    #[cfg(target_os = "linux")]
+    let flush_each = batch.is_none();
+    #[cfg(not(target_os = "linux"))]
+    let flush_each = true;
     let (jobs, queue) = sync_channel::<Job>(threads * 2);
     let queue = Mutex::new(queue);
     let failed = AtomicBool::new(false);
@@ -88,7 +96,7 @@ pub(super) fn store_all(
                     if failed.load(Ordering::Relaxed) {
                         continue;
                     }
-                    match seal(cache, job) {
+                    match seal(cache, job, flush_each) {
                         Ok(done) => locked(&sealed).push(done),
                         Err(err) => {
                             failed.store(true, Ordering::Relaxed);
@@ -113,9 +121,11 @@ pub(super) fn store_all(
     }
     // nothing is published until every member is on disk
     #[cfg(target_os = "linux")]
-    cache
-        .flush_written()
-        .map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
+    if let Some(batch) = batch {
+        batch
+            .flush()
+            .map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
+    }
     publish_all(cache, sealed, threads)
 }
 
@@ -167,7 +177,7 @@ fn publish_all(
     }
 }
 
-fn seal(cache: &Cache, job: Job) -> Result<(String, Sealed), Error> {
+fn seal(cache: &Cache, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
     let (path, object) = match job {
         Job::Bytes(path, bytes) => {
             let object = cache.new_object().and_then(|mut object| {
@@ -178,8 +188,8 @@ fn seal(cache: &Cache, job: Job) -> Result<(String, Sealed), Error> {
         }
         Job::Written(path, object) => (path, Ok(*object)),
     };
-    // on linux the members are flushed together before any is published
-    match object.and_then(|object| object.seal(!cfg!(target_os = "linux"))) {
+    // in a batch the members are flushed together before any is published
+    match object.and_then(|object| object.seal(flush)) {
         Ok(sealed) => Ok((path, sealed)),
         Err(err) => Err(not_written(&path, &err)),
     }

@@ -44,13 +44,18 @@ impl Drop for Temporary {
 }
 
 impl Cache {
-    /// flushes every file written to the cache's filesystem with one call, as git's batch mode
-    /// does: on linux one flush per small file costs far more than writing it.
+    /// starts a batch of new objects that [`Batch::flush`] flushes with one call, as git's batch
+    /// mode does: on linux one flush per small file costs far more than writing it. `None` means
+    /// each object must be flushed on its own. the batch holds the cache's filesystem open from
+    /// before its first write, because linux reports a failed write-back only to descriptors
+    /// opened before the failure, and to syncfs only from 5.8.
     #[cfg(target_os = "linux")]
-    pub(crate) fn flush_written(&self) -> io::Result<()> {
-        let folder = File::open(self.root.join("tmp"))?;
-        rustix::fs::syncfs(&folder)?;
-        Ok(())
+    pub(crate) fn batch(&self) -> io::Result<Option<Batch>> {
+        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        if !syncfs_reports_errors(&release) {
+            return Ok(None);
+        }
+        Ok(Some(Batch(File::open(self.root.join("tmp"))?)))
     }
 
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
@@ -76,6 +81,29 @@ impl Cache {
                 Err(err) => return Err(err),
             }
         }
+    }
+}
+
+/// new objects written since the batch began, flushed together.
+#[cfg(target_os = "linux")]
+pub(crate) struct Batch(File);
+
+#[cfg(target_os = "linux")]
+impl Batch {
+    pub(crate) fn flush(self) -> io::Result<()> {
+        rustix::fs::syncfs(&self.0)?;
+        Ok(())
+    }
+}
+
+/// whether a linux kernel of `release`, as `uname -r` gives it, reports write-back errors to
+/// syncfs, which it does from 5.8.
+#[cfg(any(target_os = "linux", test))]
+fn syncfs_reports_errors(release: &str) -> bool {
+    let mut numbers = release.split(['.', '-']).map(str::parse::<u32>);
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (5, 8),
+        _ => false,
     }
 }
 
@@ -166,5 +194,17 @@ mod tests {
         let sealed = sealed.seal(true).unwrap();
         drop((written, sealed));
         assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn only_kernels_that_report_write_back_errors_flush_a_batch_at_once() {
+        assert!(syncfs_reports_errors("6.6.87.2-microsoft-standard-WSL2"));
+        assert!(syncfs_reports_errors("5.8.0"));
+        assert!(syncfs_reports_errors("5.15.0-122-generic"));
+        assert!(!syncfs_reports_errors("5.7.19"));
+        assert!(!syncfs_reports_errors("4.18.0-553.el8_10.x86_64"));
+        assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
+        assert!(!syncfs_reports_errors(""));
+        assert!(!syncfs_reports_errors("unknown"));
     }
 }
