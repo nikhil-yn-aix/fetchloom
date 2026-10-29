@@ -1,0 +1,11 @@
+---
+source: tests/cli/project.rs
+assertion_line: 62
+expression: stderr
+---
+ Downloaded iris.csv · 32 B in [time]
+     Locked iris · 1 file in data.lock
+     Placed data/iris · 1 file copied, 32 B
+! the drive holding data cannot link files, so files were copied
+✓ added iris. its files are in data/iris
+  hint: scripts can find it with `fetchloom path iris`

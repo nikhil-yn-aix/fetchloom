@@ -48,12 +48,18 @@ fn add_pins_downloads_and_places_a_link() -> Result {
     );
     assert_eq!(server.requests().len(), 1, "one download, nothing else");
     let lock = fs::read_to_string(work.join("data.lock"))?;
+    let links = sandbox.links()?;
+    let story = if links.reflink || links.hardlink {
+        "add_story"
+    } else {
+        "add_story_on_a_drive_without_links"
+    };
     let mut settings = sandbox.filters();
     settings.add_filter(r#"spec = "sha256:[0-9a-f]{64}""#, r#"spec = "[spec]""#);
     settings.add_filter(r#"locked = "[0-9T:-]+Z""#, r#"locked = "[time]""#);
     settings.bind(|| {
         insta::assert_snapshot!("add_lock", lock);
-        insta::assert_snapshot!("add_story", stderr);
+        insta::assert_snapshot!(story, stderr);
     });
     Ok(())
 }

@@ -1,0 +1,8 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+ Downloaded iris.csv · 81 B in [time]
+     Placed iris/iris.csv · copied, 81 B
+✓ fetched iris.csv into iris
+  hint: the drive holding iris cannot link files, so the file was copied
