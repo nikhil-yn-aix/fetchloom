@@ -25,9 +25,7 @@ pub(crate) struct Placed {
     pub(crate) sha256: Sha256,
     pub(crate) method: Method,
     pub(crate) look: Look,
-    /// a file of its own that may be written to, as `copy = true` asks. a state written before
-    /// this was recorded reads as false, so such a copy is placed once more.
-    #[serde(default)]
+    /// a file of its own that may be written to, as `copy = true` asks.
     pub(crate) writable: bool,
 }
 
@@ -108,15 +106,9 @@ mod tests {
                 .files
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn a_state_from_before_writable_copies_reads_them_as_read_only() {
-        let text = format!(
-            r#"{{"version":1,"files":{{"data/a.csv":{{"dataset":"a","sha256":"{}","method":"copy","look":{{"size":1,"modified":2}}}}}}}}"#,
-            digest::sha256(b"x")
-        );
-        let read = State::parse(text.as_bytes());
-        assert!(!read.files["data/a.csv"].writable);
+        let unrecorded = String::from_utf8(state.render())
+            .unwrap()
+            .replace(r#","writable":true"#, "");
+        assert!(State::parse(unrecorded.as_bytes()).files.is_empty());
     }
 }

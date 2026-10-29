@@ -224,7 +224,7 @@ state fields:
 | `files[path].method` | `reflink`, `hardlink` or `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
-| `files[path].writable` | `true` when the file was placed or adopted writable; absent reads as `false` |
+| `files[path].writable` | `true` when the file was placed or adopted writable |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
