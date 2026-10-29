@@ -5,7 +5,7 @@ use std::collections::{HashSet, VecDeque};
 
 use url::Url;
 
-use super::{Item, file_url, html};
+use super::{Item, ItemKind, file_url, html};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Listing, MOST_FILES, Reference, Remote};
@@ -49,7 +49,7 @@ struct Walk {
 pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> {
     let root = Key {
         id: item.id.clone(),
-        resource: None,
+        resource: item.resource.clone(),
     };
     let page = read(item, api, &root, "").await?;
     let title = Some(page.name.clone()).filter(|name| !name.is_empty());
@@ -192,16 +192,17 @@ fn parse(text: &str) -> Option<Page> {
         )?);
         let link = base.join(&href).ok().and_then(|url| {
             let item = Item::from_link(&url)?;
-            let resource = url
-                .query_pairs()
-                .find(|(key, _)| key == "resourcekey")
-                .map(|(_, value)| value.into_owned());
+            let folder = match item.kind {
+                ItemKind::File => false,
+                ItemKind::Folder => true,
+                ItemKind::Open => return None,
+            };
             Some((
                 Key {
                     id: item.id,
-                    resource,
+                    resource: item.resource,
                 },
-                item.folder,
+                folder,
             ))
         });
         entries.push(Entry { name, link });

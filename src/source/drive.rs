@@ -3,6 +3,7 @@
 
 mod folder;
 mod html;
+mod link;
 mod page;
 
 use std::fmt;
@@ -17,26 +18,56 @@ use crate::net::{Api, Divert};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Item {
     id: String,
-    folder: bool,
+    kind: ItemKind,
+    resource: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ItemKind {
+    File,
+    Folder,
+    Open,
 }
 
 impl Item {
-    /// reads the part after `drive:`: a file id, or `folders/` and a folder id.
+    /// reads a file, folder or unresolved open reference.
     pub(super) fn parse(text: &str) -> Result<Item, Error> {
         let text = text.trim();
-        let (id, folder) = match text.strip_prefix("folders/") {
-            Some(id) => (id, true),
-            None => (text, false),
-        };
-        if !is_id(id) {
-            return Err(malformed(
+        let bad = || {
+            malformed(
                 &format!("drive:{text}"),
                 "the link drive gives when you share a file or folder",
-            ));
+            )
+        };
+        let (name, query) = text
+            .split_once('?')
+            .map_or((text, None), |(name, query)| (name, Some(query)));
+        let (id, kind) = if let Some(id) = name.strip_prefix("folders/") {
+            (id, ItemKind::Folder)
+        } else if let Some(id) = name.strip_prefix("open/") {
+            (id, ItemKind::Open)
+        } else {
+            (name, ItemKind::File)
+        };
+        if !is_id(id) {
+            return Err(bad());
         }
+        let resource = match query {
+            None => None,
+            Some(query) => {
+                let mut pairs = url::form_urlencoded::parse(query.as_bytes());
+                match (pairs.next(), pairs.next()) {
+                    (Some((key, value)), None) if key == "resourcekey" && !value.is_empty() => {
+                        Some(value.into_owned())
+                    }
+                    _ => return Err(bad()),
+                }
+            }
+        };
         Ok(Item {
             id: id.to_owned(),
-            folder,
+            kind,
+            resource,
         })
     }
 
@@ -52,30 +83,38 @@ impl Item {
             .path_segments()?
             .filter(|part| !part.is_empty())
             .collect();
-        let query_id = || {
+        let query = |key: &str| {
             url.query_pairs()
-                .find(|(name, _)| name == "id")
+                .find(|(name, _)| name == key)
                 .map(|(_, value)| value.into_owned())
         };
-        let (id, folder) = match parts.as_slice() {
-            ["file", "d", id, ..] => ((*id).to_owned(), false),
+        let (id, kind) = match parts.as_slice() {
+            ["file", "d", id, ..] => ((*id).to_owned(), ItemKind::File),
             ["drive", "folders", id, ..] | ["drive", "u", _, "folders", id, ..] => {
-                ((*id).to_owned(), true)
+                ((*id).to_owned(), ItemKind::Folder)
             }
-            ["folderview" | "embeddedfolderview"] => (query_id()?, true),
-            ["open" | "uc" | "download"] => (query_id()?, false),
+            ["folderview" | "embeddedfolderview"] => (query("id")?, ItemKind::Folder),
+            ["open"] => (query("id")?, ItemKind::Open),
+            ["uc" | "download"] => (query("id")?, ItemKind::File),
             _ => return None,
         };
-        is_id(&id).then_some(Item { id, folder })
+        let resource = query("resourcekey").filter(|key| !key.is_empty());
+        is_id(&id).then_some(Item { id, kind, resource })
     }
 
     /// a file is one download whose name the server sends. a folder lists its files.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        if self.folder {
-            return folder::list(self, api).await;
+        let opened = if self.kind == ItemKind::Open {
+            Some(self.opened(api).await?)
+        } else {
+            None
+        };
+        let item = opened.as_ref().unwrap_or(self);
+        if item.kind == ItemKind::Folder {
+            return folder::list(item, api).await;
         }
         Ok(Listing {
-            resolved: Reference::Drive(self.clone()),
+            resolved: Reference::Drive(item.clone()),
             title: None,
             version: None,
             license: None,
@@ -85,15 +124,14 @@ impl Item {
                 size: None,
                 sha256: None,
                 md5: None,
-                url: file_url(&self.id, None)?,
+                url: file_url(&item.id, item.resource.as_deref())?,
                 named_by_server: true,
             }],
         })
     }
 }
 
-/// the link data.lock keeps for a drive file. drive's `uc` link has outlived the hosts that serve
-/// the bytes, so only `fetch_plan` names those.
+/// the lock's file identity, separate from the download host and its confirmation fields.
 fn file_url(id: &str, resource: Option<&str>) -> Result<Url, Error> {
     let mut url = Url::parse("https://drive.google.com/uc").map_err(|err| {
         Error::new(
@@ -118,11 +156,19 @@ fn is_id(text: &str) -> bool {
 
 impl fmt::Display for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.folder {
-            write!(f, "drive:folders/{}", self.id)
-        } else {
-            write!(f, "drive:{}", self.id)
+        let prefix = match self.kind {
+            ItemKind::File => "",
+            ItemKind::Folder => "folders/",
+            ItemKind::Open => "open/",
+        };
+        write!(f, "drive:{prefix}{}", self.id)?;
+        if let Some(resource) = &self.resource {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("resourcekey", resource)
+                .finish();
+            write!(f, "?{query}")?;
         }
+        Ok(())
     }
 }
 
@@ -164,3 +210,6 @@ mod tests {
 
 #[cfg(test)]
 mod folder_tests;
+
+#[cfg(test)]
+mod link_tests;

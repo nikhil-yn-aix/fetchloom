@@ -59,6 +59,17 @@ impl Recorded {
         self
     }
 
+    /// says where the answer came from after redirects.
+    pub(crate) fn redirected(mut self, url: &str, final_url: &str) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before its redirect"));
+        answer.url = Url::parse(final_url).unwrap();
+        self
+    }
+
     /// every URL asked for, in order.
     pub(crate) fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()

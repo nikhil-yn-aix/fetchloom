@@ -127,10 +127,12 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
 | dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
 | OSF | `osf:<node or file id>` | the download link with a file version |
-| drive file or folder | `drive:<id>` or `drive:folders/<id>` | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when the folder entry supplies one |
+| drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
 | dropbox | the shared URL with `dl=1` | the same URL |
 
 DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+
+drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
 
 drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs entries stop the folder listing because exports can change between downloads. ask the owner to upload fixed files instead.
 

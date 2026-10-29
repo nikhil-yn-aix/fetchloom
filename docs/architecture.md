@@ -60,7 +60,7 @@ source tests implement `Api` with in-memory recorded responses from `tests/fixtu
 | osf | files API, folders walked, `links.next` paging | SHA-256 and MD5 |
 | hugging face | tree API at a commit, `/resolve/` for bytes | SHA-256 for large files, served through a CDN with range support. a branch is resolved to its commit before locking |
 | kaggle | API view for the newest version, list in pages of 200, then each file on its own with `raw=true`, redirected to signed storage | no checksum. a rate limit can look like a 404. competitions are refused |
-| google drive | the `uc` endpoint, then the confirm form for large files | "too many users" is its own retry-later error. folders are read from the folder page |
+| google drive | direct downloads from `drive.usercontent.google.com`, with a confirmation-page handler | quota pages ask you to retry later. `open?id=` follows drive's redirect; folders are walked through `embeddedfolderview` |
 | dropbox | the shared link with `dl=1` | a folder arrives as one zip, treated as an archive |
 
 ## the cache
