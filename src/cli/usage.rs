@@ -34,7 +34,7 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     finish::<()>(
         &Context::new(output),
         command.as_deref(),
-        Err(describe(err)),
+        Err(describe(err, command.as_deref())),
         started,
     )
 }
@@ -58,7 +58,7 @@ fn named_command(read: &ArgMatches) -> Option<String> {
     }
     (!names.is_empty()).then(|| names.join(" "))
 }
-fn describe(err: &clap::Error) -> Error {
+fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let named = |context| match err.get(context) {
         Some(ContextValue::String(value)) => Some(value.clone()),
         Some(ContextValue::Strings(values)) => values.first().cloned(),
@@ -97,7 +97,10 @@ fn describe(err: &clap::Error) -> Error {
         _ => None,
     };
     let help = if let Some(command) = named(ContextKind::SuggestedSubcommand) {
-        format!("did you mean `fetchloom {command}`?")
+        match parent {
+            Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
+            None => format!("did you mean `fetchloom {command}`?"),
+        }
     } else if let Some(arg) = named(ContextKind::SuggestedArg) {
         format!("did you mean `{arg}`?")
     } else if let Some(ContextValue::Strings(values)) = err.get(ContextKind::ValidValue) {

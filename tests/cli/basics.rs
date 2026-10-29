@@ -178,3 +178,23 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["cache", "verfiy", "--json"])?;
+    assert_eq!(output.status.code(), Some(2));
+    let document: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        document["errors"][0]["help"],
+        "did you mean `fetchloom cache verify`?"
+    );
+    let corrected = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        corrected.status.code(),
+        Some(0),
+        "{}",
+        text(&corrected.stderr)?
+    );
+    Ok(())
+}
