@@ -712,9 +712,27 @@ mod tests {
         assert_eq!(method, Method::Hardlink);
     }
 
+    /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
+    /// and exFAT do not.
+    fn makes_hardlinks(folder: &Path) -> bool {
+        let original = folder.join("probe");
+        let link = folder.join("probe-link");
+        fs::write(&original, CONTENTS).unwrap();
+        let made = fs::hard_link(&original, &link).is_ok();
+        for probe in [link, original] {
+            let _ = fs::remove_file(probe);
+        }
+        made
+    }
+
     #[test]
     fn many_files_are_placed_on_several_threads_and_reported_in_order() {
         let (folder, object) = cache(true);
+        let expected = if makes_hardlinks(folder.path()) {
+            Method::Hardlink
+        } else {
+            Method::Copy
+        };
         let root = folder.path().join("data");
         let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
         let destinations: Vec<PathBuf> = (0..300)
@@ -753,7 +771,7 @@ mod tests {
                     result.as_ref().unwrap_err().kind(),
                     io::ErrorKind::AlreadyExists
                 ),
-                _ => assert_eq!(result.as_ref().unwrap(), &Method::Hardlink, "{index}"),
+                _ => assert_eq!(result.as_ref().unwrap(), &expected, "{index}"),
             }
         }
         for destination in &destinations {
@@ -803,7 +821,9 @@ mod tests {
         let outside = folder.path().join("outside");
         fs::create_dir(&outside).unwrap();
         let root = folder.path().join("data");
-        assert!(link_folder(&outside, &root));
+        if !link_folder(&outside, &root) {
+            return;
+        }
         let mut placer = Placer::new(&root);
 
         let error = placer

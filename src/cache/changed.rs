@@ -72,7 +72,10 @@ mod tests {
         let digest = crate::digest::sha256(b"object");
         fs::create_dir_all(cache.changed_folder()).unwrap();
         let mark = cache.changed_folder().join(digest.hex());
-        fs::hard_link(&outside, &mark).unwrap();
+        // a filesystem without hardlinks, such as FAT, cannot hold this trap
+        if fs::hard_link(&outside, &mark).is_err() {
+            return;
+        }
 
         cache.mark_changed(&digest).unwrap();
 

@@ -149,8 +149,12 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
 }
 
 /// a project in `work` and a second one in `other`, both holding iris as a link to one cached
-/// file, with iris then edited through the first project's link.
-fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
+/// file, with iris then edited through the first project's link. nothing, on a filesystem
+/// without hardlinks.
+fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBuf>> {
+    if !sandbox.links()?.hardlink {
+        return Ok(None);
+    }
     let added = sandbox
         .command(&["add", &server.url])
         .env("OneDrive", sandbox.work())
@@ -174,7 +178,7 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<std::path::Pa
         &sandbox.work().join("data").join("iris").join("iris.csv"),
         &edited,
     )?;
-    Ok(other)
+    Ok(Some(other))
 }
 
 /// gives the fixture real hardlinks even when the filesystem chose reflinks or copies.
@@ -215,7 +219,9 @@ fn sync_force_puts_back_a_link_another_project_edited() -> Result {
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
-    let other = shared_and_edited(&sandbox, &server)?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
     let forced = sandbox.command_in(&other, &["sync", "--force"]).output()?;
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
     assert_eq!(
@@ -234,7 +240,9 @@ fn sync_force_puts_back_a_link_another_project_edited() -> Result {
 fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
-    let other = shared_and_edited(&sandbox, &server)?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
     let verified = sandbox.run(&["cache", "verify"])?;
     assert_eq!(
         verified.status.code(),
@@ -259,7 +267,9 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
-    let other = shared_and_edited(&sandbox, &server)?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
     let verified = sandbox.run(&["cache", "verify"])?;
     assert_eq!(
         verified.status.code(),
@@ -285,10 +295,10 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
 }
 
 #[test]
-fn a_read_only_copy_becomes_writable_when_the_dataset_asks_for_copies() -> Result {
+fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
-    // a folder a sync client owns gets read-only copies instead of links
+    // a folder a sync client owns gets no hardlinks, so iris is a read-only reflink or copy
     let added = sandbox
         .command(&["add", &server.url])
         .env("OneDrive", sandbox.work())
