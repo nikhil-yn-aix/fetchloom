@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::volume::Volume;
+
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
 /// other's waits. placing 10,000 files on windows took 7.5 s on four threads and 5.1 s on eight,
@@ -47,6 +49,8 @@ pub(crate) struct Placer {
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
+    /// the volume under the root, which may refuse to remove a read-only file.
+    volume: Volume,
 }
 
 /// one file to place: the object, where it goes, and whether it must be a writable copy.
@@ -58,25 +62,32 @@ pub(crate) struct Order<'a> {
 
 impl Placer {
     /// prepares placement under `root`, which must be a real folder, and notes whether `root`
-    /// sits inside a folder a sync client owns.
-    pub(crate) fn new(root: &Path) -> Placer {
+    /// sits inside a folder a sync client owns. `scratch` is a folder of fetchloom's own on the
+    /// same volume, such as the project's `.fetchloom`, where a removal may test whether the
+    /// volume can hardlink.
+    pub(crate) fn new(root: &Path, scratch: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
-        Placer::starting_at(root, Method::Reflink, synced)
+        Placer {
+            volume: Volume::new(scratch.to_path_buf()),
+            ..Placer::starting_at(root, Method::Reflink, synced)
+        }
     }
 
     /// prepares placement under a folder someone named, which may be a link to a folder. the
-    /// folders below it must still be real.
+    /// folders below it must still be real. it is the one folder fetchloom writes to on its
+    /// volume, so a removal tests there, with a hidden file, whether the volume can hardlink.
     pub(crate) fn in_named_folder(root: &Path) -> Placer {
         Placer {
             checks_root: false,
-            ..Placer::new(root)
+            ..Placer::new(root, root)
         }
     }
 
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
+            volume: Volume::new(root.clone()),
             root,
             checks_root: true,
             folders: HashSet::new(),
@@ -193,10 +204,17 @@ impl Placer {
         Ok(())
     }
 
-    /// removes a file fetchloom placed. every folder on its way is checked again first, since a
-    /// deletion must not trust a check made before downloads ran. with `prune`, folders it leaves
-    /// empty go too, up to the root.
-    pub(crate) fn remove(&mut self, path: &Path, prune: bool) -> io::Result<()> {
+    /// removes a file fetchloom placed, by `placed` when fetchloom recorded how. every folder on
+    /// its way is checked again first, since a deletion must not trust a check made before
+    /// downloads ran. with `prune`, folders it leaves empty go too, up to the root. a file
+    /// recorded as a hardlink is the cached object under another name, so it never has its
+    /// read-only flag cleared; any other follows the volume's rule for read-only files.
+    pub(crate) fn remove(
+        &mut self,
+        path: &Path,
+        prune: bool,
+        placed: Option<Method>,
+    ) -> io::Result<()> {
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
         if self.checks_root {
@@ -210,7 +228,11 @@ impl Placer {
             folder.push(part);
             real_folder(&folder, false)?;
         }
-        fs::remove_file(&path)?;
+        if placed == Some(Method::Hardlink) {
+            self.volume.remove_hardlink(&path)?;
+        } else {
+            self.volume.remove(&path)?;
+        }
         let mut folder = path.parent();
         while prune && let Some(current) = folder {
             if current == self.root || fs::remove_dir(current).is_err() {
@@ -844,7 +866,7 @@ mod tests {
         if !link_folder(&outside, &root) {
             return;
         }
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
 
         let error = placer
             .place(&object, &root.join("placed.csv"), false)
@@ -865,7 +887,7 @@ mod tests {
         if !link_folder(&outside, &link) {
             return;
         }
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
 
         let error = placer
             .place(&object, &link.join("placed.csv"), false)
@@ -894,16 +916,83 @@ mod tests {
     fn a_folder_emptied_by_a_removal_is_made_again_for_the_next_file() {
         let (folder, object) = cache(true);
         let root = folder.path().join("data");
-        let mut placer = Placer::new(&root);
+        let mut placer = Placer::new(&root, folder.path());
         let first = root.join("set").join("inner").join("a.csv");
-        placer.place(&object, &first, false).unwrap();
+        let method = placer.place(&object, &first, false).unwrap();
 
-        placer.remove(&first, true).unwrap();
+        placer.remove(&first, true, Some(method)).unwrap();
         assert!(!root.join("set").exists(), "emptied folders go");
         assert!(root.exists(), "the root stays");
         let second = root.join("set").join("b.csv");
         placer.place(&object, &second, false).unwrap();
 
         assert_eq!(fs::read_to_string(&second).unwrap(), CONTENTS);
+    }
+
+    /// a placer that copies into `root` as if `root` sat on FAT32 or exFAT, with `scratch` as
+    /// fetchloom's own folder there.
+    fn on_fat(root: &Path, scratch: &Path) -> Placer {
+        let mut placer = Placer::starting_at(root.to_path_buf(), Method::Copy, None);
+        placer.volume = Volume::refusing(scratch.to_path_buf(), false);
+        placer
+    }
+
+    #[test]
+    fn a_placed_read_only_file_is_removed_on_fat() {
+        for recorded in [Some(Method::Copy), Some(Method::Reflink), None] {
+            let (folder, object) = cache(true);
+            let root = folder.path().join("data");
+            let own = folder.path().join(".fetchloom");
+            fs::create_dir(&own).unwrap();
+            let mut placer = on_fat(&root, &own);
+            let destination = root.join("placed.csv");
+            placer.place(&object, &destination, false).unwrap();
+            assert!(is_read_only(&destination));
+
+            placer.remove(&destination, false, recorded).unwrap();
+
+            assert!(!destination.exists(), "{recorded:?}");
+            assert_eq!(
+                fs::read_dir(&own).unwrap().count(),
+                0,
+                "the probe leaves nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_removal_on_fat_leaves_nothing_else_in_a_named_folder() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("fetched");
+        let mut placer = on_fat(&root, &root);
+        for name in ["kept.csv", "replaced.csv"] {
+            placer.place(&object, &root.join(name), false).unwrap();
+        }
+
+        placer
+            .remove(&root.join("replaced.csv"), false, None)
+            .unwrap();
+
+        let left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["kept.csv"]);
+    }
+
+    #[test]
+    fn a_recorded_hardlink_keeps_its_flag_even_on_fat() {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let mut placer = on_fat(&root, folder.path());
+        let destination = root.join("placed.csv");
+        placer.place(&object, &destination, false).unwrap();
+
+        let refused = placer
+            .remove(&destination, false, Some(Method::Hardlink))
+            .unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert!(is_read_only(&destination));
     }
 }

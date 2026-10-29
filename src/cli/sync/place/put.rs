@@ -137,7 +137,7 @@ mod tests {
         let project = Project {
             root: dir.path().join("project"),
         };
-        let mut placer = Placer::new(&project.root.join("data"));
+        let mut placer = Placer::new(&project.root.join("data"), &project.own_folder());
         let mut state = State::default();
         let work = Work::default();
         let first = project.root.join(&targets[0].path);

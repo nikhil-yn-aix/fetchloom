@@ -1,17 +1,19 @@
-//! the volume under the cache. FAT32 and exFAT cannot hardlink, and on windows they refuse to
-//! remove a read-only file, which every object is.
+//! the volume under a folder fetchloom writes to: the cache, a project's data folder or the folder
+//! `get` fills. FAT32 and exFAT cannot hardlink, and on windows they refuse to remove a read-only
+//! file, which every object and, by default, every placed file is.
 
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// how the volume under the cache links, renames and removes files, and whether it can hardlink
-/// at all, learned the first time a removal needs to know.
+/// how a volume links, renames and removes files, and whether it can hardlink at all, learned
+/// the first time a removal needs to know.
 #[derive(Debug)]
 pub(crate) struct Volume {
-    /// the cache's `tmp/`, where the probe link is made.
-    tmp: PathBuf,
+    /// a folder of fetchloom's own on the volume, where the probe link is made: the cache's
+    /// `tmp/`, a project's `.fetchloom`, or the folder `get` fills.
+    scratch: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
     rename: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
@@ -19,9 +21,9 @@ pub(crate) struct Volume {
 }
 
 impl Volume {
-    pub(crate) fn new(tmp: PathBuf) -> Volume {
+    pub(crate) fn new(scratch: PathBuf) -> Volume {
         Volume {
-            tmp,
+            scratch,
             hard_link: |original, link| fs::hard_link(original, link),
             rename: |from, to| fs::rename(from, to),
             remove_file: |path| fs::remove_file(path),
@@ -51,6 +53,12 @@ impl Volume {
         }
     }
 
+    /// removes the file at `path`, which fetchloom recorded as a hardlink of a cached object. its
+    /// read-only flag is the object's too, so it is never cleared, whatever the volume.
+    pub(crate) fn remove_hardlink(&self, path: &Path) -> io::Result<()> {
+        (self.remove_file)(path)
+    }
+
     /// clears the read-only flag of the plain file at `path` and removes it, putting the flag
     /// back when that fails too. none when the file is not a read-only plain file or may have
     /// another name. the flag changes through a handle that never follows a link, so a link
@@ -69,17 +77,17 @@ impl Volume {
         Some(removed)
     }
 
-    /// whether the volume can hardlink, learned once by linking a new file in `tmp/`. none when
-    /// the probe failed in a way that says nothing about links.
+    /// whether the volume can hardlink, learned once by linking a new hidden file in the scratch
+    /// folder. none when the probe failed in a way that says nothing about links.
     fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
         }
         let [probe, link] = ["probe", "link"].map(|ending| {
-            self.tmp
-                .join(format!("{:016x}.{ending}", fastrand::u64(..)))
+            self.scratch
+                .join(format!(".fetchloom-{:016x}.{ending}", fastrand::u64(..)))
         });
-        File::create_new(&probe).ok()?;
+        create_hidden(&probe).ok()?;
         let linked = (self.hard_link)(&probe, &link);
         let _ = fs::remove_file(&probe);
         let links = match linked {
@@ -94,10 +102,24 @@ impl Volume {
     }
 }
 
-/// whether `err`, from linking a new file in `tmp/`, says the volume cannot hardlink at all.
-/// FAT32 and exFAT answer code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on linux.
+/// whether `err`, from linking a new file in the scratch folder, says the volume cannot hardlink
+/// at all. FAT32 and exFAT answer code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on linux.
 fn refuses_links(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported || err.raw_os_error() == Some(1)
+}
+
+/// makes a new empty file that file browsers do not show: windows hides it by its attribute,
+/// other systems by the dot its name starts with.
+fn create_hidden(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 2;
+        options.attributes(FILE_ATTRIBUTE_HIDDEN);
+    }
+    options.open(path)
 }
 
 /// opens `path` only to read and change its attributes, never following a link at its end.
@@ -158,7 +180,7 @@ fn writable(mut permissions: Permissions) -> Permissions {
 impl Volume {
     /// a volume that refuses to remove a read-only file, as FAT32 and exFAT do on windows, and
     /// that hardlinks only when `links` says so, which FAT cannot.
-    pub(crate) fn refusing(tmp: PathBuf, links: bool) -> Volume {
+    pub(crate) fn refusing(scratch: PathBuf, links: bool) -> Volume {
         let hard_link: fn(&Path, &Path) -> io::Result<()> = if links {
             |original, link| fs::hard_link(original, link)
         } else {
@@ -166,7 +188,7 @@ impl Volume {
             |_, _| Err(io::Error::from_raw_os_error(1))
         };
         Volume {
-            tmp,
+            scratch,
             hard_link,
             rename: |from, to| fs::rename(from, to),
             remove_file: |path| {

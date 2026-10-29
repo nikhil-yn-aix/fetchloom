@@ -87,6 +87,11 @@ impl Project {
             .unwrap_or_default()
     }
 
+    /// fetchloom's own folder in the project, which holds no data a person works with.
+    pub(crate) fn own_folder(&self) -> PathBuf {
+        self.root.join(FOLDER)
+    }
+
     /// replaces a file at the project's root in one step.
     pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         write_atomically(&self.root.join(name), bytes)
