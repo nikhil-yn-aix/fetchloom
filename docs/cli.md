@@ -130,7 +130,7 @@ when a locked file's download returns 404 or 410, fetchloom asks its recorded so
 
 file-specific failures can be collected while other downloads finish; network, disk and interruption failures stop the batch. an aggregate error names at most ten failed files, and an offline project error at most five missing files. successful downloads stay cached.
 
-resumption needs a saved prefix and either a pinned SHA-256, a strong `ETag` or `Last-Modified`. the prefix is hashed again. unsupported ranges, changed validators or damaged saved bytes can force a restart. a hard kill can lose work since the last checkpoint.
+resumption needs a saved prefix and either a pinned SHA-256, a strong `ETag`, or a `Last-Modified` from a server that sent no `ETag`. the prefix is hashed again. unsupported ranges, changed validators or damaged saved bytes can force a restart. a hard kill can lose work since the last checkpoint.
 
 approval is required above 1 GiB, not at exactly 1 GiB:
 

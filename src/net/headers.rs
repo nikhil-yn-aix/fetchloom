@@ -39,13 +39,26 @@ pub(super) fn is_html(headers: &HeaderMap) -> bool {
         })
 }
 
-/// the validator `If-Range` can trust: a strong `ETag`, else a modification date.
+/// the validator `If-Range` can trust: a strong `ETag`, else a modification date when no `ETag`
+/// was recorded. RFC 9110 section 13.1.5 allows no weak tag, and no date beside a tag.
 pub(super) fn if_range(validators: &Validators) -> Option<&str> {
-    validators
-        .etag
-        .as_deref()
-        .filter(|tag| !tag.starts_with("W/"))
-        .or(validators.last_modified.as_deref())
+    match &validators.etag {
+        Some(tag) => (!tag.starts_with("W/")).then_some(tag.as_str()),
+        None => validators.last_modified.as_deref(),
+    }
+}
+
+/// whether a response states an `ETag` or `Last-Modified` other than the one `recorded`, so its
+/// bytes may belong to another version of the file.
+pub(super) fn changed(recorded: &Validators, stated: &Validators) -> bool {
+    let differs = |stated: Option<&str>, recorded: Option<&str>| {
+        stated.is_some_and(|stated| recorded != Some(stated))
+    };
+    differs(stated.etag.as_deref(), recorded.etag.as_deref())
+        || differs(
+            stated.last_modified.as_deref(),
+            recorded.last_modified.as_deref(),
+        )
 }
 
 pub(super) fn validators(headers: &HeaderMap) -> Validators {
@@ -216,22 +229,22 @@ mod tests {
     }
 
     #[test]
-    fn only_strong_etags_and_dates_guard_a_resume() {
-        let weak = Validators {
-            etag: Some("W/\"a\"".to_owned()),
-            last_modified: None,
-        };
-        assert_eq!(if_range(&weak), None);
-        let dated = Validators {
-            etag: Some("W/\"a\"".to_owned()),
-            last_modified: Some("Tue, 01 Oct 2024 10:00:00 GMT".to_owned()),
-        };
-        assert_eq!(if_range(&dated), Some("Tue, 01 Oct 2024 10:00:00 GMT"));
-        let strong = Validators {
-            etag: Some("\"a\"".to_owned()),
-            last_modified: None,
-        };
-        assert_eq!(if_range(&strong), Some("\"a\""));
+    fn a_date_guards_a_resume_only_when_no_etag_was_recorded() {
+        let date = "Tue, 01 Oct 2024 10:00:00 GMT";
+        for (etag, last_modified, sent) in [
+            (Some("W/\"a\""), None, None),
+            // RFC 9110 section 13.1.5: never a weak tag, and never a date beside an entity tag
+            (Some("W/\"a\""), Some(date), None),
+            (Some("\"a\""), Some(date), Some("\"a\"")),
+            (None, Some(date), Some(date)),
+            (None, None, None),
+        ] {
+            let validators = Validators {
+                etag: etag.map(str::to_owned),
+                last_modified: last_modified.map(str::to_owned),
+            };
+            assert_eq!(if_range(&validators), sent, "{validators:?}");
+        }
     }
 
     #[test]

@@ -120,7 +120,7 @@ retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transien
 
 OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
 
-resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
+resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified` when the server sent no `ETag`. unsuitable responses restart from zero, and so does a range answer that states another `ETag` or `Last-Modified` than the saved bytes came with, since a server that ignores `If-Range` sends the rest of its current version. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
 
 a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
 
