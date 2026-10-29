@@ -289,12 +289,18 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
     let project = find()?;
+    // a check changes nothing, so it needs no hold. anything else reads what it changes only
+    // once no other fetchloom can change it
+    let _held = if args.check {
+        None
+    } else {
+        Some(hold(context, &project).await?)
+    };
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
     if args.check {
         return check(&project, &manifest, old.as_ref());
     }
-    let _held = hold(context, &project).await?;
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,
         Some(names) if names.is_empty() => Upgrade::All,

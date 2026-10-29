@@ -355,3 +355,17 @@ fn a_file_the_server_never_named_an_archive_needs_its_own_bytes() -> Result {
     assert!(stderr.contains("is not in the cache"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn an_archive_that_holds_nothing_still_leaves_its_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    // the end of a zip's central directory, and nothing before it
+    let mut empty = b"PK\x05\x06".to_vec();
+    empty.extend([0; 18]);
+    let server = Server::start("/files/empty.zip", vec![file(&empty, "\"e1\"")])?;
+    let output = sandbox.run(&["get", &server.url])?;
+    ok(&output)?;
+    let folder = text(&output.stdout)?;
+    assert!(Path::new(folder.trim()).is_dir(), "{folder}");
+    Ok(())
+}

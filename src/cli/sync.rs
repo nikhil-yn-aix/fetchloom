@@ -236,10 +236,11 @@ impl<'a> Loop<'a> {
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
+            // the line itself holds the secret, so only its place is shown
             parsed
                 .reference
                 .check_shareable()
-                .map_err(|err| cite(err, entry, "ref"))?;
+                .map_err(|err| cite_place(err, entry, "ref"))?;
             if !stands_for_itself(&parsed.reference) {
                 asked.push(parsed.reference.to_string());
             }
@@ -439,6 +440,19 @@ fn cite(error: Error, entry: &Entry, key: &str) -> Error {
         None => error,
     }
 }
+
+/// points an error at the data.toml line it comes from by its number alone, as `data.toml:7`.
+fn cite_place(error: Error, entry: &Entry, key: &str) -> Error {
+    match entry
+        .lines
+        .get(key)
+        .and_then(|line| line.split_whitespace().next())
+    {
+        Some(place) => error.detail(place.to_owned()),
+        None => error,
+    }
+}
+
 /// prints what a reference resolved to, before any file of it downloads.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     // a plain link has nothing to tell before its bytes arrive

@@ -73,11 +73,13 @@ impl Draft {
                     Some(file) if remote.named_by_server => file.path.clone(),
                     _ => remote.path.clone(),
                 };
-                // the same bytes unpack to the same files, while the dataset still unpacks. an
-                // upgrade pins what this machine's unpacking recorded for them instead, so a tree
-                // another version of fetchloom pinned can be replaced without downloading again
+                // the same bytes unpack to the same files, while the dataset still unpacks and
+                // the name says archive. an upgrade pins what this machine's unpacking recorded
+                // for them instead, so a tree another version of fetchloom pinned can be
+                // replaced without downloading again
+                let unpacks = entry.extract && archive::by_name(&path) == Some(Packed::Archive);
                 let unpacks_to = earlier
-                    .filter(|file| entry.extract && known == Some((file.sha256, file.size)))
+                    .filter(|file| unpacks && known == Some((file.sha256, file.size)))
                     .and_then(|file| {
                         let recorded = if upgrading {
                             cache.unpacked_tree(&file.sha256)
@@ -266,6 +268,9 @@ fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
             && (remote.named_by_server || file.path == remote.path)
             && remote.size.is_none_or(|size| size == file.size)
             && remote.sha256.is_none_or(|sha256| sha256 == file.sha256)
+            && remote
+                .md5
+                .is_none_or(|md5| file.md5.is_none_or(|was| was == md5))
     })
 }
 
@@ -428,6 +433,101 @@ mod tests {
             upgraded.files[0].unpacks_to,
             Some(recorded),
             "an upgrade pins what this fetchloom unpacks"
+        );
+    }
+
+    #[test]
+    fn a_file_whose_name_is_no_archive_never_unpacks() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        // the same bytes as a zip that was unpacked under another name
+        let bytes = store(&cache, b"zip bytes inside an npz");
+        let tree = cache.record_unpacked(&bytes.digest, &[]).unwrap();
+        let url = Url::parse("https://example.org/weights.npz").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.w]\nref = \"https://example.org/weights.npz\"\n").unwrap();
+        let listing = || Listing {
+            resolved: Reference::Url(url.clone()),
+            title: None,
+            version: None,
+            license: None,
+            doi: None,
+            files: vec![Remote {
+                path: "weights.npz".to_owned(),
+                size: Some(bytes.size),
+                sha256: Some(bytes.digest),
+                md5: None,
+                url: url.clone(),
+                named_by_server: false,
+            }],
+        };
+        let locked = |unpacks_to| Locked {
+            name: "w".to_owned(),
+            reference: url.to_string(),
+            spec: String::new(),
+            resolved: url.to_string(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: String::new(),
+            files: vec![LockedFile {
+                path: "weights.npz".to_owned(),
+                size: bytes.size,
+                sha256: bytes.digest,
+                md5: None,
+                url: url.to_string(),
+                unpacks_to,
+            }],
+        };
+        let entry = &manifest.datasets["w"];
+        for (upgrading, before) in [(true, None), (false, Some(tree)), (true, Some(tree))] {
+            let draft = Draft::new(
+                "w",
+                entry,
+                listing(),
+                Some(&locked(before)),
+                upgrading,
+                &cache,
+            )
+            .unwrap();
+            assert_eq!(draft.files[0].unpacks_to, None, "{upgrading} {before:?}");
+        }
+    }
+
+    #[test]
+    fn a_pin_is_not_carried_once_the_source_states_another_md5() {
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        let file = |md5: &str| LockedFile {
+            path: "data.csv".to_owned(),
+            size: 4,
+            sha256: digest::sha256(b"a,b\n"),
+            md5: crate::digest::Md5::from_hex(md5),
+            url: url.to_string(),
+            unpacks_to: None,
+        };
+        let locked = Locked {
+            name: "d".to_owned(),
+            reference: url.to_string(),
+            spec: String::new(),
+            resolved: url.to_string(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: String::new(),
+            files: vec![file("900150983cd24fb0d6963f7d28e17f72")],
+        };
+        let remote = |md5: &str| Remote {
+            path: "data.csv".to_owned(),
+            size: Some(4),
+            sha256: None,
+            md5: crate::digest::Md5::from_hex(md5),
+            url: url.clone(),
+            named_by_server: false,
+        };
+        assert!(carried(&locked, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
+        assert!(
+            carried(&locked, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
+            "the bytes changed under the same link"
         );
     }
 }

@@ -30,7 +30,7 @@ pub(crate) struct Partial {
     url: String,
     bytes: PathBuf,
     record: PathBuf,
-    _lock: Option<Arc<File>>,
+    lock: Option<Arc<File>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl Cache {
             url: url.to_owned(),
             bytes: folder.join(format!("{stem}.part")),
             record: folder.join(format!("{stem}.json")),
-            _lock: lock,
+            lock,
         }))
     }
 }
@@ -123,6 +123,7 @@ impl Partial {
         Ok(PartialWriter {
             cache: self.cache.clone(),
             file: BufWriter::with_capacity(BUFFER, file),
+            _lock: self.lock.clone(),
             record: Record {
                 url: self.url.clone(),
                 received: offset,
@@ -260,10 +261,12 @@ fn continuable(metadata: &Metadata) -> bool {
     is_plain(metadata) && !metadata.permissions().readonly()
 }
 
-/// the writing end of a download: hashes every byte on its way to disk.
+/// the writing end of a download: hashes every byte on its way to disk. it keeps the download
+/// claimed until it is done, since a stopped run may drop its claim while this still writes.
 pub(crate) struct PartialWriter {
     cache: Cache,
     file: BufWriter<File>,
+    _lock: Option<Arc<File>>,
     hasher: Hasher,
     written: u64,
     saved: Instant,
