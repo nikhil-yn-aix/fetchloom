@@ -21,7 +21,9 @@ pub(crate) struct Project {
 }
 
 /// the project lock, held while a command changes the project. dropping it lets others in.
-pub(crate) struct Held(Option<File>);
+pub(crate) struct Held {
+    _lock: Option<File>,
+}
 
 pub(crate) enum Hold {
     Held(Held),
@@ -119,12 +121,12 @@ impl Project {
             .open(folder.join("lock"))
             .map_err(|err| Error::io("could not open the project lock", &err))?;
         match file.try_lock() {
-            Ok(()) => Ok(Hold::Held(Held(Some(file)))),
+            Ok(()) => Ok(Hold::Held(Held { _lock: Some(file) })),
             Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
             // a filesystem without locks still works, one fetchloom at a time
             Err(TryLockError::Error(err)) => {
                 tracing::debug!(%err, "this filesystem has no file locks");
-                Ok(Hold::Held(Held(None)))
+                Ok(Hold::Held(Held { _lock: None }))
             }
         }
     }

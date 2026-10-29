@@ -27,7 +27,6 @@ fn lists_every_field_without_requesting_files_twice() {
             "Effects of xylooligosaccharide supplementation on methane emissions, rumen microbiome, and serum metabolome in lactating Jersey cows"
         )
     );
-    assert_eq!(listing.version.as_deref(), Some("1"));
     assert_eq!(listing.license.as_deref(), Some("CC BY 4.0"));
     assert_eq!(
         listing.doi.as_deref(),

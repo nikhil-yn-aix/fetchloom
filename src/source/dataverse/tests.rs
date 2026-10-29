@@ -26,7 +26,6 @@ fn lists_original_bytes_and_nested_paths_in_one_request() {
         "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0"
     );
     assert_eq!(listing.title.as_deref(), Some("Open Source at Harvard"));
-    assert_eq!(listing.version.as_deref(), Some("5.0"));
     assert_eq!(listing.license.as_deref(), Some("CC0-1.0"));
     assert_eq!(listing.doi.as_deref(), Some("10.7910/DVN/TJCLKP"));
     assert_eq!(

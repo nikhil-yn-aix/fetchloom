@@ -46,7 +46,6 @@ fn lists_every_field_with_metadata_embedded_in_one_request() {
         listing.title.as_deref(),
         Some("Reproducibility Project: Psychology")
     );
-    assert_eq!(listing.version, None);
     assert_eq!(listing.license.as_deref(), Some("CC0 1.0 Universal"));
     assert_eq!(listing.doi.as_deref(), Some("10.17605/OSF.IO/EZCUJ"));
     assert_eq!(listing.files, [expected_file()]);
@@ -75,7 +74,6 @@ fn file_guids_resolve_to_one_versioned_file() {
     let listing = block_on(Node::parse("sejcv").unwrap().resolve(&recorded)).unwrap();
     assert_eq!(listing.resolved.to_string(), "osf:sejcv");
     assert_eq!(listing.title.as_deref(), Some("OSC2012.pdf"));
-    assert_eq!(listing.version.as_deref(), Some("1"));
     assert_eq!(listing.license, None);
     assert_eq!(listing.doi, None);
     assert_eq!(listing.files, [expected_file()]);
@@ -227,9 +225,8 @@ fn live_osf() {
 #[test]
 fn recorded_storage_expiry_is_distinct_from_an_auth_refusal() {
     let url = Url::parse("https://osf.io/download/tfa5d/?version=1").unwrap();
-    let recorded = Recorded::default()
-        .on(url.as_str(), 403, fixture_bytes("osf/expired-storage.xml"))
-        .content_type(url.as_str(), "application/xml; charset=utf-8");
+    let recorded =
+        Recorded::default().on(url.as_str(), 403, fixture_bytes("osf/expired-storage.xml"));
     let answer = block_on(recorded.get(&url)).unwrap();
     let check = crate::source::fetch_plan(&url).expired.unwrap();
     assert!(check(&answer.text()));

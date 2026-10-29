@@ -93,7 +93,6 @@ impl Record {
         Ok(Listing {
             resolved: Reference::Zenodo(resolved),
             title: Some(answer.metadata.title),
-            version: answer.metadata.version,
             license: answer.metadata.license.map(|license| license.id),
             doi: answer.doi,
             files,
@@ -125,7 +124,6 @@ struct Answer {
 #[derive(Deserialize)]
 struct Metadata {
     title: String,
-    version: Option<String>,
     license: Option<License>,
     access_right: String,
 }
@@ -212,7 +210,6 @@ mod tests {
         let listing = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap();
         assert_eq!(listing.resolved.to_string(), "zenodo:3608990");
         assert_eq!(listing.title.as_deref(), Some("DatasetIris"));
-        assert_eq!(listing.version, None);
         assert_eq!(listing.license.as_deref(), Some("cc-by-4.0"));
         assert_eq!(listing.doi.as_deref(), Some("10.5281/zenodo.3608990"));
         assert_eq!(

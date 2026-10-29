@@ -113,7 +113,6 @@ impl Article {
         Ok(Listing {
             resolved: Reference::Figshare(resolved),
             title: Some(answer.title),
-            version: Some(answer.version.to_string()),
             license: answer.license.map(|license| license.name),
             doi: answer.doi,
             files,

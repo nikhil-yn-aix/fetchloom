@@ -47,7 +47,6 @@ pub(crate) struct Cache {
 pub(crate) struct Stored {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
-    pub(crate) path: PathBuf,
     /// the MD5 of the bytes, when it was computed to check one a source stated.
     pub(crate) md5: Option<Md5>,
     /// false when the cache already held these bytes.
@@ -255,7 +254,6 @@ impl Cache {
         Ok(Stored {
             digest,
             size,
-            path,
             md5,
             new,
         })
@@ -414,13 +412,21 @@ pub(crate) mod tests {
             stored.digest.hex(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(fs::read(&stored.path).unwrap(), b"abc");
-        assert!(fs::metadata(&stored.path).unwrap().permissions().readonly());
+        assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"abc");
+        assert!(
+            fs::metadata(cache.object_path(&stored.digest))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
         assert_eq!(
             cache.find(&stored.digest, Some(3)),
-            Some(stored.path.clone())
+            Some(cache.object_path(&stored.digest))
         );
-        assert_eq!(cache.find(&stored.digest, None), Some(stored.path.clone()));
+        assert_eq!(
+            cache.find(&stored.digest, None),
+            Some(cache.object_path(&stored.digest))
+        );
         assert_eq!(
             cache.find(&stored.digest, Some(4)),
             None,
@@ -435,8 +441,13 @@ pub(crate) mod tests {
             let second = store(&cache, b"same");
             assert!(first.new);
             assert!(!second.new);
-            assert_eq!(first.path, second.path);
-            assert!(fs::metadata(&first.path).unwrap().permissions().readonly());
+            assert_eq!(first.digest, second.digest);
+            assert!(
+                fs::metadata(cache.object_path(&first.digest))
+                    .unwrap()
+                    .permissions()
+                    .readonly()
+            );
             let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
             assert_eq!(leftovers, 0, "nothing is left behind in tmp");
         }
@@ -450,8 +461,16 @@ pub(crate) mod tests {
         assert_eq!(cache.find(&digest::sha256(b"same"), None), None);
         let stored = store(&cache, b"same");
         assert!(!stored.new);
-        assert_eq!(fs::read(&stored.path).unwrap(), b"same");
-        assert!(fs::metadata(&stored.path).unwrap().permissions().readonly());
+        assert_eq!(
+            fs::read(cache.object_path(&stored.digest)).unwrap(),
+            b"same"
+        );
+        assert!(
+            fs::metadata(cache.object_path(&stored.digest))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
         let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
         assert_eq!(leftovers, 0, "nothing is left behind in tmp");
     }

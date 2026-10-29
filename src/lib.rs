@@ -1,10 +1,6 @@
 //! fetchloom puts the exact data a project needs onto any machine with one command.
 //!
 //! the `fetchloom` and `fl` binaries both call [`main`]. everything else is private to the crate.
-#![expect(
-    dead_code,
-    reason = "the sources and the project loop are being built on these parts"
-)]
 
 mod archive;
 mod cache;

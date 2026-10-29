@@ -60,7 +60,6 @@ impl Dataset {
         Ok(Listing {
             resolved: Reference::Kaggle(pinned),
             title: Some(view.title).filter(|title| !title.is_empty()),
-            version: Some(version.to_string()),
             license: Some(view.license_name)
                 .filter(|license| !license.is_empty() && license != "Unknown"),
             doi: None,
@@ -259,7 +258,6 @@ mod tests {
         let listing = block_on(dataset("uciml/iris").resolve(&recorded)).unwrap();
         assert_eq!(listing.resolved.to_string(), "kaggle:uciml/iris@2");
         assert_eq!(listing.title.as_deref(), Some("Iris Species"));
-        assert_eq!(listing.version.as_deref(), Some("2"));
         assert_eq!(listing.license.as_deref(), Some("CC0: Public Domain"));
         assert_eq!(listing.doi, None);
         let file = |path: &str, size| Remote {

@@ -62,7 +62,6 @@ impl Link {
         Listing {
             resolved: Reference::Dropbox(self.clone()),
             title: None,
-            version: None,
             license: None,
             doi: None,
             files: vec![Remote {

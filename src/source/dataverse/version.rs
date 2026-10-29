@@ -144,10 +144,9 @@ impl Version {
             resolved: Reference::Dataverse(Dataset {
                 host: dataset.host.clone(),
                 item,
-                version: Some(number.clone()),
+                version: Some(number),
             }),
             title,
-            version: Some(number),
             license: self.license.map(|license| {
                 license
                     .rights_identifier

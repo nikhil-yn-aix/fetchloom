@@ -24,7 +24,6 @@ impl Recorded {
         let response = Response {
             status,
             url: parsed.clone(),
-            content_type: None,
             next: None,
             body: body.into(),
         };
@@ -45,17 +44,6 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before its next page"));
         answer.next = Some(Url::parse(next).unwrap());
-        self
-    }
-
-    /// says the answer for `url` came with this content type.
-    pub(crate) fn content_type(mut self, url: &str, content_type: &str) -> Recorded {
-        let key = Url::parse(url).unwrap().to_string();
-        let answer = self
-            .answers
-            .get_mut(&key)
-            .unwrap_or_else(|| panic!("record {url} before its content type"));
-        answer.content_type = Some(content_type.to_owned());
         self
     }
 

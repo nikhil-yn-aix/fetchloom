@@ -194,12 +194,10 @@ impl Entry {
             return Err(node.invalid("the GUID names a folder rather than a file"));
         }
         let title = self.attributes.name.clone();
-        let version = self.version(node)?.to_string();
         let file = self.remote(node, title.clone())?;
         Ok(Listing {
             resolved: Reference::Osf(node.clone()),
             title: Some(title),
-            version: Some(version),
             license: None,
             doi: None,
             files: vec![file],

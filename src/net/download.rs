@@ -81,7 +81,6 @@ pub(crate) enum Event {
     Started {
         total: Option<u64>,
         resumed: u64,
-        name: Option<String>,
     },
     Bytes(u64),
 }
@@ -395,7 +394,6 @@ impl Net {
         on(Event::Started {
             total,
             resumed: offset,
-            name: name.clone(),
         })
         .map_err(Failure::Final)?;
         if offset > 0 {

@@ -37,7 +37,6 @@ impl Repo {
         Ok(Listing {
             resolved: Reference::HuggingFace(pinned),
             title: None,
-            version: Some(info.sha.clone()),
             license: info.license(),
             doi: info.doi(),
             files,
@@ -132,7 +131,6 @@ mod tests {
             format!("hf:datasets/stanfordnlp/imdb@{IMDB}")
         );
         assert_eq!(listing.title, None);
-        assert_eq!(listing.version.as_deref(), Some(IMDB));
         assert_eq!(listing.license.as_deref(), Some("other"));
         assert_eq!(listing.doi, None);
         let file = |path: &str, size, lfs: Option<&str>| Remote {

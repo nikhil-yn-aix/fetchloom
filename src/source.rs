@@ -60,7 +60,6 @@ pub(crate) struct Listing {
     /// the reference to resolve again, pinned to a version when the source provides one.
     pub(crate) resolved: Reference,
     pub(crate) title: Option<String>,
-    pub(crate) version: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
     pub(crate) files: Vec<Remote>,
@@ -323,7 +322,6 @@ fn single(url: &Url) -> Listing {
     Listing {
         resolved: Reference::Url(url.clone()),
         title: None,
-        version: None,
         license: None,
         doi: None,
         files: vec![Remote {

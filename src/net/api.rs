@@ -28,17 +28,12 @@ pub(crate) struct Response {
     pub(crate) status: u16,
     /// where the answer came from, after redirects.
     pub(crate) url: Url,
-    pub(crate) content_type: Option<String>,
     /// the `rel="next"` target of a `Link` header, for listings sent in pages.
     pub(crate) next: Option<Url>,
     pub(crate) body: Vec<u8>,
 }
 
 impl Response {
-    pub(crate) fn is_success(&self) -> bool {
-        (200..300).contains(&self.status)
-    }
-
     pub(crate) fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
         serde_json::from_slice(&self.body).map_err(|err| {
             Error::new(Kind::SourceInvalid, format!("{} sent an answer fetchloom could not read: {err}", host(&self.url)))
@@ -102,7 +97,6 @@ impl Net {
                 .and_then(|value: &header::HeaderValue| value.to_str().ok())
                 .map(str::to_owned)
         };
-        let content_type = text(header::CONTENT_TYPE);
         let next = text(header::LINK)
             .and_then(|value| next_link(&value))
             .and_then(|link| response.url().join(&link).ok());
@@ -146,7 +140,6 @@ impl Net {
         Ok(Response {
             status: status.as_u16(),
             url: final_url,
-            content_type,
             next,
             body: body.to_vec(),
         })

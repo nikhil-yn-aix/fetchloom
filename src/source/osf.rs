@@ -164,7 +164,6 @@ impl Metadata {
         Listing {
             resolved: Reference::Osf(node.clone()),
             title: Some(self.attributes.title),
-            version: None,
             license: self
                 .embeds
                 .license

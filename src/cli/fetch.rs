@@ -346,7 +346,6 @@ mod tests {
         let unknown = || Event::Started {
             total: None,
             resumed: 0,
-            name: None,
         };
         let approval = Approval::new();
         let watch = Watch::new(&job, &output, &overall, &approval, false);
@@ -381,7 +380,6 @@ mod tests {
         let small = Event::Started {
             total: Some(10),
             resumed: 0,
-            name: None,
         };
         told.on(&small).unwrap();
         told.on(&Event::Bytes(2 * super::super::ASK_ABOVE)).unwrap();
@@ -422,7 +420,6 @@ mod tests {
             let result = watch.on(&Event::Started {
                 total: Some(total),
                 resumed,
-                name: None,
             });
             if needs_approval {
                 assert_eq!(result.unwrap_err().kind, Kind::Unconfirmed);
@@ -460,7 +457,6 @@ mod tests {
         let event = Event::Started {
             total: Some(super::super::ASK_ABOVE + 1),
             resumed: 0,
-            name: None,
         };
         let first = Watch::new(&first, &output, &overall, &approval, false);
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);

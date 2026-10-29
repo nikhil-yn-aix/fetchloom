@@ -67,7 +67,6 @@ fn bare_prefixed_and_web_dois_return_the_complete_dataset() {
         let listing = block_on(reference.resolve(&recorded)).unwrap();
         assert_eq!(listing.resolved.to_string(), "zenodo:3608990");
         assert_eq!(listing.title.as_deref(), Some("DatasetIris"));
-        assert_eq!(listing.version, None);
         assert_eq!(listing.license.as_deref(), Some("cc-by-4.0"));
         assert_eq!(listing.doi.as_deref(), Some(DOI));
         assert_eq!(

@@ -326,16 +326,18 @@ mod tests {
         let (_dir, cache) = cache();
         let good = store(&cache, b"good");
         let bad = store(&cache, b"bad!");
-        let mut permissions = fs::metadata(&bad.path).unwrap().permissions();
+        let mut permissions = fs::metadata(cache.object_path(&bad.digest))
+            .unwrap()
+            .permissions();
         #[expect(
             clippy::permissions_set_readonly_false,
             reason = "the test damages an object on purpose"
         )]
         permissions.set_readonly(false);
-        fs::set_permissions(&bad.path, permissions).unwrap();
+        fs::set_permissions(cache.object_path(&bad.digest), permissions).unwrap();
         fs::OpenOptions::new()
             .write(true)
-            .open(&bad.path)
+            .open(cache.object_path(&bad.digest))
             .unwrap()
             .write_all(b"BAD!")
             .unwrap();
@@ -359,12 +361,13 @@ mod tests {
     fn a_changed_object_that_cannot_be_removed_is_still_reported() {
         let (_dir, cache) = cache();
         let bad = store(&cache, b"bad!");
-        damage(&bad.path);
-        let held = hold(&bad.path);
+        let object = cache.object_path(&bad.digest);
+        damage(&object);
+        let held = hold(&object);
         let checked = cache.verify_all(2, &|_| {});
         drop(held);
         assert_eq!(checked.changed, vec![bad.digest]);
-        assert_eq!(checked.stuck.is_empty(), !bad.path.exists());
+        assert_eq!(checked.stuck.is_empty(), !object.exists());
     }
 
     #[test]
@@ -372,15 +375,19 @@ mod tests {
         for (_dir, cache) in [cache(), fat()] {
             let rotten = [store(&cache, b"rot1"), store(&cache, b"rot2")];
             for object in &rotten {
-                damage(&object.path);
+                damage(&cache.object_path(&object.digest));
                 // bytes that rot on disk leave the read-only flag as it was
-                seal(&object.path);
+                seal(&cache.object_path(&object.digest));
             }
             assert!(!cache.verify(&rotten[0].digest).unwrap());
             let checked = cache.verify_all(2, &|_| {});
             assert_eq!(checked.changed, vec![rotten[1].digest]);
             assert_eq!(checked.stuck, vec![]);
-            assert!(rotten.iter().all(|object| !object.path.exists()));
+            assert!(
+                rotten
+                    .iter()
+                    .all(|object| !cache.object_path(&object.digest).exists())
+            );
         }
     }
 

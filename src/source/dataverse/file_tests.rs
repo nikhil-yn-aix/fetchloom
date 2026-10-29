@@ -62,7 +62,6 @@ fn a_file_is_listed_as_one_file_of_its_dataset_in_one_request() {
         "dataverse:dataverse.harvard.edu/file:6867336@5.0"
     );
     assert_eq!(listing.title.as_deref(), Some("Open Source at Harvard"));
-    assert_eq!(listing.version.as_deref(), Some("5.0"));
     assert_eq!(listing.license.as_deref(), Some("CC0-1.0"));
     assert_eq!(listing.doi.as_deref(), Some("10.7910/DVN/TJCLKP"));
     assert_eq!(

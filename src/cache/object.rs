@@ -90,10 +90,6 @@ fn create_sealed(path: &Path) -> io::Result<File> {
 }
 
 impl NewObject {
-    pub(crate) fn written(&self) -> u64 {
-        self.written
-    }
-
     /// flushes the bytes to disk, so a power cut cannot leave the object empty, and closes it.
     pub(crate) fn seal(self) -> io::Result<Sealed> {
         let NewObject {

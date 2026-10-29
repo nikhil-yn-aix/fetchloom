@@ -44,9 +44,7 @@ fn a_dropbox_html_answer_is_not_a_file() {
     )
     .unwrap();
     let crate::net::Fetch { from, divert, .. } = crate::source::fetch_plan(&url);
-    let recorded = Recorded::default()
-        .fixture(from.as_str(), "dropbox/download-page.html")
-        .content_type(from.as_str(), "text/html; charset=utf-8");
+    let recorded = Recorded::default().fixture(from.as_str(), "dropbox/download-page.html");
     let response = block_on(recorded.get(&from)).unwrap();
     let error = divert.unwrap()(&response.url, response.status, &response.text()).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);

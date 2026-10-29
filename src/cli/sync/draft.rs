@@ -389,7 +389,6 @@ mod tests {
         let listing = || Listing {
             resolved: Reference::Url(url.clone()),
             title: None,
-            version: None,
             license: None,
             doi: None,
             files: vec![Remote {
@@ -447,7 +446,6 @@ mod tests {
         let listing = || Listing {
             resolved: Reference::Url(url.clone()),
             title: None,
-            version: None,
             license: None,
             doi: None,
             files: vec![Remote {

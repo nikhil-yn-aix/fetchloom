@@ -70,7 +70,6 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
     Ok(Listing {
         resolved: Reference::Drive(item.clone()),
         title,
-        version: None,
         license: None,
         doi: None,
         files: walk.files,

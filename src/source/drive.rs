@@ -116,7 +116,6 @@ impl Item {
         Ok(Listing {
             resolved: Reference::Drive(item.clone()),
             title: None,
-            version: None,
             license: None,
             doi: None,
             files: vec![Remote {

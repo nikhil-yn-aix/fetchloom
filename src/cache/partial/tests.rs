@@ -35,7 +35,10 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     assert_eq!(resumed.written(), 3);
     resumed.write_all(b"def").unwrap();
     let stored = resumed.finish().unwrap();
-    assert_eq!(fs::read(&stored.path).unwrap(), b"abcdef");
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"abcdef"
+    );
     assert_eq!(stored.size, 6);
     assert_eq!(
         stored.md5.map(|md5| md5.hex()).as_deref(),
@@ -87,7 +90,7 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     // a run that died while publishing leaves its record and, sealed, a second name of the
     // object it was publishing
     fs::remove_file(&partial.bytes).unwrap();
-    fs::hard_link(&object.path, &partial.bytes).unwrap();
+    fs::hard_link(cache.object_path(&object.digest), &partial.bytes).unwrap();
     drop(partial);
 
     let partial = owned(&cache, url);
@@ -96,9 +99,17 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
         .writer(0, None, Validators::default(), false)
         .unwrap();
     writer.write_all(b"xyz").unwrap();
-    assert_eq!(fs::read(&writer.finish().unwrap().path).unwrap(), b"xyz");
-    assert_eq!(fs::read(&object.path).unwrap(), b"abc");
-    assert!(fs::metadata(&object.path).unwrap().permissions().readonly());
+    assert_eq!(
+        fs::read(cache.object_path(&writer.finish().unwrap().digest)).unwrap(),
+        b"xyz"
+    );
+    assert_eq!(fs::read(cache.object_path(&object.digest)).unwrap(), b"abc");
+    assert!(
+        fs::metadata(cache.object_path(&object.digest))
+            .unwrap()
+            .permissions()
+            .readonly()
+    );
 }
 
 #[test]
@@ -122,7 +133,10 @@ fn a_sealed_download_is_dropped_on_fat() {
         .writer(0, None, Validators::default(), false)
         .unwrap();
     writer.write_all(b"xyz").unwrap();
-    assert_eq!(fs::read(&writer.finish().unwrap().path).unwrap(), b"xyz");
+    assert_eq!(
+        fs::read(cache.object_path(&writer.finish().unwrap().digest)).unwrap(),
+        b"xyz"
+    );
 }
 
 #[test]
@@ -164,7 +178,7 @@ fn a_published_object_can_be_read_while_its_download_is_still_claimed() {
         .unwrap();
     writer.write_all(b"abc").unwrap();
     let stored = writer.finish().unwrap();
-    assert_eq!(fs::read(&stored.path).unwrap(), b"abc");
+    assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"abc");
     drop(partial);
-    assert_eq!(store(&cache, b"abc").path, stored.path);
+    assert_eq!(store(&cache, b"abc").digest, stored.digest);
 }
