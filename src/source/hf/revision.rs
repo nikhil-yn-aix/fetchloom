@@ -59,6 +59,19 @@ impl Repo {
             )
             .detail(format!("id \"{}\", commit \"{}\"", info.id, info.sha)));
         }
+        if let Some(requested) = &self.revision
+            && is_commit(requested)
+            && !requested.eq_ignore_ascii_case(&info.sha)
+        {
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!("huggingface.co answered {self} with a different commit"),
+            )
+            .detail(format!("expected {requested}, got {}", info.sha))
+            .help(
+                "try again later. if it keeps happening, check the repository's commit history",
+            ));
+        }
         Ok(info)
     }
 

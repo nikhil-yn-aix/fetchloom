@@ -129,8 +129,10 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | OSF | `osf:<node or file id>` | the download link with a file version |
 | drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
 | dropbox | the shared URL with `dl=1` | the same URL |
+| hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
+| kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
 
-DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment.
 
 drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
 
@@ -140,7 +142,7 @@ dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and local cache records keep those URLs verbatim, so do not share them. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs mask recognized query secrets. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 

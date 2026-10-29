@@ -319,4 +319,42 @@ mod tests {
         );
         assert_eq!(work.counts().requests, 2);
     }
+
+    #[test]
+    fn a_pinned_commit_cannot_resolve_to_another_commit() {
+        let requested = "1111111111111111111111111111111111111111";
+        let revision = api(&format!(
+            "datasets/stanfordnlp/imdb/revision/{requested}?{EXPAND}"
+        ));
+        let recorded = Recorded::default()
+            .fixture(&revision, "hf/imdb-revision.json")
+            .fixture(
+                &api(&format!(
+                    "datasets/stanfordnlp/imdb/tree/{IMDB}?recursive=true"
+                )),
+                "hf/imdb-tree.json",
+            );
+        let error =
+            block_on(repo(&format!("datasets/stanfordnlp/imdb@{requested}")).resolve(&recorded))
+                .unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert_eq!(recorded.asked(), [revision]);
+    }
+
+    #[test]
+    fn the_stack_requires_accepted_terms_and_a_token() {
+        let revision = api(&format!(
+            "datasets/bigcode/the-stack/revision/main?{EXPAND}"
+        ));
+        let access = api("datasets/bigcode/the-stack/auth-check");
+        let recorded = Recorded::default()
+            .fixture(&revision, "hf/stack-revision.json")
+            .on(&access, 401, fixture_bytes("hf/stack-auth-check.json"));
+        let error = block_on(repo("datasets/bigcode/the-stack").resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        let help = error.help.unwrap();
+        assert!(help.contains("https://huggingface.co/datasets/bigcode/the-stack"));
+        assert!(help.contains("HF_TOKEN"));
+        assert_eq!(recorded.asked(), [revision, access]);
+    }
 }

@@ -57,7 +57,7 @@ pub(crate) struct Parsed {
 /// what a source says a dataset holds, at one exact version.
 #[derive(Clone, Debug)]
 pub(crate) struct Listing {
-    /// the exact version, as a reference that keeps naming these same files.
+    /// the reference to resolve again, pinned to a version when the source provides one.
     pub(crate) resolved: Reference,
     pub(crate) title: Option<String>,
     pub(crate) version: Option<String>,
@@ -74,8 +74,8 @@ pub(crate) struct Remote {
     pub(crate) size: Option<u64>,
     pub(crate) sha256: Option<Sha256>,
     pub(crate) md5: Option<Md5>,
-    /// a URL that keeps serving these bytes. `data.lock` records it, so it never carries a token
-    /// or a signature.
+    /// the link project commands write to data.lock. redirects and source credentials are not
+    /// part of that record.
     pub(crate) url: Url,
     /// the path is only a guess from the link, and the name the server sends replaces it.
     pub(crate) named_by_server: bool,
