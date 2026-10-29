@@ -26,12 +26,7 @@ fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
     let folder = sandbox.work().join("iris");
     assert_eq!(text(&output.stdout)?, format!("{}\n", folder.display()));
     assert_eq!(fs::read(folder.join("iris.csv"))?, IRIS);
-    let links = sandbox.links()?;
-    let name = if links.reflink || links.hardlink {
-        "a_link_lands_in_a_folder_named_after_its_file"
-    } else {
-        "a_link_lands_in_a_folder_named_after_its_file_on_a_drive_without_links"
-    };
+    let name = sandbox.placed_story("a_link_lands_in_a_folder_named_after_its_file")?;
     sandbox
         .filters()
         .bind(|| insta::assert_snapshot!(name, stderr));
@@ -222,12 +217,7 @@ fn a_busy_server_is_tried_again() -> Result {
     let output = sandbox.run(&["get", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let links = sandbox.links()?;
-    let name = if links.reflink || links.hardlink {
-        "a_busy_server_is_tried_again"
-    } else {
-        "a_busy_server_is_tried_again_on_a_drive_without_links"
-    };
+    let name = sandbox.placed_story("a_busy_server_is_tried_again")?;
     sandbox
         .filters()
         .bind(|| insta::assert_snapshot!(name, stderr));
@@ -325,12 +315,7 @@ fn a_changed_file_replaces_the_copy_fetched_before() -> Result {
         fs::read(sandbox.work().join("iris").join("iris.csv"))?,
         newer
     );
-    let links = sandbox.links()?;
-    let name = if links.reflink || links.hardlink {
-        "a_changed_file_replaces_the_copy_fetched_before"
-    } else {
-        "a_changed_file_replaces_the_copy_fetched_before_on_a_drive_without_links"
-    };
+    let name = sandbox.placed_story("a_changed_file_replaces_the_copy_fetched_before")?;
     sandbox
         .filters()
         .bind(|| insta::assert_snapshot!(name, stderr));

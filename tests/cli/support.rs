@@ -74,6 +74,17 @@ impl Sandbox {
         Ok(links)
     }
 
+    /// `name` for a snapshot that says how files were placed, or its variant for a drive that
+    /// makes neither link, where every file is copied.
+    pub(crate) fn placed_story(&self, name: &str) -> Result<String> {
+        let links = self.links()?;
+        Ok(if links.reflink || links.hardlink {
+            name.to_owned()
+        } else {
+            format!("{name}_on_a_drive_without_links")
+        })
+    }
+
     /// waits until a file written in the sandbox now carries a later time than `time`. a
     /// filesystem stamps times in steps, two seconds on FAT32, so a file written right after
     /// another can carry the same time.

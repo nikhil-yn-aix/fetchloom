@@ -1,6 +1,6 @@
 ---
 source: tests/cli/project.rs
-assertion_line: 62
+assertion_line: 57
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
