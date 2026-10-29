@@ -162,7 +162,7 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     )
-    .help("only links typed on the command line may reach this machine or its local network")
+    .help("only hosts written on the command line or in data.toml may reach this machine or its local network")
 }
 
 pub(super) fn interrupted(url: &Url) -> Error {

@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, reply, text};
+use crate::support::{Result, Sandbox, Server, file, reply, text};
 
 const PATH: &str = "/files/data.csv";
 
@@ -103,5 +103,17 @@ fn patterns_that_leave_nothing_never_show_the_token() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(!stderr.contains("abc123"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn get_json_never_shows_the_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    let output = sandbox.run(&["--json", "get", &format!("{}?token=abc123", server.url)])?;
+    let stdout = text(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(!stdout.contains("abc123"), "{stdout}");
+    assert!(stdout.contains("token=***"), "{stdout}");
     Ok(())
 }

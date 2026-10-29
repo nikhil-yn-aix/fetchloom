@@ -165,8 +165,7 @@ pub(crate) fn unpack_cached(
     Ok(Some(unpacked))
 }
 
-const REFUSED_HELP: &str =
-    "set extract = false on this dataset in data.toml to keep the archive packed";
+const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";
 
 /// an archive fetchloom will not unpack, for the reason given.
 fn refused(message: impl Into<String>) -> Error {
@@ -187,7 +186,7 @@ fn damaged(at: Option<&str>, err: &dyn std::fmt::Display) -> Error {
         None => format!("the archive is damaged: {err}"),
     };
     Error::new(Kind::SourceInvalid, message)
-        .help("ask the dataset's authors for a fixed copy, or set extract = false on this dataset in data.toml to keep it packed")
+        .help("ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract")
 }
 
 fn not_written(path: &str, err: &io::Error) -> Error {

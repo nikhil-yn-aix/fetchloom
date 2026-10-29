@@ -268,6 +268,9 @@ fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
             && (remote.named_by_server || file.path == remote.path)
             && remote.size.is_none_or(|size| size == file.size)
             && remote.sha256.is_none_or(|sha256| sha256 == file.sha256)
+            && remote
+                .md5
+                .is_none_or(|md5| file.md5.is_none_or(|was| was == md5))
     })
 }
 
@@ -489,5 +492,42 @@ mod tests {
             .unwrap();
             assert_eq!(draft.files[0].unpacks_to, None, "{upgrading} {before:?}");
         }
+    }
+
+    #[test]
+    fn a_pin_is_not_carried_once_the_source_states_another_md5() {
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        let file = |md5: &str| LockedFile {
+            path: "data.csv".to_owned(),
+            size: 4,
+            sha256: digest::sha256(b"a,b\n"),
+            md5: crate::digest::Md5::from_hex(md5),
+            url: url.to_string(),
+            unpacks_to: None,
+        };
+        let locked = Locked {
+            name: "d".to_owned(),
+            reference: url.to_string(),
+            spec: String::new(),
+            resolved: url.to_string(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: String::new(),
+            files: vec![file("900150983cd24fb0d6963f7d28e17f72")],
+        };
+        let remote = |md5: &str| Remote {
+            path: "data.csv".to_owned(),
+            size: Some(4),
+            sha256: None,
+            md5: crate::digest::Md5::from_hex(md5),
+            url: url.clone(),
+            named_by_server: false,
+        };
+        assert!(carried(&locked, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
+        assert!(
+            carried(&locked, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
+            "the bytes changed under the same link"
+        );
     }
 }

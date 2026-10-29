@@ -102,7 +102,8 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
             size: fetched.size,
             sha256: fetched.digest,
             md5: remote.md5,
-            url: remote.url.to_string(),
+            // what get reports, so a secret in the link stays masked
+            url: crate::net::Shown(&remote.url).to_string(),
             unpacks_to: None,
         })
         .collect();
