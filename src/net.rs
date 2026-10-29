@@ -52,8 +52,41 @@ pub(crate) enum Notice {
 
 pub(crate) type Notify = Arc<dyn Fn(Notice) + Send + Sync>;
 
+/// the settings that enabled offline mode, kept for recovery instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Offline {
+    No,
+    Flag,
+    Environment,
+    Both,
+}
+
+impl Offline {
+    pub(crate) fn from_settings(flag: bool, environment: bool) -> Offline {
+        match (flag, environment) {
+            (false, false) => Self::No,
+            (true, false) => Self::Flag,
+            (false, true) => Self::Environment,
+            (true, true) => Self::Both,
+        }
+    }
+
+    pub(crate) fn enabled(self) -> bool {
+        self != Self::No
+    }
+
+    pub(crate) fn retry(self) -> &'static str {
+        match self {
+            Self::No => "run the same command when you are online",
+            Self::Flag => "run the same command without --offline",
+            Self::Environment => "unset FETCHLOOM_OFFLINE, then run the same command",
+            Self::Both => "remove --offline and unset FETCHLOOM_OFFLINE, then run the same command",
+        }
+    }
+}
+
 pub(crate) struct Options {
-    pub(crate) offline: bool,
+    pub(crate) offline: Offline,
     /// downloads running at once, across all hosts.
     pub(crate) jobs: usize,
     pub(crate) credentials: Vec<Credential>,
@@ -63,7 +96,7 @@ pub(crate) struct Net {
     /// made on the first request, so a run that never goes online loads no TLS roots and reads no
     /// proxy settings.
     wire: OnceLock<Result<Wire, Error>>,
-    offline: bool,
+    offline: Offline,
     typed: address::Typed,
     credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
     jobs: Arc<Semaphore>,
@@ -132,7 +165,7 @@ impl Net {
     /// not be made stays an error, since nothing about a retry would differ.
     fn wire(&self) -> Result<&Wire, Error> {
         self.wire
-            .get_or_init(|| Wire::new(&self.typed, self.offline))
+            .get_or_init(|| Wire::new(&self.typed, self.offline.enabled()))
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -150,7 +183,7 @@ impl Net {
         }
     }
 
-    pub(crate) fn is_offline(&self) -> bool {
+    pub(crate) fn offline(&self) -> Offline {
         self.offline
     }
 
@@ -177,7 +210,7 @@ impl Net {
             let response = tokio::select! {
                 sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
                     Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
-                    Ok(Err(err)) => return Err(failure::classify(&hop, &err)),
+                    Ok(Err(err)) => return Err(failure::classify(&hop, &err, self.offline)),
                     Ok(Ok(response)) => response,
                 },
                 () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(&hop))),
@@ -277,7 +310,7 @@ mod tests {
     #[test]
     fn a_run_that_sends_nothing_loads_no_tls_roots() {
         let options = Options {
-            offline: false,
+            offline: Offline::No,
             jobs: 1,
             credentials: Vec::new(),
         };

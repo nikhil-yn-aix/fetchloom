@@ -80,7 +80,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
     let old = project.lock()?;
     if args.name.is_none()
-        && let Some(name) = present(&manifest, old.as_ref(), &reference, &listing)
+        && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
     {
         let work = Loop::new(context, &project, net, cache);
         return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
@@ -123,13 +123,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
             ),
         );
     }
-    let folder = plan::folder(&new_manifest, &name);
-    context
-        .output
-        .done(&format!("added {name}. its files are in {folder}"));
-    context
-        .output
-        .hint(&format!("scripts can find it with `fetchloom path {name}`"));
+    tell_added(&work, &new_manifest, &name)?;
     Ok(Report {
         project: project.root,
         datasets: vec![name],
@@ -156,18 +150,26 @@ fn restore(project: &Project, before: Option<&str>) {
 fn present(
     manifest: &Manifest,
     old: Option<&Lock>,
-    reference: &str,
+    wanted: &manifest::Entry,
     listing: &Listing,
 ) -> Option<String> {
     let resolved = listing.resolved.to_string();
     manifest
         .datasets
         .iter()
-        .find(|(name, entry)| {
-            entry.reference == reference
+        .filter(|(name, entry)| {
+            entry.reference == wanted.reference
                 || old
                     .and_then(|old| old.get(name))
                     .is_some_and(|locked| locked.resolved == resolved)
+        })
+        .min_by_key(|(_, entry)| {
+            (
+                entry.select != wanted.select
+                    || entry.exclude != wanted.exclude
+                    || entry.extract != wanted.extract,
+                entry.reference != wanted.reference,
+            )
         })
         .map(|(name, _)| name.clone())
 }
@@ -204,16 +206,45 @@ async fn again(
     }
     let (lock_changed, placement) =
         sync_all(work, manifest, old, &Upgrade::Nothing, false, None).await?;
-    work.context.output.done(&format!(
-        "{name} is already in data.toml. its files are in {}",
-        plan::folder(manifest, name)
-    ));
+    let contents = if has_files(work, manifest, name)? {
+        format!("its files are in {}", plan::folder(manifest, name))
+    } else {
+        "its archives contain no regular files".to_owned()
+    };
+    work.context
+        .output
+        .done(&format!("{name} is already in data.toml. {contents}"));
     Ok(Report {
         project: work.project.root.clone(),
         datasets: Vec::new(),
         lock_changed,
         placement: Some(placement),
     })
+}
+
+fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+    if has_files(work, manifest, name)? {
+        let folder = plan::folder(manifest, name);
+        work.context
+            .output
+            .done(&format!("added {name}. its files are in {folder}"));
+        work.context
+            .output
+            .hint(&format!("scripts can find it with `fetchloom path {name}`"));
+    } else {
+        work.context.output.done(&format!(
+            "added {name}. its archives contain no regular files"
+        ));
+    }
+    Ok(())
+}
+
+fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {
+    let lock = work.project.lock()?.unwrap_or_default();
+    Ok(plan::from_cache(manifest, &lock, &work.cache)?
+        .targets
+        .iter()
+        .any(|target| target.dataset == name))
 }
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
@@ -408,13 +439,22 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             .await?;
         }
     }
+    let lock = project.lock()?.unwrap_or_default();
+    let targets = plan::from_cache(&manifest, &lock, &open_cache()?)?.targets;
+    if !targets.iter().any(|target| target.dataset == name) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{name} has no regular files after extraction"),
+        )
+        .help(format!(
+            "set extract = false on {name} in data.toml, then run `fetchloom sync` to keep the packed archive"
+        )));
+    }
     let folder = plan::folder(&manifest, name);
     let relative = match file.filter(|file| !file.is_empty()) {
         None => folder,
         Some(file) => {
-            let lock = project.lock()?.unwrap_or_default();
             let wanted = format!("{folder}/{file}");
-            let targets = plan::from_cache(&manifest, &lock, &open_cache()?)?.targets;
             if !targets.iter().any(|target| {
                 target.path == wanted || target.path.starts_with(&format!("{wanted}/"))
             }) {

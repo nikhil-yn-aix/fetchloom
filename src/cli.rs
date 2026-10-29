@@ -36,7 +36,7 @@ const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
 /// what every command gets: where to print, the settings, the counters and the stop signal.
 struct Context {
     output: Arc<Output>,
-    offline: bool,
+    offline: net::Offline,
     yes: bool,
     jobs: usize,
     work: Arc<Work>,
@@ -48,7 +48,7 @@ impl Context {
     fn new(output: Output) -> Context {
         Context {
             output: Arc::new(output),
-            offline: false,
+            offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
             work: Arc::default(),
@@ -149,7 +149,10 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
-    context.offline = global.offline || var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1");
+    context.offline = net::Offline::from_settings(
+        global.offline,
+        var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
+    );
     context.yes = global.yes;
     if args.version {
         return about(

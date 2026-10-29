@@ -201,7 +201,7 @@ pub(crate) struct Remove {
 /// make the data folder match data.lock on this machine
 #[derive(Debug, clap::Args)]
 pub(crate) struct Sync {
-    /// replace files that were changed by hand
+    /// replace conflicting files at locked paths, including untracked files
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 }
@@ -209,7 +209,7 @@ pub(crate) struct Sync {
 /// bring data.lock in line with data.toml
 #[derive(Debug, clap::Args)]
 pub(crate) struct Lock {
-    /// move datasets to their newest version: all of them, or the ones named
+    /// re-resolve datasets, keeping explicit version pins
     #[arg(long, value_name = "name", num_args = 0.., help_heading = "options")]
     pub(crate) upgrade: Option<Vec<String>>,
 
@@ -243,4 +243,39 @@ pub(crate) struct Get {
     /// keep zip and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    #[test]
+    fn force_help_names_untracked_conflicts() -> Result<(), &'static str> {
+        let help = Args::command()
+            .find_subcommand_mut("sync")
+            .ok_or("sync command is missing")?
+            .render_help()
+            .to_string();
+        assert!(
+            help.contains("replace conflicting files at locked paths, including untracked files"),
+            "{help}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn upgrade_help_keeps_explicit_pins() -> Result<(), &'static str> {
+        let help = Args::command()
+            .find_subcommand_mut("lock")
+            .ok_or("lock command is missing")?
+            .render_help()
+            .to_string();
+        assert!(
+            help.contains("re-resolve datasets, keeping explicit version pins"),
+            "{help}"
+        );
+        Ok(())
+    }
 }

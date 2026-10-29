@@ -476,3 +476,27 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn zero_byte_copies_are_reported_as_copies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/empty.csv", vec![file(b"", "\"empty\"")])?;
+    let output = sandbox
+        .command(&["get", &server.url, "-v"])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    if sandbox.links()?.reflink {
+        assert!(stderr.contains("linked, no extra disk"), "{stderr}");
+    } else {
+        assert!(stderr.contains("copied, 0 B"), "{stderr}");
+        assert!(stderr.contains("1 copy"), "{stderr}");
+        assert!(stderr.contains("is inside onedrive"), "{stderr}");
+    }
+    assert_eq!(
+        fs::metadata(sandbox.work().join("empty/empty.csv"))?.len(),
+        0
+    );
+    Ok(())
+}

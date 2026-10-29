@@ -172,26 +172,12 @@ fn tell_placed(
     outcomes: &[Outcome],
 ) {
     let output = &context.output;
-    let copied: u64 = outcomes
-        .iter()
-        .zip(targets)
-        .filter(|(outcome, _)| {
-            matches!(
-                outcome,
-                Outcome::Placed(Method::Copy) | Outcome::Replaced(Method::Copy)
-            )
-        })
-        .map(|(_, target)| target.size)
-        .sum();
-    let how = if copied > 0 {
-        format!("copied, {}", units::size(copied))
-    } else {
-        "linked, no extra disk".to_owned()
-    };
-    let changed = outcomes
-        .iter()
-        .filter(|outcome| !matches!(outcome, Outcome::AlreadyThere))
-        .count();
+    let (changed, copies, how) = placement_summary(
+        outcomes
+            .iter()
+            .copied()
+            .zip(targets.iter().map(|target| target.size)),
+    );
     match (targets, outcomes) {
         (_, _) if changed == 0 => {
             let shown = match targets {
@@ -217,7 +203,7 @@ fn tell_placed(
             &format!(
                 "{} · {} {how}",
                 folder.display(),
-                units::count(changed as u64, "file", "files")
+                units::count(changed, "file", "files")
             ),
         ),
     }
@@ -226,35 +212,41 @@ fn tell_placed(
     } else {
         "files were"
     };
-    let why = placer.unlinked().filter(|_| copied > 0);
-    if let Some(Unlinked::Synced(client)) = why {
-        output.warn(&format!(
-            "{} is inside {client}, which breaks links, so {things} copied",
-            folder.display()
-        ));
+    let why = placer.unlinked().filter(|_| copies > 0);
+    if let Some(why @ Unlinked::Synced(_)) = why {
+        output.warn(&why.copied_because(folder.display(), things));
     }
     let what = match targets {
         [only] => only.path.clone(),
         _ => units::count(targets.len() as u64, "file", "files"),
     };
     output.done(&format!("fetched {what} into {}", folder.display()));
-    if let Some(why) = why {
-        output.hint(&copy_hint(why, folder, things));
+    if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
+        output.hint(&why.copied_because(folder.display(), things));
     }
 }
 
-/// the hint after files were copied into `folder` for the reason `why`.
-fn copy_hint(why: Unlinked, folder: &Path, things: &str) -> String {
-    match why {
-        Unlinked::Synced(client) => {
-            format!("a folder outside {client} gets links that use no extra disk")
+fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, String) {
+    let (mut changed, mut copies, mut bytes) = (0, 0, 0);
+    for (outcome, size) in files {
+        if matches!(outcome, Outcome::AlreadyThere) {
+            continue;
         }
-        Unlinked::OtherDrive => "the cache is on another drive. set FETCHLOOM_CACHE to a folder on this drive to link files instead of copying them".to_owned(),
-        Unlinked::NoLinks => format!(
-            "the drive holding {} cannot link files, so {things} copied",
-            folder.display()
-        ),
+        changed += 1;
+        if matches!(
+            outcome,
+            Outcome::Placed(Method::Copy) | Outcome::Replaced(Method::Copy)
+        ) {
+            copies += 1;
+            bytes += size;
+        }
     }
+    let how = match (changed - copies, copies) {
+        (_, 0) => "linked, no extra disk".to_owned(),
+        (0, _) => format!("copied, {}", units::size(bytes)),
+        (_, _) => format!("partly copied, {}", units::size(bytes)),
+    };
+    (changed, copies, how)
 }
 
 fn local(path: &Path, err: &io::Error) -> Error {
@@ -266,6 +258,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mixed_placements_count_links_and_copies() {
+        use Outcome::{AlreadyThere, Placed, Replaced};
+        for (files, counts, expected) in [
+            (
+                &[(Placed(Method::Copy), 0), (Placed(Method::Hardlink), 5)][..],
+                (2, 1),
+                "partly copied, 0 B",
+            ),
+            (
+                &[
+                    (Replaced(Method::Copy), 5),
+                    (Placed(Method::Reflink), 7),
+                    (AlreadyThere, 9),
+                ],
+                (2, 1),
+                "partly copied, 5 B",
+            ),
+            (
+                &[(Placed(Method::Copy), 0), (AlreadyThere, 7)],
+                (1, 1),
+                "copied, 0 B",
+            ),
+            (
+                &[(Placed(Method::Copy), 3), (Replaced(Method::Copy), 5)],
+                (2, 2),
+                "copied, 8 B",
+            ),
+            (
+                &[
+                    (Placed(Method::Hardlink), 0),
+                    (Replaced(Method::Reflink), 5),
+                ],
+                (2, 0),
+                "linked, no extra disk",
+            ),
+        ] {
+            let (changed, copies, how) = placement_summary(files.iter().copied());
+            assert_eq!((changed, copies), counts);
+            assert_eq!(how, expected);
+        }
+    }
+
+    #[test]
     fn a_write_the_disk_refuses_says_what_to_do() {
         let full = local(
             Path::new("iris/iris.csv"),
@@ -274,14 +309,6 @@ mod tests {
         assert_eq!(
             full.help.as_deref(),
             Some("free some space on that disk, then run the command again")
-        );
-    }
-
-    #[test]
-    fn a_file_copied_onto_a_drive_that_links_nothing_says_why() {
-        assert_eq!(
-            copy_hint(Unlinked::NoLinks, Path::new("iris"), "the file was"),
-            "the drive holding iris cannot link files, so the file was copied"
         );
     }
 }

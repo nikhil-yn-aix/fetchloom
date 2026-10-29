@@ -34,7 +34,7 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     finish::<()>(
         &Context::new(output),
         command.as_deref(),
-        Err(describe(err)),
+        Err(describe(err, command.as_deref())),
         started,
     )
 }
@@ -58,7 +58,7 @@ fn named_command(read: &ArgMatches) -> Option<String> {
     }
     (!names.is_empty()).then(|| names.join(" "))
 }
-fn describe(err: &clap::Error) -> Error {
+fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let named = |context| match err.get(context) {
         Some(ContextValue::String(value)) => Some(value.clone()),
         Some(ContextValue::Strings(values)) => values.first().cloned(),
@@ -73,7 +73,7 @@ fn describe(err: &clap::Error) -> Error {
             format!("there is no command called \"{command}\"")
         }
         (ErrorKind::UnknownArgument, _, Some(arg)) => {
-            format!("there is no option called \"{arg}\"")
+            format!("unexpected argument \"{arg}\"")
         }
         (ErrorKind::MissingRequiredArgument, _, Some(arg)) => format!("{arg} is missing"),
         _ => first_line(err),
@@ -97,7 +97,10 @@ fn describe(err: &clap::Error) -> Error {
         _ => None,
     };
     let help = if let Some(command) = named(ContextKind::SuggestedSubcommand) {
-        format!("did you mean `fetchloom {command}`?")
+        match parent {
+            Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
+            None => format!("did you mean `fetchloom {command}`?"),
+        }
     } else if let Some(arg) = named(ContextKind::SuggestedArg) {
         format!("did you mean `{arg}`?")
     } else if let Some(ContextValue::Strings(values)) = err.get(ContextKind::ValidValue) {
@@ -108,8 +111,10 @@ fn describe(err: &clap::Error) -> Error {
             .take_while(|word| !word.starts_with(['[', '<']))
             .collect();
         format!("`{} --help` says what it takes", command.join(" "))
+    } else if let Some(parent) = parent {
+        format!("`fetchloom {parent} --help` says what it takes")
     } else {
-        "`fetchloom --help` lists every command and option".to_owned()
+        "`fetchloom --help` lists commands and options".to_owned()
     };
     let error = Error::new(Kind::Usage, message);
     match usage {
@@ -123,4 +128,66 @@ fn first_line(err: &clap::Error) -> String {
     let text = err.to_string();
     let line = text.lines().next().unwrap_or_default();
     line.strip_prefix("error: ").unwrap_or(line).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn problem(arguments: &[&str]) -> Result<Error, Box<dyn std::error::Error>> {
+        let error = args::Args::command()
+            .try_get_matches_from(arguments)
+            .err()
+            .ok_or("the invalid command unexpectedly parsed")?;
+        let parsed = args::Args::command()
+            .ignore_errors(true)
+            .try_get_matches_from(arguments)?;
+        Ok(describe(&error, named_command(&parsed).as_deref()))
+    }
+
+    #[test]
+    fn extra_positionals_are_arguments_not_options() -> Result<(), Box<dyn std::error::Error>> {
+        for (arguments, expected) in [
+            (
+                &["fetchloom", "sync", "iris"][..],
+                "unexpected argument \"iris\"",
+            ),
+            (
+                &["fetchloom", "get", "https://example.org/file.csv", "iris"],
+                "unexpected argument \"iris\"",
+            ),
+            (
+                &["fetchloom", "sync", "--", "-iris"],
+                "unexpected argument \"-iris\"",
+            ),
+        ] {
+            assert_eq!(problem(arguments)?.message, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn command_errors_link_to_their_own_help() -> Result<(), Box<dyn std::error::Error>> {
+        for (arguments, expected) in [
+            (
+                &["fetchloom", "get", "--wat"][..],
+                "`fetchloom get --help` says what it takes",
+            ),
+            (
+                &["fetchloom", "sync", "iris"],
+                "`fetchloom sync --help` says what it takes",
+            ),
+            (
+                &["fetchloom", "cache", "verify", "--wat"],
+                "`fetchloom cache verify --help` says what it takes",
+            ),
+            (
+                &["fetchloom", "--wat"],
+                "`fetchloom --help` lists commands and options",
+            ),
+        ] {
+            assert_eq!(problem(arguments)?.help.as_deref(), Some(expected));
+        }
+        Ok(())
+    }
 }

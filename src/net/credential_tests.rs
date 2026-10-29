@@ -28,7 +28,7 @@ fn net() -> Net {
     };
     Net::new(
         Options {
-            offline: false,
+            offline: crate::net::Offline::No,
             jobs: 1,
             credentials: crate::source::credentials(&var),
         },

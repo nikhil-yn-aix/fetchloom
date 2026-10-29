@@ -369,3 +369,73 @@ fn an_archive_that_holds_nothing_still_leaves_its_folder() -> Result {
     assert!(Path::new(folder.trim()).is_dir(), "{folder}");
     Ok(())
 }
+
+fn directory_only_archive() -> Result<Vec<u8>> {
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    archive.add_directory("empty/", zip::write::SimpleFileOptions::default())?;
+    Ok(archive.finish()?.into_inner())
+}
+
+#[test]
+fn add_of_an_empty_archive_does_not_offer_a_path() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = directory_only_archive()?;
+    let server = Server::start("/empty.zip", vec![file(&zip, "\"empty\"")])?;
+    let output = sandbox.run(&["add", &server.url, "--as", "empty"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("added empty. its archives contain no regular files"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fetchloom path"), "{stderr}");
+    assert!(!sandbox.work().join("data/empty").exists());
+    let again = sandbox.run(&["add", &server.url])?;
+    ok(&again)?;
+    let stderr = text(&again.stderr)?;
+    assert!(
+        stderr.contains("empty is already in data.toml. its archives contain no regular files"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("its files are in"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn path_of_an_empty_archive_explains_why_it_has_no_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = directory_only_archive()?;
+    let server = Server::start(
+        "/empty.zip",
+        vec![file(&zip, "\"empty\""), file(&zip, "\"empty\"")],
+    )?;
+    ok(&sandbox.run(&["add", &server.url, "--as", "empty"])?)?;
+    for target in ["empty", "empty/missing"] {
+        let output = sandbox.run(&["path", target])?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        assert!(output.stdout.is_empty(), "{}", text(&output.stdout)?);
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains("empty has no regular files after extraction"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("extract = false"), "{stderr}");
+    }
+    fs::remove_dir_all(sandbox.cache().join("unpacked"))?;
+    let output = sandbox.run(&["path", "empty", "--json"])?;
+    assert_eq!(output.status.code(), Some(2));
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["message"],
+        "empty has no regular files after extraction"
+    );
+    assert!(document["result"].is_null());
+    assert!(!sandbox.work().join("data/empty").exists());
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "path retried after rebuilding the missing archive record"
+    );
+    Ok(())
+}

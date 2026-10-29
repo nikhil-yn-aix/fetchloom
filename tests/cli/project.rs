@@ -729,3 +729,32 @@ fn a_folder_too_long_to_work_in_is_named_with_its_length_before_anything_is_writ
     assert!(!deep.join("data").exists());
     Ok(())
 }
+
+#[test]
+fn duplicate_add_chooses_the_entry_with_matching_settings() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, (0..4).map(|_| file(IRIS, "\"v1\"")).collect())?;
+    let manifest = format!(
+        "[datasets.a-extracted]\nref = \"{url}\"\n\n[datasets.b-selected]\nref = \"{url}\"\nextract = false\nselect = \"*.csv\"\n\n[datasets.c-excluded]\nref = \"{url}\"\nextract = false\nexclude = \"ignored.*\"\n\n[datasets.z-packed]\nref = \"{url}\"\nextract = false\n",
+        url = server.url
+    );
+    fs::write(sandbox.work().join("data.toml"), &manifest)?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let locked = fs::read(sandbox.work().join("data.lock"))?;
+    let requests = server.requests().len();
+    let output = sandbox.run(&["add", &server.url, "--no-extract"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "✓ z-packed is already in data.toml. its files are in data/z-packed\n"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        manifest
+    );
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, locked);
+    assert_eq!(server.requests().len(), requests);
+    Ok(())
+}

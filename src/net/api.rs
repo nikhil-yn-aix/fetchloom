@@ -49,12 +49,12 @@ impl Response {
 
 impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
-        if self.offline {
+        if self.offline.enabled() {
             return Err(Error::new(
                 Kind::OfflineMissing,
                 format!("offline, and this needs an answer from {}", host(url)),
             )
-            .help("run the same command without --offline"));
+            .help(self.offline.retry()));
         }
         self.typed
             .check(url)

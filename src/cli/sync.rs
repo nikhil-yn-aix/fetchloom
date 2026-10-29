@@ -230,9 +230,9 @@ impl<'a> Loop<'a> {
                 listings.push((name, listing.clone()));
                 continue;
             }
-            if self.net.is_offline() {
+            if self.net.offline().enabled() {
                 return Err(Error::new(Kind::OfflineMissing, format!("offline, and {name} must be resolved because its entry in data.toml changed"))
-                    .help("run the same command without --offline, or undo the change in data.toml"));
+                    .help(format!("{}, or undo the change in data.toml", self.net.offline().retry())));
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
@@ -279,7 +279,7 @@ impl<'a> Loop<'a> {
         if jobs.is_empty() {
             return Ok(Vec::new());
         }
-        if self.net.is_offline() {
+        if self.net.offline().enabled() {
             let missing: Vec<&str> = jobs
                 .iter()
                 .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
@@ -300,7 +300,7 @@ impl<'a> Loop<'a> {
                 if missing.len() > 5 {
                     error = error.detail(format!("and {} more", missing.len() - 5));
                 }
-                return Err(error.help("run the same command without --offline to download them"));
+                return Err(error.help(format!("{} to download them", self.net.offline().retry())));
             }
         }
         let size: u64 = jobs

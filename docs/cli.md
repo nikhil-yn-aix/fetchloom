@@ -77,6 +77,8 @@ fetchloom path eeg/sub-01
 
 `path` accepts a dataset, a file, or a subfolder containing locked files. it syncs the whole project when the requested dataset is not ready. a ready dataset takes no project lock. a waiting caller checks again after acquiring the lock.
 
+`path` exits 2 when the dataset has no regular files after extraction and explains how to keep the packed archive instead. `add` reports that its archives contain no regular files and omits the path hint.
+
 `path` prints the location, not an integrity check. sync can leave an edited file there.
 
 ## get without a project
@@ -209,4 +211,4 @@ when a download no longer matches its lock:
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```
 
-help is optional. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).
+a separate help line is optional when the error itself says what to change or do next. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).
