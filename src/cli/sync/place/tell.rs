@@ -19,10 +19,10 @@ pub(super) fn tell(
     placement: &Placement,
 ) {
     for (dataset, tally) in tallies {
-        let how = match (tally.links, tally.copied) {
+        let how = match (tally.links, tally.files - tally.links) {
             (_, 0) => "linked, no extra disk".to_owned(),
-            (0, copied) => format!("copied, {}", units::size(copied)),
-            (_, copied) => format!("partly copied, {}", units::size(copied)),
+            (0, _) => format!("copied, {}", units::size(tally.copied)),
+            (_, _) => format!("partly copied, {}", units::size(tally.copied)),
         };
         output.step(
             "Placed",
@@ -43,7 +43,7 @@ pub(super) fn tell(
             ),
         );
     }
-    if tallies.values().any(|tally| tally.copied > 0)
+    if tallies.values().any(|tally| tally.files > tally.links)
         && let Some(why) = placer
             .unlinked()
             .and_then(|why| copied_because(why, &manifest.data_dir))

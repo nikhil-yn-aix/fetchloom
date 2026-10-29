@@ -577,3 +577,31 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
     Ok(())
 }
+
+#[test]
+fn zero_byte_copies_are_reported_as_copies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/empty.csv", vec![file(b"", "\"empty\"")])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.empty]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let output = sandbox
+        .command(&["sync", "-v"])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    if sandbox.links()?.reflink {
+        assert!(stderr.contains("linked, no extra disk"), "{stderr}");
+    } else {
+        assert!(stderr.contains("1 file copied, 0 B"), "{stderr}");
+        assert!(stderr.contains("1 copy"), "{stderr}");
+        assert!(stderr.contains("data is inside onedrive"), "{stderr}");
+    }
+    assert_eq!(
+        fs::metadata(sandbox.work().join("data/empty/empty.csv"))?.len(),
+        0
+    );
+    Ok(())
+}
