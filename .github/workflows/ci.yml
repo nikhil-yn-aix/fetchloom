@@ -62,7 +62,7 @@ jobs:
             $env:TMP = "${letter}:\tmp"
             $env:TEMP = $env:TMP
             Write-Output "::group::cargo test on $fs"
-            cargo test --locked
+            cargo test --locked --no-fail-fast
             if ($LASTEXITCODE) { $failed = $true }
             Write-Output "::endgroup::"
           }
