@@ -15,10 +15,11 @@ use self::folder::{Outcome, check, put_all};
 use super::args::Get;
 use super::fetch::{self, Job};
 use super::sync as engine;
+use super::sync::place::doubtful;
 use super::sync::unpack::{self as unpacking, Unpack};
 use super::{Context, open_cache};
 use crate::archive::{self, Packed};
-use crate::cache::Cache;
+use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
@@ -74,6 +75,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         &units::count(files.len() as u64, "file", "files"),
         size,
     )?;
+    vet(&cache, &files, &names, extract)?;
     let jobs = files
         .iter()
         .zip(&names)
@@ -168,14 +170,8 @@ fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Opti
             _ => remote.path.clone(),
         };
         if extract && archive::by_name(&name) == Some(Packed::Archive) {
-            let members = remote
-                .sha256
-                .or_else(|| {
-                    let md5 = remote.md5?;
-                    cache.stated_md5(&md5).map(|(digest, _)| digest)
-                })
-                .or_else(|| record.map(|record| record.sha256))
-                .and_then(|digest| cache.unpacked(&digest, None));
+            let members = known(cache, remote, record.as_ref())
+                .and_then(|(digest, _)| cache.unpacked(&digest, None));
             match (members, paths.as_mut()) {
                 (Some(members), Some(paths)) => {
                     paths.extend(plan::unpacked_paths(&name, alone, &members));
@@ -188,6 +184,52 @@ fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Opti
         names.push(name);
     }
     (names, paths)
+}
+
+/// the bytes a listed file is known to have before it downloads: by a checksum its source states,
+/// or by what its link served last time.
+fn known(
+    cache: &Cache,
+    remote: &Remote,
+    record: Option<&UrlRecord>,
+) -> Option<(Sha256, Option<u64>)> {
+    if let Some(digest) = remote.sha256 {
+        return Some((digest, remote.size));
+    }
+    if let Some((digest, size)) = remote.md5.and_then(|md5| cache.stated_md5(&md5)) {
+        return Some((digest, Some(size)));
+    }
+    record.map(|record| (record.sha256, Some(record.size)))
+}
+
+/// hashes the cached objects in doubt that this run would take for `files`, and those an archive
+/// among them unpacked to, before anything downloads, so one whose bytes changed is removed and
+/// downloads again.
+fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Result<(), Error> {
+    let marks = cache.changed();
+    if marks.is_empty() {
+        return Ok(());
+    }
+    for (remote, name) in files.iter().zip(names) {
+        let record = cache.url_record(remote.url.as_str());
+        let Some((digest, size)) = known(cache, remote, record.as_ref()) else {
+            continue;
+        };
+        cache
+            .trusted(&digest, size, &marks)
+            .map_err(|doubt| doubtful(&doubt))?;
+        if extract
+            && archive::by_name(name) == Some(Packed::Archive)
+            && let Some(members) = cache.unpacked(&digest, None)
+        {
+            for member in &members {
+                cache
+                    .trusted(&member.sha256, Some(member.size), &marks)
+                    .map_err(|doubt| doubtful(&doubt))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// unpacks each archive among the fetched files that this machine has not unpacked before, and

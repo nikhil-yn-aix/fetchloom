@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,10 @@ pub(crate) struct Placed {
     pub(crate) look: Look,
     /// a file of its own that may be written to, as `copy = true` asks.
     pub(crate) writable: bool,
+    /// when fetchloom last knew the file held its locked bytes, in nanoseconds since 1970: when it
+    /// placed or adopted the file, or when hashing proved them after the cache marked the object
+    /// changed. a mark older than this puts the file in no doubt.
+    pub(crate) checked: u64,
 }
 
 /// how a file looks on disk without reading it: its size and modification time.
@@ -64,18 +68,19 @@ impl State {
 
 impl Look {
     pub(crate) fn of(metadata: &Metadata) -> Look {
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |since| {
-                u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-            });
         Look {
             size: metadata.len(),
-            modified,
+            modified: metadata.modified().map_or(0, nanos),
         }
     }
+}
+
+/// `time` as the state records times: nanoseconds since 1970, zero before then, and capped at the
+/// largest unsigned 64-bit integer.
+pub(crate) fn nanos(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+    })
 }
 
 #[cfg(test)]
@@ -97,6 +102,7 @@ mod tests {
                     modified: 42,
                 },
                 writable: true,
+                checked: 43,
             },
         );
         let read = State::parse(&state.render());

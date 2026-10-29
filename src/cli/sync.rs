@@ -94,7 +94,7 @@ impl<'a> Loop<'a> {
             placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         }
         let (archives, files): (Vec<_>, Vec<_>) = placing
-            .missing(&self.cache)
+            .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
         let jobs = files

@@ -1,16 +1,72 @@
 //! objects found changed, remembered after they leave the cache, so a project holding a hardlink
-//! to the changed bytes learns it from one listing instead of reading every file it placed.
+//! to the changed bytes learns it from one listing instead of reading every file it placed. an
+//! object still in the cache that a mark is newer than is hashed before anything is placed from
+//! it.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::Cache;
 use crate::digest::Sha256;
 
+/// an object in doubt that could not be hashed, or that held other bytes and could not be
+/// removed.
+#[derive(Debug)]
+pub(crate) struct Doubt {
+    pub(crate) object: PathBuf,
+    /// whether hashing found other bytes, so the object stays only because removing it failed.
+    pub(crate) changed: bool,
+    pub(crate) error: io::Error,
+}
+
 impl Cache {
+    /// the object for `digest` when the cache holds it, with `size` when one is known, and its
+    /// bytes can be trusted. a mark in `marks` newer than the object puts it in doubt, so it is
+    /// hashed first: one whose bytes changed is marked again and removed, so it is fetched again.
+    pub(crate) fn trusted(
+        &self,
+        digest: &Sha256,
+        size: Option<u64>,
+        marks: &HashMap<Sha256, u64>,
+    ) -> Result<Option<PathBuf>, Doubt> {
+        let path = self.object_path(digest);
+        let Ok(metadata) = fs::metadata(&path) else {
+            return Ok(None);
+        };
+        if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
+            return Ok(None);
+        }
+        let written = metadata.modified().map_or(0, nanos);
+        if marks.get(digest).is_none_or(|marked| *marked <= written) {
+            return Ok(Some(path));
+        }
+        match Sha256::of_file(&path) {
+            Ok(actual) if actual == *digest => Ok(Some(path)),
+            Ok(_) => {
+                if let Err(err) = self.mark_changed(digest) {
+                    tracing::debug!(%err, "could not remember a changed object");
+                }
+                match self.drop_object(digest) {
+                    Ok(()) => Ok(None),
+                    Err(error) => Err(Doubt {
+                        object: path,
+                        changed: true,
+                        error,
+                    }),
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(Doubt {
+                object: path,
+                changed: false,
+                error,
+            }),
+        }
+    }
+
     /// remembers that the object for `digest` no longer held its bytes, as of now.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
         let folder = self.changed_folder();
@@ -38,8 +94,7 @@ impl Cache {
                 }
                 let digest = Sha256::from_hex(&entry.file_name().to_string_lossy())?;
                 let found = entry.metadata().ok()?.modified().ok()?;
-                let since = found.duration_since(UNIX_EPOCH).ok()?;
-                Some((digest, u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)))
+                Some((digest, nanos(found)))
             })
             .collect()
     }
@@ -57,6 +112,13 @@ impl Cache {
     fn changed_folder(&self) -> PathBuf {
         self.root.join("changed")
     }
+}
+
+/// `time` in nanoseconds since 1970, as projects record the times of their files.
+fn nanos(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+    })
 }
 
 #[cfg(test)]

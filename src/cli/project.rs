@@ -479,7 +479,8 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
     }
     let survey = Survey::read(project, &manifest.data_dir);
     let cache = open_cache()?;
-    let elsewhere = survey.edited_elsewhere(&cache);
+    // a file a mark puts in doubt waits for a sync, which hashes it once and records it
+    let doubted = survey.doubted(&cache);
     let planned = plan::from_cache(manifest, &lock, &cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(false);
@@ -489,7 +490,7 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
         .iter()
         .filter(|target| target.dataset == name)
         .all(|target| {
-            !elsewhere.contains(&target.path)
+            !doubted.contains(&target.path)
                 && survey.state.files.get(&target.path).is_some_and(|placed| {
                     placed.sha256 == target.sha256
                         && survey.disk.get(&target.path) == Some(&placed.look)

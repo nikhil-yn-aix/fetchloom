@@ -208,7 +208,7 @@ the `.lock` file coordinates writers; its contents are unused. without OS file l
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
 - an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit or `cache verify` writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
+- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit, `cache verify`, or the hash a marked object gets before it is placed writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
@@ -235,6 +235,7 @@ state fields:
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
+| `files[path].checked` | when fetchloom last knew the file held its locked bytes, in nanoseconds since 1970: when it placed or adopted the file, or when hashing proved them after the cache marked its object changed |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
@@ -317,7 +318,7 @@ status arrays:
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
-| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after that time; `sync` puts them back |
+| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after fetchloom last knew them, and whose bytes hashing found changed; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 

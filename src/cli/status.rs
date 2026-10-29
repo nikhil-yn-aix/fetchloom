@@ -1,6 +1,6 @@
 //! `fetchloom status`: what differs between the data folder and data.lock. it changes nothing,
-//! downloads nothing and hashes only files as new as the state itself, so it answers at once even
-//! for large projects.
+//! downloads nothing and hashes only files whose size and time cannot vouch for them, so it
+//! answers at once even for large projects.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -95,14 +95,16 @@ fn check(project: &Project) -> Result<Status, Error> {
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     let targets = planned.targets;
-    let survey = Survey::read(project, &manifest.data_dir);
-    let elsewhere: HashSet<String> = survey.edited_elsewhere(&cache).into_iter().collect();
+    let mut survey = Survey::read(project, &manifest.data_dir);
+    survey.check_doubted(&project.root, &cache);
     for target in &targets {
         let seen = survey.disk.get(&target.path);
         let file = project.root.join(&target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => &mut status.missing,
-            (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
+            (Some(_), Some(_)) if survey.elsewhere.contains(&target.path) => {
+                &mut status.edited_elsewhere
+            }
             (Some(seen), Some(record))
                 if record.look == *seen && !survey.edited.contains(&target.path) =>
             {
