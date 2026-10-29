@@ -1,6 +1,7 @@
 //! google drive: shared files and folders, pasted as links. a file downloads from drive's
 //! download host, which may first send a page that confirms the download or refuses it.
 
+mod folder;
 mod html;
 mod page;
 
@@ -69,14 +70,9 @@ impl Item {
     }
 
     /// a file is one download whose name the server sends. a folder lists its files.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "folders are walked next"
-    )]
-    pub(super) async fn resolve(&self, _api: &impl Api) -> Result<Listing, Error> {
+    pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
         if self.folder {
-            return Err(super::not_yet("drive folder"));
+            return folder::list(self, api).await;
         }
         Ok(Listing {
             resolved: Reference::Drive(self.clone()),
@@ -89,7 +85,7 @@ impl Item {
                 size: None,
                 sha256: None,
                 md5: None,
-                url: file_url(&self.id)?,
+                url: file_url(&self.id, None)?,
                 named_by_server: true,
             }],
         })
@@ -98,7 +94,7 @@ impl Item {
 
 /// the link data.lock keeps for a drive file. drive's `uc` link has outlived the hosts that serve
 /// the bytes, so only `fetch_plan` names those.
-fn file_url(id: &str) -> Result<Url, Error> {
+fn file_url(id: &str, resource: Option<&str>) -> Result<Url, Error> {
     let mut url = Url::parse("https://drive.google.com/uc").map_err(|err| {
         Error::new(
             Kind::SourceInvalid,
@@ -106,6 +102,9 @@ fn file_url(id: &str) -> Result<Url, Error> {
         )
     })?;
     url.query_pairs_mut().append_pair("id", id);
+    if let Some(resource) = resource {
+        url.query_pairs_mut().append_pair("resourcekey", resource);
+    }
     Ok(url)
 }
 
@@ -162,3 +161,6 @@ mod tests {
         assert!(fetch_plan(&elsewhere).is_none());
     }
 }
+
+#[cfg(test)]
+mod folder_tests;

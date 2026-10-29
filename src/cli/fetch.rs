@@ -360,4 +360,49 @@ mod tests {
         told.on(&small).unwrap();
         told.on(&Event::Bytes(2 * super::super::ASK_ABOVE)).unwrap();
     }
+
+    #[test]
+    fn an_unknown_drive_size_asks_when_the_server_states_a_large_remainder() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = Job {
+            fetch: Fetch::new(
+                Url::parse("https://drive.google.com/uc?id=1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb")
+                    .unwrap(),
+            ),
+            label: "file.txt".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = Overall {
+            bar: None,
+            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+        };
+        for (total, resumed, needs_approval) in [
+            (super::super::ASK_ABOVE, 0, false),
+            (super::super::ASK_ABOVE + 1, 0, true),
+            (super::super::ASK_ABOVE + 1, 1, false),
+        ] {
+            let asked = AtomicBool::new(false);
+            let watch = Watch::new(&job, &output, &overall, &asked, false);
+            let result = watch.on(&Event::Started {
+                total: Some(total),
+                resumed,
+                name: None,
+            });
+            if needs_approval {
+                assert_eq!(result.unwrap_err().kind, Kind::Unconfirmed);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
 }

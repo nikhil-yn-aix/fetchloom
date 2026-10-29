@@ -310,14 +310,6 @@ fn known_host(url: &Url) -> Option<&'static str> {
     })
 }
 
-/// the error for a source whose listing is not built yet.
-fn not_yet(source: &str) -> Error {
-    Error::new(
-        Kind::ReferenceInvalid,
-        format!("fetchloom cannot list {source} datasets yet"),
-    )
-}
-
 /// a plain link: one file, named by its last path segment until the server names it.
 fn single(url: &Url) -> Listing {
     Listing {

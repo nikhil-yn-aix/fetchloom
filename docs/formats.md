@@ -127,10 +127,12 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
 | dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
 | OSF | `osf:<node or file id>` | the download link with a file version |
-| drive file | `drive:<id>` | `https://drive.google.com/uc?id=<id>` |
+| drive file or folder | `drive:<id>` or `drive:folders/<id>` | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when the folder entry supplies one |
 | dropbox | the shared URL with `dl=1` | the same URL |
 
 DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+
+drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs entries stop the folder listing because exports can change between downloads. ask the owner to upload fixed files instead.
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
