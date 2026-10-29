@@ -81,7 +81,7 @@ FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file 
 
 new placements try reflink, then hardlink, then copy. a `Placer` remembers unsupported methods for its destination tree during the run, not in a persistent per-volume map. `copy = true` still allows a writable reflink, but skips hardlinks.
 
-reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space.
+reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space. when a drive refuses both reflinks and hardlinks, `sync` and `get` say that is why their files were copied.
 
 never make a hardlinked input writable to edit it. that edits the cached object too. before a project sync, changed hardlinks recorded in that project's state cause the associated objects to be hashed and removed if damaged. an object found damaged that way, or by `cache verify`, also gets a mark in the cache. cache writers must be trusted.
 

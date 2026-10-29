@@ -56,6 +56,19 @@ pub(crate) struct Order<'a> {
     pub(crate) writable: bool,
 }
 
+/// why a placer copied files it would rather have linked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unlinked {
+    /// the root sits inside a folder this sync client owns, which breaks links: "onedrive",
+    /// "dropbox", "icloud drive" or "google drive".
+    Synced(&'static str),
+    /// hardlinks failed because the cache sits on another drive, which a cache on the same drive
+    /// would fix.
+    OtherDrive,
+    /// the drive refused reflinks and hardlinks alike, as FAT and exFAT drives do.
+    NoLinks,
+}
+
 impl Placer {
     /// prepares placement under `root`, which must be a real folder, and notes whether `root`
     /// sits inside a folder a sync client owns.
@@ -87,15 +100,16 @@ impl Placer {
         }
     }
 
-    /// the sync client that owns `root`, if any: "onedrive", "dropbox", "icloud drive" or "google drive".
-    pub(crate) fn synced(&self) -> Option<&'static str> {
-        self.synced
-    }
-
-    /// whether links failed because the cache sits on another drive, which a cache on the same
-    /// drive would fix.
-    pub(crate) fn other_volume(&self) -> bool {
-        self.other_volume.load(Ordering::Relaxed)
+    /// why files were copied rather than linked, as far as the filesystem told.
+    pub(crate) fn unlinked(&self) -> Option<Unlinked> {
+        if let Some(client) = self.synced {
+            return Some(Unlinked::Synced(client));
+        }
+        if self.other_volume.load(Ordering::Relaxed) {
+            return Some(Unlinked::OtherDrive);
+        }
+        let refused = |method: &AtomicBool| !method.load(Ordering::Relaxed);
+        (refused(&self.can_reflink) && refused(&self.can_hardlink)).then_some(Unlinked::NoLinks)
     }
 
     /// puts `object` at `destination`, which must not exist yet. creates missing parent folders.
@@ -730,6 +744,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(method, Method::Hardlink);
+    }
+
+    #[test]
+    fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
+        let folder = TempDir::new().unwrap();
+        let placer =
+            |synced| Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, synced);
+        let refused = || io::Error::from(io::ErrorKind::Unsupported);
+
+        let linking = placer(None);
+        assert_eq!(linking.unlinked(), None);
+        let no_links = placer(None);
+        no_links.learn(Method::Reflink, refused()).unwrap();
+        no_links.learn(Method::Hardlink, refused()).unwrap();
+        assert_eq!(no_links.unlinked(), Some(Unlinked::NoLinks));
+        let elsewhere = placer(None);
+        elsewhere.learn(Method::Reflink, refused()).unwrap();
+        elsewhere
+            .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
+            .unwrap();
+        assert_eq!(elsewhere.unlinked(), Some(Unlinked::OtherDrive));
+        let synced = placer(Some("onedrive"));
+        synced.learn(Method::Reflink, refused()).unwrap();
+        assert_eq!(synced.unlinked(), Some(Unlinked::Synced("onedrive")));
     }
 
     /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
