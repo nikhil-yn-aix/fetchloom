@@ -10,10 +10,31 @@ pub(super) fn client(
     folder: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
 ) -> Option<&'static str> {
+    let folder = resolved(folder);
     roots(var)
         .into_iter()
-        .find(|(root, _)| inside(folder, root))
+        .find(|(root, _)| inside(&folder, &resolved(root)))
         .map(|(_, client)| client)
+}
+
+/// `path` with the links in its existing part resolved, so two names for one folder compare
+/// equal. a part that does not exist yet stays as written.
+fn resolved(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(mut real) = fs::canonicalize(existing) {
+            real.extend(rest.iter().rev());
+            return real;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// the folders each sync client owns on this machine, as far as can be told without asking it.
@@ -165,6 +186,25 @@ mod tests {
         assert_eq!(client(&personal.join("x"), &var), Some("dropbox"));
         assert_eq!(client(&business, &var), Some("dropbox"));
         assert_eq!(client(&home.path().join("elsewhere"), &var), None);
+    }
+
+    #[test]
+    fn a_folder_named_through_a_link_is_still_inside() {
+        let home = tempfile::tempdir().unwrap();
+        let onedrive = home.path().join("OneDrive");
+        fs::create_dir(&onedrive).unwrap();
+        let link = home.path().join("linked");
+        assert!(crate::place::tests::link_folder(&onedrive, &link));
+        let root_through_link = env(&[("OneDrive", &link)]);
+        assert_eq!(
+            client(&onedrive.join("data"), &root_through_link),
+            Some("onedrive")
+        );
+        let folder_through_link = env(&[("OneDrive", &onedrive)]);
+        assert_eq!(
+            client(&link.join("data"), &folder_through_link),
+            Some("onedrive")
+        );
     }
 
     #[cfg(windows)]
