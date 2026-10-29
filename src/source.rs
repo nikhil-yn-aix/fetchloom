@@ -338,7 +338,7 @@ fn single(url: &Url) -> Listing {
 fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
     if listing.files.len() > MOST_FILES {
         return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {} files, more than the {MOST_FILES} fetchloom handles in one dataset", listing.files.len()))
-            .help("add select patterns to data.toml to keep the files you need"));
+            .help("ask the dataset's authors to pack its files into archives, or fetch the files you need by their own links"));
     }
     let mut seen = HashSet::with_capacity(listing.files.len());
     for file in &listing.files {
