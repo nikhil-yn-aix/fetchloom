@@ -29,6 +29,10 @@ impl Volume {
         }
     }
 
+    pub(super) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
+        (self.hard_link)(original, link)
+    }
+
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
     /// a read-only file on a volume that cannot hardlink, as they cannot, has no other name, so
     /// it is made writable for a second try. on a volume that can hardlink the refusal stands:

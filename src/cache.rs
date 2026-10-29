@@ -238,7 +238,7 @@ impl Cache {
             }
             self.checked[first].store(true, Ordering::Relaxed);
         }
-        let new = link_new(source, &path)?;
+        let new = link_new(&self.volume, source, &path)?;
         Ok(Stored {
             digest,
             size,
@@ -251,8 +251,8 @@ impl Cache {
 
 /// links `source` to `path` unless something is there already, then removes `source`. says
 /// whether the link is new.
-fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
-    let new = match fs::hard_link(source, path) {
+fn link_new(volume: &Volume, source: &Path, path: &Path) -> io::Result<bool> {
+    let new = match volume.hard_link(source, path) {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
         // something removed the object's folder since this run checked it
@@ -260,7 +260,7 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
             if let Some(parent) = path.parent() {
                 real_folder(parent)?;
             }
-            return link_new(source, path);
+            return link_new(volume, source, path);
         }
         // a filesystem without hardlinks gets a plain rename, guarded by a check
         Err(_) if path.exists() => false,
@@ -269,7 +269,7 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
             return Ok(true);
         }
     };
-    fs::remove_file(source)?;
+    volume.remove(source)?;
     Ok(new)
 }
 
@@ -407,14 +407,16 @@ pub(crate) mod tests {
 
     #[test]
     fn the_same_bytes_twice_are_stored_once() {
-        let (_dir, cache) = cache();
-        let first = store(&cache, b"same");
-        let second = store(&cache, b"same");
-        assert!(first.new);
-        assert!(!second.new);
-        assert_eq!(first.path, second.path);
-        let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
-        assert_eq!(leftovers, 0, "nothing is left behind in tmp");
+        for (_dir, cache) in [cache(), fat()] {
+            let first = store(&cache, b"same");
+            let second = store(&cache, b"same");
+            assert!(first.new);
+            assert!(!second.new);
+            assert_eq!(first.path, second.path);
+            assert!(fs::metadata(&first.path).unwrap().permissions().readonly());
+            let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
+            assert_eq!(leftovers, 0, "nothing is left behind in tmp");
+        }
     }
 
     #[test]
