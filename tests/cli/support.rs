@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -124,6 +124,21 @@ impl Sandbox {
 
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
+}
+
+/// makes `link` name the folder `target` the way a user can without admin: a junction on
+/// windows, a symlink elsewhere. says whether the filesystem allowed it.
+pub(crate) fn link_folder(target: &Path, link: &Path) -> bool {
+    #[cfg(windows)]
+    let made = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    made
 }
 
 /// whether a variable of the machine running the tests could change what fetchloom does.

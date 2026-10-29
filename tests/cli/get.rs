@@ -1,13 +1,12 @@
 //! `fetchloom get`: one link into one folder, through the cache.
 
 use std::fs;
-use std::path::Path;
 use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, file, link_folder, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -424,22 +423,6 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     Ok(())
 }
 
-/// makes `link` name the folder `target` in a way that needs no admin: a junction on windows, a
-/// symlink elsewhere. says whether the filesystem allowed it.
-fn link_folder(target: &Path, link: &Path) -> Result<bool> {
-    #[cfg(windows)]
-    let made = std::process::Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()?
-        .status
-        .success();
-    #[cfg(unix)]
-    let made = std::os::unix::fs::symlink(target, link).is_ok();
-    Ok(made)
-}
-
 /// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
 /// into a home folder.
 #[test]
@@ -448,7 +431,7 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     let newer = b"sepal_length,species\n5.1,setosa\n";
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
     let real = sandbox.folder("real")?;
-    if !link_folder(&real, &sandbox.work().join("linked"))? {
+    if !link_folder(&real, &sandbox.work().join("linked")) {
         return Ok(());
     }
     for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
