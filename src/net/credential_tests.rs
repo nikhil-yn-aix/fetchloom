@@ -36,12 +36,12 @@ fn net() -> Net {
         Arc::default(),
         Arc::new(|_| {}),
     )
-    .unwrap()
 }
 
 #[test]
 fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
     let net = net();
+    let client = &net.wire().unwrap().client;
     for (host, value) in OWNERS {
         for url in [
             format!("https://{host}/file"),
@@ -49,7 +49,7 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
             format!("https://{}/file", host.to_ascii_uppercase()),
         ] {
             let url = Url::parse(&url).unwrap();
-            let request = net.request(&url, true).build().unwrap();
+            let request = net.request(client, &url, true).build().unwrap();
             assert_eq!(request.headers()[header::AUTHORIZATION], value, "{url}");
             assert!(request.headers()[header::AUTHORIZATION].is_sensitive());
         }
@@ -61,13 +61,25 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
             format!("https://{host}.example.org/file"),
         ] {
             let url = Url::parse(&url).unwrap();
-            let request = net.request(&url, true).build().unwrap();
+            let request = net.request(client, &url, true).build().unwrap();
             assert!(
                 !request.headers().contains_key(header::AUTHORIZATION),
                 "{url}"
             );
         }
     }
+}
+
+/// a client that carries the requests `send` shapes to a local server instead of their hosts. it
+/// is the test's own, so it installs the crypto provider fetchloom installs only when it first
+/// goes online.
+fn transport() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
 }
 
 fn server(locations: &[String]) -> (Url, JoinHandle<Vec<Option<String>>>) {
@@ -114,11 +126,7 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
             format!("https://{host}:8443/away"),
         ] {
             let net = net();
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap();
+            let client = transport();
             net.trust([(*host).to_owned(), other.to_owned()]);
             let start = Url::parse(&format!("https://{host}/start")).unwrap();
             let (local, serving) = server(&[
@@ -166,11 +174,7 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
         "https://api.figshare.com/file".to_owned(),
         "https://example.org/back".to_owned(),
     ]);
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let client = transport();
     let answer = block_on(net.send(&start, |request| {
         let request = request.build().unwrap();
         client.get(local.clone()).headers(request.headers().clone())

@@ -52,7 +52,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     if let Some(asked) = args.name.as_deref() {
         usable(asked, &manifest)?;
     }
-    let net = Arc::new(net(context, &manifest)?);
+    let net = Arc::new(net(context, &manifest));
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
     }
@@ -254,7 +254,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let work = Loop::new(
         context,
         &project,
-        Arc::new(net(context, &manifest)?),
+        Arc::new(net(context, &manifest)),
         open_cache()?,
     );
     let (lock_changed, placement) = sync_all(
@@ -314,7 +314,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let work = Loop::new(
         context,
         &project,
-        Arc::new(net(context, &manifest)?),
+        Arc::new(net(context, &manifest)),
         open_cache()?,
     );
     let empty = Lock::default();
@@ -394,7 +394,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             let work = Loop::new(
                 context,
                 &project,
-                Arc::new(net(context, &manifest)?),
+                Arc::new(net(context, &manifest)),
                 open_cache()?,
             );
             sync_all(
@@ -713,13 +713,13 @@ fn units_datasets(count: usize) -> String {
 }
 
 /// the network, trusting every host data.toml names, since a person wrote them.
-fn net(context: &Context, manifest: &Manifest) -> Result<Net, Error> {
-    let net = context.net()?;
+fn net(context: &Context, manifest: &Manifest) -> Net {
+    let net = context.net();
     net.trust(manifest.datasets.values().filter_map(|entry| {
         Reference::parse(&entry.reference)
             .ok()?
             .reference
             .written_host()
     }));
-    Ok(net)
+    net
 }

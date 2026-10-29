@@ -216,8 +216,7 @@ fn live_doi() {
         work.clone(),
         Arc::default(),
         Arc::new(|_| {}),
-    )
-    .unwrap();
+    );
     for (doi, target, requests) in [
         (DOI, "zenodo:3608990", 2),
         ("10.6084/m9.figshare.34744689.v1", "figshare:34744689@1", 2),

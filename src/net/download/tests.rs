@@ -66,7 +66,7 @@ fn net(url: &Url) -> Net {
         jobs: 1,
         credentials: Vec::new(),
     };
-    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {})).unwrap();
+    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
     net.typed(url);
     net
 }

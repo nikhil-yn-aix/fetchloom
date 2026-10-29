@@ -206,8 +206,7 @@ fn live_osf() {
         work.clone(),
         Arc::default(),
         Arc::new(|_| {}),
-    )
-    .unwrap();
+    );
     let start = Instant::now();
     let reference = Reference::parse("osf:ezcuj").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();

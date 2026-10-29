@@ -9,7 +9,7 @@ mod headers;
 mod shown;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use reqwest::StatusCode;
@@ -60,10 +60,11 @@ pub(crate) struct Options {
 }
 
 pub(crate) struct Net {
-    client: reqwest::Client,
+    /// made on the first request, so a run that never goes online loads no TLS roots and reads no
+    /// proxy settings.
+    wire: OnceLock<Result<Wire, Error>>,
     offline: bool,
     typed: address::Typed,
-    proxies: address::Proxies,
     credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
@@ -72,23 +73,20 @@ pub(crate) struct Net {
     notify: Notify,
 }
 
-impl Net {
-    pub(crate) fn new(
-        options: Options,
-        work: Arc<Work>,
-        stop: Arc<Stop>,
-        notify: Notify,
-    ) -> Result<Net, Error> {
+/// the HTTP client and the proxies its requests go through.
+struct Wire {
+    client: reqwest::Client,
+    proxies: address::Proxies,
+}
+
+impl Wire {
+    fn new(typed: &address::Typed, offline: bool) -> Result<Wire, Error> {
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let typed = address::Typed::default();
         let client = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT)
-            .dns_resolver(Arc::new(address::Resolver::new(
-                typed.clone(),
-                options.offline,
-            )))
+            .dns_resolver(Arc::new(address::Resolver::new(typed.clone(), offline)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -98,6 +96,15 @@ impl Net {
                     format!("could not start the network client: {err}"),
                 )
             })?;
+        Ok(Wire {
+            client,
+            proxies: address::Proxies::from_system(),
+        })
+    }
+}
+
+impl Net {
+    pub(crate) fn new(options: Options, work: Arc<Work>, stop: Arc<Stop>, notify: Notify) -> Net {
         let credentials = options
             .credentials
             .into_iter()
@@ -108,18 +115,26 @@ impl Net {
                 Some((credential.host, name, value))
             })
             .collect();
-        Ok(Net {
-            client,
+        Net {
+            wire: OnceLock::new(),
             offline: options.offline,
-            typed,
-            proxies: address::Proxies::from_system(),
+            typed: address::Typed::default(),
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             work,
             stop,
             notify,
-        })
+        }
+    }
+
+    /// the client, made once even when the first requests start together. a client that could
+    /// not be made stays an error, since nothing about a retry would differ.
+    fn wire(&self) -> Result<&Wire, Error> {
+        self.wire
+            .get_or_init(|| Wire::new(&self.typed, self.offline))
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// marks the host of a URL a person wrote, so it may be a private address such as a lab
@@ -148,16 +163,17 @@ impl Net {
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
+        let wire = self.wire().map_err(Failure::Final)?;
         let mut hop = url.clone();
         let mut redirects = 0;
         let mut first_origin = true;
         loop {
-            self.proxies
+            wire.proxies
                 .check(&hop, &self.typed)
                 .await
                 .map_err(|reason| refused(&hop, reason))?;
             first_origin &= hop.origin() == url.origin();
-            let request = shape(self.request(&hop, first_origin));
+            let request = shape(self.request(&wire.client, &hop, first_origin));
             let response = tokio::select! {
                 sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
                     Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
@@ -184,8 +200,13 @@ impl Net {
 
     /// a GET with the user agent and, when `credentials` allows, the credential for this exact
     /// host.
-    fn request(&self, url: &Url, credentials: bool) -> reqwest::RequestBuilder {
-        let mut request = self.client.get(url.clone());
+    fn request(
+        &self,
+        client: &reqwest::Client,
+        url: &Url,
+        credentials: bool,
+    ) -> reqwest::RequestBuilder {
+        let mut request = client.get(url.clone());
         let secure = url.scheme() == "https" && url.port_or_known_default() == Some(443);
         if credentials
             && secure
@@ -248,3 +269,21 @@ fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
 
 #[cfg(test)]
 mod credential_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_that_sends_nothing_loads_no_tls_roots() {
+        let options = Options {
+            offline: false,
+            jobs: 1,
+            credentials: Vec::new(),
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        assert!(net.wire.get().is_none());
+        net.wire().unwrap();
+        assert!(net.wire.get().is_some());
+    }
+}

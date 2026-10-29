@@ -219,8 +219,7 @@ fn live_figshare() {
         work.clone(),
         Arc::default(),
         Arc::new(|_| {}),
-    )
-    .unwrap();
+    );
     let start = Instant::now();
     let reference = Reference::parse("figshare:34744689@1").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();
