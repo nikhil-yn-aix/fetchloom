@@ -303,7 +303,9 @@ fn settle<'t, 'a>(
 
 /// what the file at `destination` needs, as `survey` saw it. a hardlink the cache marked as
 /// changed through another link is replaced, and a file hashing found changed is an edit, though
-/// its size and time may not show either.
+/// its size and time may not show either. a changed file that holds the locked bytes is taken as
+/// placed: a run cut off after it replaced a file and before it wrote the state leaves the new
+/// bytes recorded as the old file.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -324,6 +326,7 @@ fn decide(
                 Action::Replace
             })
         }
+        Some(_) if holds_target(target, look, destination) => Ok(Action::Adopt(*look)),
         Some(_) => Ok(if force {
             Action::Replace
         } else {
@@ -416,8 +419,14 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed
     }
 }
 
+/// whether the file at `path`, seen as `look`, holds the target's bytes. only a file of the
+/// target's size is hashed, and one that cannot be read does not.
+pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
+    look.size == target.size && Sha256::of_file(path).is_ok_and(|digest| digest == target.sha256)
+}
+
 /// whether the file at `path` may be written to now.
-fn now_writable(path: &Path) -> bool {
+pub(crate) fn now_writable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }
 

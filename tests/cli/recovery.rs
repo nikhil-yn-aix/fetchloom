@@ -107,3 +107,49 @@ fn a_broken_link_in_the_lock_is_pinned_again_by_an_upgrade() -> Result {
     );
     Ok(())
 }
+
+/// a run cut off after it replaced a file and before it wrote the state leaves the new, locked
+/// bytes recorded as the old file. a file whose size is the locked size is hashed, so status and
+/// sync take it as placed instead of as an edit only `--force` would clear.
+#[test]
+fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/iris.csv",
+        vec![file(b"iris\n", "\"v1\""), file(b"iris, again\n", "\"v2\"")],
+    )?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let state = sandbox.work().join(".fetchloom").join("state");
+    let before = fs::read(&state)?;
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let replaced = sandbox.run(&["sync"])?;
+    assert_eq!(
+        replaced.status.code(),
+        Some(0),
+        "{}",
+        text(&replaced.stderr)?
+    );
+    // what a kill after placing and before the state write leaves behind
+    fs::write(&state, before)?;
+
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(text(&status.stderr)?, "✓ everything matches data.lock\n");
+    let synced = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let report: Value = serde_json::from_slice(&synced.stdout)?;
+    assert_eq!(report["result"]["placement"]["kept"], serde_json::json!([]));
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?,
+        b"iris, again\n"
+    );
+    let after = sandbox.run(&["status"])?;
+    assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
+    Ok(())
+}

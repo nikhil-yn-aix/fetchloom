@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::Context;
 use super::sync::disk::Survey;
+use super::sync::place;
 use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
@@ -98,6 +99,7 @@ fn check(project: &Project) -> Result<Status, Error> {
     let elsewhere: HashSet<String> = survey.edited_elsewhere(&cache).into_iter().collect();
     for target in &targets {
         let seen = survey.disk.get(&target.path);
+        let file = project.root.join(&target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => &mut status.missing,
             (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
@@ -105,6 +107,13 @@ fn check(project: &Project) -> Result<Status, Error> {
                 if record.look == *seen && !survey.edited.contains(&target.path) =>
             {
                 if record.sha256 == target.sha256 && (!target.copy || record.writable) {
+                    continue;
+                }
+                &mut status.outdated
+            }
+            // sync takes a changed file that holds the locked bytes as placed
+            (Some(seen), Some(_)) if place::holds_target(target, seen, &file) => {
+                if !target.copy || place::now_writable(&file) {
                     continue;
                 }
                 &mut status.outdated
