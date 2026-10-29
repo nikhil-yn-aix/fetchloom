@@ -123,7 +123,12 @@ fn a_fresh_clone_gets_the_same_bytes_without_downloading_them_again() -> Result 
         document["work"]["requests"], 0,
         "the cache already holds iris"
     );
-    assert_eq!(document["work"]["copies"], 0, "a link costs no disk");
+    let links = sandbox.links()?;
+    assert_eq!(
+        document["work"]["copies"],
+        u64::from(!links.reflink && !links.hardlink),
+        "a link costs no disk where the drive makes one"
+    );
     assert_eq!(
         fs::read(warm.join("data").join("iris").join("iris.csv"))?,
         IRIS
