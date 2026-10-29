@@ -8,7 +8,6 @@ mod tell;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -24,7 +23,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, nanos};
+use crate::project::state::{Look, Placed};
 use crate::work::Work;
 
 /// what placing did.
@@ -63,7 +62,7 @@ enum Action {
     Replace,
     Adopt(Look),
     /// a hardlink a mark put in doubt that still holds the locked bytes: kept, with the time
-    /// hashing proved it and how it looks by name now.
+    /// the scan began and how it looks by name now.
     Vouch(Look),
     Leave(Reason),
 }
@@ -201,8 +200,9 @@ impl<'a> Placing<'a> {
             &mut placement,
         )?;
         let needs_writing = survey.needs_writing;
+        let checked = survey.started;
         let state = &mut survey.state;
-        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, work);
+        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
         if removed || adopted || needs_writing || !tallies.is_empty() {
             project.write_state(state)?;
         }
@@ -262,7 +262,13 @@ fn settle<'t, 'a>(
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
-                let found = adoption(target, seen, &project.root.join(&target.path), cache);
+                let found = adoption(
+                    target,
+                    seen,
+                    &project.root.join(&target.path),
+                    cache,
+                    survey.started,
+                );
                 survey.state.files.insert(target.path.clone(), found);
                 placement.unchanged += 1;
                 adopted = true;
@@ -270,7 +276,7 @@ fn settle<'t, 'a>(
             Action::Vouch(seen) => {
                 if let Some(placed) = survey.state.files.get_mut(&target.path) {
                     placed.look = seen;
-                    placed.checked = nanos(SystemTime::now());
+                    placed.checked = survey.started;
                 }
                 placement.unchanged += 1;
                 adopted = true;
@@ -320,8 +326,8 @@ fn settle<'t, 'a>(
 /// what the file at `destination` needs, as `survey` saw it. a hardlink a mark put in doubt is
 /// replaced when hashing found its bytes changed and kept when it found them intact, and a file
 /// hashing found changed is an edit, though its size and time may not show either. a changed file
-/// that holds the locked bytes is taken as placed: a run cut off after it replaced a file and
-/// before it wrote the state leaves the new bytes recorded as the old file.
+/// that holds the locked bytes is taken as placed if its mode fits the dataset: a run cut off
+/// after it replaced a file and before it wrote the state leaves the new bytes recorded as old.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -350,7 +356,13 @@ fn decide(
                 Action::Replace
             })
         }
-        Some(_) if holds_target(target, look, destination) => Ok(Action::Adopt(*look)),
+        Some(_) if holds_target(target, look, destination) => {
+            Ok(if !target.copy || now_writable(destination) {
+                Action::Adopt(*look)
+            } else {
+                Action::Replace
+            })
+        }
         Some(_) => Ok(if force {
             Action::Replace
         } else {
@@ -433,25 +445,25 @@ fn now(path: &Path) -> Option<Look> {
         .map(|metadata| Look::of(&metadata))
 }
 
-fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed {
+fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: u64) -> Placed {
     Placed {
         dataset: target.dataset.clone(),
         sha256: target.sha256,
         method,
         look,
         writable,
-        checked: nanos(SystemTime::now()),
+        checked,
     }
 }
 
 /// the record of a file at `path` found to hold the target's bytes. a link a run cut off before
 /// it wrote the state placed is the cached object under another name, so it is recorded as a
 /// hardlink, which the audit covers and whose read-only flag is never cleared.
-fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache) -> Placed {
+fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u64) -> Placed {
     if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
-        placed(target, Method::Hardlink, look, false)
+        placed(target, Method::Hardlink, look, false, checked)
     } else {
-        placed(target, Method::Copy, look, now_writable(path))
+        placed(target, Method::Copy, look, now_writable(path), checked)
     }
 }
 
@@ -489,7 +501,108 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
+    use crate::output::{Level, Style};
+    use crate::project::state::{State, nanos};
+
+    #[test]
+    fn placements_are_checked_no_later_than_their_survey() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        let stored = crate::cache::tests::store(&cache, bytes);
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let names = ["placed", "replaced", "adopted", "vouched"];
+        let targets: Vec<Target> = names
+            .iter()
+            .map(|name| Target {
+                dataset: "weather".to_owned(),
+                path: format!("data/weather/{name}.csv"),
+                sha256: stored.digest,
+                size: bytes.len() as u64,
+                copy: false,
+                locked: &locked,
+            })
+            .collect();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        fs::create_dir_all(project.root.join("data/weather")).unwrap();
+        let mut state = State::default();
+        for (index, target) in targets.iter().enumerate().skip(1) {
+            let path = project.root.join(&target.path);
+            fs::hard_link(cache.object_path(&stored.digest), &path).unwrap();
+            if index != 2 {
+                state.files.insert(
+                    target.path.clone(),
+                    Placed {
+                        dataset: target.dataset.clone(),
+                        sha256: target.sha256,
+                        method: Method::Hardlink,
+                        look: now(&path).unwrap(),
+                        writable: false,
+                        checked: 0,
+                    },
+                );
+            }
+        }
+        project.write_state(&state).unwrap();
+        let before = nanos(SystemTime::now());
+        let survey = Survey::read(&project, "data");
+        let surveyed = nanos(SystemTime::now());
+        let started = survey.started;
+        assert!((before..=surveyed).contains(&started));
+        let actions = vec![
+            Action::Place,
+            Action::Replace,
+            Action::Adopt(survey.disk[&targets[2].path]),
+            Action::Vouch(survey.disk[&targets[3].path]),
+        ];
+        while nanos(SystemTime::now()) <= surveyed {
+            std::thread::yield_now();
+        }
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                .unwrap();
+        let placing = Placing {
+            project: &project,
+            manifest: &manifest,
+            targets,
+            unknown: Vec::new(),
+            actions,
+            data_dir: project.root.join("data"),
+            survey,
+        };
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        placing.apply(&output, &Work::default(), &cache).unwrap();
+        let (recorded, _) = project.state();
+        for name in names {
+            let checked = recorded.files[&format!("data/weather/{name}.csv")].checked;
+            assert!(
+                (before..=surveyed).contains(&checked),
+                "{name} was checked after its survey: {checked} > {surveyed}"
+            );
+            assert_eq!(checked, started, "{name} did not record the survey's start");
+        }
+    }
 
     #[test]
     fn a_placement_the_disk_refuses_says_what_to_do() {

@@ -28,9 +28,8 @@ pub(crate) struct Placed {
     pub(crate) look: Look,
     /// a file of its own that may be written to, as `copy = true` asks.
     pub(crate) writable: bool,
-    /// when fetchloom last knew the file held its locked bytes, in nanoseconds since 1970: when it
-    /// placed or adopted the file, or when hashing proved them after the cache marked the object
-    /// changed. a mark older than this puts the file in no doubt.
+    /// the start of the scan that last placed, adopted or vouched for the file, in nanoseconds
+    /// since 1970. marks written while placing other files still put it in doubt.
     pub(crate) checked: u64,
 }
 

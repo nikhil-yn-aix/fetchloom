@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::SystemTime;
 
 use super::place::local;
 use crate::cache::Cache;
@@ -11,10 +12,12 @@ use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::{self, Method};
 use crate::project::Project;
-use crate::project::state::{Look, State};
+use crate::project::state::{Look, State, nanos};
 
 /// the data folder as fetchloom recorded placing it and as it is now.
 pub(crate) struct Survey {
+    /// the scan's start, so marks written while placing files still put them in doubt.
+    pub(crate) started: u64,
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
@@ -22,7 +25,7 @@ pub(crate) struct Survey {
     /// project's link. sync puts them back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
     /// hardlinks a mark put in doubt whose bytes hashing found intact, which sync keeps, recording
-    /// when they were checked.
+    /// the scan's start.
     pub(crate) vouched: HashSet<String>,
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
@@ -36,8 +39,10 @@ impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
     pub(crate) fn read(project: &Project, data_dir: &str) -> Survey {
+        let started = nanos(SystemTime::now());
         let (state, written) = project.state();
         let mut survey = Survey {
+            started,
             state,
             disk: scan(&project.root, data_dir),
             elsewhere: HashSet::new(),
@@ -104,32 +109,47 @@ impl Survey {
             .collect()
     }
 
-    /// hashes the files a mark puts in doubt: those holding other bytes were edited through
-    /// another project's link, and the rest are vouched for.
-    pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) {
+    /// hashes the files a mark puts in doubt, separating changed links from intact ones.
+    /// an unreadable file stops the check.
+    pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) -> Result<(), Error> {
         let doubted = self.doubted(cache);
         if doubted.is_empty() {
-            return;
+            return Ok(());
         }
         let _span = tracing::debug_span!("hash_doubted", files = doubted.len()).entered();
         let files = &self.state.files;
         let intact = place::run_all(&doubted, |path| {
-            Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == files[path].sha256)
+            Sha256::of_file(&root.join(path)).map(|digest| digest == files[path].sha256)
         });
         for (path, intact) in doubted.into_iter().zip(intact) {
-            if intact {
-                self.vouched.insert(path);
-            } else {
-                self.elsewhere.insert(path);
+            match intact {
+                Ok(true) => {
+                    self.vouched.insert(path);
+                }
+                Ok(false) => {
+                    self.elsewhere.insert(path);
+                }
+                Err(err) => {
+                    return Err(Error::io(
+                        format_args!("could not read {path} to check it"),
+                        &err,
+                    ));
+                }
             }
         }
+        Ok(())
     }
 
     /// hashes what a mark puts in doubt, then reads hardlinks again by name, which windows answers
     /// from the file itself where a listing may be stale: those in doubt, and with `force` every
     /// one, since --force asks for every edit to be undone.
-    pub(crate) fn look_again(&mut self, root: &Path, cache: &Cache, force: bool) {
-        self.check_doubted(root, cache);
+    pub(crate) fn look_again(
+        &mut self,
+        root: &Path,
+        cache: &Cache,
+        force: bool,
+    ) -> Result<(), Error> {
+        self.check_doubted(root, cache)?;
         let paths: Vec<String> = if force && cfg!(windows) {
             self.state
                 .files
@@ -149,6 +169,7 @@ impl Survey {
                 self.disk.insert(path, Look::of(&metadata));
             }
         }
+        Ok(())
     }
 }
 

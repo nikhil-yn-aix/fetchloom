@@ -579,6 +579,46 @@ fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Resul
     Ok(())
 }
 
+#[test]
+fn a_recovered_hardlink_becomes_writable_when_copies_are_requested() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    assert!(fs::metadata(&placed)?.permissions().readonly());
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let before = fs::metadata(&placed)?.modified()?;
+    set_time(&placed, before - Duration::from_secs(10))?;
+    assert_ne!(fs::metadata(&placed)?.modified()?, before);
+
+    let synced = sandbox.run(&["sync"])?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        !fs::metadata(&placed)?.permissions().readonly(),
+        "recovery kept a read-only hardlink despite copy = true: {stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    assert_eq!(server.requests().len(), 1, "the cache still holds iris");
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert_eq!(status.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("everything matches data.lock"), "{stderr}");
+    Ok(())
+}
+
 /// asking for writable copies after the files were placed read-only leaves them waiting for a
 /// sync, which status shows and path does before it answers.
 #[test]
@@ -855,6 +895,49 @@ fn a_marked_object_that_cannot_be_removed_stops_sync() -> Result {
         .into_owned();
     assert!(stderr.contains(&name), "{stderr}");
     assert!(!stderr.contains("put back"), "{stderr}");
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn an_unreadable_marked_link_stops_sync_without_replacing_it() -> Result {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state = fs::read(&state_path)?;
+    sandbox.wait_for_a_later_time(fs::metadata(&state_path)?.modified()?)?;
+    mark(&sandbox, &iris_object(&sandbox, &sandbox.work())?)?;
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&placed)?;
+
+    let synced = sandbox.run(&["sync"])?;
+    let status = sandbox.run(&["status"])?;
+
+    drop(held);
+    assert_eq!(fs::read(&placed)?, V1, "the unreadable file must stay");
+    assert_eq!(fs::read(&state_path)?, state, "the state must stay");
+    for output in [synced, status] {
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{stderr}");
+        assert!(
+            stderr.contains("could not read data/iris/iris.csv to check it"),
+            "missing 'could not read data/iris/iris.csv to check it': {stderr}"
+        );
+    }
     Ok(())
 }
 

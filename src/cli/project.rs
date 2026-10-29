@@ -550,7 +550,7 @@ async fn sync_all(
     given: Option<(String, Listing)>,
 ) -> Result<(bool, Placement), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir);
-    survey.look_again(&work.project.root, &work.cache, force);
+    survey.look_again(&work.project.root, &work.cache, force)?;
     disk::audit(work.project, &survey, &work.cache)?;
     let empty = Lock::default();
     let lock = work
