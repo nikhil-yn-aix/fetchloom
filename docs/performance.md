@@ -8,53 +8,58 @@ fetchloom is fast because of how it is built: it streams, touches each byte once
 - one pass over the bytes: read, hash and write in the same loop.
 - the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing.
 - many small files from one host share a connection over HTTP/2.
-- new objects are flushed to disk in parallel batches before they are renamed into place, never one blocking flush at a time. the rename makes an object appear whole, and the flush makes it survive a power cut.
-- read file metadata by listing directories, never one call per file. on windows the listing is about 15 times faster.
+- new objects are flushed to disk before they are renamed into place, on several threads at once. the rename makes an object appear whole, and the flush makes it survive a power cut.
+- read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux and macos listings carry neither, so there each file costs one stat, as in git.
+- spread placement over folders. making links in one folder serializes on that folder; neighbours in different folders do not wait for each other.
 - parallel work is bounded: a fixed number of downloads, hashing threads and placement workers, never one task per file.
-- startup does only what the command needs. TLS roots and sources load on first use.
+- startup does only what the command needs. TLS roots, proxy settings and sources load on first use.
 - hot loops reuse their buffers and do not allocate.
 
 ## budgets
 
-measured on release builds. a budget is a number with a unit, or a comparison with a baseline.
+measured on release builds. a budget is a number with a unit, or a comparison with a baseline. the measurements below are from 2026-10-30, commit f9bbda5, on one laptop: an 11th gen intel i7-1185G7 (4 cores, 8 threads), 32 GB, nvme. windows is windows 11 with defender's real-time protection on, as people have it; linux is ubuntu 24.04 in WSL 2 on the same laptop, on ext4. each timing is the median of at least ten runs after three warm-up runs, unless the row says otherwise, with nothing else running.
 
-| what | budget |
-|---|---|
-| `fetchloom --version` | under 5 ms on linux and macos, within noise of an empty program on windows |
-| first line of output | under 100 ms |
-| `sync` with nothing to do, 10,000 files | under 200 ms |
-| `status`, 10,000 files | under 150 ms |
-| placing 10,000 cached files into a new project | under 300 ms on linux, under 2 s on windows with defender on |
-| cold download of a plain URL | one request, plus any redirects the server sends |
-| a source's requests | only those its protocol needs, each counted in tests |
-| a paged file listing | one request per page |
-| one large file on a fast link | limited by the link, not by hashing or disk |
-| SHA-256 | at least 1 GB/s on one core with hardware support |
-| unpacking zip or tar.zst | within 15% of the decompressor alone |
-| reading and checking a `data.lock` of 10,000 files | under 30 ms |
-| memory used by downloads | a fixed buffer per running download, under 50 MB in total |
-| peak memory with 100,000 files in a project | under 150 MB |
+| what | budget | windows | linux |
+|---|---|---|---|
+| `fetchloom --version` | under 5 ms on linux and macos, within noise of an empty program on windows | 13.9 ms, an empty program 12.1 ms | 1.1 ms |
+| first line of output | under 100 ms | 29 ms (`get` while the server waits), 64 ms (`status`) | 3.9 ms, 42 ms |
+| `sync` with nothing to do, 10,000 files | under 200 ms | 112 ms | 50 ms |
+| `status`, 10,000 files | under 150 ms | 89 ms | 42 ms |
+| placing 10,000 cached files into a new project | under 300 ms on linux, under 2 s on windows | **2.74 s**, best 2.15 s: a miss | 126 ms |
+| reading and checking a `data.lock` of 10,000 files | under 30 ms | 26 ms of work in a 38 ms command (an empty program takes 12 ms) | 10.7 ms |
+| SHA-256 | at least 1 GB/s on one core with hardware support | 1.08 GB/s in the best `cache verify` of 1 GiB, 0.33 GB/s in the median run | 1.33 GB/s |
+| memory used by downloads | a fixed buffer per running download, under 50 MB in total | 17 MiB for a 1 GiB download | 26 MiB |
+| peak memory with 100,000 files in a project | under 150 MB | 108 MiB adding, 75 MiB `status` | **162 MiB adding**: a miss; 77 MiB `status`, 141 MiB placing |
+| one large file on a fast link | limited by the link, not by hashing or disk | 1 GiB from this machine in 5.8 s, curl 2.9 s | 2.2 s, curl 1.0 s |
+| unpacking an archive of large members | within 2 times of bsdtar extracting it to disk | 512 MiB tar.zst: 2.2 s, bsdtar 1.7 s; zip: 2.4 s, bsdtar 1.2 s | tar.zst: 1.6 s, bsdtar 1.0 s; zip: 2.3 s, bsdtar 6.1 s |
+| unpacking many small files | within 2 times of creating, writing and flushing the same files | 10,000 files of 4 KiB: 37 to 55 s, floor 21 to 24 s: a miss | 7.7 s, floor 7.2 to 7.9 s |
+| cold download of a plain URL | one request, plus any redirects the server sends | counted in tests | counted in tests |
+| a source's requests | only those its protocol needs, each counted in tests | counted in tests | counted in tests |
+| a paged file listing | one request per page | counted in tests | counted in tests |
 
-an earlier version of fetchloom measured most of these on an 11th gen intel laptop: 113 ms for a no-op sync of 10,000 files on windows, 25 ms to read a lock of 10,000 files, 7 to 21 MB of peak memory. SHA-256 ran at 1.13 GB/s on one core of that laptop.
+what the measurements showed:
+
+- a 1 GiB download from a server on the same machine runs at about 180 MB/s on windows and 460 MB/s on linux, since each byte is also hashed and the object is flushed before it is placed. that keeps up with links up to about 1.5 Gbit/s on windows; above that the disk and the hash set the pace. the best windows run matched curl, and the spread between runs came from the antivirus.
+- placing hardlinks on ntfs with defender on costs about 130 us a link when neighbours go to different folders on 8 threads, and 400 to 1,100 us when threads fill one folder at a time. 10,000 bare links spread that way take 1.3 s, so the 2 s budget leaves room; placing adds the folders, a look at each file and the state, and that overhead is the miss.
+- two budgets changed with these measurements. unpacking was "within 15% of the decompressor alone", but every member is also hashed and flushed, and on windows every new file is scanned: bsdtar decompresses the 10,000 small files in 0.18 s and writes them in 8.4 s. small members are now measured against a program that does nothing but create, write, flush and link the same bytes. on windows that floor is about 2 ms a file for an unsigned program, flushed or not, while bsdtar, which microsoft signs, writes the same files in 0.8 ms each. on linux the floor is the flush, 0.7 ms a file on ext4.
+- `lock --check` reads and checks 10,000 locked files in about 26 ms on windows; starting any program there takes 12 ms.
 
 ## counters
 
-every run counts its work: requests, bytes downloaded, retries, resumes, objects written, bytes written, files placed by each method, cache hits and milliseconds per phase. every counter except the timings is deterministic, so tests assert them on every commit. a change that adds a request, or copies a file that should have been linked, fails CI.
+every run counts its work: requests, bytes downloaded, retries, resumes, objects written, cache hits, files placed by each method and the total time. every counter except the time is deterministic, so tests assert them on every commit. a change that adds a request, or copies a file that should have been linked, fails CI.
 
-`-v` prints the counters at the end of a run, and `--json` includes them.
+`-v` prints the counters at the end of a run, and `--json` includes them. `FETCHLOOM_TRACE=run.json` writes a timeline of the run's phases, such as reading the lock, scanning the data folder, placing and writing the state, which perfetto opens.
 
 ## tools
 
 | need | tool |
 |---|---|
-| CPU profile on any platform | samply |
+| CPU profile | samply, on linux and macos; on windows it needs the windows performance toolkit |
 | timeline of one run | `FETCHLOOM_TRACE=run.json`, opened in perfetto |
-| heap | dhat-rs in a profiling build |
 | whole commands | hyperfine, warmed up, ten runs or more |
-| small functions | divan |
-| CI regression gate | counters, plus instruction counts from gungraun on linux |
+| CI regression gate | the counters, asserted in tests |
 
-wall clock time is recorded in pull requests and tracked over time, never used to fail CI: shared runners and laptops vary too much.
+there is no heap profiler, micro-benchmark harness or instruction-count gate. add one with the job it will run. wall clock time is recorded here and in pull requests, never used to fail CI: shared runners and laptops vary too much.
 
 ## when something is slow
 
