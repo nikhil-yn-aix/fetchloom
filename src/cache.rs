@@ -277,10 +277,13 @@ fn link_new(volume: &Volume, source: &Path, path: &Path) -> io::Result<bool> {
         }
         // a filesystem without hardlinks gets a plain rename, guarded by a check
         Err(_) if path.exists() => false,
-        Err(_) => {
-            fs::rename(source, path)?;
-            return Ok(true);
-        }
+        Err(_) => match volume.rename(source, path) {
+            Ok(()) => return Ok(true),
+            // another writer published the object since the check, and the rename could not
+            // replace it
+            Err(_) if path.exists() => false,
+            Err(err) => return Err(err),
+        },
     };
     volume.remove(source)?;
     Ok(new)
@@ -437,6 +440,20 @@ pub(crate) mod tests {
             let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
             assert_eq!(leftovers, 0, "nothing is left behind in tmp");
         }
+    }
+
+    #[test]
+    fn bytes_another_writer_published_since_the_check_are_not_new() {
+        let (_dir, mut cache) = cache();
+        // FAT refuses the link, and another writer publishes the same bytes before the rename
+        cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), false).losing_renames());
+        assert_eq!(cache.find(&digest::sha256(b"same"), None), None);
+        let stored = store(&cache, b"same");
+        assert!(!stored.new);
+        assert_eq!(fs::read(&stored.path).unwrap(), b"same");
+        assert!(fs::metadata(&stored.path).unwrap().permissions().readonly());
+        let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
+        assert_eq!(leftovers, 0, "nothing is left behind in tmp");
     }
 
     #[test]

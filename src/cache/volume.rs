@@ -8,13 +8,14 @@ use std::sync::OnceLock;
 
 use super::partial::is_plain;
 
-/// how the volume under the cache links and removes files, and whether it can hardlink at all,
-/// learned the first time a removal needs to know.
+/// how the volume under the cache links, renames and removes files, and whether it can hardlink
+/// at all, learned the first time a removal needs to know.
 #[derive(Debug)]
 pub(super) struct Volume {
     /// the cache's `tmp/`, where the probe link is made.
     tmp: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
+    rename: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
     links: OnceLock<bool>,
 }
@@ -24,6 +25,7 @@ impl Volume {
         Volume {
             tmp,
             hard_link: |original, link| fs::hard_link(original, link),
+            rename: |from, to| fs::rename(from, to),
             remove_file: |path| fs::remove_file(path),
             links: OnceLock::new(),
         }
@@ -31,6 +33,10 @@ impl Volume {
 
     pub(super) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
         (self.hard_link)(original, link)
+    }
+
+    pub(super) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        (self.rename)(from, to)
     }
 
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
@@ -151,6 +157,7 @@ impl Volume {
         Volume {
             tmp,
             hard_link,
+            rename: |from, to| fs::rename(from, to),
             remove_file: |path| {
                 if fs::symlink_metadata(path)?.permissions().readonly() {
                     return Err(io::ErrorKind::PermissionDenied.into());
@@ -158,6 +165,20 @@ impl Volume {
                 fs::remove_file(path)
             },
             links: OnceLock::new(),
+        }
+    }
+
+    /// this volume, losing every rename to another writer: just before the rename, that writer
+    /// publishes the same file read-only at the destination, and the rename is then refused, as
+    /// windows refuses to rename over a read-only file.
+    pub(super) fn losing_renames(self) -> Volume {
+        Volume {
+            rename: |from, to| {
+                fs::copy(from, to)?;
+                crate::cache::tests::seal(to);
+                Err(io::ErrorKind::PermissionDenied.into())
+            },
+            ..self
         }
     }
 }
