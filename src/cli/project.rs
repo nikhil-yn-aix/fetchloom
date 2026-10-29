@@ -80,7 +80,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
     let old = project.lock()?;
     if args.name.is_none()
-        && let Some(name) = present(&manifest, old.as_ref(), &reference, &listing)
+        && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
     {
         let work = Loop::new(context, &project, net, cache);
         return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
@@ -150,18 +150,26 @@ fn restore(project: &Project, before: Option<&str>) {
 fn present(
     manifest: &Manifest,
     old: Option<&Lock>,
-    reference: &str,
+    wanted: &manifest::Entry,
     listing: &Listing,
 ) -> Option<String> {
     let resolved = listing.resolved.to_string();
     manifest
         .datasets
         .iter()
-        .find(|(name, entry)| {
-            entry.reference == reference
+        .filter(|(name, entry)| {
+            entry.reference == wanted.reference
                 || old
                     .and_then(|old| old.get(name))
                     .is_some_and(|locked| locked.resolved == resolved)
+        })
+        .min_by_key(|(_, entry)| {
+            (
+                entry.select != wanted.select
+                    || entry.exclude != wanted.exclude
+                    || entry.extract != wanted.extract,
+                entry.reference != wanted.reference,
+            )
         })
         .map(|(name, _)| name.clone())
 }
