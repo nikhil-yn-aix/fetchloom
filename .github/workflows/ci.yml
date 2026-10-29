@@ -41,7 +41,6 @@ jobs:
       # windows runners are admin, which diskpart needs
       - name: cargo test on refs, exfat and fat32
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $failed = @()

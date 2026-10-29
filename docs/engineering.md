@@ -61,7 +61,7 @@ for a bug fix, first add a test that fails for the reported behavior. use the lo
 
 ## automation
 
-[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux, macos and windows. there are no nightly live-source checks or release workflows.
+[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux, macos and windows. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
 
 nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-deny, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
 
