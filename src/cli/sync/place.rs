@@ -326,8 +326,8 @@ fn settle<'t, 'a>(
 /// what the file at `destination` needs, as `survey` saw it. a hardlink a mark put in doubt is
 /// replaced when hashing found its bytes changed and kept when it found them intact, and a file
 /// hashing found changed is an edit, though its size and time may not show either. a changed file
-/// that holds the locked bytes is taken as placed: a run cut off after it replaced a file and
-/// before it wrote the state leaves the new bytes recorded as the old file.
+/// that holds the locked bytes is taken as placed if its mode fits the dataset: a run cut off
+/// after it replaced a file and before it wrote the state leaves the new bytes recorded as old.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -356,7 +356,13 @@ fn decide(
                 Action::Replace
             })
         }
-        Some(_) if holds_target(target, look, destination) => Ok(Action::Adopt(*look)),
+        Some(_) if holds_target(target, look, destination) => {
+            Ok(if !target.copy || now_writable(destination) {
+                Action::Adopt(*look)
+            } else {
+                Action::Replace
+            })
+        }
         Some(_) => Ok(if force {
             Action::Replace
         } else {
