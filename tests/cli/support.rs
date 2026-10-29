@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -72,6 +72,26 @@ impl Sandbox {
         };
         std::fs::remove_dir_all(&probe)?;
         Ok(links)
+    }
+
+    /// waits until a file written in the sandbox now carries a later time than `time`. a
+    /// filesystem stamps times in steps, two seconds on FAT32, so a file written right after
+    /// another can carry the same time.
+    pub(crate) fn wait_for_a_later_time(&self, time: SystemTime) -> Result {
+        let probe = self.root.join(".clock");
+        let started = Instant::now();
+        loop {
+            std::fs::write(&probe, b"")?;
+            let stamped = std::fs::metadata(&probe)?.modified()?;
+            std::fs::remove_file(&probe)?;
+            if stamped > time {
+                return Ok(());
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                return Err("the filesystem's clock never passed the time".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// the command, run in `folder` instead of the work folder.
