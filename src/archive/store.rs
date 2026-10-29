@@ -111,6 +111,11 @@ pub(super) fn store_all(
     if let Some(failure) = trouble.or_else(|| read.err()) {
         return Err(failure);
     }
+    // nothing is published until every member is on disk
+    #[cfg(target_os = "linux")]
+    cache
+        .flush_written()
+        .map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
     publish_all(cache, sealed, threads)
 }
 
@@ -173,7 +178,8 @@ fn seal(cache: &Cache, job: Job) -> Result<(String, Sealed), Error> {
         }
         Job::Written(path, object) => (path, Ok(*object)),
     };
-    match object.and_then(NewObject::seal) {
+    // on linux the members are flushed together before any is published
+    match object.and_then(|object| object.seal(!cfg!(target_os = "linux"))) {
         Ok(sealed) => Ok((path, sealed)),
         Err(err) => Err(not_written(&path, &err)),
     }

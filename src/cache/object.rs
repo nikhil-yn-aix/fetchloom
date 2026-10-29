@@ -44,6 +44,15 @@ impl Drop for Temporary {
 }
 
 impl Cache {
+    /// flushes every file written to the cache's filesystem with one call, as git's batch mode
+    /// does: on linux one flush per small file costs far more than writing it.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn flush_written(&self) -> io::Result<()> {
+        let folder = File::open(self.root.join("tmp"))?;
+        rustix::fs::syncfs(&folder)?;
+        Ok(())
+    }
+
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
         loop {
             let path = self
@@ -90,15 +99,18 @@ fn create_sealed(path: &Path) -> io::Result<File> {
 }
 
 impl NewObject {
-    /// flushes the bytes to disk, so a power cut cannot leave the object empty, and closes it.
-    pub(crate) fn seal(self) -> io::Result<Sealed> {
+    /// closes the object. with `flush` its bytes reach the disk first, so a power cut cannot
+    /// leave it empty; without, the caller flushes a whole batch at once before publishing any.
+    pub(crate) fn seal(self, flush: bool) -> io::Result<Sealed> {
         let NewObject {
             file,
             temp,
             hasher,
             written,
         } = self;
-        file.sync_all()?;
+        if flush {
+            file.sync_all()?;
+        }
         drop(file);
         let (digest, _) = hasher.finish();
         Ok(Sealed {
@@ -151,7 +163,7 @@ mod tests {
         written.write_all(b"abc").unwrap();
         let mut sealed = cache.new_object().unwrap();
         sealed.write_all(b"def").unwrap();
-        let sealed = sealed.seal().unwrap();
+        let sealed = sealed.seal(true).unwrap();
         drop((written, sealed));
         assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
     }

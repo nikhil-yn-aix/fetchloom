@@ -406,7 +406,7 @@ pub(crate) mod tests {
     pub(crate) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
-        object.seal().unwrap().publish(cache).unwrap()
+        object.seal(true).unwrap().publish(cache).unwrap()
     }
 
     #[test]
@@ -548,7 +548,7 @@ pub(crate) mod tests {
         let held = hold(&object);
         let mut again = cache.new_object().unwrap();
         again.write_all(b"abc").unwrap();
-        let published = again.seal().unwrap().publish(&cache);
+        let published = again.seal(true).unwrap().publish(&cache);
         drop(held);
         // root on unix removes the changed object anyway
         let holds = fs::read(&object).unwrap() == b"abc";
