@@ -41,7 +41,7 @@ the async command runtime uses up to four worker threads. file-download tasks ar
 
 archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
 
-placement, project metadata and many cache-index operations run synchronously on command futures. placing files and looking up their objects use up to eight threads, at most one per 64 files and no more than the logical CPU count. the first file is placed alone, so the others start knowing which methods the filesystem refuses. large fallback copies overlap reading and writing with three reusable 1 MiB buffers. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
+placement, project metadata and many cache-index operations run synchronously on command futures. placing files and looking up their objects use up to eight threads, at most one per 64 files and no more than the logical CPU count. the first file is placed alone, so the others start knowing which methods the filesystem refuses. off linux, large fallback copies overlap reading and writing with three reusable 1 MiB buffers; linux copies inside the kernel with `copy_file_range`. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
 
 ## sources
 
@@ -152,7 +152,7 @@ successful unpacking records a sorted member tree under the archive hash. a lock
 
 ## project coordination and observability
 
-commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. standalone `lock` currently reads its manifest and old lock before acquiring the lock. on a filesystem without working file locks, serialize modifying commands yourself.
+commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. `lock --check` reads without it, since it changes nothing. on a filesystem without working file locks, serialize modifying commands yourself.
 
 human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 
