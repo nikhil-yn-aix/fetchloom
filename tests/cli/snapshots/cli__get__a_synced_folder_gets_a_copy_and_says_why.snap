@@ -1,9 +1,9 @@
 ---
 source: tests/cli/get.rs
+assertion_line: 399
 expression: stderr
 ---
  Downloaded iris.csv · 81 B in [time]
      Placed iris/iris.csv · copied, 81 B
-! iris is inside onedrive, which breaks links, so the file was copied
+! iris is inside onedrive, which breaks links, so the file was copied. a folder outside onedrive lets fetchloom try links
 ✓ fetched iris.csv into iris
-  hint: a folder outside onedrive gets links that use no extra disk

@@ -213,19 +213,16 @@ fn tell_placed(
         "files were"
     };
     let why = placer.unlinked().filter(|_| copies > 0);
-    if let Some(Unlinked::Synced(client)) = why {
-        output.warn(&format!(
-            "{} is inside {client}, which breaks links, so {things} copied",
-            folder.display()
-        ));
+    if let Some(why @ Unlinked::Synced(_)) = why {
+        output.warn(&why.copied_because(folder.display(), things));
     }
     let what = match targets {
         [only] => only.path.clone(),
         _ => units::count(targets.len() as u64, "file", "files"),
     };
     output.done(&format!("fetched {what} into {}", folder.display()));
-    if let Some(why) = why {
-        output.hint(&copy_hint(why, folder, things));
+    if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
+        output.hint(&why.copied_because(folder.display(), things));
     }
 }
 
@@ -250,20 +247,6 @@ fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, 
         (_, _) => format!("partly copied, {}", units::size(bytes)),
     };
     (changed, copies, how)
-}
-
-/// the hint after files were copied into `folder` for the reason `why`.
-fn copy_hint(why: Unlinked, folder: &Path, things: &str) -> String {
-    match why {
-        Unlinked::Synced(client) => {
-            format!("a folder outside {client} gets links that use no extra disk")
-        }
-        Unlinked::OtherDrive => "the cache is on another drive. set FETCHLOOM_CACHE to a folder on this drive to link files instead of copying them".to_owned(),
-        Unlinked::NoLinks => format!(
-            "the drive holding {} cannot link files, so {things} copied",
-            folder.display()
-        ),
-    }
 }
 
 fn local(path: &Path, err: &io::Error) -> Error {
@@ -326,14 +309,6 @@ mod tests {
         assert_eq!(
             full.help.as_deref(),
             Some("free some space on that disk, then run the command again")
-        );
-    }
-
-    #[test]
-    fn a_file_copied_onto_a_drive_that_links_nothing_says_why() {
-        assert_eq!(
-            copy_hint(Unlinked::NoLinks, Path::new("iris"), "the file was"),
-            "the drive holding iris cannot link files, so the file was copied"
         );
     }
 }

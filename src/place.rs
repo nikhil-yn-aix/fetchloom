@@ -73,6 +73,23 @@ pub(crate) enum Unlinked {
     NoLinks,
 }
 
+impl Unlinked {
+    /// explains why the named files were copied and how another placement may allow links.
+    pub(crate) fn copied_because(self, place: impl std::fmt::Display, subject: &str) -> String {
+        match self {
+            Self::Synced(client) => format!(
+                "{place} is inside {client}, which breaks links, so {subject} copied. a folder outside {client} lets fetchloom try links"
+            ),
+            Self::NoLinks => {
+                format!("the drive holding {place} cannot link files, so {subject} copied")
+            }
+            Self::OtherDrive => format!(
+                "the cache is on another drive, so {subject} copied. set FETCHLOOM_CACHE to a folder on this drive to let fetchloom try links"
+            ),
+        }
+    }
+}
+
 impl Placer {
     /// prepares placement under `root`, which must be a real folder, and notes whether `root`
     /// sits inside a folder a sync client owns. `scratch` is a folder of fetchloom's own on the
@@ -534,6 +551,51 @@ mod tests {
             fs::set_permissions(&object, permissions).unwrap();
         }
         (folder, object)
+    }
+
+    #[test]
+    fn synced_copy_advice_does_not_promise_zero_disk() {
+        for (place, subject, expected) in [
+            (
+                "data",
+                "files were",
+                "data is inside onedrive, which breaks links, so files were copied. a folder outside onedrive lets fetchloom try links",
+            ),
+            (
+                "iris",
+                "the file was",
+                "iris is inside onedrive, which breaks links, so the file was copied. a folder outside onedrive lets fetchloom try links",
+            ),
+        ] {
+            assert_eq!(
+                Unlinked::Synced("onedrive").copied_because(place, subject),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn copy_advice_on_drives_without_links_names_the_place() {
+        assert_eq!(
+            Unlinked::NoLinks.copied_because("data", "files were"),
+            "the drive holding data cannot link files, so files were copied"
+        );
+        assert_eq!(
+            Unlinked::NoLinks.copied_because("iris", "the file was"),
+            "the drive holding iris cannot link files, so the file was copied"
+        );
+    }
+
+    #[test]
+    fn a_cache_on_another_drive_explains_the_copy() {
+        assert_eq!(
+            Unlinked::OtherDrive.copied_because("data", "files were"),
+            "the cache is on another drive, so files were copied. set FETCHLOOM_CACHE to a folder on this drive to let fetchloom try links"
+        );
+        assert_eq!(
+            Unlinked::OtherDrive.copied_because("iris", "the file was"),
+            "the cache is on another drive, so the file was copied. set FETCHLOOM_CACHE to a folder on this drive to let fetchloom try links"
+        );
     }
 
     #[test]

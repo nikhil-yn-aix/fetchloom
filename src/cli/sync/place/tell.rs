@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::put::Tally;
 use super::{Placement, Reason};
 use crate::output::Output;
-use crate::place::{Placer, Unlinked};
+use crate::place::Placer;
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -44,11 +44,9 @@ pub(super) fn tell(
         );
     }
     if tallies.values().any(|tally| tally.files > tally.links)
-        && let Some(why) = placer
-            .unlinked()
-            .and_then(|why| copied_because(why, &manifest.data_dir))
+        && let Some(why) = placer.unlinked()
     {
-        output.warn(&why);
+        output.warn(&why.copied_because(&manifest.data_dir, "files were"));
     }
     for kept in &placement.kept {
         let message = match kept.reason {
@@ -71,31 +69,5 @@ pub(super) fn tell(
         output.warn(&format!(
             "{path} was changed through a link in another project, so the locked bytes were put back"
         ));
-    }
-}
-
-/// what the summary says about files copied into `data_dir` for the reason `why`.
-fn copied_because(why: Unlinked, data_dir: &str) -> Option<String> {
-    match why {
-        Unlinked::Synced(client) => Some(format!(
-            "{data_dir} is inside {client}, which breaks links, so files were copied. a project outside {client} uses no extra disk"
-        )),
-        Unlinked::NoLinks => Some(format!(
-            "the drive holding {data_dir} cannot link files, so files were copied"
-        )),
-        Unlinked::OtherDrive => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn files_copied_onto_a_drive_that_links_nothing_say_why() {
-        assert_eq!(
-            copied_because(Unlinked::NoLinks, "data").as_deref(),
-            Some("the drive holding data cannot link files, so files were copied")
-        );
     }
 }
