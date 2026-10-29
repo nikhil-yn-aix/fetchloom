@@ -74,23 +74,41 @@ impl Sandbox {
         Ok(links)
     }
 
+    /// `name` for a snapshot that says how files were placed, or its variant for a drive that
+    /// makes neither link, where every file is copied.
+    pub(crate) fn placed_story(&self, name: &str) -> Result<String> {
+        let links = self.links()?;
+        Ok(if links.reflink || links.hardlink {
+            name.to_owned()
+        } else {
+            format!("{name}_on_a_drive_without_links")
+        })
+    }
+
     /// waits until a file written in the sandbox now carries a later time than `time`. a
     /// filesystem stamps times in steps, two seconds on FAT32, so a file written right after
     /// another can carry the same time.
     pub(crate) fn wait_for_a_later_time(&self, time: SystemTime) -> Result {
         let probe = self.root.join(".clock");
         let started = Instant::now();
-        loop {
-            std::fs::write(&probe, b"")?;
-            let stamped = std::fs::metadata(&probe)?.modified()?;
-            std::fs::remove_file(&probe)?;
-            if stamped > time {
-                return Ok(());
+        // the probe is written over in place with bytes. exFAT need only stamp a write that
+        // changes a file's bytes or length, and on windows a file made again under a name just
+        // deleted gets the old file's creation time back.
+        let passed = loop {
+            std::fs::write(&probe, b"tick")?;
+            if std::fs::metadata(&probe)?.modified()? > time {
+                break true;
             }
             if started.elapsed() > Duration::from_secs(10) {
-                return Err("the filesystem's clock never passed the time".into());
+                break false;
             }
             std::thread::sleep(Duration::from_millis(10));
+        };
+        std::fs::remove_file(&probe)?;
+        if passed {
+            Ok(())
+        } else {
+            Err("the filesystem's clock never passed the time".into())
         }
     }
 
