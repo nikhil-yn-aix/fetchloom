@@ -124,7 +124,8 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | plain URL | the parsed URL | the same URL |
 | zenodo | `zenodo:<concrete record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
 | figshare | `figshare:<id>@<version>` | the API's download URL |
-| dataverse | `dataverse:<host>/<persistent id>@<version>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
 | OSF | `osf:<node or file id>` | the download link with a file version |
 | drive file | `drive:<id>` | `https://drive.google.com/uc?id=<id>` |
 | dropbox | the shared URL with `dl=1` | the same URL |

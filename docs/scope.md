@@ -23,14 +23,14 @@ these are not guarantees that a host keeps a file forever, that every resume can
 | DOI | `doi:10.5281/zenodo.3608990`, a bare DOI or doi.org link | route the handle's URL to a known source |
 | zenodo | `zenodo:3608990`, a record or file-page link | list the concrete record; check stated MD5 on download |
 | figshare | `figshare:34744689@2`, including institutional article links | list and pin an article version; check stated MD5 |
-| dataverse | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP` | published dataset versions, `doi:` or `hdl:` ids; MD5 and SHA-256 supported |
+| dataverse | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP`, `dataverse:dataverse.harvard.edu/file:6867336` or a dataset or file page | pin published dataset or file versions; accept numeric file ids and `doi:` or `hdl:` ids; check stated MD5 or SHA-256 |
 | OSF | `osf:abc12`, project links or file GUID links | walk osfstorage folders and pin file-version URLs |
 | drive | a shared file link or `drive:<id>` | single `uc` download; folders and confirmation/quota pages are unfinished |
 | dropbox | `/s/`, `/sh/`, `/scl/fi/` or `/scl/fo/` shared links | rewrite to `dl=1` and fetch one response; no page-specific recovery |
 | hugging face | `hf:datasets/org/name@revision` | reference parsing only; listing is not implemented |
 | kaggle | `kaggle:owner/dataset@version` | reference parsing only; listing is not implemented |
 
-zenodo rejects restricted, embargoed and closed records. figshare rejects embargoed or download-disabled articles. dataverse rejects a dataset if any listed file is restricted. filtering cannot bypass these checks or the listing-size limit.
+zenodo rejects restricted, embargoed and closed records. figshare rejects embargoed or download-disabled articles. dataverse rejects a dataset if any listed file is restricted, and refuses a restricted file page. filtering cannot bypass these checks or the listing-size limit.
 
 the adapters, credentials and release status are separate from accepting a reference spelling. do not infer a working download from a link appearing in help. [formats](formats.md#what-each-source-records) shows the pins written by working paths.
 

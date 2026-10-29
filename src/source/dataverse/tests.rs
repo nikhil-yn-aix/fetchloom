@@ -259,3 +259,16 @@ fn live_dataverse() {
     );
     assert_eq!(work.counts().requests, 1);
 }
+
+#[test]
+fn a_dataset_without_file_metadata_is_not_empty() {
+    let body = changed(|value| {
+        value["data"]["latestVersion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("files");
+    });
+    let recorded = Recorded::default().on(DATASET, 200, body);
+    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+}
