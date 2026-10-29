@@ -301,7 +301,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `status` | `project`: absolute path; eight arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
-| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array |
+| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array; `unreadable`: hash array |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
@@ -324,7 +324,7 @@ status arrays:
 
 status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
-`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding a changed or unreadable object returns an error and exit 30, so `result` is null; its successful `changed` and `stuck` arrays are always empty.
+`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object could not be read, it returns `local.io` and exit 50. either error has a null `result`. unreadable objects are named separately in `warnings` and are neither marked nor removed. successful `changed`, `stuck` and `unreadable` arrays are empty.
 
 ### work counters
 
@@ -352,7 +352,7 @@ a warm project can place cached files with zero cache hits. there are no phase t
 | 2 | `usage` |
 | 10 | `reference.invalid`, `reference.unresolved`, `source.invalid` |
 | 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
-| 30 | `integrity.mismatch`, including size mismatches and failed cache verification |
+| 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
 | 50 | `local.io`, `local.not_empty`, `project.invalid` |
 | 130 | `interrupted` |

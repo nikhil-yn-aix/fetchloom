@@ -161,7 +161,7 @@ fetchloom cache verify
 
 a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact.
 
-`cache verify` rehashes objects, removes those that differ or cannot be read, and exits 30 if it found any. removal failures are reported too. it does not verify independent copies under `data/`.
+`cache verify` rehashes objects, marks and removes those whose bytes differ, and exits 30 if it found any. removal failures are reported too. unreadable objects get their own warning and stay in the cache without a new change mark; when none changed, an unreadable object makes the command exit 50. close any program using the object or check its permissions, then verify again. it does not verify independent copies under `data/`.
 
 ## options
 

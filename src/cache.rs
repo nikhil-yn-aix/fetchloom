@@ -143,7 +143,7 @@ impl Cache {
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
     /// edited, is removed so the next run downloads it again, and marked as changed so other
     /// projects whose links to it still look as placed put their copies back. says whether it was
-    /// intact.
+    /// intact. a read error leaves the object and its change mark untouched.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {

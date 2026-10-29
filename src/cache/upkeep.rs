@@ -53,6 +53,8 @@ pub(crate) struct Checked {
     pub(crate) changed: Vec<Sha256>,
     /// changed objects that could not be removed, so they are still in the cache.
     pub(crate) stuck: Vec<Sha256>,
+    /// objects that could not be read, left untouched and without a new change mark.
+    pub(crate) unreadable: Vec<Sha256>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -197,43 +199,49 @@ impl Cache {
     }
 
     /// hashes every object again on `threads` threads and removes any whose bytes changed.
-    /// `progress` hears the bytes as they are read.
+    /// `progress` hears each object's size after its read attempt.
     pub(crate) fn verify_all(&self, threads: usize, progress: &(dyn Fn(u64) + Sync)) -> Checked {
         let objects = self.objects();
         let next = AtomicUsize::new(0);
-        let changed = Mutex::new((Vec::new(), Vec::new()));
+        let checked = Mutex::new(Checked {
+            objects: objects.len() as u64,
+            bytes: objects.iter().map(|object| object.size).sum(),
+            ..Checked::default()
+        });
         std::thread::scope(|scope| {
             for _ in 0..threads.max(1) {
                 scope.spawn(|| {
                     while let Some(object) = objects.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let intact = Sha256::of_file(&object.path)
-                            .is_ok_and(|actual| actual == object.digest);
+                        let actual = Sha256::of_file(&object.path);
                         progress(object.size);
-                        if intact {
-                            continue;
+                        match actual {
+                            Ok(actual) if actual == object.digest => continue,
+                            Err(_) => {
+                                checked
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .unreadable
+                                    .push(object.digest);
+                                continue;
+                            }
+                            Ok(_) => {}
                         }
                         self.remember_changed(&object.digest);
                         let removed = self.volume.remove(&object.path).is_ok();
-                        let mut found = changed
+                        let mut found = checked
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        found.0.push(object.digest);
+                        found.changed.push(object.digest);
                         if !removed {
-                            found.1.push(object.digest);
+                            found.stuck.push(object.digest);
                         }
                     }
                 });
             }
         });
-        let (changed, stuck) = changed
+        checked
             .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Checked {
-            objects: objects.len() as u64,
-            bytes: objects.iter().map(|object| object.size).sum(),
-            changed,
-            stuck,
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn registration(&self, root: &Path) -> PathBuf {
@@ -380,6 +388,50 @@ mod tests {
             cache.changed().into_keys().collect::<Vec<_>>(),
             [bad.digest],
             "projects linking to it can learn it changed"
+        );
+    }
+
+    #[test]
+    fn unreadable_objects_are_kept_without_a_change_mark() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"intact");
+        let object = cache.object_path(&stored.digest);
+        #[cfg(windows)]
+        let held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_DELETE: u32 = 4;
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_DELETE)
+                .open(&object)
+                .unwrap()
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if rustix::process::geteuid().is_root() {
+                return;
+            }
+            fs::set_permissions(&object, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        assert!(cache.verify(&stored.digest).is_err());
+        assert!(object.exists());
+        assert!(cache.changed().is_empty());
+        let checked = cache.verify_all(2, &|_| {});
+        #[cfg(windows)]
+        drop(held);
+        assert!(
+            checked.changed.is_empty(),
+            "a read error is not changed bytes"
+        );
+        assert_eq!(checked.stuck, vec![]);
+        assert!(object.exists(), "unreadable objects must stay in the cache");
+        assert!(cache.changed().is_empty());
+        assert_eq!(checked.objects, 1);
+        assert_eq!(checked.bytes, 6);
+        assert_eq!(
+            serde_json::to_value(&checked).unwrap()["unreadable"],
+            serde_json::json!([stored.digest])
         );
     }
 
