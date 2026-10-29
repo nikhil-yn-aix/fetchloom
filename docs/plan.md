@@ -4,7 +4,7 @@
 
 | # | milestone | built | left |
 |---|---|---|---|
-| 1 | command shell | both executables, welcome and project status, help, colors, JSON, errors, progress and interruption | three-platform CI and release dry runs |
+| 1 | command shell | both executables, welcome and project status, help, colors, JSON, errors, progress and interruption | a first passing CI run on all three platforms, and release dry runs |
 | 2 | one file | URL `get`, cache objects, conditional requests, retries, checkpointed resume, placement | tighten destination ownership and interrupted replacement |
 | 3 | project loop | add, remove, sync, lock, upgrade, check, status and path; offline use and hand-edit reporting | fix writable-placement transitions and stale reads around concurrent locking |
 | 4 | archives | zip and the tar family, member checks, tree hashes, staged publication, placement and packed-object cleanup | run the corpus on the platform matrix |
@@ -19,7 +19,7 @@ source work and cache work have landed before the automation and packaging miles
 
 1. finish the source adapters and test their access failures, paging and filename discovery. parsing a source reference is not enough to mark that source done.
 2. close the data-safety gaps: atomic file replacement, ownership of adopted and one-off files, writable-copy transitions, changed MD5 carry-forward, and project reads under the project lock. hardlink reuse and the cache's rename fallback need their own regression cases.
-3. add windows, macos and linux CI using the checks in [engineering](engineering.md#checks). exercise source fixtures and archive corpora on each platform before claiming that matrix is supported.
+3. get [CI](../.github/workflows/ci.yml) passing on windows, macos and linux. it runs the source fixtures and archive corpora, so a platform counts as supported only once its job passes.
 4. add a python wrapper around `path --json` and test the installed wheel. build standalone release artifacts and installers. publishing and attestations need configured workflows, not only a version tag convention.
 5. measure release builds against [performance](performance.md), with cache state, placement method and hardware recorded. fix excess requests and copies before setting speed claims.
 6. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.

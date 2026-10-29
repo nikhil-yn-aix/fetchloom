@@ -59,9 +59,9 @@ snapshot filters replace sandbox paths, ports and durations, normalize path sepa
 
 for a bug fix, first add a test that fails for the reported behavior. use the lowest layer that demonstrates it. add a CLI case when exit codes, stdout, files left on disk or cross-command recovery are part of the bug. do not weaken an assertion to hide a failure.
 
-## automation still missing
+## automation
 
-there are no checked-in CI workflows, nightly live-source checks or release workflows. the commands above are local checks, not a three-platform gate. windows, macos and linux branches in the code need a build and test matrix before release.
+[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux, macos and windows. there are no nightly live-source checks or release workflows.
 
 nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-deny, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
 

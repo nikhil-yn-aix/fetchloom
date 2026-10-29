@@ -36,7 +36,7 @@ the adapters, credentials and release status are separate from accepting a refer
 
 ## platforms and release
 
-the code has windows, macos and unix filesystem paths. there is no checked-in three-platform CI matrix or release packaging. build the executables [from source](../README.md#install). source completion, python packaging and installers remain in [plan](plan.md).
+the code has windows, macos and unix filesystem paths, and [CI](../.github/workflows/ci.yml) runs the checks on all three. there is no release packaging. build the executables [from source](../README.md#install). source completion, python packaging and installers remain in [plan](plan.md).
 
 one user's processes can share a cache. a cache writable by several people trusts all of them; no group-permission or cross-user administration feature is provided. recognized synced folders skip hardlinks but can use reflinks. placement details belong in [architecture](architecture.md#placing-files).
 
