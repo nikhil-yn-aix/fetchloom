@@ -510,6 +510,10 @@ mod tests {
     #[test]
     fn placements_are_checked_no_later_than_their_survey() {
         let dir = tempfile::tempdir().unwrap();
+        // FAT32 and exFAT cannot hardlink, and only a hardlink can be vouched for
+        if !crate::cache::tests::hardlinks(dir.path()) {
+            return;
+        }
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let bytes = b"station,temperature\nlerwick,9.1\n";
         let stored = crate::cache::tests::store(&cache, bytes);
