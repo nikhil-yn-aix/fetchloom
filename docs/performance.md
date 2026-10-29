@@ -8,7 +8,7 @@ fetchloom is fast because of how it is built: it streams, touches each byte once
 - one pass over the bytes: read, hash and write in the same loop.
 - the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing.
 - many small files from one host share a connection over HTTP/2.
-- new objects are flushed to disk before they are renamed into place, on several threads at once. the rename makes an object appear whole, and the flush makes it survive a power cut.
+- new objects are flushed to disk before they are put in place under their hash, on several threads at once. publishing makes an object appear whole, and the flush makes it survive a power cut. on linux an archive's members are flushed together, with one flush of the cache's filesystem before any is published, as git's batch mode does; one flush per small file cost twenty times more.
 - read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux and macos listings carry neither, so there each file costs one stat, as in git.
 - spread placement over folders. making links in one folder serializes on that folder; neighbours in different folders do not wait for each other.
 - parallel work is bounded: a fixed number of downloads, hashing threads and placement workers, never one task per file.
@@ -32,7 +32,7 @@ measured on release builds. a budget is a number with a unit, or a comparison wi
 | peak memory with 100,000 files in a project | under 150 MB | 108 MiB adding, 75 MiB `status` | **162 MiB adding**: a miss; 77 MiB `status`, 141 MiB placing |
 | one large file on a fast link | limited by the link, not by hashing or disk | 1 GiB from this machine in 5.8 s, curl 2.9 s | 2.2 s, curl 1.0 s |
 | unpacking an archive of large members | within 2 times of bsdtar extracting it to disk | 512 MiB tar.zst: 2.2 s, bsdtar 1.7 s; zip: 2.4 s, bsdtar 1.2 s | tar.zst: 1.6 s, bsdtar 1.0 s; zip: 2.3 s, bsdtar 6.1 s |
-| unpacking many small files | within 2 times of creating, writing and flushing the same files | 10,000 files of 4 KiB: 37 to 55 s, floor 21 to 24 s: a miss | 7.7 s, floor 7.2 to 7.9 s |
+| unpacking many small files | within 2 times of creating, writing and flushing the same files | 10,000 files of 4 KiB: 37 to 55 s, floor 21 to 24 s: a miss | 0.47 to 0.56 s, bsdtar 0.59 s |
 | cold download of a plain URL | one request, plus any redirects the server sends | counted in tests | counted in tests |
 | a source's requests | only those its protocol needs, each counted in tests | counted in tests | counted in tests |
 | a paged file listing | one request per page | counted in tests | counted in tests |
@@ -41,7 +41,7 @@ what the measurements showed:
 
 - a 1 GiB download from a server on the same machine runs at about 180 MB/s on windows and 460 MB/s on linux, since each byte is also hashed and the object is flushed before it is placed. that keeps up with links up to about 1.5 Gbit/s on windows; above that the disk and the hash set the pace. the best windows run matched curl, and the spread between runs came from the antivirus.
 - placing hardlinks on ntfs with defender on costs about 130 us a link when neighbours go to different folders on 8 threads, and 400 to 1,100 us when threads fill one folder at a time. 10,000 bare links spread that way take 1.3 s, so the 2 s budget leaves room; placing adds the folders, a look at each file and the state, and that overhead is the miss.
-- two budgets changed with these measurements. unpacking was "within 15% of the decompressor alone", but every member is also hashed and flushed, and on windows every new file is scanned: bsdtar decompresses the 10,000 small files in 0.18 s and writes them in 8.4 s. small members are now measured against a program that does nothing but create, write, flush and link the same bytes. on windows that floor is about 2 ms a file for an unsigned program, flushed or not, while bsdtar, which microsoft signs, writes the same files in 0.8 ms each. on linux the floor is the flush, 0.7 ms a file on ext4.
+- two budgets changed with these measurements. unpacking was "within 15% of the decompressor alone", but every member is also hashed and flushed, and on windows every new file is scanned: bsdtar decompresses the 10,000 small files in 0.18 s and writes them in 8.4 s. small members are now measured against a program that does nothing but create, write, flush and link the same bytes. on windows that floor is about 2 ms a file for an unsigned program, flushed or not, while bsdtar, which microsoft signs, writes the same files in 0.8 ms each. more threads do not lower that floor: the same files took 19 s on 8 threads and 23 to 26 s on 16, 32 and 64, so the scanner's throughput, not the wait at each close, sets it. on linux one flush per file cost 0.7 ms on ext4; flushing the batch at once took unpacking from 8.5 to 10.2 s down to half a second (commit 26a3dbc, three runs each). a dev drive, whose antivirus scans in the background, or an exclusion for the cache folder are the machine owner's choices; both need an administrator and were not measured here.
 - `lock --check` reads and checks 10,000 locked files in about 26 ms on windows; starting any program there takes 12 ms.
 
 ## counters
