@@ -138,14 +138,12 @@ impl Draft {
                 }
                 Some(_) => continue,
             };
-            let (from, divert) = source::fetch_plan(&remote.url);
+
             let fetch = Fetch {
-                url: remote.url.clone(),
-                from,
-                divert,
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 unpack: self.unpacks(file),
+                ..source::fetch_plan(&remote.url)
             };
             let job = Job {
                 fetch,

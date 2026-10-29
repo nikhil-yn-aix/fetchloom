@@ -14,6 +14,19 @@ pub(super) fn file_name(headers: &HeaderMap) -> Option<String> {
     disposition(&String::from_utf8_lossy(value.as_bytes()))
 }
 
+pub(super) fn is_xml(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "application/xml" | "text/xml"
+            )
+        })
+}
+
 pub(super) fn is_html(headers: &HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)

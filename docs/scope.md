@@ -24,7 +24,7 @@ these are not guarantees that a host keeps a file forever, that every resume can
 | zenodo | `zenodo:3608990`, a record or file-page link | list the concrete record; check stated MD5 on download |
 | figshare | `figshare:34744689@1`, including institutional article links | list and pin an article version; check stated MD5 |
 | dataverse | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP`, `dataverse:dataverse.harvard.edu/file:6867336` or a dataset or file page | pin published dataset or file versions; accept numeric file ids and `doi:` or `hdl:` ids; check stated MD5 or SHA-256 |
-| OSF | `osf:abc12`, project links or file GUID links | walk osfstorage folders and pin file-version URLs |
+| OSF | `osf:abc12`, project links or file GUID links | walk osfstorage folders and pin file-version URLs; refresh explicitly expired storage redirects |
 | drive | a shared file or folder link, including `open?id=`, or `drive:<id>` or `drive:folders/<id>` | walk shared folders; follow download confirmations; report quota, access and missing-file errors; refuse google docs entries and empty folders |
 | dropbox | `/s/`, `/sh/`, `/scl/fi/` or `/scl/fo/` shared links | download shared files or a folder zip through `dl=1`; unpack folder zips; refuse unnamed HTML pages |
 | hugging face | `hf:datasets/org/name@revision` | list and pin a repository commit; check stated LFS SHA-256; gated data needs approved access |

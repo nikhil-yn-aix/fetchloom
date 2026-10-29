@@ -584,12 +584,9 @@ async fn learn_name(
     if !remote.named_by_server {
         return Ok(());
     }
-    let (from, divert) = source::fetch_plan(&remote.url);
+
     let job = fetch::Job {
         fetch: Fetch {
-            url: remote.url.clone(),
-            from,
-            divert,
             expect: Expect {
                 sha256: remote.sha256,
                 md5: remote.md5,
@@ -597,6 +594,7 @@ async fn learn_name(
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
             unpack: extract && archive::by_name(&remote.path) == Some(Packed::Archive),
+            ..source::fetch_plan(&remote.url)
         },
         label: remote.path.clone(),
         dataset: None,

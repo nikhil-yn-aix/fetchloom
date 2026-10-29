@@ -43,7 +43,7 @@ fn a_dropbox_html_answer_is_not_a_file() {
         "https://www.dropbox.com/sh/o4p5od3yzzj7384/AADovh3gpXiPyPoygeB6Cwi1a/readme.md?dl=1",
     )
     .unwrap();
-    let (from, divert) = crate::source::fetch_plan(&url);
+    let crate::net::Fetch { from, divert, .. } = crate::source::fetch_plan(&url);
     let recorded = Recorded::default()
         .fixture(from.as_str(), "dropbox/download-page.html")
         .content_type(from.as_str(), "text/html; charset=utf-8");
@@ -57,7 +57,7 @@ fn a_dropbox_html_answer_is_not_a_file() {
 #[test]
 fn dropbox_access_and_missing_pages_keep_their_error_kinds() {
     let url = Url::parse("https://www.dropbox.com/s/abc/data.csv?dl=1").unwrap();
-    let (_, divert) = crate::source::fetch_plan(&url);
+    let divert = crate::source::fetch_plan(&url).divert;
     for (status, kind) in [
         (401, Kind::AuthRequired),
         (403, Kind::AuthRequired),
@@ -79,7 +79,7 @@ fn dropbox_access_and_missing_pages_keep_their_error_kinds() {
 #[test]
 fn unrelated_downloads_have_no_dropbox_page_handler() {
     let url = Url::parse("https://example.org/s/abc/data.csv?dl=1").unwrap();
-    let (from, divert) = crate::source::fetch_plan(&url);
+    let crate::net::Fetch { from, divert, .. } = crate::source::fetch_plan(&url);
     assert_eq!(from, url);
     assert!(divert.is_none());
 }

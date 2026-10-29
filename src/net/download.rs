@@ -31,6 +31,9 @@ const LARGEST_PAGE: usize = 4 * 1024 * 1024;
 /// the page with the URL the page came from, after redirects, and its status.
 pub(crate) type Divert = fn(&Url, u16, &str) -> Result<Url, Error>;
 
+/// whether a forbidden XML answer names an expired source-issued download link.
+pub(crate) type Expired = fn(&str) -> bool;
+
 /// what a download must turn out to be, when something already says so.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Expect {
@@ -46,6 +49,7 @@ pub(crate) struct Fetch {
     /// where to ask first, when that differs from `url`.
     pub(crate) from: Url,
     pub(crate) divert: Option<Divert>,
+    pub(crate) expired: Option<Expired>,
     pub(crate) expect: Expect,
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
@@ -61,6 +65,7 @@ impl Fetch {
             from: url.clone(),
             url,
             divert: None,
+            expired: None,
             expect: Expect::default(),
             revalidate: false,
             unpack: false,
@@ -351,6 +356,18 @@ impl Net {
                 .map(Answer::Divert)
                 .map_err(Failure::Final);
         }
+        if let Some(expired) = fetch.expired
+            && status == StatusCode::FORBIDDEN
+            && headers::is_xml(&head)
+        {
+            if self.expired_link(from, response, expired).await? {
+                return Err(failure::transient(format!(
+                    "{} supplied an expired download link",
+                    host(from)
+                )));
+            }
+            return Err(failure::refusal(from, status, &head));
+        }
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
                 return Ok(Answer::NotModified);
@@ -464,6 +481,26 @@ impl Net {
             )));
         }
         Ok(writer)
+    }
+
+    async fn expired_link(
+        &self,
+        url: &Url,
+        response: reqwest::Response,
+        expired: Expired,
+    ) -> Result<bool, Failure> {
+        let page = tokio::select! {
+            page = self.page(url, response) => page,
+            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+        };
+        match page {
+            Ok(text) => Ok(expired(&text)),
+            Err(Failure::Final(error)) if error.kind == Kind::Interrupted => {
+                Err(Failure::Final(error))
+            }
+            // without a readable expiry message, the original 403 remains an access refusal.
+            Err(_) => Ok(false),
+        }
     }
 
     /// reads a page a server sent instead of the file.

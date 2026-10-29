@@ -18,7 +18,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 pub(crate) use api::{Api, Response};
-pub(crate) use download::{Divert, Event, Expect, Fetch, Fetched, Origin};
+pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
 pub(crate) use shown::{Shown, secret};
 

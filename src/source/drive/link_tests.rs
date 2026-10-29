@@ -92,7 +92,7 @@ fn a_shared_files_key_reaches_the_lock_and_the_download() {
         listing.files[0].url.as_str(),
         format!("https://drive.google.com/uc?id={FILE}&resourcekey=0-file")
     );
-    let (from, _) = crate::source::fetch_plan(&listing.files[0].url);
+    let from = crate::source::fetch_plan(&listing.files[0].url).from;
     assert_eq!(
         from.as_str(),
         format!(
@@ -162,7 +162,7 @@ fn an_open_link_must_end_at_a_drive_file_or_folder() {
 fn download_plans_read_confirmation_and_refusal_pages() {
     let id = "1s52ek_4YTDRt_EOkx1FS53u-vJa0c4nu";
     let link = Url::parse(&format!("https://drive.google.com/uc?id={id}")).unwrap();
-    let (from, divert) = crate::source::fetch_plan(&link);
+    let crate::net::Fetch { from, divert, .. } = crate::source::fetch_plan(&link);
     let divert = divert.unwrap();
     let recorded = Recorded::default().fixture(from.as_str(), "drive/confirm.html");
     let response = block_on(recorded.get(&from)).unwrap();

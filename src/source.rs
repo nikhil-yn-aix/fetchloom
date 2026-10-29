@@ -24,7 +24,7 @@ use url::Url;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Api, Credential, Divert, Response};
+use crate::net::{self, Api, Credential, Fetch, Response};
 
 /// the most files one dataset may list, so `data.lock` stays small and memory stays bounded.
 pub(crate) const MOST_FILES: usize = 100_000;
@@ -203,11 +203,17 @@ impl fmt::Display for Reference {
     }
 }
 
-/// where to ask for a file's bytes, and how to read a page a host sends in their place.
-pub(crate) fn fetch_plan(url: &Url) -> (Url, Option<Divert>) {
-    drive::fetch_plan(url)
+/// a download request with the source's response handling.
+pub(crate) fn fetch_plan(url: &Url) -> Fetch {
+    let (from, divert) = drive::fetch_plan(url)
         .or_else(|| dropbox::fetch_plan(url))
-        .unwrap_or_else(|| (url.clone(), None))
+        .unwrap_or_else(|| (url.clone(), None));
+    Fetch {
+        from,
+        divert,
+        expired: osf::expiry_check(url),
+        ..Fetch::new(url.clone())
+    }
 }
 
 /// every credential found where its source keeps it.

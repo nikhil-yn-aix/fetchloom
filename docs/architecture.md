@@ -110,6 +110,8 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
 
+OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
+
 resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
 
 a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
@@ -156,4 +158,4 @@ human steps are printed directly. warnings are collected, and the JSON document 
 
 ## adding a source
 
-add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or a download-page handler when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.
+add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or source-specific download response handling when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.
