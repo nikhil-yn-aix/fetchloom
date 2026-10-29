@@ -235,7 +235,7 @@ pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
 }
 
 /// whether `metadata` describes a plain file, not a link, a folder or a device.
-fn is_plain(metadata: &Metadata) -> bool {
+pub(super) fn is_plain(metadata: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

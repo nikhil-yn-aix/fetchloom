@@ -244,7 +244,7 @@ impl Cache {
 mod tests {
     use std::io::Write;
 
-    use super::super::tests::{cache, store};
+    use super::super::tests::{cache, hold, store};
     use super::*;
 
     #[test]
@@ -350,31 +350,5 @@ mod tests {
             .unwrap()
             .write_all(b"BAD!")
             .unwrap();
-    }
-
-    /// keeps `path` from being removed while the result lives.
-    #[cfg(windows)]
-    fn hold(path: &Path) -> impl Sized {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_SHARE_READ: u32 = 1;
-        fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(path)
-            .unwrap()
-    }
-
-    #[cfg(unix)]
-    fn hold(path: &Path) -> impl Sized {
-        use std::os::unix::fs::PermissionsExt;
-        struct Locked(PathBuf);
-        impl Drop for Locked {
-            fn drop(&mut self) {
-                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
-            }
-        }
-        let folder = path.parent().unwrap().to_path_buf();
-        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
-        Locked(folder)
     }
 }

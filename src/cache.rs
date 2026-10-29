@@ -4,6 +4,7 @@ mod object;
 mod partial;
 mod unpacked;
 mod upkeep;
+mod volume;
 
 #[cfg(test)]
 mod link_tests;
@@ -21,6 +22,7 @@ pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
+use volume::Volume;
 
 use crate::digest::{self, Md5, Sha256};
 
@@ -36,6 +38,7 @@ pub(crate) struct Cache {
     /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
+    volume: Arc<Volume>,
 }
 
 /// an object as it sits in the cache after a write.
@@ -97,6 +100,7 @@ impl Cache {
             real_folder(&root.join(folder))?;
         }
         let cache = Cache {
+            volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
         };
@@ -313,6 +317,52 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         (dir, cache)
+    }
+
+    /// a cache that acts as if it sat on FAT32 or exFAT: it cannot hardlink, and it refuses to
+    /// remove a read-only file, as windows does there.
+    pub(crate) fn fat() -> (tempfile::TempDir, Cache) {
+        let (dir, mut cache) = cache();
+        cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), false));
+        (dir, cache)
+    }
+
+    /// whether the volume under `dir` can hardlink. FAT32 and exFAT cannot.
+    pub(crate) fn hardlinks(dir: &Path) -> bool {
+        let probe = dir.join("probe");
+        let link = dir.join("probe link");
+        fs::write(&probe, b"").unwrap();
+        let linked = fs::hard_link(&probe, &link).is_ok();
+        for path in [probe, link] {
+            let _ = fs::remove_file(path);
+        }
+        linked
+    }
+
+    /// keeps `path` from being removed while the result lives.
+    #[cfg(windows)]
+    pub(super) fn hold(path: &Path) -> impl Sized {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    pub(super) fn hold(path: &Path) -> impl Sized {
+        use std::os::unix::fs::PermissionsExt;
+        struct Locked(PathBuf);
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        let folder = path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        Locked(folder)
     }
 
     pub(crate) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
