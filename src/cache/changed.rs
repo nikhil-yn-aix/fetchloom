@@ -1,16 +1,85 @@
 //! objects found changed, remembered after they leave the cache, so a project holding a hardlink
-//! to the changed bytes learns it from one listing instead of reading every file it placed.
+//! to the changed bytes learns it from one listing instead of reading every file it placed. an
+//! object still in the cache that a mark is newer than is hashed before anything is placed from
+//! it.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::Cache;
 use crate::digest::Sha256;
 
+/// an object in doubt that could not be hashed or sealed, or that held other bytes and could
+/// not be removed.
+#[derive(Debug)]
+pub(crate) struct Doubt {
+    pub(crate) object: PathBuf,
+    /// whether hashing found other bytes, so the object stays only because removing it failed.
+    pub(crate) changed: bool,
+    pub(crate) error: io::Error,
+}
+
 impl Cache {
+    /// the object for `digest` when the cache holds it, with `size` when one is known, and its
+    /// bytes can be trusted. a mark in `marks` newer than the object puts it in doubt, so it is
+    /// hashed first, as is a writable object. intact writable objects are sealed again; changed
+    /// ones are marked and removed, so they are fetched again.
+    pub(crate) fn trusted(
+        &self,
+        digest: &Sha256,
+        size: Option<u64>,
+        marks: &HashMap<Sha256, u64>,
+    ) -> Result<Option<PathBuf>, Doubt> {
+        let path = self.object_path(digest);
+        let Ok(metadata) = fs::metadata(&path) else {
+            return Ok(None);
+        };
+        if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
+            return Ok(None);
+        }
+        let mut permissions = metadata.permissions();
+        let writable = !permissions.readonly();
+        let written = metadata.modified().map_or(0, nanos);
+        if !writable && marks.get(digest).is_none_or(|marked| *marked <= written) {
+            return Ok(Some(path));
+        }
+        match Sha256::of_file(&path) {
+            Ok(actual) if actual == *digest => {
+                if writable {
+                    permissions.set_readonly(true);
+                    fs::set_permissions(&path, permissions).map_err(|error| Doubt {
+                        object: path.clone(),
+                        changed: false,
+                        error,
+                    })?;
+                }
+                Ok(Some(path))
+            }
+            Ok(_) => {
+                if let Err(err) = self.mark_changed(digest) {
+                    tracing::debug!(%err, "could not remember a changed object");
+                }
+                match self.drop_object(digest) {
+                    Ok(()) => Ok(None),
+                    Err(error) => Err(Doubt {
+                        object: path,
+                        changed: true,
+                        error,
+                    }),
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(Doubt {
+                object: path,
+                changed: false,
+                error,
+            }),
+        }
+    }
+
     /// remembers that the object for `digest` no longer held its bytes, as of now.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
         let folder = self.changed_folder();
@@ -38,8 +107,7 @@ impl Cache {
                 }
                 let digest = Sha256::from_hex(&entry.file_name().to_string_lossy())?;
                 let found = entry.metadata().ok()?.modified().ok()?;
-                let since = found.duration_since(UNIX_EPOCH).ok()?;
-                Some((digest, u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)))
+                Some((digest, nanos(found)))
             })
             .collect()
     }
@@ -57,6 +125,13 @@ impl Cache {
     fn changed_folder(&self) -> PathBuf {
         self.root.join("changed")
     }
+}
+
+/// `time` in nanoseconds since 1970, as projects record the times of their files.
+fn nanos(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+    })
 }
 
 #[cfg(test)]
@@ -81,6 +156,43 @@ mod tests {
 
         assert_eq!(fs::read(outside).unwrap(), b"keep these bytes");
         assert_eq!(fs::read(mark).unwrap(), b"");
+    }
+
+    #[test]
+    fn writable_objects_are_hashed_and_resealed_before_use() {
+        for damaged in [false, true] {
+            let (_dir, cache) = cache();
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            let mut permissions = fs::metadata(&object).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the test models a user clearing a hardlink's flag"
+            )]
+            permissions.set_readonly(false);
+            fs::set_permissions(&object, permissions).unwrap();
+            if damaged {
+                fs::write(&object, b"evil").unwrap();
+            }
+
+            let found = cache
+                .trusted(&stored.digest, Some(4), &HashMap::new())
+                .unwrap();
+
+            if damaged {
+                assert!(found.is_none());
+                assert!(!object.exists());
+                assert!(cache.changed().contains_key(&stored.digest));
+            } else {
+                assert_eq!(found.as_deref(), Some(object.as_path()));
+                assert!(
+                    fs::metadata(&object).unwrap().permissions().readonly(),
+                    "a trusted object must be read-only"
+                );
+                assert_eq!(fs::read(&object).unwrap(), b"good");
+                assert!(cache.changed().is_empty());
+            }
+        }
     }
 
     #[test]

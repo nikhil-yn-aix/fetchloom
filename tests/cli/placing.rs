@@ -362,6 +362,43 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
     Ok(())
 }
 
+/// an edit through one project's hardlink that changes the size leaves the cached object at the
+/// wrong size, so a new project downloads the file. the fresh bytes take the object's place.
+#[test]
+fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let mut grown = V1.to_vec();
+    grown.extend_from_slice(b"6.3,edited\n");
+    edit(
+        &sandbox.work().join("data").join("iris").join("iris.csv"),
+        &grown,
+    )?;
+    let other = sandbox.folder("other")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        text(&fs::read(other.join("data").join("iris").join("iris.csv"))?)?,
+        text(V1)?
+    );
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}
+
 #[test]
 fn sync_force_puts_back_a_link_another_project_edited() -> Result {
     let sandbox = Sandbox::new()?;
@@ -603,5 +640,348 @@ fn zero_byte_copies_are_reported_as_copies() -> Result {
         fs::metadata(sandbox.work().join("data/empty/empty.csv"))?.len(),
         0
     );
+    Ok(())
+}
+
+/// a run cut off between placing a link and writing the state leaves a file the next run adopts.
+/// it is the cached object under another name, so the state records it as a hardlink, and an
+/// edit through it is audited like any placed link.
+#[test]
+fn an_adopted_link_is_recorded_as_a_hardlink() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    fs::remove_file(&state_path)?;
+
+    let synced = sandbox.run(&["sync"])?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    assert_eq!(
+        state["files"]["data/iris/iris.csv"]["method"],
+        serde_json::json!("hardlink")
+    );
+    Ok(())
+}
+
+/// the cached object behind iris in `project`, by the digest its state records.
+fn iris_object(sandbox: &Sandbox, project: &Path) -> Result<std::path::PathBuf> {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fetchloom").join("state"))?)?;
+    let digest = state["files"]["data/iris/iris.csv"]["sha256"]
+        .as_str()
+        .ok_or("a placed file has a digest")?;
+    Ok(sandbox
+        .cache()
+        .join("objects")
+        .join(&digest[..2])
+        .join(&digest[2..]))
+}
+
+/// marks `object` as changed, as `cache verify` does when it cannot remove an object whose bytes
+/// changed.
+fn mark(sandbox: &Sandbox, object: &Path) -> Result {
+    let fan = object
+        .parent()
+        .and_then(Path::file_name)
+        .ok_or("an object sits in a fan folder")?;
+    let rest = object.file_name().ok_or("an object has a name")?;
+    let folder = sandbox.cache().join("changed");
+    fs::create_dir_all(&folder)?;
+    fs::write(
+        folder.join(format!(
+            "{}{}",
+            fan.to_string_lossy(),
+            rest.to_string_lossy()
+        )),
+        b"",
+    )?;
+    Ok(())
+}
+
+/// keeps `path` from being removed while the result lives, as a program holding it open does:
+/// windows refuses to delete a file opened without sharing deletion.
+#[cfg(windows)]
+fn hold(path: &Path) -> Result<Option<fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    Ok(Some(
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)?,
+    ))
+}
+
+/// a folder nobody may write to while it lives.
+#[cfg(unix)]
+struct Unwritable(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for Unwritable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// keeps `path` from being removed while the result lives: unix refuses to remove a file from a
+/// folder nobody may write to. none for root, who may remove it anyway.
+#[cfg(unix)]
+fn hold(path: &Path) -> Result<Option<Unwritable>> {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = path
+        .parent()
+        .ok_or("a file sits in a folder")?
+        .to_path_buf();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o555))?;
+    let held = Unwritable(folder.clone());
+    let probe = folder.join("probe");
+    if fs::write(&probe, b"").is_ok() {
+        let _ = fs::remove_file(probe);
+        return Ok(None);
+    }
+    Ok(Some(held))
+}
+
+/// a mark on an object still in the cache, as `cache verify` leaves one it could not remove, whose
+/// bytes changed while its size and time stayed. sync hashes the object before it places anything
+/// from it, so the project sharing the link gets the locked bytes from a new download instead of
+/// the changed object linked again.
+#[test]
+fn a_marked_object_still_in_the_cache_is_never_placed_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let object = iris_object(&sandbox, &other)?;
+    mark(&sandbox, &object)?;
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed object is fetched again"
+    );
+    assert_eq!(
+        fs::read(&object)?,
+        V1,
+        "the cache holds the locked bytes again"
+    );
+    Ok(())
+}
+
+/// a project that copies its files gets the locked bytes too, never a copy of the marked object.
+#[test]
+fn a_copy_is_never_made_from_a_marked_object() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    mark(&sandbox, &iris_object(&sandbox, &other)?)?;
+    let copier = sandbox.folder("copier")?;
+    fs::write(
+        copier.join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    fs::copy(sandbox.work().join("data.lock"), copier.join("data.lock"))?;
+
+    let synced = sandbox.command_in(&copier, &["sync"]).output()?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(copier.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed object is fetched again"
+    );
+    Ok(())
+}
+
+/// a marked object another program holds open cannot be removed. sync stops with an error that
+/// names it, rather than placing its bytes again as if they were the locked ones.
+#[test]
+fn a_marked_object_that_cannot_be_removed_stops_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let object = iris_object(&sandbox, &other)?;
+    mark(&sandbox, &object)?;
+    let Some(held) = hold(&object)? else {
+        return Ok(());
+    };
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    drop(held);
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(50), "{stderr}");
+    let name = object
+        .file_name()
+        .ok_or("an object has a name")?
+        .to_string_lossy()
+        .into_owned();
+    assert!(stderr.contains(&name), "{stderr}");
+    assert!(!stderr.contains("put back"), "{stderr}");
+    Ok(())
+}
+
+/// a link may name an older copy of an object than the one that changed, such as one placed
+/// before gc freed the object and a download brought it back. sync hashes the project's own file
+/// once, keeps it without downloading, and nothing differs afterwards.
+#[test]
+fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let other = sandbox.folder("other")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&other, &["sync"])
+        .env("OneDrive", &other)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    link_iris(&sandbox, &other)?;
+    // gc frees an object no registered project needs, and the link keeps its bytes
+    let object = iris_object(&sandbox, &other)?;
+    delete(&object)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    delete(&placed)?;
+    let again = sandbox
+        .command(&["sync"])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(&placed, &edited)?;
+    keep_time(&sandbox.work())?;
+    mark(&sandbox, &object)?;
+
+    let synced = sandbox
+        .command_in(&other, &["--offline", "sync"])
+        .output()?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    let status = sandbox.command_in(&other, &["status"]).output()?;
+    assert_eq!(text(&status.stderr)?, "✓ everything matches data.lock\n");
+    Ok(())
+}
+
+/// get hashes a marked object before it takes it too, so it places the locked bytes from a new
+/// download instead of the changed object.
+#[test]
+fn get_never_takes_a_marked_object() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    mark(&sandbox, &iris_object(&sandbox, &other)?)?;
+    let folder = sandbox.folder("got")?;
+
+    let got = sandbox.run(&["get", &server.url, "-o", &folder.display().to_string()])?;
+
+    let stderr = text(&got.stderr)?;
+    assert_eq!(got.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(folder.join("iris.csv"))?, V1, "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn a_new_project_reseals_an_object_made_writable_through_a_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let first = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut permissions = fs::metadata(&first)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test models a user clearing a hardlink's flag"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&first, permissions)?;
+    let other = sandbox.folder("second-project")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+
+    let synced = sandbox
+        .command_in(&other, &["sync", "--offline"])
+        .output()?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let placed = other.join("data").join("iris").join("iris.csv");
+    assert!(
+        fs::metadata(&placed)?.permissions().readonly(),
+        "the second project's input must be read-only"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    assert!(
+        fs::metadata(iris_object(&sandbox, &other)?)?
+            .permissions()
+            .readonly()
+    );
+    assert_eq!(server.requests().len(), 1);
     Ok(())
 }

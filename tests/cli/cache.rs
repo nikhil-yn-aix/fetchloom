@@ -53,3 +53,55 @@ fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
     );
     Ok(())
 }
+
+#[cfg(windows)]
+#[test]
+fn unreadable_objects_have_their_own_report() -> Result {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_DELETE: u32 = 4;
+
+    let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    for json in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let object = sandbox
+            .cache()
+            .join("objects")
+            .join(&digest[..2])
+            .join(&digest[2..]);
+        fs::create_dir_all(object.parent().unwrap())?;
+        fs::write(&object, b"abc")?;
+        let mut permissions = fs::metadata(&object)?.permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&object, permissions)?;
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_DELETE)
+            .open(&object)?;
+        let args: &[&str] = if json {
+            &["--json", "cache", "verify"]
+        } else {
+            &["cache", "verify"]
+        };
+        let output = sandbox.run(args)?;
+        drop(held);
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+        let report = if json {
+            let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(document["errors"][0]["kind"], "local.io");
+            assert!(document["result"].is_null());
+            document["warnings"].to_string()
+        } else {
+            text(&output.stderr)?
+        };
+        assert!(
+            report
+                .lines()
+                .any(|line| line.contains(digest) && line.contains("unreadable")),
+            "{report}"
+        );
+        assert!(object.is_file());
+        assert_eq!(fs::read(&object)?, b"abc");
+        assert_eq!(fs::read_dir(sandbox.cache().join("changed"))?.count(), 0);
+    }
+    Ok(())
+}

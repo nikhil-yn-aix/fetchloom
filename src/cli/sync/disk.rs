@@ -18,9 +18,12 @@ pub(crate) struct Survey {
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
-    /// files placed as hardlinks whose object the cache marked as changed after they were placed,
-    /// which sync puts back with or without --force.
+    /// hardlinks a mark put in doubt whose bytes hashing found changed: edited through another
+    /// project's link. sync puts them back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
+    /// hardlinks a mark put in doubt whose bytes hashing found intact, which sync keeps, recording
+    /// when they were checked.
+    pub(crate) vouched: HashSet<String>,
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
@@ -38,6 +41,7 @@ impl Survey {
             state,
             disk: scan(&project.root, data_dir),
             elsewhere: HashSet::new(),
+            vouched: HashSet::new(),
             edited: HashSet::new(),
             needs_writing: false,
         };
@@ -75,11 +79,12 @@ impl Survey {
         }
     }
 
-    /// files placed as hardlinks whose object the cache found changed after they were placed,
-    /// while their listing here still shows them as placed. on windows a folder's listing keeps
-    /// the old size and time of a hardlink changed through another name, so this is the only
-    /// sign of an edit made through another project.
-    pub(crate) fn edited_elsewhere(&self, cache: &Cache) -> Vec<String> {
+    /// files placed as hardlinks whose object the cache marked as changed after fetchloom last
+    /// knew them to hold their bytes, while their listing still shows them as placed. on windows a
+    /// folder's listing keeps the old size and time of a hardlink changed through another name, so
+    /// the mark is the only sign of an edit made through another project. the link may also name
+    /// an older copy of the object than the one that changed, so only hashing settles it.
+    pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
         let changed = cache.changed();
         if changed.is_empty() {
             return Vec::new();
@@ -91,7 +96,7 @@ impl Survey {
                 placed.method == Method::Hardlink
                     && changed
                         .get(&placed.sha256)
-                        .is_some_and(|found| *found > placed.look.modified)
+                        .is_some_and(|found| *found > placed.look.modified.max(placed.checked))
                     && self.disk.get(*path) == Some(&placed.look)
                     && !self.edited.contains(*path)
             })
@@ -99,11 +104,32 @@ impl Survey {
             .collect()
     }
 
-    /// remembers the files edited elsewhere, then reads hardlinks again by name, which windows
-    /// answers from the file itself where a listing may be stale: those edited elsewhere, and with
-    /// `force` every one, since --force asks for every edit to be undone.
+    /// hashes the files a mark puts in doubt: those holding other bytes were edited through
+    /// another project's link, and the rest are vouched for.
+    pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) {
+        let doubted = self.doubted(cache);
+        if doubted.is_empty() {
+            return;
+        }
+        let _span = tracing::debug_span!("hash_doubted", files = doubted.len()).entered();
+        let files = &self.state.files;
+        let intact = place::run_all(&doubted, |path| {
+            Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == files[path].sha256)
+        });
+        for (path, intact) in doubted.into_iter().zip(intact) {
+            if intact {
+                self.vouched.insert(path);
+            } else {
+                self.elsewhere.insert(path);
+            }
+        }
+    }
+
+    /// hashes what a mark puts in doubt, then reads hardlinks again by name, which windows answers
+    /// from the file itself where a listing may be stale: those in doubt, and with `force` every
+    /// one, since --force asks for every edit to be undone.
     pub(crate) fn look_again(&mut self, root: &Path, cache: &Cache, force: bool) {
-        self.elsewhere = self.edited_elsewhere(cache).into_iter().collect();
+        self.check_doubted(root, cache);
         let paths: Vec<String> = if force && cfg!(windows) {
             self.state
                 .files
@@ -112,7 +138,11 @@ impl Survey {
                 .map(|(path, _)| path.clone())
                 .collect()
         } else {
-            self.elsewhere.iter().cloned().collect()
+            self.elsewhere
+                .iter()
+                .chain(&self.vouched)
+                .cloned()
+                .collect()
         };
         for path in paths {
             if let Ok(metadata) = fs::symlink_metadata(root.join(&path)) {

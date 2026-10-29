@@ -28,6 +28,8 @@ pub(in crate::cli) struct Unpack {
     pub(in crate::cli) archive: Sha256,
     pub(in crate::cli) size: u64,
     pub(in crate::cli) label: String,
+    /// the tree data.lock pins for it, the only one recorded once known.
+    pub(in crate::cli) tree: Option<Sha256>,
 }
 
 /// unpacks archives the cache holds and records what each unpacked to: what it holds, or none
@@ -74,7 +76,13 @@ pub(in crate::cli) async fn unpack_all(
                     ticker.advance(bytes);
                     stop.is_asked() || failed.load(Ordering::Relaxed)
                 };
-                let unpacked = archive::unpack_cached(&cache, &unpack.archive, unpack.size, &watch);
+                let unpacked = archive::unpack_cached(
+                    &cache,
+                    &unpack.archive,
+                    unpack.size,
+                    unpack.tree.as_ref(),
+                    &watch,
+                );
                 drop(bar);
                 (index, unpack, started.elapsed(), unpacked)
             });
@@ -149,6 +157,7 @@ impl Loop<'_> {
                     archive: todo.archive,
                     size: todo.size,
                     label: todo.label,
+                    tree: None,
                 });
             }
         }
@@ -178,14 +187,46 @@ impl Loop<'_> {
     }
 
     /// unpacks archives the lock pins whose files this machine lacks, downloading those the
-    /// cache does not hold, and checks that each unpacks to what the lock says.
+    /// cache does not hold, and checks that each unpacks to what the lock says. one that does not
+    /// is hashed first: bytes that changed in the cache are dropped and downloaded again, and only
+    /// an intact archive that unpacks to other files is an error.
     pub(super) async fn unpack_locked(
         &self,
         lock: &Lock,
         archives: &[(String, &LockedFile)],
     ) -> Result<(), Error> {
+        let mut damaged = Vec::new();
+        for (dataset, file) in self.unpack_checked(lock, archives).await? {
+            let intact = self.cache.verify(&file.sha256).map_err(|err| {
+                Error::io(
+                    format_args!("could not check {dataset}/{}", file.path),
+                    &err,
+                )
+            })?;
+            if intact {
+                return Err(other_files(&dataset, file));
+            }
+            self.context.output.warn(&format!(
+                "{dataset}/{} changed in the cache, so it is downloaded again",
+                file.path
+            ));
+            damaged.push((dataset, file));
+        }
+        match self.unpack_checked(lock, &damaged).await?.first() {
+            Some((dataset, file)) => Err(other_files(dataset, file)),
+            None => Ok(()),
+        }
+    }
+
+    /// downloads the archives the cache lacks and unpacks every one, and returns those that
+    /// unpacked to other files than the lock says.
+    async fn unpack_checked<'f>(
+        &self,
+        lock: &Lock,
+        archives: &[(String, &'f LockedFile)],
+    ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
         if archives.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let jobs = archives
             .iter()
@@ -199,24 +240,16 @@ impl Loop<'_> {
                 archive: file.sha256,
                 size: file.size,
                 label: format!("{dataset}/{}", file.path),
+                tree: file.unpacks_to,
             })
             .collect();
         let trees = self.unpack(unpacks).await?;
-        for ((dataset, file), tree) in archives.iter().zip(trees) {
-            if tree != file.unpacks_to {
-                return Err(Error::new(
-                    Kind::IntegrityMismatch,
-                    format!(
-                        "{dataset}/{} unpacked to other files than data.lock says",
-                        file.path
-                    ),
-                )
-                .help(format!(
-                    "data.lock may come from another version of fetchloom. `fetchloom lock --upgrade {dataset}` pins what this one unpacks"
-                )));
-            }
-        }
-        Ok(())
+        Ok(archives
+            .iter()
+            .zip(trees)
+            .filter(|((_, file), tree)| *tree != file.unpacks_to)
+            .map(|(archive, _)| archive.clone())
+            .collect())
     }
 
     /// drops from the cache each archive this run unpacked, now that its files are in, unless
@@ -226,6 +259,21 @@ impl Loop<'_> {
             std::mem::take(&mut *self.unpacked.lock().unwrap_or_else(PoisonError::into_inner));
         drop_archives(&self.cache, &unpacked, Some(lock));
     }
+}
+
+/// an intact archive that unpacks to other files than data.lock says, as one pinned by another
+/// version of fetchloom can.
+fn other_files(dataset: &str, file: &LockedFile) -> Error {
+    Error::new(
+        Kind::IntegrityMismatch,
+        format!(
+            "{dataset}/{} unpacked to other files than data.lock says",
+            file.path
+        ),
+    )
+    .help(format!(
+        "data.lock may come from another version of fetchloom. `fetchloom lock --upgrade {dataset}` pins what this one unpacks"
+    ))
 }
 
 fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Duration) {

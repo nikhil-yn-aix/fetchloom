@@ -119,19 +119,39 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         units::count(checked.objects, "object", "objects"),
         units::size(checked.bytes)
     );
+    for digest in &checked.unreadable {
+        output.warn(&format!(
+            "object {digest} is unreadable and was left in the cache"
+        ));
+    }
     if checked.changed.is_empty() {
-        output.done(&format!("verified {what}. every one is intact"));
-        return Ok(checked);
+        if checked.unreadable.is_empty() {
+            output.done(&format!("verified {what}. every one is intact"));
+            return Ok(checked);
+        }
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "checked {what}. {} could not be read",
+                units::count(checked.unreadable.len() as u64, "object", "objects")
+            ),
+        )
+        .help("close any program using these objects or check their permissions, then run `fetchloom cache verify` again"));
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
             output.warn(&format!("object {digest} had changed and was removed"));
         }
     }
+    let verb = if checked.unreadable.is_empty() {
+        "verified"
+    } else {
+        "checked"
+    };
     let mut error = Error::new(
         Kind::IntegrityMismatch,
         format!(
-            "verified {what}. {} had changed",
+            "{verb} {what}. {} had changed",
             units::count(checked.changed.len() as u64, "object", "objects")
         ),
     );

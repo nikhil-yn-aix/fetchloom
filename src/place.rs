@@ -406,15 +406,55 @@ fn real_folder(folder: &Path, make: bool) -> io::Result<()> {
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
 fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
-    let claimed = File::create_new(destination)?;
-    undo_on_error(fill(object, &claimed, writable), destination)
+    let destination = std::path::absolute(destination)?;
+    let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
+    let destination = parent.join(destination.file_name().unwrap_or_default());
+    let (temporary, claimed) = loop {
+        let temporary = parent.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..)));
+        match crate::volume::create_hidden(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    };
+    let temporary = tempfile::TempPath::try_from_path(temporary)?;
+    // publishing clears windows attributes, so seal through the claimed handle afterward.
+    #[cfg(windows)]
+    let staged_writable = true;
+    #[cfg(not(windows))]
+    let staged_writable = writable;
+    fill(object, &claimed, staged_writable)?;
+    temporary
+        .persist_noclobber(&destination)
+        .map_err(|error| error.error)?;
+    #[cfg(windows)]
+    undo_on_error(set_file_writable(&claimed, writable), &destination)?;
+    Ok(())
+}
+
+/// whether a file has the reserved name of an unfinished placement copy.
+pub(crate) fn is_copy_temporary(name: &str) -> bool {
+    name.strip_prefix(".fetchloom-")
+        .and_then(|name| name.strip_suffix(".copy"))
+        .is_some_and(|random| {
+            random.len() == 16 && random.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
 fn fill(object: &Path, output: &File, writable: bool) -> io::Result<()> {
     transfer(File::open(object)?, output)?;
-    output.set_permissions(writable_as(output.metadata()?.permissions(), writable))
+    set_file_writable(output, writable)
+}
+
+fn set_file_writable(output: &File, writable: bool) -> io::Result<()> {
+    let before = output.metadata()?.permissions();
+    let after = writable_as(before.clone(), writable);
+    if before != after {
+        output.set_permissions(after)?;
+    }
+    Ok(())
 }
 
 /// linux copies from file to file inside the kernel, with `copy_file_range`, which a network
@@ -724,6 +764,155 @@ mod tests {
         let copied = folder.path().join("claimed.csv");
         assert_eq!(fs::read_to_string(&copied).unwrap(), CONTENTS);
         assert!(is_read_only(&copied));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_writable_copy_needs_no_permission_change() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_DATA: u32 = 2;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+
+        let (folder, object) = cache(true);
+        let destination = folder.path().join("placed.csv");
+        let output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .access_mode(FILE_WRITE_DATA | FILE_READ_ATTRIBUTES)
+            .open(&destination)
+            .unwrap();
+
+        let result = fill(&object, &output, true);
+
+        assert!(
+            result.is_ok(),
+            "unchanged permissions need no write access to attributes: {result:?}"
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert!(!is_read_only(&destination));
+        let readonly = undo_on_error(fill(&object, &output, false), &destination);
+        assert!(
+            readonly.is_err(),
+            "a real permission change must still fail"
+        );
+        drop(output);
+        assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_copy_works_where_the_mount_refuses_chmod() {
+        let Some(root) = std::env::var_os("FETCHLOOM_TEST_NOOP_CHMOD") else {
+            return;
+        };
+        let destination_folder = TempDir::new_in(root).unwrap();
+        let (_source_folder, object) = cache(true);
+        let probe = destination_folder.path().join("probe");
+        fs::write(&probe, b"writable").unwrap();
+        let permissions = fs::metadata(&probe).unwrap().permissions();
+        assert_eq!(
+            fs::set_permissions(&probe, permissions).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&probe).unwrap();
+        let destination = destination_folder.path().join("placed.csv");
+
+        copy(&object, &destination, true).unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert!(!is_read_only(&destination));
+        assert!(is_read_only(&object));
+        let readonly = destination_folder.path().join("readonly.csv");
+        assert!(copy(&object, &readonly, false).is_err());
+        assert!(!readonly.exists());
+    }
+
+    #[test]
+    fn an_interrupted_copy_never_leaves_partial_bytes_at_its_name() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        const CHILD: &str = "FETCHLOOM_TEST_COPY_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            copy(&root.join("object"), &root.join("placed.bin"), false).unwrap();
+            return;
+        }
+        let folder = TempDir::new().unwrap();
+        let object = folder.path().join("object");
+        let destination = folder.path().join("placed.bin");
+        fs::write(&object, vec![0x5a; 64 << 20]).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "place::tests::an_interrupted_copy_never_leaves_partial_bytes_at_its_name",
+            ])
+            .env(CHILD, folder.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let started_copy = loop {
+            if fs::read_dir(folder.path())
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.path() != object)
+            {
+                break true;
+            }
+            if child.try_wait().unwrap().is_some() || started.elapsed() > Duration::from_secs(30) {
+                break false;
+            }
+            std::thread::yield_now();
+        };
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            started_copy,
+            "the copy never started: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if destination.exists() {
+            assert_eq!(
+                fs::metadata(&destination).unwrap().len(),
+                64 << 20,
+                "a killed copy left partial bytes at the destination"
+            );
+            assert_eq!(
+                crate::digest::Sha256::of_file(&destination).unwrap(),
+                crate::digest::Sha256::of_file(&object).unwrap()
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_can_be_published_beyond_the_windows_path_limit() {
+        let (folder, object) = cache(true);
+        let mut parent = folder.path().to_path_buf();
+        while parent.as_os_str().len() < 300 {
+            parent.push("a_long_folder_for_a_copy");
+        }
+        fs::create_dir_all(&parent).unwrap();
+        let destination = parent.join("placed.csv");
+
+        copy(&object, &destination, false).unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert!(is_read_only(&destination));
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_no_staging_file() {
+        let folder = TempDir::new().unwrap();
+        let missing = folder.path().join("missing");
+        let destination = folder.path().join("placed.csv");
+
+        assert!(copy(&missing, &destination, false).is_err());
+
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
     }
 
     #[test]

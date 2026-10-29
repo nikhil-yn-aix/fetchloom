@@ -8,13 +8,14 @@ mod tell;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
 use super::disk::Survey;
-use crate::cache::Cache;
+use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::output::Output;
@@ -23,7 +24,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed};
+use crate::project::state::{Look, Placed, nanos};
 use crate::work::Work;
 
 /// what placing did.
@@ -61,6 +62,9 @@ enum Action {
     Place,
     Replace,
     Adopt(Look),
+    /// a hardlink a mark put in doubt that still holds the locked bytes: kept, with the time
+    /// hashing proved it and how it looks by name now.
+    Vouch(Look),
     Leave(Reason),
 }
 
@@ -121,8 +125,10 @@ impl<'a> Placing<'a> {
     }
 
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
-    /// dataset each belongs to. an archive is listed when a file it unpacks to is missing.
-    pub(crate) fn missing(&self, cache: &Cache) -> Vec<(String, &'a LockedFile)> {
+    /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
+    /// object a mark puts in doubt is hashed first, and one whose bytes changed is removed, so it
+    /// is listed too; one that cannot be removed is an error.
+    pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -137,22 +143,23 @@ impl<'a> Placing<'a> {
             .map(|target| (target.sha256, target.size))
             .collect();
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
+        let marks = cache.changed();
         let found = place::run_all(&objects, |(digest, size)| {
-            cache.find(digest, Some(*size)).is_some()
+            cache.trusted(digest, Some(*size), &marks)
         });
-        let present: HashSet<Sha256> = objects
-            .iter()
-            .zip(found)
-            .filter(|(_, found)| *found)
-            .map(|((digest, _), _)| *digest)
-            .collect();
+        let mut present = HashSet::new();
+        for ((digest, _), found) in objects.iter().zip(found) {
+            if found.map_err(|doubt| doubtful(&doubt))?.is_some() {
+                present.insert(*digest);
+            }
+        }
         let mut seen = HashSet::new();
-        needed
+        Ok(needed
             .into_iter()
             .filter(|target| !present.contains(&target.sha256))
             .filter(|target| seen.insert(target.locked.sha256))
             .map(|target| (target.dataset.clone(), target.locked))
-            .collect()
+            .collect())
     }
 
     /// removes what no dataset needs, places what is missing or outdated, and records it.
@@ -187,6 +194,7 @@ impl<'a> Placing<'a> {
         let (todo, adopted) = settle(
             project,
             &mut placer,
+            cache,
             &mut survey,
             &targets,
             actions,
@@ -242,6 +250,7 @@ impl<'a> Placing<'a> {
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
+    cache: &Cache,
     survey: &mut Survey,
     targets: &'t [Target<'a>],
     actions: Vec<Action>,
@@ -253,9 +262,16 @@ fn settle<'t, 'a>(
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
-                let writable = now_writable(&project.root.join(&target.path));
-                let found = placed(target, Method::Copy, seen, writable);
+                let found = adoption(target, seen, &project.root.join(&target.path), cache);
                 survey.state.files.insert(target.path.clone(), found);
+                placement.unchanged += 1;
+                adopted = true;
+            }
+            Action::Vouch(seen) => {
+                if let Some(placed) = survey.state.files.get_mut(&target.path) {
+                    placed.look = seen;
+                    placed.checked = nanos(SystemTime::now());
+                }
                 placement.unchanged += 1;
                 adopted = true;
             }
@@ -301,9 +317,11 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
-/// what the file at `destination` needs, as `survey` saw it. a hardlink the cache marked as
-/// changed through another link is replaced, and a file hashing found changed is an edit, though
-/// its size and time may not show either.
+/// what the file at `destination` needs, as `survey` saw it. a hardlink a mark put in doubt is
+/// replaced when hashing found its bytes changed and kept when it found them intact, and a file
+/// hashing found changed is an edit, though its size and time may not show either. a changed file
+/// that holds the locked bytes is taken as placed: a run cut off after it replaced a file and
+/// before it wrote the state leaves the new bytes recorded as the old file.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -316,6 +334,14 @@ fn decide(
     };
     match survey.state.files.get(path) {
         Some(_) if survey.elsewhere.contains(path) => Ok(Action::Replace),
+        Some(placed) if survey.vouched.contains(path) => {
+            let fits = !target.copy || placed.writable;
+            Ok(if placed.sha256 == target.sha256 && fits {
+                Action::Vouch(*look)
+            } else {
+                Action::Replace
+            })
+        }
         Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
             let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {
@@ -324,6 +350,7 @@ fn decide(
                 Action::Replace
             })
         }
+        Some(_) if holds_target(target, look, destination) => Ok(Action::Adopt(*look)),
         Some(_) => Ok(if force {
             Action::Replace
         } else {
@@ -413,16 +440,51 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed
         method,
         look,
         writable,
+        checked: nanos(SystemTime::now()),
     }
 }
 
+/// the record of a file at `path` found to hold the target's bytes. a link a run cut off before
+/// it wrote the state placed is the cached object under another name, so it is recorded as a
+/// hardlink, which the audit covers and whose read-only flag is never cleared.
+fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache) -> Placed {
+    if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
+        placed(target, Method::Hardlink, look, false)
+    } else {
+        placed(target, Method::Copy, look, now_writable(path))
+    }
+}
+
+/// whether the file at `path`, seen as `look`, holds the target's bytes. only a file of the
+/// target's size is hashed, and one that cannot be read does not.
+pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
+    look.size == target.size && Sha256::of_file(path).is_ok_and(|digest| digest == target.sha256)
+}
+
 /// whether the file at `path` may be written to now.
-fn now_writable(path: &Path) -> bool {
+pub(crate) fn now_writable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
     Error::io(format_args!("could not place {}", path.display()), err)
+}
+
+/// what stops a run at an object that could not be checked or sealed, or whose changed bytes
+/// could not be removed.
+pub(crate) fn doubtful(doubt: &Doubt) -> Error {
+    let object = doubt.object.display();
+    if doubt.changed {
+        Error::io(
+            format_args!("could not remove {object}, a cached file whose bytes changed"),
+            &doubt.error,
+        )
+    } else {
+        Error::io(
+            format_args!("could not check and seal {object} for placement"),
+            &doubt.error,
+        )
+    }
 }
 
 #[cfg(test)]

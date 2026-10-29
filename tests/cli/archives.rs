@@ -439,3 +439,77 @@ fn path_of_an_empty_archive_explains_why_it_has_no_folder() -> Result {
     );
     Ok(())
 }
+
+/// python-v7.tar holds dataset/README.md and dataset/data/train.csv, and train.csv's bytes start
+/// at byte 1536.
+const V7_SHA256: &str = "9a2f3adae7925e1f1db798d92b4c394d2883f42aeb04ee00363e6e851ab56fdd";
+const V7_TREE: &str = "aac41d8ac40805957f5260c833a02f89a62665783d5a02ef907b532a205ff4fd";
+
+/// a tar holds no checksum over its files, so a byte changed in its cached copy unpacks to other
+/// files without any error. that copy is fetched again, and what it unpacked to is never
+/// recorded, so neither this sync nor an upgrade pins the damage.
+#[test]
+fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let tar = fixture("python-v7.tar")?;
+    let server = Server::start(
+        "/files/set.tar",
+        (0..4).map(|_| file(&tar, "\"t1\"")).collect(),
+    )?;
+    // a project that keeps the tar packed keeps it in the cache
+    let packed = sandbox.folder("packed")?;
+    ok(&sandbox
+        .command_in(&packed, &["add", "--no-extract", &server.url])
+        .output()?)?;
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let cache = sandbox.cache();
+    let object = |hex: &str| cache.join("objects").join(&hex[..2]).join(&hex[2..]);
+    let record = cache.join("unpacked").join(V7_SHA256);
+    let pinned = fs::read_to_string(&record)?;
+    let mut damaged = tar.clone();
+    damaged[1536] = b'X';
+    overwrite(&object(V7_SHA256), &damaged)?;
+    // as gc would once README.md's object is a day old, so the tar must be unpacked again
+    let readme = pinned
+        .lines()
+        .find_map(|line| line.strip_prefix("dataset/README.md\t"))
+        .and_then(|line| line.rsplit('\t').next())
+        .ok_or("README.md is in the record")?;
+    delete(&object(readme))?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+
+    let synced = sandbox.command_in(&clone, &["sync"]).output()?;
+
+    assert_eq!(fs::read_to_string(&record)?, pinned, "the record changed");
+    ok(&synced)?;
+    let set = clone.join("data").join("set");
+    assert_eq!(
+        fs::read(set.join("data").join("train.csv"))?,
+        b"x,y\n1,2\n3,4\n"
+    );
+    assert_eq!(fs::read(object(V7_SHA256))?, tar);
+    ok(&sandbox
+        .command_in(&clone, &["lock", "--upgrade"])
+        .output()?)?;
+    let lock = fs::read_to_string(clone.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!("unpacks_to = \"sha256:{V7_TREE}\"")),
+        "{lock}"
+    );
+    Ok(())
+}
+
+/// writes `bytes` over the file at `path`, clearing its read-only flag first.
+fn overwrite(path: &Path, bytes: &[u8]) -> Result {
+    let mut permissions = fs::metadata(path)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test damages a cached archive on purpose"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions)?;
+    Ok(fs::write(path, bytes)?)
+}

@@ -178,6 +178,40 @@ fn an_html_file_the_server_names_is_the_file() {
     assert_eq!(fetched.size, 13);
 }
 
+/// a server that ignores `If-Range` answers a resume with the rest of whatever it holds now. a
+/// range answer naming another version than the bytes kept must not be appended to them.
+#[test]
+fn a_resume_answered_from_another_version_starts_over() {
+    for (old, new) in [
+        (("ETag", "\"v1\""), ("ETag", "\"v2\"")),
+        (
+            ("Last-Modified", "Tue, 01 Oct 2024 10:00:00 GMT"),
+            ("Last-Modified", "Wed, 02 Oct 2024 10:00:00 GMT"),
+        ),
+    ] {
+        // the first answer promises 8 bytes and breaks after 4
+        let cut = format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\n{}: {}\r\n\r\naaaa",
+            old.0, old.1
+        );
+        let (url, _) = serve(vec![
+            cut.into_bytes(),
+            reply(
+                "206 Partial Content",
+                &[("Content-Range", "bytes 4-7/8"), new],
+                "BBBB",
+            ),
+            reply("200 OK", &[new], "BBBBBBBB"),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let fetch = Fetch::new(url.clone());
+        let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
+        assert_eq!(String::from_utf8(stored).unwrap(), "BBBBBBBB", "{}", old.0);
+    }
+}
+
 #[test]
 fn bidi_controls_are_refused_in_server_names() {
     for disposition in [

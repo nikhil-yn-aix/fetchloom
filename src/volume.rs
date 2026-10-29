@@ -162,7 +162,7 @@ fn refusal_code(code: i32) -> bool {
 
 /// makes a new empty file that file browsers do not show: windows hides it by its attribute,
 /// other systems by the dot its name starts with.
-fn create_hidden(path: &Path) -> io::Result<File> {
+pub(crate) fn create_hidden(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(windows)]

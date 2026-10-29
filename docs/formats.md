@@ -205,14 +205,14 @@ objects hold read-only payloads. `tmp/` holds new archive members, atomic record
 
 partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. progress is saved about once a second while writing. resumption truncates bytes past the checkpoint and rehashes the prefix.
 
-the `.lock` file coordinates writers; its contents are unused. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
+the `.lock` file coordinates writers; its contents are unused. gc removes an abandoned download's `.part` and `.json` but keeps its `.lock`, since a run waiting for that download may already have it open. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 
 ### other indexes
 
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
-- an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
+- an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit or `cache verify` writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
+- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
@@ -225,6 +225,7 @@ archive bytes may be deleted after successful unpacking when no registered proje
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
 | `.fetchloom/lock` | OS project lock; file contents are unused |
 | `.fetchloom/state` | compact JSON describing tracked placements |
+| `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
 inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
@@ -237,10 +238,11 @@ state fields:
 | `files` | object keyed by project-relative path, using `/` |
 | `files[path].dataset` | dataset name |
 | `files[path].sha256` | locked member or file hash, 64 hex digits |
-| `files[path].method` | `reflink`, `hardlink` or `copy` |
+| `files[path].method` | `reflink`, `hardlink` or `copy`. an adopted file is `hardlink` when it is the cached object's own file, else `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
+| `files[path].checked` | when fetchloom last knew the file held its locked bytes, in nanoseconds since 1970: when it placed or adopted the file, or when hashing proved them after the cache marked its object changed |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
@@ -306,7 +308,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `status` | `project`: absolute path; eight arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
-| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array |
+| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array; `unreadable`: hash array |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
@@ -323,13 +325,13 @@ status arrays:
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
-| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after that time; `sync` puts them back |
+| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after fetchloom last knew them, and whose bytes hashing found changed; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
 status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
-`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding a changed or unreadable object returns an error and exit 30, so `result` is null; its successful `changed` and `stuck` arrays are always empty.
+`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object could not be read, it returns `local.io` and exit 50. either error has a null `result`. unreadable objects are named separately in `warnings` and are neither marked nor removed. successful `changed`, `stuck` and `unreadable` arrays are empty.
 
 ### work counters
 
@@ -357,7 +359,7 @@ a warm project can place cached files with zero cache hits. there are no phase t
 | 2 | `usage` |
 | 10 | `reference.invalid`, `reference.unresolved`, `source.invalid` |
 | 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
-| 30 | `integrity.mismatch`, including size mismatches and failed cache verification |
+| 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
 | 50 | `local.io`, `local.not_empty`, `project.invalid` |
 | 130 | `interrupted` |

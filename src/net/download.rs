@@ -367,13 +367,19 @@ impl Net {
             }
             return Err(failure::refusal(from, status, &head));
         }
+        let validators = headers::validators(&head);
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
                 return Ok(Answer::NotModified);
             }
             StatusCode::OK => 0,
+            // a server that ignores If-Range sends the rest of whatever version it holds now
             StatusCode::PARTIAL_CONTENT => match (&earlier, headers::range_start(&head)) {
-                (Some((received, _)), Some(start)) if start == *received => *received,
+                (Some((received, recorded)), Some(start))
+                    if start == *received && !headers::changed(recorded, &validators) =>
+                {
+                    *received
+                }
                 _ => return Ok(Answer::StartOver),
             },
             StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => return Ok(Answer::StartOver),
@@ -381,7 +387,6 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = server_name(&head)?;
-        let validators = headers::validators(&head);
         let body = Body {
             offset,
             total,

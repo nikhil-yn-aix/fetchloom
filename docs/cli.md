@@ -61,7 +61,9 @@ $ fetchloom status
   hint: `fetchloom sync` brings the rest in line. edited and extra files stay as they are
 ```
 
-`status` compares recorded sizes and modification times, without downloading. it hashes only a file whose recorded time is not older than `.fetchloom/state` itself: a clock as coarse as FAT's two seconds gives a file edited just after it was placed the same size and time. `sync` writes the state again once such files prove unchanged, so later runs hash nothing. `status` also reports edited, untracked and outdated paths, hardlinks the cache marked as changed through another project, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
+`status` compares recorded sizes and modification times, without downloading. it hashes three kinds of file. one is a file whose recorded time is not older than `.fetchloom/state` itself: a clock as coarse as FAT's two seconds gives a file edited just after it was placed the same size and time. `sync` writes the state again once such files prove unchanged, so later runs hash nothing. another is a changed file of the locked size, which counts as placed when it holds the locked bytes: a run cut off after it replaced a file and before it wrote the state leaves the new bytes recorded as the old file. the last is a hardlink whose cached object was marked as changed since fetchloom last knew the file; `sync` records the ones that prove intact, so they are hashed once. `status` also reports edited, untracked and outdated paths, hardlinks changed through another project, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
+
+on windows, an edit through another project's hardlink can stay invisible to your project's `status` until that project syncs, `cache verify` runs, or `sync --force` reads each hardlink by name.
 
 `sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. a hardlink `status` lists as changed through another project is put back instead, with a warning, and listed in `placement.restored`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
 
@@ -95,7 +97,7 @@ for direct downloads, a `Content-Disposition` filename replaces the URL's guesse
 
 on another run, a known SHA-256 or MD5 can find cached bytes. an unpinned URL is checked again with `ETag` or `Last-Modified` validators when available. a 304 response downloads no file body; without validators the file may be downloaded again. changed bytes are accepted by `get`, unlike a locked project. repository references may still need metadata requests even when all file bytes are cached.
 
-a destination with unrelated top-level entries is refused. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
+a destination with unrelated top-level entries is refused. hidden `.fetchloom-<16 hex digits>.copy` files left by interrupted copies are ignored. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
 
 in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
 
@@ -134,7 +136,7 @@ when a locked file's download returns 404 or 410, fetchloom asks its recorded so
 
 file-specific failures can be collected while other downloads finish; network, disk and interruption failures stop the batch. an aggregate error names at most ten failed files, and an offline project error at most five missing files. successful downloads stay cached.
 
-resumption needs a saved prefix and either a pinned SHA-256, a strong `ETag` or `Last-Modified`. the prefix is hashed again. unsupported ranges, changed validators or damaged saved bytes can force a restart. a hard kill can lose work since the last checkpoint.
+resumption needs a saved prefix and either a pinned SHA-256, a strong `ETag`, or a `Last-Modified` from a server that sent no `ETag`. the prefix is hashed again. unsupported ranges, changed validators or damaged saved bytes can force a restart. a hard kill can lose work since the last checkpoint.
 
 approval is required above 1 GiB, not at exactly 1 GiB:
 
@@ -165,7 +167,7 @@ fetchloom cache verify
 
 a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact.
 
-`cache verify` rehashes objects, removes those that differ or cannot be read, and exits 30 if it found any. removal failures are reported too. it does not verify independent copies under `data/`.
+`cache verify` rehashes objects, marks and removes those whose bytes differ, and exits 30 if it found any. removal failures are reported too. unreadable objects get their own warning and stay in the cache without a new change mark; when none changed, an unreadable object makes the command exit 50. close any program using the object or check its permissions, then verify again. it does not verify independent copies under `data/`.
 
 ## options
 
