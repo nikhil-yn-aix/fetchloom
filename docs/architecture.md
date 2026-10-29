@@ -27,7 +27,7 @@ there is no separate model crate or python wrapper. core types live with their o
 3. write `data.lock` if its contents changed. standalone `lock` does no placement and need not fill the cache with already pinned files.
 4. expand the lock into destination targets. an archive without a usable member record is unpacked before its destinations can be planned. compare targets with state and disk metadata to choose keep, adopt, place, replace or leave.
 5. fetch only the bytes needed by place and replace actions. a missing archive member requires the original archive again when it is not cached. check pinned size, SHA-256 and any stated MD5 on downloads.
-6. remove unwanted unchanged tracked files, place the targets, and write state if it changed. drop unneeded packed objects and register the project for cache retention.
+6. remove unwanted unchanged tracked files, place the targets, and write state if it changed or settles files hashed for being as new as the old state. drop unneeded packed objects and register the project for cache retention.
 
 `add` first resolves its new reference, sometimes downloading a single file to learn its name. it writes the manifest before syncing and attempts to restore that manifest on sync failure. `remove` changes the manifest and lock, then removes unwanted tracked files without downloading.
 
@@ -81,7 +81,7 @@ FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file 
 
 new placements try reflink, then hardlink, then copy. a `Placer` remembers unsupported methods for its destination tree during the run, not in a persistent per-volume map. `copy = true` still allows a writable reflink, but skips hardlinks.
 
-reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space.
+reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space. when a drive refuses both reflinks and hardlinks, `sync` and `get` say that is why their files were copied.
 
 removing or replacing a placed file follows [the cache's rule](#the-cache) for read-only files, judged on the volume that holds the files and tested there at most once a run: in `.fetchloom` for a project, and with a hidden file in the folder it fills for `get`. a file the state records as a hardlink never has its flag cleared, so on a volume that refuses to remove read-only files, removing it fails.
 
@@ -97,7 +97,7 @@ metadata files use a sibling file, flush and rename. data-file replacement is di
 
 sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays. state records each placed file's size and time as read right after that file is placed, so an edit made while later files are placed shows as an edit too.
 
-state stores hash, method, size, modification time and whether the file was placed writable, with no file id. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
+state stores hash, method, size, modification time and whether the file was placed writable, with no file id. a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
 
 ## the network
 

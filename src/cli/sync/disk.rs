@@ -7,8 +7,9 @@ use std::path::Path;
 
 use super::place::local;
 use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::Error;
-use crate::place::Method;
+use crate::place::{self, Method};
 use crate::project::Project;
 use crate::project::state::{Look, State};
 
@@ -20,15 +21,57 @@ pub(crate) struct Survey {
     /// files placed as hardlinks whose object the cache marked as changed after they were placed,
     /// which sync puts back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
+    /// files that still look as recorded but hold other bytes, which hashing found among those
+    /// as new as the state itself.
+    pub(crate) edited: HashSet<String>,
+    /// whether hashing found files as new as the state unchanged, so a state written now settles
+    /// them for later runs.
+    pub(crate) needs_writing: bool,
 }
 
 impl Survey {
-    /// reads the state and lists the data folder.
+    /// reads the state, lists the data folder, and hashes the files the state is too new to
+    /// vouch for.
     pub(crate) fn read(project: &Project, data_dir: &str) -> Survey {
-        Survey {
-            state: project.state(),
+        let (state, written) = project.state();
+        let mut survey = Survey {
+            state,
             disk: scan(&project.root, data_dir),
             elsewhere: HashSet::new(),
+            edited: HashSet::new(),
+            needs_writing: false,
+        };
+        survey.hash_racy(&project.root, written);
+        survey
+    }
+
+    /// hashes each file that looks as recorded while its recorded time is not older than the
+    /// state's own, `written`. a coarse clock, such as FAT's two seconds, gives a file edited in
+    /// the tick it was placed the size and time recorded for it, and both times come from that
+    /// clock. git treats its racily clean index entries the same way.
+    fn hash_racy(&mut self, root: &Path, written: u64) {
+        let racy: Vec<(&String, &Sha256)> = self
+            .state
+            .files
+            .iter()
+            .filter(|(path, placed)| {
+                placed.look.modified >= written && self.disk.get(*path) == Some(&placed.look)
+            })
+            .map(|(path, placed)| (path, &placed.sha256))
+            .collect();
+        if racy.is_empty() {
+            return;
+        }
+        let _span = tracing::debug_span!("hash_racy", files = racy.len()).entered();
+        let unchanged = place::run_all(&racy, |(path, sha256)| {
+            Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == **sha256)
+        });
+        for ((path, _), unchanged) in racy.into_iter().zip(unchanged) {
+            if unchanged {
+                self.needs_writing = true;
+            } else {
+                self.edited.insert(path.clone());
+            }
         }
     }
 
@@ -50,6 +93,7 @@ impl Survey {
                         .get(&placed.sha256)
                         .is_some_and(|found| *found > placed.look.modified)
                     && self.disk.get(*path) == Some(&placed.look)
+                    && !self.edited.contains(*path)
             })
             .map(|(path, _)| path.clone())
             .collect()
@@ -113,10 +157,11 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
     let _span = tracing::debug_span!("audit").entered();
     for (path, placed) in &survey.state.files {
         if placed.method == Method::Hardlink
-            && survey
-                .disk
-                .get(path)
-                .is_some_and(|seen| *seen != placed.look)
+            && (survey.edited.contains(path)
+                || survey
+                    .disk
+                    .get(path)
+                    .is_some_and(|seen| *seen != placed.look))
             && !cache
                 .verify(&placed.sha256)
                 .map_err(|err| local(&project.root.join(path), &err))?

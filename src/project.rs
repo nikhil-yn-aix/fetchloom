@@ -6,12 +6,12 @@ pub(crate) mod manifest;
 pub(crate) mod state;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::State;
+use self::state::{Look, State};
 use crate::error::{Error, Kind};
 
 const FOLDER: &str = ".fetchloom";
@@ -77,14 +77,23 @@ impl Project {
         }
     }
 
-    pub(crate) fn state(&self) -> State {
+    /// the state, and when it was written in nanoseconds since 1970, like the times it records. a
+    /// missing or unreadable state is empty.
+    pub(crate) fn state(&self) -> (State, u64) {
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        fs::read(self.root.join(FOLDER).join("state"))
-            .map(|bytes| {
+        let read = File::open(self.root.join(FOLDER).join("state")).and_then(|mut file| {
+            let written = Look::of(&file.metadata()?).modified;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok((bytes, written))
+        });
+        match read {
+            Ok((bytes, written)) => {
                 span.record("bytes", bytes.len());
-                State::parse(&bytes)
-            })
-            .unwrap_or_default()
+                (State::parse(&bytes), written)
+            }
+            Err(_) => (State::default(), 0),
+        }
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.

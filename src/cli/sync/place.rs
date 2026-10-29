@@ -94,16 +94,7 @@ impl<'a> Placing<'a> {
         let actions = plan
             .targets
             .iter()
-            .map(|target| {
-                decide(
-                    target,
-                    survey.disk.get(&target.path),
-                    survey.state.files.get(&target.path),
-                    force,
-                    survey.elsewhere.contains(&target.path),
-                    &project.root.join(&target.path),
-                )
-            })
+            .map(|target| decide(target, &survey, force, &project.root.join(&target.path)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Placing {
             project,
@@ -201,9 +192,10 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         )?;
+        let needs_writing = survey.needs_writing;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, work);
-        if removed || adopted || !tallies.is_empty() {
+        if removed || adopted || needs_writing || !tallies.is_empty() {
             project.write_state(state)?;
         }
         if let Some(error) = failure {
@@ -236,7 +228,7 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        if removed {
+        if removed || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
@@ -309,22 +301,22 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
-/// what the file at `destination` needs. `marked` says the cache found the bytes behind its
-/// hardlink changed after it was placed, which its size and time may not show.
+/// what the file at `destination` needs, as `survey` saw it. a hardlink the cache marked as
+/// changed through another link is replaced, and a file hashing found changed is an edit, though
+/// its size and time may not show either.
 fn decide(
     target: &Target,
-    look: Option<&Look>,
-    placed: Option<&Placed>,
+    survey: &Survey,
     force: bool,
-    marked: bool,
     destination: &Path,
 ) -> Result<Action, Error> {
-    let Some(look) = look else {
+    let path = &target.path;
+    let Some(look) = survey.disk.get(path) else {
         return Ok(Action::Place);
     };
-    match placed {
-        Some(_) if marked => Ok(Action::Replace),
-        Some(placed) if placed.look == *look => {
+    match survey.state.files.get(path) {
+        Some(_) if survey.elsewhere.contains(path) => Ok(Action::Replace),
+        Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
             let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
@@ -380,7 +372,7 @@ fn remove_unwanted(
         };
         match survey.disk.get(&path) {
             None => {}
-            Some(look) if *look == before.look => {
+            Some(look) if *look == before.look && !survey.edited.contains(&path) => {
                 let file = project.root.join(&path);
                 match now(&file) {
                     Some(current) if current == *look => {
