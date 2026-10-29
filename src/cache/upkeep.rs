@@ -165,6 +165,8 @@ impl Cache {
 
     /// removes unfinished downloads that nobody holds and whose bytes have not grown in a day. a
     /// download that runs for days keeps writing, so it is never mistaken for an abandoned one.
+    /// the empty lock files stay: a run waiting for the download may have opened one already,
+    /// and a lock taken on a file that lost its name would let a later run own the download too.
     fn sweep_partials(&self, old: &dyn Fn(SystemTime) -> bool) -> u64 {
         let folder = self.root.join("partial");
         let mut removed = 0;
@@ -190,8 +192,6 @@ impl Cache {
                     removed += 1;
                 }
             }
-            drop(lock);
-            let _ = fs::remove_file(entry.path());
         }
         removed
     }
@@ -301,8 +301,34 @@ mod tests {
             let later = SystemTime::now() + GRACE + Duration::from_secs(60);
             assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 3);
             assert!(sealed.iter().all(|path| !path.exists()));
-            assert_eq!(fs::read_dir(partial).unwrap().count(), 0);
+            let left: Vec<String> = fs::read_dir(partial)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(left, ["left.lock"], "a run may hold the lock open");
         }
+    }
+
+    #[test]
+    fn a_run_that_opened_a_lock_before_a_sweep_owns_the_download_alone() {
+        let (_dir, cache) = cache();
+        let url = "https://example.org/raced";
+        // every download leaves its lock file behind
+        drop(cache.claim(url).unwrap());
+        let key = digest::sha256(url.as_bytes()).hex();
+        let lock = cache.root.join("partial").join(format!("{key}.lock"));
+        // a run waiting for the download opens the lock, gc sweeps, then the run takes the lock
+        let opened = super::super::partial::open_unfollowed(&lock, true).unwrap();
+        cache.sweep(
+            &Needed::default(),
+            SystemTime::now() + GRACE + Duration::from_secs(60),
+        );
+        opened.try_lock().unwrap();
+        assert!(
+            matches!(cache.claim(url).unwrap(), super::super::Claim::Busy),
+            "a second run owns the same download"
+        );
     }
 
     #[test]

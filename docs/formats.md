@@ -201,7 +201,7 @@ objects hold read-only payloads. `tmp/` holds new archive members, atomic record
 
 partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. progress is saved about once a second while writing. resumption truncates bytes past the checkpoint and rehashes the prefix.
 
-the `.lock` file coordinates writers; its contents are unused. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
+the `.lock` file coordinates writers; its contents are unused. gc removes an abandoned download's `.part` and `.json` but keeps its `.lock`, since a run waiting for that download may already have it open. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 
 ### other indexes
 
