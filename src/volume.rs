@@ -79,7 +79,7 @@ impl Volume {
 
     /// whether the volume can hardlink, learned once by linking a new hidden file in the scratch
     /// folder. none when the probe failed in a way that says nothing about links.
-    fn can_hardlink(&self) -> Option<bool> {
+    pub(crate) fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
         }
@@ -102,10 +102,62 @@ impl Volume {
     }
 }
 
-/// whether `err`, from linking a new file in the scratch folder, says the volume cannot hardlink
-/// at all. FAT32 and exFAT answer code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on linux.
-fn refuses_links(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::Unsupported || err.raw_os_error() == Some(1)
+/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link at all.
+/// FAT32 and exFAT refuse hardlinks with code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on
+/// linux. `EPERM` can also refuse one file alone, such as another user's under linux's
+/// `protected_hardlinks`, which only a probe on a file of fetchloom's own tells apart.
+pub(crate) fn refuses_links(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
+}
+
+/// whether `err` says the two files sit on different volumes, as a link from a cache on another
+/// drive does.
+pub(crate) fn crosses_volumes(err: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        const NOT_SAME_DEVICE: u32 = 17;
+        if err
+            .raw_os_error()
+            .is_some_and(|code| win32(code) == NOT_SAME_DEVICE)
+        {
+            return true;
+        }
+    }
+    err.kind() == io::ErrorKind::CrossesDevices
+}
+
+/// `ERROR_INVALID_FUNCTION` and `ERROR_NOT_SUPPORTED`, the codes of a windows volume that cannot
+/// link or clone at all.
+#[cfg(windows)]
+fn refusal_code(code: i32) -> bool {
+    const INVALID_FUNCTION: u32 = 1;
+    const NOT_SUPPORTED: u32 = 50;
+    matches!(win32(code), INVALID_FUNCTION | NOT_SUPPORTED)
+}
+
+/// the windows error code `code` carries. reflink-copy reports windows errors as HRESULTs, which
+/// keep the code in their low 16 bits.
+#[cfg(windows)]
+fn win32(code: i32) -> u32 {
+    let code = code.cast_unsigned();
+    if code >> 16 == 0x8007 {
+        code & 0xffff
+    } else {
+        code
+    }
+}
+
+/// `EPERM`, and `ENOTSUP`, which clonefile answers on a volume that cannot clone and which std
+/// leaves uncategorized.
+#[cfg(target_os = "macos")]
+fn refusal_code(code: i32) -> bool {
+    matches!(code, 1 | 45)
+}
+
+/// `EPERM`. linux reports the other refusals with codes std already calls unsupported.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn refusal_code(code: i32) -> bool {
+    code == 1
 }
 
 /// makes a new empty file that file browsers do not show: windows hides it by its attribute,
