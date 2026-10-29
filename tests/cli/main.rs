@@ -7,6 +7,7 @@ mod concurrent;
 mod get;
 mod hints;
 mod moved;
+mod placing;
 mod progress;
 mod project;
 mod proxy;

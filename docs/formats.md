@@ -38,7 +38,7 @@ names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character 
 
 `add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
 
-`copy = true` applies when a file is placed. an existing read-only fallback copy is not made writable by changing this setting; recreate that file to apply it. save any edits first.
+`copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. turning it off leaves writable files as they are.
 
 ### patterns
 
@@ -124,16 +124,25 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | plain URL | the parsed URL | the same URL |
 | zenodo | `zenodo:<concrete record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
 | figshare | `figshare:<id>@<version>` | the API's download URL |
-| dataverse | `dataverse:<host>/<persistent id>@<version>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
 | OSF | `osf:<node or file id>` | the download link with a file version |
-| drive file | `drive:<id>` | `https://drive.google.com/uc?id=<id>` |
+| drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
 | dropbox | the shared URL with `dl=1` | the same URL |
+| hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
+| kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
 
-DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment.
+
+drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
+
+drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs entries stop the folder listing because exports can change between downloads. ask the owner to upload fixed files instead.
+
+dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins the zip; extraction adds its tree hash. an unnamed HTML answer fails instead of entering the cache as dataset bytes.
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and local cache records keep those URLs verbatim, so do not share them. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs mask recognized query secrets. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 
@@ -169,12 +178,13 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>
   unpacked/<archive sha256>
   projects/<sha256 of project root>.json
+  changed/<object sha256>
   tmp/
 ```
 
 `layout` is created with `1\n`. an existing value is not validated or migrated. `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache.
 
-objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, and private downloads when file locking is unavailable. these records are local cache indexes, not files to commit.
+objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
 ### URL and partial records
 
@@ -198,6 +208,7 @@ the `.lock` file coordinates writers; its contents are unused. without OS file l
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
 - an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
+- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit or `cache verify` writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
@@ -222,8 +233,11 @@ state fields:
 | `files[path].method` | `reflink`, `hardlink` or `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
+| `files[path].writable` | `true` when the file was placed or adopted writable |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
+
+a file whose `look.modified` is not older than the state file's own modification time is hashed before its look is trusted, since both times come from one filesystem clock and a coarse clock hides an edit made in the same tick. a hash that differs counts as an edit. a sync that finds such files unchanged writes the state again, which settles them.
 
 ## settings
 
@@ -249,7 +263,9 @@ an invalid jobs value fails a named command even when it does not download. welc
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and known icloud and macos `CloudStorage` locations. system proxy settings and proxy environment variables are read by the HTTP stack.
 
-credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `~/.kaggle/kaggle.json` or `KAGGLE_USERNAME` and `KAGGLE_KEY`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `DATAVERSE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+
+`DATAVERSE_TOKEN` is not read. use public dataverse links; an access refusal needs a public copy from the dataset's owner.
 
 ## the JSON document
 
@@ -280,14 +296,14 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
 | `get` | `folder`: absolute path; `files`: file records below |
 | `path` | absolute path string, for a dataset, file or subfolder |
-| `status` | `project`: absolute path; seven arrays below |
+| `status` | `project`: absolute path; eight arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
-placement has integer counts `placed`, `replaced`, `removed`, `unchanged`, and `kept`, an array of `{path, reason}`. paths are project-relative. reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
@@ -299,7 +315,8 @@ status arrays:
 | `missing` | absent target paths |
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
-| `outdated` | unchanged managed paths pinned to other hashes now |
+| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
+| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after that time; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 

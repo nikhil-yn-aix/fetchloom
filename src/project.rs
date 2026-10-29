@@ -6,12 +6,12 @@ pub(crate) mod manifest;
 pub(crate) mod state;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::State;
+use self::state::{Look, State};
 use crate::error::{Error, Kind};
 
 const FOLDER: &str = ".fetchloom";
@@ -46,6 +46,7 @@ impl Project {
 
     /// data.toml's text and what it says.
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
+        let _span = tracing::debug_span!("read_manifest").entered();
         let text = fs::read_to_string(self.manifest_path()).map_err(|err| {
             if err.kind() == io::ErrorKind::InvalidData {
                 Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
@@ -60,8 +61,12 @@ impl Project {
 
     /// data.lock, or nothing when the project has none yet.
     pub(crate) fn lock(&self) -> Result<Option<Lock>, Error> {
+        let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
-            Ok(text) => Lock::parse(&text).map(Some),
+            Ok(text) => {
+                span.record("bytes", text.len());
+                Lock::parse(&text).map(Some)
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
                 Kind::ProjectInvalid,
@@ -72,10 +77,23 @@ impl Project {
         }
     }
 
-    pub(crate) fn state(&self) -> State {
-        fs::read(self.root.join(FOLDER).join("state"))
-            .map(|bytes| State::parse(&bytes))
-            .unwrap_or_default()
+    /// the state, and when it was written in nanoseconds since 1970, like the times it records. a
+    /// missing or unreadable state is empty.
+    pub(crate) fn state(&self) -> (State, u64) {
+        let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
+        let read = File::open(self.root.join(FOLDER).join("state")).and_then(|mut file| {
+            let written = Look::of(&file.metadata()?).modified;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok((bytes, written))
+        });
+        match read {
+            Ok((bytes, written)) => {
+                span.record("bytes", bytes.len());
+                (State::parse(&bytes), written)
+            }
+            Err(_) => (State::default(), 0),
+        }
     }
 
     /// replaces a file at the project's root in one step.
@@ -85,6 +103,7 @@ impl Project {
     }
 
     pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
+        let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
         write_atomically(&folder.join("state"), &state.render())
             .map_err(|err| Error::io("could not record what was placed", &err))

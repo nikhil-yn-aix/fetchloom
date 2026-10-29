@@ -72,7 +72,7 @@ impl Kind {
 }
 
 /// a failure: what happened in one sentence, supporting lines, and what to do next.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Error {
     pub(crate) kind: Kind,
     pub(crate) message: String,

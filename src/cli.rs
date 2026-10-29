@@ -159,6 +159,7 @@ pub(crate) fn run() -> ExitCode {
         );
     }
     let name = args.command.as_ref().map(args::Command::name);
+    let _command = tracing::debug_span!("command", name).entered();
     if let Some(folder) = &global.directory
         && let Err(err) = std::env::set_current_dir(folder)
     {

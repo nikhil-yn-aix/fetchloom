@@ -1,9 +1,11 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
+mod changed;
 mod object;
 mod partial;
 mod unpacked;
 mod upkeep;
+mod volume;
 
 #[cfg(test)]
 mod link_tests;
@@ -21,13 +23,14 @@ pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
+use volume::Volume;
 
 use crate::digest::{self, Md5, Sha256};
 
 const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
-const FOLDERS: [&str; 7] = [
-    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
+const FOLDERS: [&str; 8] = [
+    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
 ];
 
 #[derive(Clone, Debug)]
@@ -36,6 +39,7 @@ pub(crate) struct Cache {
     /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
+    volume: Arc<Volume>,
 }
 
 /// an object as it sits in the cache after a write.
@@ -92,11 +96,13 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
+        let _span = tracing::debug_span!("open_cache").entered();
         fs::create_dir_all(&root)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder))?;
         }
         let cache = Cache {
+            volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
         };
@@ -129,24 +135,35 @@ impl Cache {
     /// removes an object the cache no longer needs to hold, such as an archive whose files are
     /// all unpacked. files placed from it keep their bytes.
     pub(crate) fn drop_object(&self, digest: &Sha256) -> io::Result<()> {
-        match fs::remove_file(self.object_path(digest)) {
+        match self.volume.remove(&self.object_path(digest)) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             removed => removed,
         }
     }
 
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
-    /// edited, is removed so the next run downloads it again. says whether it was intact.
+    /// edited, is removed so the next run downloads it again, and marked as changed so other
+    /// projects whose links to it still look as placed put their copies back. says whether it was
+    /// intact.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
-                fs::remove_file(&path)?;
+                self.remember_changed(digest);
+                self.volume.remove(&path)?;
                 Ok(false)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
+        }
+    }
+
+    /// marks an object as changed. without the mark, another project sees the change only where
+    /// its own listing shows it, which on windows it may not.
+    fn remember_changed(&self, digest: &Sha256) {
+        if let Err(err) = self.mark_changed(digest) {
+            tracing::debug!(%err, "could not remember a changed object");
         }
     }
 
@@ -234,7 +251,7 @@ impl Cache {
             }
             self.checked[first].store(true, Ordering::Relaxed);
         }
-        let new = link_new(source, &path)?;
+        let new = link_new(&self.volume, source, &path)?;
         Ok(Stored {
             digest,
             size,
@@ -247,8 +264,8 @@ impl Cache {
 
 /// links `source` to `path` unless something is there already, then removes `source`. says
 /// whether the link is new.
-fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
-    let new = match fs::hard_link(source, path) {
+fn link_new(volume: &Volume, source: &Path, path: &Path) -> io::Result<bool> {
+    let new = match volume.hard_link(source, path) {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
         // something removed the object's folder since this run checked it
@@ -256,16 +273,19 @@ fn link_new(source: &Path, path: &Path) -> io::Result<bool> {
             if let Some(parent) = path.parent() {
                 real_folder(parent)?;
             }
-            return link_new(source, path);
+            return link_new(volume, source, path);
         }
         // a filesystem without hardlinks gets a plain rename, guarded by a check
         Err(_) if path.exists() => false,
-        Err(_) => {
-            fs::rename(source, path)?;
-            return Ok(true);
-        }
+        Err(_) => match volume.rename(source, path) {
+            Ok(()) => return Ok(true),
+            // another writer published the object since the check, and the rename could not
+            // replace it
+            Err(_) if path.exists() => false,
+            Err(err) => return Err(err),
+        },
     };
-    fs::remove_file(source)?;
+    volume.remove(source)?;
     Ok(new)
 }
 
@@ -315,6 +335,59 @@ pub(crate) mod tests {
         (dir, cache)
     }
 
+    /// a cache that acts as if it sat on FAT32 or exFAT: it cannot hardlink, and it refuses to
+    /// remove a read-only file, as windows does there.
+    pub(crate) fn fat() -> (tempfile::TempDir, Cache) {
+        let (dir, mut cache) = cache();
+        cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), false));
+        (dir, cache)
+    }
+
+    /// whether the volume under `dir` can hardlink. FAT32 and exFAT cannot.
+    pub(crate) fn hardlinks(dir: &Path) -> bool {
+        let probe = dir.join("probe");
+        let link = dir.join("probe link");
+        fs::write(&probe, b"").unwrap();
+        let linked = fs::hard_link(&probe, &link).is_ok();
+        for path in [probe, link] {
+            let _ = fs::remove_file(path);
+        }
+        linked
+    }
+
+    /// makes the file at `path` read-only, as every object is.
+    pub(super) fn seal(path: &Path) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// keeps `path` from being removed while the result lives.
+    #[cfg(windows)]
+    pub(super) fn hold(path: &Path) -> impl Sized {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    pub(super) fn hold(path: &Path) -> impl Sized {
+        use std::os::unix::fs::PermissionsExt;
+        struct Locked(PathBuf);
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        let folder = path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        Locked(folder)
+    }
+
     pub(crate) fn store(cache: &Cache, bytes: &[u8]) -> Stored {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
@@ -357,14 +430,39 @@ pub(crate) mod tests {
 
     #[test]
     fn the_same_bytes_twice_are_stored_once() {
-        let (_dir, cache) = cache();
-        let first = store(&cache, b"same");
-        let second = store(&cache, b"same");
-        assert!(first.new);
-        assert!(!second.new);
-        assert_eq!(first.path, second.path);
+        for (_dir, cache) in [cache(), fat()] {
+            let first = store(&cache, b"same");
+            let second = store(&cache, b"same");
+            assert!(first.new);
+            assert!(!second.new);
+            assert_eq!(first.path, second.path);
+            assert!(fs::metadata(&first.path).unwrap().permissions().readonly());
+            let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
+            assert_eq!(leftovers, 0, "nothing is left behind in tmp");
+        }
+    }
+
+    #[test]
+    fn bytes_another_writer_published_since_the_check_are_not_new() {
+        let (_dir, mut cache) = cache();
+        // FAT refuses the link, and another writer publishes the same bytes before the rename
+        cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), false).losing_renames());
+        assert_eq!(cache.find(&digest::sha256(b"same"), None), None);
+        let stored = store(&cache, b"same");
+        assert!(!stored.new);
+        assert_eq!(fs::read(&stored.path).unwrap(), b"same");
+        assert!(fs::metadata(&stored.path).unwrap().permissions().readonly());
         let leftovers = fs::read_dir(cache.root.join("tmp")).unwrap().count();
         assert_eq!(leftovers, 0, "nothing is left behind in tmp");
+    }
+
+    #[test]
+    fn a_dropped_object_leaves_the_cache() {
+        for (_dir, cache) in [cache(), fat()] {
+            let archive = store(&cache, b"an archive whose files are unpacked");
+            cache.drop_object(&archive.digest).unwrap();
+            assert_eq!(cache.find(&archive.digest, None), None);
+        }
     }
 
     #[test]

@@ -382,4 +382,36 @@ mod tests {
             err.message
         );
     }
+
+    #[test]
+    fn a_dropbox_zip_ignores_its_root_directory_entry() {
+        let mut bytes = zip_of(&[
+            ("/", b""),
+            ("readme.md", b"readme\n"),
+            ("nested/", b""),
+            ("nested/data.csv", b"x,y\n1,2\n"),
+        ]);
+        // dropbox marks entries as unix, with permission bits and DOS directory or archive flags.
+        for at in signatures(&bytes, *b"PK\x01\x02") {
+            bytes[at + 5] = 3;
+            let length = usize::from(u16::from_le_bytes([bytes[at + 28], bytes[at + 29]]));
+            let directory = bytes[at + 46..at + 46 + length].ends_with(b"/");
+            let attributes = if directory {
+                0x01e4_0010_u32
+            } else {
+                0x01e4_0020_u32
+            };
+            bytes[at + 38..at + 42].copy_from_slice(&attributes.to_le_bytes());
+        }
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(Format::Zip, &bytes).unwrap();
+        let paths: Vec<_> = unpacked
+            .members
+            .iter()
+            .map(|member| member.path.as_str())
+            .collect();
+        assert_eq!(paths, ["nested/data.csv", "readme.md"]);
+        scratch.assert_stored(&unpacked.members[0], b"x,y\n1,2\n");
+        scratch.assert_stored(&unpacked.members[1], b"readme\n");
+    }
 }

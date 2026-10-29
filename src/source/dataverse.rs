@@ -1,6 +1,7 @@
 //! dataverse: datasets on any dataverse install, named by host and persistent id, listed through
 //! the native API.
 
+mod file;
 mod version;
 
 use std::fmt;
@@ -9,16 +10,21 @@ use url::Url;
 
 use super::{Listing, malformed};
 use crate::error::{Error, Kind};
-use crate::net::Api;
+use crate::net::{Api, Response};
 
-/// a dataset on one dataverse install, at a version or at its newest published one.
+/// a dataset or one of its files, at a version or at its newest published one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Dataset {
     /// the install's host, with its port when it is not the usual one.
     host: String,
-    /// the persistent id, such as `doi:10.7910/DVN/TJCLKP`.
-    pid: String,
+    item: Item,
     version: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Item {
+    Dataset(String),
+    File(String),
 }
 
 impl Dataset {
@@ -28,7 +34,7 @@ impl Dataset {
         let bad = || {
             malformed(
                 &format!("dataverse:{text}"),
-                "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
+                "dataverse:host/doi:10.7910/DVN/TJCLKP or dataverse:host/file:6867336, with @version to pin one",
             )
         };
         let (host, rest) = text.trim().split_once('/').ok_or_else(bad)?;
@@ -51,26 +57,25 @@ impl Dataset {
             Some((pid, version)) if is_version(version) => (pid, Some(version.to_owned())),
             _ => (rest, None),
         };
-        let pid_ok = ["doi:", "hdl:"].iter().any(|scheme| {
-            pid.len() > scheme.len()
-                && pid
-                    .get(..scheme.len())
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
-        });
-        if host.is_empty() || host.contains(['/', '?', '#']) || !pid_ok {
+        let item = match pid.strip_prefix("file:") {
+            Some(id) if is_number(id) || is_pid(id) => Item::File(id.to_owned()),
+            None if is_pid(pid) => Item::Dataset(pid.to_owned()),
+            _ => return Err(bad()),
+        };
+        if host.is_empty() || host.contains(['/', '?', '#']) {
             return Err(bad());
         }
         Ok(Dataset {
             host: host.to_ascii_lowercase(),
-            pid: pid.to_owned(),
+            item,
             version,
         })
     }
 
-    /// a pasted dataset page on any install: `.../dataset.xhtml?persistentId=doi:...`.
+    /// a dataset or file page on any install, without fetching its HTML.
     pub(super) fn from_link(url: &Url) -> Option<Dataset> {
         let page = url.path_segments()?.next_back()?;
-        if !matches!(page, "dataset.xhtml" | "citation") {
+        if !matches!(page, "dataset.xhtml" | "citation" | "file.xhtml") {
             return None;
         }
         let query = |key: &str| {
@@ -82,7 +87,15 @@ impl Dataset {
             Some(port) => format!("{}:{port}", url.host_str()?),
             None => url.host_str()?.to_owned(),
         };
-        Dataset::parse(&format!("{host}/{}", query("persistentId")?))
+        let id = if page == "file.xhtml" {
+            format!(
+                "file:{}",
+                query("fileId").or_else(|| query("persistentId"))?
+            )
+        } else {
+            query("persistentId")?
+        };
+        Dataset::parse(&format!("{host}/{id}"))
             .ok()
             .map(|dataset| Dataset {
                 version: query("version").filter(|version| is_version(version)),
@@ -105,12 +118,28 @@ impl Dataset {
 
     /// asks the install's native API for the dataset's files.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
+        if let Item::File(id) = &self.item {
+            return file::resolve(self, id, api).await;
+        }
         let response = api.get(&self.url()?).await?;
-        let answer: version::Answer = super::json(self, &response)?;
+        let answer: version::Answer = self.answer(&response)?;
         answer.listing(self)
     }
 
+    fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
+        super::json(self, response).map_err(|error| {
+            if error.kind == Kind::AuthRequired {
+                error.help("ask the dataset's owner for a public copy. fetchloom does not sign in to dataverse")
+            } else {
+                error
+            }
+        })
+    }
+
     fn url(&self) -> Result<Url, Error> {
+        let Item::Dataset(pid) = &self.item else {
+            return Err(self.invalid("a file has no dataset listing URL"));
+        };
         let mut url = Url::parse(&format!(
             "https://{}/api/datasets/:persistentId/",
             self.host
@@ -122,7 +151,7 @@ impl Dataset {
                 .pop_if_empty()
                 .extend(["versions", version]);
         }
-        url.query_pairs_mut().append_pair("persistentId", &self.pid);
+        url.query_pairs_mut().append_pair("persistentId", pid);
         Ok(url)
     }
 
@@ -143,6 +172,21 @@ impl Dataset {
     }
 }
 
+fn is_number(text: &str) -> bool {
+    !text.is_empty()
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+        && text.parse::<u64>().is_ok_and(|id| id > 0)
+}
+
+fn is_pid(text: &str) -> bool {
+    ["doi:", "hdl:"].iter().any(|scheme| {
+        text.len() > scheme.len()
+            && text
+                .get(..scheme.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+    })
+}
+
 /// a dataverse version: `2.0`, `3`, or a name such as `:draft`.
 fn is_version(text: &str) -> bool {
     !text.is_empty()
@@ -151,7 +195,11 @@ fn is_version(text: &str) -> bool {
 
 impl fmt::Display for Dataset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dataverse:{}/{}", self.host, self.pid)?;
+        write!(f, "dataverse:{}/", self.host)?;
+        match &self.item {
+            Item::Dataset(pid) => f.write_str(pid)?,
+            Item::File(id) => write!(f, "file:{id}")?,
+        }
         if let Some(version) = &self.version {
             write!(f, "@{version}")?;
         }
@@ -161,3 +209,6 @@ impl fmt::Display for Dataset {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod file_tests;

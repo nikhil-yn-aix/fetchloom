@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{Listing, Reference, Remote, Var, malformed};
 use crate::error::{Error, Kind};
-use crate::net::{Api, Credential};
+use crate::net::{Api, Credential, Expired};
 
 /// first path segments on osf.io that are pages, not ids.
 const PAGES: [&str; 12] = [
@@ -212,6 +212,22 @@ pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
         })
         .into_iter()
         .collect()
+}
+
+/// OSF redirects can expire while a slow first connection reaches its storage provider.
+pub(super) fn expiry_check(url: &Url) -> Option<Expired> {
+    (url.scheme() == "https"
+        && url.port_or_known_default() == Some(443)
+        && matches!(url.host_str(), Some("osf.io" | "files.osf.io"))
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then_some(expired)
+}
+
+fn expired(text: &str) -> bool {
+    text.contains("<Code>AccessDenied</Code>")
+        && text.contains("<Message>Request has expired. X-Amz-Date = ")
+        && text.contains(", X-Amz-Expires = ")
 }
 
 #[cfg(test)]

@@ -259,3 +259,27 @@ fn live_dataverse() {
     );
     assert_eq!(work.counts().requests, 1);
 }
+
+#[test]
+fn a_dataset_without_file_metadata_is_not_empty() {
+    let body = changed(|value| {
+        value["data"]["latestVersion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("files");
+    });
+    let recorded = Recorded::default().on(DATASET, 200, body);
+    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+}
+
+#[test]
+fn access_errors_do_not_suggest_unscoped_credentials() {
+    for status in [401, 403] {
+        let recorded =
+            Recorded::default().on(DATASET, status, fixture_bytes("dataverse/refused.json"));
+        let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert!(error.help.unwrap().contains("public copy"));
+    }
+}

@@ -35,3 +35,55 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      # the default disks never show some paths: refs clones blocks, the way apfs does, while
+      # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
+      # read-only file the way ntfs allows. every test runs again with its folders on each.
+      # windows runners are admin, which diskpart needs
+      - name: cargo test on refs, exfat and fat32
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($volume in @(@('refs', 'R'), @('exfat', 'X'), @('fat32', 'Y'))) {
+            $fs, $letter = $volume
+            $vhd = "$env:RUNNER_TEMP\$fs.vhdx"
+            $script = "$env:RUNNER_TEMP\$fs.txt"
+            Set-Content $script -Encoding ascii -Value @(
+              "create vdisk file=`"$vhd`" maximum=4096 type=expandable"
+              "select vdisk file=`"$vhd`""
+              "attach vdisk"
+              "create partition primary"
+              "format fs=$fs quick label=$fs"
+              "assign letter=$letter"
+            )
+            diskpart /s $script
+            if ($LASTEXITCODE) { throw "diskpart could not make the $fs volume" }
+            New-Item -ItemType Directory "${letter}:\tmp" | Out-Null
+            $env:TMP = "${letter}:\tmp"
+            $env:TEMP = $env:TMP
+            Write-Output "::group::cargo test on $fs"
+            cargo test --locked --no-fail-fast
+            if ($LASTEXITCODE) { $failed += $fs }
+            Write-Output "::endgroup::"
+          }
+          if ($failed) { throw "tests failed on $($failed -join ', ')" }
+      # btrfs and xfs clone blocks, a path ext4 never takes
+      - name: cargo test on btrfs and xfs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
+          failed=""
+          for fs in btrfs xfs; do
+            image="$RUNNER_TEMP/$fs.img"
+            truncate -s 4G "$image"
+            "mkfs.$fs" -q "$image"
+            sudo mkdir -p "/mnt/$fs"
+            sudo mount -o loop "$image" "/mnt/$fs"
+            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
+            echo "::group::cargo test on $fs"
+            TMPDIR="/mnt/$fs" cargo test --locked --no-fail-fast || failed="$failed $fs"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "tests failed on$failed"; exit 1; fi

@@ -1,6 +1,7 @@
 //! the loop at the heart of a project: resolve what data.toml changed, learn every file's hash,
 //! put what the lock names in the cache, then write data.lock.
 
+pub(super) mod disk;
 mod draft;
 pub(super) mod place;
 pub(super) mod unpack;
@@ -13,6 +14,7 @@ use std::time::{Instant, SystemTime};
 use tokio::task::JoinSet;
 use url::Url;
 
+use self::disk::Survey;
 use self::draft::Draft;
 use self::place::{Placement, Placing};
 use super::Context;
@@ -74,20 +76,22 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// makes the data folder match `lock`. what each file needs is decided first, so only the
-    /// bytes placing lacks are downloaded. archives this machine never unpacked are unpacked
-    /// first, since what they hold decides where files go.
+    /// makes the data folder match `lock`, starting from `survey` of it. what each file needs is
+    /// decided first, so only the bytes placing lacks are downloaded. archives this machine never
+    /// unpacked are unpacked first, since what they hold decides where files go.
     pub(super) async fn place(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         force: bool,
+        survey: Survey,
     ) -> Result<Placement, Error> {
-        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
             self.unpack_locked(lock, &unknown).await?;
-            placing = Placing::new(self.project, manifest, lock, &self.cache, force)?;
+            let survey = placing.into_survey();
+            placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         }
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)
@@ -176,6 +180,7 @@ impl<'a> Loop<'a> {
         if old == Some(lock) {
             return Ok(false);
         }
+        let _span = tracing::debug_span!("write_lock").entered();
         self.project.write(lock::FILE, lock.render().as_bytes())?;
         let output = &self.context.output;
         let pinned: Vec<&Locked> = lock
@@ -382,12 +387,9 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
         .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
     let pinned = lock.datasets.iter().find(|locked| locked.name == dataset);
-    let (from, divert) = source::fetch_plan(&url);
+
     Ok(Job {
         fetch: Fetch {
-            url,
-            from,
-            divert,
             expect: Expect {
                 sha256: Some(file.sha256),
                 md5: file.md5,
@@ -395,6 +397,7 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
             },
             revalidate: false,
             unpack: false,
+            ..source::fetch_plan(&url)
         },
         label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),

@@ -27,7 +27,7 @@ there is no separate model crate or python wrapper. core types live with their o
 3. write `data.lock` if its contents changed. standalone `lock` does no placement and need not fill the cache with already pinned files.
 4. expand the lock into destination targets. an archive without a usable member record is unpacked before its destinations can be planned. compare targets with state and disk metadata to choose keep, adopt, place, replace or leave.
 5. fetch only the bytes needed by place and replace actions. a missing archive member requires the original archive again when it is not cached. check pinned size, SHA-256 and any stated MD5 on downloads.
-6. remove unwanted unchanged tracked files, place the targets, and write state. drop unneeded packed objects and register the project for cache retention.
+6. remove unwanted unchanged tracked files, place the targets, and write state if it changed or settles files hashed for being as new as the old state. drop unneeded packed objects and register the project for cache retention.
 
 `add` first resolves its new reference, sometimes downloading a single file to learn its name. it writes the manifest before syncing and attempts to restore that manifest on sync failure. `remove` changes the manifest and lock, then removes unwanted tracked files without downloading.
 
@@ -41,7 +41,7 @@ the async command runtime uses up to four worker threads. file-download tasks ar
 
 archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
 
-placement, project metadata and many cache-index operations run synchronously on command futures. large fallback copies overlap reading and writing with three reusable 1 MiB buffers. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
+placement, project metadata and many cache-index operations run synchronously on command futures. placing files and looking up their objects use up to eight threads, at most one per 64 files and no more than the logical CPU count. the first file is placed alone, so the others start knowing which methods the filesystem refuses. off linux, large fallback copies overlap reading and writing with three reusable 1 MiB buffers; linux copies inside the kernel with `copy_file_range`. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
 
 ## sources
 
@@ -59,37 +59,43 @@ source tests implement `Api` with in-memory recorded responses from `tests/fixtu
 | dataverse | native API, `format=original` for tabular files | checksum type per file, MD5 on harvard |
 | osf | files API, folders walked, `links.next` paging | SHA-256 and MD5 |
 | hugging face | tree API at a commit, `/resolve/` for bytes | SHA-256 for large files, served through a CDN with range support. a branch is resolved to its commit before locking |
-| kaggle | datasets API, then a redirect to signed storage | no checksum. a rate limit can look like a 404 |
-| google drive | the `uc` endpoint, then the confirm form for large files | "too many users" is its own retry-later error. folders are read from the folder page |
+| kaggle | API view for the newest version, list in pages of 200, then each file on its own with `raw=true`, redirected to signed storage | no checksum. public datasets need no token; a 403 can mean private or missing. competitions are refused |
+| google drive | direct downloads from `drive.usercontent.google.com`, with a confirmation-page handler | quota pages ask you to retry later. `open?id=` follows drive's redirect; folders are walked through `embeddedfolderview` |
 | dropbox | the shared link with `dl=1` | a folder arrives as one zip, treated as an archive |
 
 ## the cache
 
 objects are read-only files named by SHA-256. an ordinary download writes to a partial file, computes its hash, flushes and seals it, then publishes under that hash. the caller checks expected size and checksums after publication; a rejected transfer can leave an unreferenced object for gc.
 
-publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee.
+publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee. a rename that fails because another writer published the object since the check counts the bytes as already cached.
 
 partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and are saved about once a second. resuming rehashes that prefix before appending.
 
-cache lookup checks file type and known size, not content. `cache verify` rehashes objects. the [layout and records](formats.md#the-cache) separate objects from URL history, MD5 mappings, archive trees and project registrations.
+cache lookup checks file type and known size, not content. `cache verify` rehashes objects. the [layout and records](formats.md#the-cache) separate objects from URL history, MD5 mappings, archive trees, change marks and project registrations.
 
 successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable lock stops gc. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
+
+FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file there. when a removal is refused, the cache learns whether its volume can hardlink by trying once in `tmp/`. on a volume that cannot, the file has no other name, so the cache clears its read-only flag and removes it, and sets the flag again if the removal still fails. on a volume that can hardlink the flag stays: it belongs to every name of the file, including a hardlink a project placed.
 
 ## placing files
 
 new placements try reflink, then hardlink, then copy. a `Placer` remembers unsupported methods for its destination tree during the run, not in a persistent per-volume map. `copy = true` still allows a writable reflink, but skips hardlinks.
 
-reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space.
+reflinks have independent file contents after a write. hardlinks are the same file as the cached object. default placements are read-only; writable placement is opt-in. detection of onedrive, dropbox, icloud and macos file-provider folders skips hardlinks but still tries reflinks. fallback copies cost additional disk space. when a drive refuses both reflinks and hardlinks, `sync` and `get` say that is why their files were copied.
 
-never make a hardlinked input writable to edit it. that edits the cached object too. before a project sync, changed hardlinks recorded in that project's state cause the associated objects to be hashed and removed if damaged. another project's reuse is not protected by that audit. cache writers must be trusted.
+never make a hardlinked input writable to edit it. that edits the cached object too. before a project sync, changed hardlinks recorded in that project's state cause the associated objects to be hashed and removed if damaged. an object found damaged that way, or by `cache verify`, also gets a mark in the cache. cache writers must be trusted.
+
+the mark reaches other projects holding a hardlink to that object. a hardlink whose size and time still match its record, with that time older than the mark, is listed in `status` as edited through a link in another project, and the next sync puts the locked bytes back. on windows that is the usual case: a folder listing keeps the old size and time of a hardlink changed through another name, and `sync --force` reads every hardlink through its own name. on linux and macos, an edit that changes the size or time shows through every name of the file, so each project holding the link lists the file as edited and keeps it until `sync --force`.
 
 `plan` rejects overlapping dataset folders, file/folder clashes and folded-name collisions. its fold is ASCII lowercase, or NFC followed by uppercase then lowercase for unicode. path components longer than 255 UTF-8 bytes are refused on every platform. windows additionally rejects device names, trailing dots or spaces, and forbidden characters.
 
-manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; deletion rechecks its parent chain. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
+manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; a project's data folder is checked again, while the folder `get` writes into may itself be a link. deletion rechecks its parent chain the same way. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
 
 metadata files use a sibling file, flush and rename. data-file replacement is different: the old file is removed first, and copies write directly to their destination. a hard interruption can leave a missing or partial destination. a later sync may preserve a partial copy as an edit, so inspect `status` before forcing replacement.
 
-state stores hash, method, size and modification time, with no file id. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
+sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays. state records each placed file's size and time as read right after that file is placed, so an edit made while later files are placed shows as an edit too.
+
+state stores hash, method, size, modification time and whether the file was placed writable, with no file id. a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
 
 ## the network
 
@@ -110,6 +116,8 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
 
+OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
+
 resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
 
 a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
@@ -122,7 +130,7 @@ redirects are followed explicitly so every hop is checked. behind a proxy, untru
 
 source credentials attach only to their configured host over HTTPS on port 443. once a redirect leaves the original origin, no later hop receives those credentials. offline mode stops requests before sending and stops the resolver before lookup.
 
-project references reject recognized secret query keys on resolution. URL display masking is a wrapper used at call sites, not an invariant of `url::Url`. one-off URL records and successful `get` JSON retain raw URLs. do not share those records when fetching a signed link.
+project references reject recognized secret query keys on resolution. URL display masking is a wrapper used at call sites, not an invariant of `url::Url`. one-off URL records retain raw URLs; successful `get` JSON masks recognized query secrets. do not share local URL records when fetching a signed link.
 
 a shared writable cache trusts every writer. partial-download handles refuse links and special files; on unix, a resumed partial must belong to the current user and have one hardlink. cache subdirectories are checked when created or first used. these checks do not authenticate object contents or isolate users from one another.
 
@@ -148,12 +156,12 @@ successful unpacking records a sorted member tree under the archive hash. a lock
 
 ## project coordination and observability
 
-commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. standalone `lock` currently reads its manifest and old lock before acquiring the lock. on a filesystem without working file locks, serialize modifying commands yourself.
+commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. `lock --check` reads without it, since it changes nothing. on a filesystem without working file locks, serialize modifying commands yourself.
 
 human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 
-`-v` adds details and total counters; `-vv` enables debug events. `FETCHLOOM_TRACE` records instrumented spans and events, including source resolution, rather than a complete phase profile. there is no custom panic report. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
+`-v` adds details and total counters; `-vv` enables debug events. `FETCHLOOM_TRACE` records instrumented spans and events: the command, source resolution, and the phases of a project sync from reading the manifest, lock and state through scanning, relocking, planning and placing. downloads and unpacking have no spans of their own. there is no custom panic report. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
 
 ## adding a source
 
-add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or a download-page handler when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.
+add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or source-specific download response handling when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.

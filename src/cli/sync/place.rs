@@ -2,23 +2,28 @@
 //! before when the lock moved on, remove what no dataset needs, and leave alone every file
 //! someone changed or added.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+mod put;
+mod tell;
+
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use self::put::put_all;
+use self::tell::tell;
+use super::disk::Survey;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
-use crate::place::{Method, Placer};
+use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, State};
-use crate::units;
+use crate::project::state::{Look, Placed};
 use crate::work::Work;
 
 /// what placing did.
@@ -30,6 +35,8 @@ pub(crate) struct Placement {
     pub(crate) unchanged: u64,
     /// files left alone: changed by hand, or never placed by fetchloom.
     pub(crate) kept: Vec<Kept>,
+    /// files replaced because another project changed the bytes they shared through a link.
+    pub(crate) restored: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,14 +64,6 @@ enum Action {
     Leave(Reason),
 }
 
-/// what one dataset's placing cost, for its summary line.
-#[derive(Default)]
-struct Tally {
-    files: u64,
-    links: u64,
-    copied: u64,
-}
-
 /// the data folder compared with a lock, with what each file needs decided before anything
 /// downloads, so only the bytes placing lacks are fetched.
 pub(crate) struct Placing<'a> {
@@ -74,37 +73,28 @@ pub(crate) struct Placing<'a> {
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     data_dir: PathBuf,
-    state: State,
-    disk: HashMap<String, Look>,
+    survey: Survey,
 }
 
 impl<'a> Placing<'a> {
-    /// compares the data folder with `lock`, with each archive standing for the files the cache
-    /// records it unpacked to. only files fetchloom did not place are hashed, to see whether
-    /// they already hold the locked bytes.
+    /// compares the data folder, as `survey` saw it, with `lock`, with each archive standing for
+    /// the files the cache records it unpacked to. only files fetchloom did not place are hashed,
+    /// to see whether they already hold the locked bytes.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
         lock: &'a Lock,
         cache: &Cache,
         force: bool,
+        survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
-        let state = project.state();
-        let disk = scan(&project.root, &manifest.data_dir);
+        let _span = tracing::debug_span!("decide").entered();
         let actions = plan
             .targets
             .iter()
-            .map(|target| {
-                decide(
-                    target,
-                    disk.get(&target.path),
-                    state.files.get(&target.path),
-                    force,
-                    &project.root.join(&target.path),
-                )
-            })
+            .map(|target| decide(target, &survey, force, &project.root.join(&target.path)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Placing {
             project,
@@ -113,9 +103,13 @@ impl<'a> Placing<'a> {
             unknown: plan.unknown,
             actions,
             data_dir,
-            state,
-            disk,
+            survey,
         })
+    }
+
+    /// what the data folder held when this placing was decided, to decide again from.
+    pub(crate) fn into_survey(self) -> Survey {
+        self.survey
     }
 
     /// the archives never unpacked on this machine, with the dataset each belongs to.
@@ -129,16 +123,38 @@ impl<'a> Placing<'a> {
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing.
     pub(crate) fn missing(&self, cache: &Cache) -> Vec<(String, &'a LockedFile)> {
-        let mut seen = HashSet::new();
-        self.targets
+        let needed: Vec<&Target> = self
+            .targets
             .iter()
             .zip(&self.actions)
             .filter(|(_, action)| matches!(action, Action::Place | Action::Replace))
-            .filter(|(target, _)| cache.find(&target.sha256, Some(target.size)).is_none())
-            .filter(|(target, _)| seen.insert(target.locked.sha256))
-            .map(|(target, _)| (target.dataset.clone(), target.locked))
+            .map(|(target, _)| target)
+            .collect();
+        let mut unique = HashSet::new();
+        let objects: Vec<(Sha256, u64)> = needed
+            .iter()
+            .filter(|target| unique.insert(target.sha256))
+            .map(|target| (target.sha256, target.size))
+            .collect();
+        let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
+        let found = place::run_all(&objects, |(digest, size)| {
+            cache.find(digest, Some(*size)).is_some()
+        });
+        let present: HashSet<Sha256> = objects
+            .iter()
+            .zip(found)
+            .filter(|(_, found)| *found)
+            .map(|((digest, _), _)| *digest)
+            .collect();
+        let mut seen = HashSet::new();
+        needed
+            .into_iter()
+            .filter(|target| !present.contains(&target.sha256))
+            .filter(|target| seen.insert(target.locked.sha256))
+            .map(|target| (target.dataset.clone(), target.locked))
             .collect()
     }
+
     /// removes what no dataset needs, places what is missing or outdated, and records it.
     pub(crate) fn apply(
         self,
@@ -146,166 +162,159 @@ impl<'a> Placing<'a> {
         work: &Work,
         cache: &Cache,
     ) -> Result<Placement, Error> {
+        let _span = tracing::debug_span!("place").entered();
         let Placing {
             project,
             manifest,
             targets,
             actions,
             data_dir,
-            mut state,
-            disk,
+            mut survey,
             unknown,
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir);
         // removing first means a file that moved never collides with its own old copy
-        remove_unwanted(
+        let removed = remove_unwanted(
             project,
             &mut placer,
-            &mut state,
-            &disk,
+            &mut survey,
             &wanted,
             &unknown,
             &mut placement,
         )?;
-        let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
-        for (target, action) in targets.iter().zip(actions) {
-            let destination = project.root.join(&target.path);
-            match action {
-                Action::Keep => placement.unchanged += 1,
-                Action::Adopt(seen) => {
-                    state
-                        .files
-                        .insert(target.path.clone(), placed(target, Method::Copy, seen));
-                    placement.unchanged += 1;
-                }
-                Action::Leave(reason) => placement.kept.push(Kept {
-                    path: target.path.clone(),
-                    reason,
-                }),
-                action @ (Action::Place | Action::Replace) => {
-                    if matches!(action, Action::Replace) {
-                        placer
-                            .remove(&destination, false)
-                            .map_err(|err| local(&destination, &err))?;
-                        placement.replaced += 1;
-                    } else {
-                        placement.placed += 1;
-                    }
-                    let method = put(&mut placer, cache, target, &destination)?;
-                    let seen = Look::of(
-                        &fs::metadata(&destination).map_err(|err| local(&destination, &err))?,
-                    );
-                    state
-                        .files
-                        .insert(target.path.clone(), placed(target, method, seen));
-                    count(work, method);
-                    let tally = tallies.entry(target.dataset.as_str()).or_default();
-                    tally.files += 1;
-                    if method == Method::Copy {
-                        tally.copied += target.size;
-                    } else {
-                        tally.links += 1;
-                    }
-                }
-            }
+        let (todo, adopted) = settle(
+            project,
+            &mut placer,
+            &mut survey,
+            &targets,
+            actions,
+            &mut placement,
+        )?;
+        let needs_writing = survey.needs_writing;
+        let state = &mut survey.state;
+        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, work);
+        if removed || adopted || needs_writing || !tallies.is_empty() {
+            project.write_state(state)?;
         }
-        project.write_state(&state)?;
+        if let Some(error) = failure {
+            return Err(error);
+        }
         tell(output, manifest, &placer, &tallies, &placement);
         Ok(placement)
     }
 
     /// removes only what no dataset needs, and places nothing, so `remove` never downloads.
     pub(crate) fn remove_only(self, output: &Output) -> Result<Placement, Error> {
+        let _span = tracing::debug_span!("remove").entered();
         let Placing {
             project,
             manifest,
             targets,
             data_dir,
-            mut state,
-            disk,
+            mut survey,
             unknown,
             ..
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir);
-        remove_unwanted(
+        let removed = remove_unwanted(
             project,
             &mut placer,
-            &mut state,
-            &disk,
+            &mut survey,
             &wanted,
             &unknown,
             &mut placement,
         )?;
-        project.write_state(&state)?;
+        if removed || survey.needs_writing {
+            project.write_state(&survey.state)?;
+        }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
     }
 }
 
-fn put(
+/// carries out every decision short of placing files: counts what stays, records files found to
+/// hold the locked bytes, and removes files about to be replaced unless they changed since the
+/// scan. returns the targets left to place, and whether the state gained a file.
+fn settle<'t, 'a>(
+    project: &Project,
     placer: &mut Placer,
-    cache: &Cache,
-    target: &Target,
-    destination: &Path,
-) -> Result<Method, Error> {
-    let object = cache
-        .find(&target.sha256, Some(target.size))
-        .ok_or_else(|| {
-            Error::new(
-                Kind::LocalIo,
-                format!("the cache lost {} while placing it", target.path),
-            )
-            .help("run the same command again to download it")
-        })?;
-    placer
-        .place(&object, destination, target.copy)
-        .map_err(|err| local(destination, &err))
-}
-
-/// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
-/// through a hardlink also changes the cached object, which is then dropped and fetched again,
-/// so it never spreads to other projects.
-pub(crate) fn audit(project: &Project, manifest: &Manifest, cache: &Cache) -> Result<(), Error> {
-    let state = project.state();
-    let edited: Vec<&Placed> = state
-        .files
-        .values()
-        .filter(|placed| placed.method == Method::Hardlink)
-        .collect();
-    if edited.is_empty() {
-        return Ok(());
-    }
-    let disk = scan(&project.root, &manifest.data_dir);
-    for (path, placed) in &state.files {
-        if placed.method == Method::Hardlink
-            && disk.get(path).is_some_and(|seen| *seen != placed.look)
-            && !cache
-                .verify(&placed.sha256)
-                .map_err(|err| local(&project.root.join(path), &err))?
-        {
-            tracing::debug!(%path, "an edit through a hardlink changed its cached object");
+    survey: &mut Survey,
+    targets: &'t [Target<'a>],
+    actions: Vec<Action>,
+    placement: &mut Placement,
+) -> Result<(Vec<&'t Target<'a>>, bool), Error> {
+    let mut todo = Vec::new();
+    let mut adopted = false;
+    for (target, action) in targets.iter().zip(actions) {
+        match action {
+            Action::Keep => placement.unchanged += 1,
+            Action::Adopt(seen) => {
+                let writable = now_writable(&project.root.join(&target.path));
+                let found = placed(target, Method::Copy, seen, writable);
+                survey.state.files.insert(target.path.clone(), found);
+                placement.unchanged += 1;
+                adopted = true;
+            }
+            Action::Leave(reason) => placement.kept.push(Kept {
+                path: target.path.clone(),
+                reason,
+            }),
+            Action::Replace => {
+                let destination = project.root.join(&target.path);
+                match now(&destination) {
+                    Some(look) if survey.disk.get(&target.path) != Some(&look) => {
+                        let reason = if survey.state.files.contains_key(&target.path) {
+                            Reason::Changed
+                        } else {
+                            Reason::Foreign
+                        };
+                        placement.kept.push(Kept {
+                            path: target.path.clone(),
+                            reason,
+                        });
+                        continue;
+                    }
+                    Some(_) => placer
+                        .remove(&destination, false)
+                        .map_err(|err| local(&destination, &err))?,
+                    None => {}
+                }
+                if survey.elsewhere.contains(&target.path) {
+                    placement.restored.push(target.path.clone());
+                }
+                placement.replaced += 1;
+                todo.push(target);
+            }
+            Action::Place => {
+                placement.placed += 1;
+                todo.push(target);
+            }
         }
     }
-    Ok(())
+    Ok((todo, adopted))
 }
 
+/// what the file at `destination` needs, as `survey` saw it. a hardlink the cache marked as
+/// changed through another link is replaced, and a file hashing found changed is an edit, though
+/// its size and time may not show either.
 fn decide(
     target: &Target,
-    look: Option<&Look>,
-    placed: Option<&Placed>,
+    survey: &Survey,
     force: bool,
     destination: &Path,
 ) -> Result<Action, Error> {
-    let Some(look) = look else {
+    let path = &target.path;
+    let Some(look) = survey.disk.get(path) else {
         return Ok(Action::Place);
     };
-    match placed {
-        Some(placed) if placed.look == *look => {
-            let fits = !target.copy || placed.method == Method::Copy;
+    match survey.state.files.get(path) {
+        Some(_) if survey.elsewhere.contains(path) => Ok(Action::Replace),
+        Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
+            let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
             } else {
@@ -334,18 +343,18 @@ fn decide(
 
 /// deletes files fetchloom placed that no dataset needs now, unless someone changed them. the
 /// files of a dataset with an archive this machine never unpacked stay, since nothing tells which
-/// of them it still needs.
+/// of them it still needs. says whether the state lost a file.
 fn remove_unwanted(
     project: &Project,
     placer: &mut Placer,
-    state: &mut State,
-    disk: &HashMap<String, Look>,
+    survey: &mut Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
     placement: &mut Placement,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
-    let unwanted: Vec<String> = state
+    let unwanted: Vec<String> = survey
+        .state
         .files
         .iter()
         .filter(|(path, placed)| {
@@ -353,18 +362,28 @@ fn remove_unwanted(
         })
         .map(|(path, _)| path.clone())
         .collect();
+    let changed = !unwanted.is_empty();
     for path in unwanted {
-        let Some(before) = state.files.remove(&path) else {
+        let Some(before) = survey.state.files.remove(&path) else {
             continue;
         };
-        match disk.get(&path) {
+        match survey.disk.get(&path) {
             None => {}
-            Some(look) if *look == before.look => {
+            Some(look) if *look == before.look && !survey.edited.contains(&path) => {
                 let file = project.root.join(&path);
-                placer
-                    .remove(&file, true)
-                    .map_err(|err| local(&file, &err))?;
-                placement.removed += 1;
+                match now(&file) {
+                    Some(current) if current == *look => {
+                        placer
+                            .remove(&file, true)
+                            .map_err(|err| local(&file, &err))?;
+                        placement.removed += 1;
+                    }
+                    Some(_) => placement.kept.push(Kept {
+                        path,
+                        reason: Reason::Unneeded,
+                    }),
+                    None => {}
+                }
             }
             Some(_) => placement.kept.push(Kept {
                 path,
@@ -372,113 +391,34 @@ fn remove_unwanted(
             }),
         }
     }
-    Ok(())
+    Ok(changed)
 }
 
-/// every file under the data folder and how it looks, by its path in the project. links are
-/// neither followed nor touched.
-pub(crate) fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
-    let mut found = HashMap::new();
-    let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
-    while let Some((folder, relative)) = folders.pop() {
-        let Ok(entries) = fs::read_dir(&folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let path = format!("{relative}/{}", entry.file_name().to_string_lossy());
-            if kind.is_dir() {
-                folders.push((entry.path(), path));
-            } else if kind.is_file()
-                && let Ok(metadata) = entry.metadata()
-            {
-                found.insert(path, Look::of(&metadata));
-            }
-        }
-    }
-    found
+/// how the file at `path` looks right now. a file is read again right before it is deleted,
+/// since downloads may have run for hours after the folder was scanned, and someone may have
+/// changed it meanwhile.
+fn now(path: &Path) -> Option<Look> {
+    fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| Look::of(&metadata))
 }
 
-fn placed(target: &Target, method: Method, look: Look) -> Placed {
+fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed {
     Placed {
         dataset: target.dataset.clone(),
         sha256: target.sha256,
         method,
         look,
+        writable,
     }
 }
 
-fn count(work: &Work, method: Method) {
-    let counter = match method {
-        Method::Reflink => &work.reflinks,
-        Method::Hardlink => &work.hardlinks,
-        Method::Copy => &work.copies,
-    };
-    Work::add(counter, 1);
+/// whether the file at `path` may be written to now.
+fn now_writable(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }
 
-fn tell(
-    output: &Output,
-    manifest: &Manifest,
-    placer: &Placer,
-    tallies: &BTreeMap<&str, Tally>,
-    placement: &Placement,
-) {
-    for (dataset, tally) in tallies {
-        let how = match (tally.links, tally.copied) {
-            (_, 0) => "linked, no extra disk".to_owned(),
-            (0, copied) => format!("copied, {}", units::size(copied)),
-            (_, copied) => format!("partly copied, {}", units::size(copied)),
-        };
-        output.step(
-            "Placed",
-            &format!(
-                "{} · {} {how}",
-                plan::folder(manifest, dataset),
-                units::count(tally.files, "file", "files")
-            ),
-        );
-    }
-    if placement.removed > 0 {
-        output.step(
-            "Removed",
-            &units::count(
-                placement.removed,
-                "file no dataset needs",
-                "files no dataset needs",
-            ),
-        );
-    }
-    if let Some(client) = placer.synced()
-        && tallies.values().any(|tally| tally.copied > 0)
-    {
-        output.warn(&format!(
-            "{} is inside {client}, which breaks links, so files were copied. a project outside {client} uses no extra disk",
-            manifest.data_dir
-        ));
-    }
-    for kept in &placement.kept {
-        let message = match kept.reason {
-            Reason::Changed => format!(
-                "{} was changed by hand, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
-            ),
-            Reason::Foreign => format!(
-                "{} was not placed by fetchloom and holds other bytes, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
-            ),
-            Reason::Unneeded => format!(
-                "{} is no longer needed, but it was changed by hand, so it stays. delete it if you do not need it",
-                kept.path
-            ),
-        };
-        output.warn(&message);
-    }
-}
-
-fn local(path: &Path, err: &std::io::Error) -> Error {
+pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
     Error::new(
         Kind::LocalIo,
         format!("could not place {}: {err}", path.display()),

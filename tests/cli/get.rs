@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, file, link_folder, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -360,7 +360,7 @@ fn the_server_can_name_the_file() -> Result {
 }
 
 #[test]
-fn a_synced_folder_gets_a_copy_and_says_why() -> Result {
+fn a_synced_folder_gets_a_reflink_or_a_copy() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let output = sandbox
@@ -369,7 +369,16 @@ fn a_synced_folder_gets_a_copy_and_says_why() -> Result {
         .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    // sync clients keep a reflink like any file of its own but break a hardlink, so a filesystem
+    // without reflinks gets a copy, and the copy is explained
+    let name = if sandbox.links()?.reflink {
+        "a_synced_folder_gets_a_reflink"
+    } else {
+        "a_synced_folder_gets_a_copy_and_says_why"
+    };
+    sandbox
+        .filters()
+        .bind(|| insta::assert_snapshot!(name, stderr));
     Ok(())
 }
 
@@ -411,5 +420,42 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         fs::read(sandbox.work().join("second").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+#[test]
+fn a_large_unknown_size_needs_approval_before_reading_the_body() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/large.bin",
+        vec![reply("200 OK", &[("Content-Length", "1073741825")], b"")],
+    )?;
+    let output = sandbox.run(&["--json", "get", &server.url])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
+    assert_eq!(document["work"]["bytes_down"], 0);
+    assert_eq!(document["work"]["objects_written"], 0);
+    assert!(!sandbox.work().join("large").exists());
+    Ok(())
+}
+
+/// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
+/// into a home folder.
+#[test]
+fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
+    let sandbox = Sandbox::new()?;
+    let newer = b"sepal_length,species\n5.1,setosa\n";
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
+    let real = sandbox.folder("real")?;
+    if !link_folder(&real, &sandbox.work().join("linked")) {
+        return Ok(());
+    }
+    for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
+        let output = sandbox.run(&["get", &server.url, "-o", "linked"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{run} run: {stderr}");
+        assert_eq!(fs::read(real.join("iris.csv"))?, bytes, "{run} run");
+    }
     Ok(())
 }

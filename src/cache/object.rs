@@ -4,17 +4,17 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use tempfile::TempPath;
-
+use super::volume::Volume;
 use super::{Cache, Stored};
 use crate::digest::{Hasher, Sha256};
 
 /// a new object being written into `tmp/`. dropped before it is sealed, it leaves nothing.
 pub(crate) struct NewObject {
     file: File,
-    temp: TempPath,
+    temp: Temporary,
     hasher: Hasher,
     written: u64,
 }
@@ -22,9 +22,25 @@ pub(crate) struct NewObject {
 /// an object written in full and flushed to disk, waiting in `tmp/` to be put in place. dropped
 /// before it is published, it leaves nothing.
 pub(crate) struct Sealed {
-    temp: TempPath,
+    temp: Temporary,
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
+}
+
+/// the name of a file this process made in `tmp/`. dropped before the file is published, it
+/// removes the file.
+struct Temporary {
+    path: PathBuf,
+    volume: Arc<Volume>,
+    published: bool,
+}
+
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = self.volume.remove(&self.path);
+        }
+    }
 }
 
 impl Cache {
@@ -38,7 +54,11 @@ impl Cache {
                 Ok(file) => {
                     return Ok(NewObject {
                         file,
-                        temp: TempPath::try_from_path(path)?,
+                        temp: Temporary {
+                            path,
+                            volume: Arc::clone(&self.volume),
+                            published: false,
+                        },
                         hasher: Hasher::default(),
                         written: 0,
                     });
@@ -101,9 +121,9 @@ impl Sealed {
             digest,
             size,
         } = self;
-        let stored = cache.link_object(&temp, digest, size, None)?;
+        let stored = cache.link_object(&temp.path, digest, size, None)?;
         // linking moved or removed the file, and whatever has its name now is not ours to touch
-        temp.disable_cleanup(true);
+        temp.published = true;
         Ok(stored)
     }
 }
@@ -118,5 +138,25 @@ impl Write for NewObject {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::super::tests::fat;
+    use super::*;
+
+    #[test]
+    fn objects_never_published_leave_nothing_on_fat() {
+        let (_dir, cache) = fat();
+        let mut written = cache.new_object().unwrap();
+        written.write_all(b"abc").unwrap();
+        let mut sealed = cache.new_object().unwrap();
+        sealed.write_all(b"def").unwrap();
+        let sealed = sealed.seal().unwrap();
+        drop((written, sealed));
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
     }
 }

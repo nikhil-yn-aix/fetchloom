@@ -129,7 +129,7 @@ impl Cache {
         for object in self.objects() {
             if !needed.objects.contains(&object.digest)
                 && old(object.modified)
-                && fs::remove_file(&object.path).is_ok()
+                && self.volume.remove(&object.path).is_ok()
             {
                 freed.objects += 1;
                 freed.bytes += object.size;
@@ -145,6 +145,7 @@ impl Cache {
             }
         }
         freed.leftovers += self.sweep_partials(&old);
+        self.forget_changed(&needed.objects);
         for entry in fs::read_dir(self.root.join("tmp"))
             .into_iter()
             .flatten()
@@ -155,7 +156,7 @@ impl Cache {
                 .ok()
                 .and_then(|metadata| metadata.modified().ok())
                 .is_some_and(old);
-            if stale && fs::remove_file(entry.path()).is_ok() {
+            if stale && self.volume.remove(&entry.path()).is_ok() {
                 freed.leftovers += 1;
             }
         }
@@ -185,7 +186,7 @@ impl Cache {
                 continue;
             }
             for leftover in [bytes, folder.join(format!("{key}.json"))] {
-                if fs::remove_file(leftover).is_ok() {
+                if self.volume.remove(&leftover).is_ok() {
                     removed += 1;
                 }
             }
@@ -211,7 +212,8 @@ impl Cache {
                         if intact {
                             continue;
                         }
-                        let removed = fs::remove_file(&object.path).is_ok();
+                        self.remember_changed(&object.digest);
+                        let removed = self.volume.remove(&object.path).is_ok();
                         let mut found = changed
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -244,7 +246,7 @@ impl Cache {
 mod tests {
     use std::io::Write;
 
-    use super::super::tests::{cache, store};
+    use super::super::tests::{cache, fat, hold, seal, store};
     use super::*;
 
     #[test]
@@ -260,23 +262,47 @@ mod tests {
 
     #[test]
     fn a_sweep_keeps_what_is_needed_and_what_is_new() {
-        let (_dir, cache) = cache();
-        let needed = store(&cache, b"needed");
-        let unneeded = store(&cache, b"unneeded");
-        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
-        let keep = Needed {
-            objects: HashSet::from([needed.digest]),
-            ..Needed::default()
-        };
-        assert_eq!(
-            cache.sweep(&keep, SystemTime::now()).objects,
-            0,
-            "nothing is old yet"
-        );
-        let freed = cache.sweep(&keep, later);
-        assert_eq!((freed.objects, freed.bytes), (1, 8));
-        assert!(cache.find(&needed.digest, Some(6)).is_some());
-        assert!(cache.find(&unneeded.digest, Some(8)).is_none());
+        for (_dir, cache) in [cache(), fat()] {
+            let needed = store(&cache, b"needed");
+            let unneeded = store(&cache, b"unneeded");
+            let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+            let keep = Needed {
+                objects: HashSet::from([needed.digest]),
+                ..Needed::default()
+            };
+            assert_eq!(
+                cache.sweep(&keep, SystemTime::now()).objects,
+                0,
+                "nothing is old yet"
+            );
+            let freed = cache.sweep(&keep, later);
+            assert_eq!((freed.objects, freed.bytes), (1, 8));
+            assert!(cache.find(&needed.digest, Some(6)).is_some());
+            assert!(cache.find(&unneeded.digest, Some(8)).is_none());
+        }
+    }
+
+    #[test]
+    fn a_sweep_removes_what_stopped_runs_left_sealed() {
+        for (_dir, cache) in [cache(), fat()] {
+            // a download sealed by a run that died while publishing it, and a member sealed by
+            // one that died while unpacking
+            let partial = cache.root.join("partial");
+            fs::write(partial.join("left.lock"), b"").unwrap();
+            fs::write(partial.join("left.json"), b"{}").unwrap();
+            let sealed = [
+                partial.join("left.part"),
+                cache.root.join("tmp").join("0123456789abcdef.new"),
+            ];
+            for path in &sealed {
+                fs::write(path, b"abc").unwrap();
+                seal(path);
+            }
+            let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+            assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 3);
+            assert!(sealed.iter().all(|path| !path.exists()));
+            assert_eq!(fs::read_dir(partial).unwrap().count(), 0);
+        }
     }
 
     #[test]
@@ -322,6 +348,11 @@ mod tests {
         assert_eq!(seen.load(Ordering::Relaxed), 8);
         assert!(cache.find(&good.digest, Some(4)).is_some());
         assert!(cache.find(&bad.digest, Some(4)).is_none());
+        assert_eq!(
+            cache.changed().into_keys().collect::<Vec<_>>(),
+            [bad.digest],
+            "projects linking to it can learn it changed"
+        );
     }
 
     #[test]
@@ -334,6 +365,23 @@ mod tests {
         drop(held);
         assert_eq!(checked.changed, vec![bad.digest]);
         assert_eq!(checked.stuck.is_empty(), !bad.path.exists());
+    }
+
+    #[test]
+    fn objects_whose_bytes_rotted_are_removed() {
+        for (_dir, cache) in [cache(), fat()] {
+            let rotten = [store(&cache, b"rot1"), store(&cache, b"rot2")];
+            for object in &rotten {
+                damage(&object.path);
+                // bytes that rot on disk leave the read-only flag as it was
+                seal(&object.path);
+            }
+            assert!(!cache.verify(&rotten[0].digest).unwrap());
+            let checked = cache.verify_all(2, &|_| {});
+            assert_eq!(checked.changed, vec![rotten[1].digest]);
+            assert_eq!(checked.stuck, vec![]);
+            assert!(rotten.iter().all(|object| !object.path.exists()));
+        }
     }
 
     fn damage(path: &Path) {
@@ -350,31 +398,5 @@ mod tests {
             .unwrap()
             .write_all(b"BAD!")
             .unwrap();
-    }
-
-    /// keeps `path` from being removed while the result lives.
-    #[cfg(windows)]
-    fn hold(path: &Path) -> impl Sized {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_SHARE_READ: u32 = 1;
-        fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(path)
-            .unwrap()
-    }
-
-    #[cfg(unix)]
-    fn hold(path: &Path) -> impl Sized {
-        use std::os::unix::fs::PermissionsExt;
-        struct Locked(PathBuf);
-        impl Drop for Locked {
-            fn drop(&mut self) {
-                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
-            }
-        }
-        let folder = path.parent().unwrap().to_path_buf();
-        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
-        Locked(folder)
     }
 }

@@ -7,6 +7,8 @@ use percent_encoding::percent_decode_str;
 use url::Url;
 
 use super::{Listing, Reference, Remote};
+use crate::error::{Error, Kind};
+use crate::net::Divert;
 
 /// a dropbox shared link, kept as the link itself with `dl=1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,3 +82,26 @@ impl fmt::Display for Link {
         write!(f, "{}", self.url)
     }
 }
+
+/// a shared link can answer with a page instead of a download, which must not enter the cache.
+pub(super) fn fetch_plan(url: &Url) -> Option<(Url, Option<Divert>)> {
+    let link = Link::from_link(url)?;
+    Some((link.url, Some(page)))
+}
+
+fn page(_url: &Url, status: u16, _text: &str) -> Result<Url, Error> {
+    let error = match status {
+        200 => Error::new(Kind::SourceInvalid, "dropbox sent an HTML page instead of the shared file or folder")
+            .help("open the shared link in a browser and check that it allows downloads without signing in"),
+        401 | 403 => Error::new(Kind::AuthRequired, "dropbox refused access to the shared file or folder")
+            .help("ask its owner for a public link that allows downloads without signing in"),
+        404 | 410 => Error::new(Kind::ReferenceUnresolved, "dropbox could not find the shared file or folder")
+            .help("check the shared link in a browser, or ask its owner for a current link"),
+        status => Error::new(Kind::NetworkStatus, format!("dropbox answered {status} instead of the shared file or folder"))
+            .help("open the shared link in a browser to check why the download was refused"),
+    };
+    Err(error)
+}
+
+#[cfg(test)]
+mod tests;

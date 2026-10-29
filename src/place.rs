@@ -2,14 +2,26 @@
 
 mod synced;
 
-use std::collections::HashSet;
-use std::fs::{self, File, Permissions};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, Metadata, Permissions};
 use std::io;
 #[cfg(not(target_os = "linux"))]
 use std::io::{Read, Write};
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+/// the most threads that place files or look up objects at once. creating a link or opening a
+/// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
+/// other's waits. placing 10,000 files on windows took 7.5 s on four threads and 5.1 s on eight,
+/// and sixteen gained little more.
+const THREADS: usize = 8;
+
+/// the fewest items worth a thread of their own, since starting a thread costs more than a few
+/// calls.
+const PER_THREAD: usize = 64;
 
 /// how a file was placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,43 +38,78 @@ pub(crate) enum Method {
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
     root: PathBuf,
+    /// whether the root itself must be a real folder, as a project's data folder must. a folder
+    /// someone named for `get` may be a link to one.
+    checks_root: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
-    can_reflink: bool,
-    can_hardlink: bool,
-    other_volume: bool,
+    can_reflink: AtomicBool,
+    can_hardlink: AtomicBool,
+    other_volume: AtomicBool,
+}
+
+/// one file to place: the object, where it goes, and whether it must be a writable copy.
+pub(crate) struct Order<'a> {
+    pub(crate) object: &'a Path,
+    pub(crate) destination: &'a Path,
+    pub(crate) writable: bool,
+}
+
+/// why a placer copied files it would rather have linked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unlinked {
+    /// the root sits inside a folder this sync client owns, which breaks links: "onedrive",
+    /// "dropbox", "icloud drive" or "google drive".
+    Synced(&'static str),
+    /// hardlinks failed because the cache sits on another drive, which a cache on the same drive
+    /// would fix.
+    OtherDrive,
+    /// the drive refused reflinks and hardlinks alike, as FAT and exFAT drives do.
+    NoLinks,
 }
 
 impl Placer {
-    /// prepares placement under `root`, and notes whether `root` sits inside a folder a sync client owns.
+    /// prepares placement under `root`, which must be a real folder, and notes whether `root`
+    /// sits inside a folder a sync client owns.
     pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
         Placer::starting_at(root, Method::Reflink, synced)
     }
 
+    /// prepares placement under a folder someone named, which may be a link to a folder. the
+    /// folders below it must still be real.
+    pub(crate) fn in_named_folder(root: &Path) -> Placer {
+        Placer {
+            checks_root: false,
+            ..Placer::new(root)
+        }
+    }
+
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
             root,
+            checks_root: true,
             folders: HashSet::new(),
             synced,
-            can_reflink: first == Method::Reflink,
-            can_hardlink: first != Method::Copy,
-            other_volume: false,
+            can_reflink: AtomicBool::new(first == Method::Reflink),
+            can_hardlink: AtomicBool::new(first != Method::Copy),
+            other_volume: AtomicBool::new(false),
         }
     }
 
-    /// the sync client that owns `root`, if any: "onedrive", "dropbox", "icloud drive" or "google drive".
-    pub(crate) fn synced(&self) -> Option<&'static str> {
-        self.synced
-    }
-
-    /// whether links failed because the cache sits on another drive, which a cache on the same
-    /// drive would fix.
-    pub(crate) fn other_volume(&self) -> bool {
-        self.other_volume
+    /// why files were copied rather than linked, as far as the filesystem told.
+    pub(crate) fn unlinked(&self) -> Option<Unlinked> {
+        if let Some(client) = self.synced {
+            return Some(Unlinked::Synced(client));
+        }
+        if self.other_volume.load(Ordering::Relaxed) {
+            return Some(Unlinked::OtherDrive);
+        }
+        let refused = |method: &AtomicBool| !method.load(Ordering::Relaxed);
+        (refused(&self.can_reflink) && refused(&self.can_hardlink)).then_some(Unlinked::NoLinks)
     }
 
     /// puts `object` at `destination`, which must not exist yet. creates missing parent folders.
@@ -74,7 +121,41 @@ impl Placer {
         writable: bool,
     ) -> io::Result<Method> {
         self.check_folders(destination, true)?;
-        if self.can_reflink {
+        self.put(object, destination, writable)
+    }
+
+    /// places every order and says how each went, in order, with the metadata of each placed file
+    /// read right after it was placed, so a later edit is never taken for the placed file. the
+    /// first goes alone, so it learns which methods the filesystem allows before the rest go
+    /// several at once.
+    pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<(Method, Metadata)>> {
+        let mut results = Vec::with_capacity(orders.len());
+        let mut ready = Vec::with_capacity(orders.len());
+        for (index, order) in orders.iter().enumerate() {
+            match self.check_folders(order.destination, true) {
+                Ok(()) => ready.push((index, order)),
+                Err(err) => results.push((index, Err(err))),
+            }
+        }
+        let ready = spread(ready);
+        let this = &*self;
+        let put = |(index, order): &(usize, &Order)| {
+            let placed = this
+                .put(order.object, order.destination, order.writable)
+                .and_then(|method| Ok((method, fs::symlink_metadata(order.destination)?)));
+            (*index, placed)
+        };
+        if let Some((first, rest)) = ready.split_first() {
+            results.push(put(first));
+            results.extend(run_all(rest, put));
+        }
+        results.sort_unstable_by_key(|(index, _)| *index);
+        results.into_iter().map(|(_, result)| result).collect()
+    }
+
+    /// tries each method the filesystem may allow, best first.
+    fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
+        if self.can_reflink.load(Ordering::Relaxed) {
             match reflink_copy::reflink(object, destination) {
                 Ok(()) => {
                     seal(destination, writable)?;
@@ -84,7 +165,7 @@ impl Placer {
             }
         }
         // sync clients break hardlinks or upload every link as a full file.
-        if self.can_hardlink && !writable && self.synced.is_none() {
+        if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
             match fs::hard_link(object, destination) {
                 Ok(()) => return Ok(Method::Hardlink),
                 Err(error) => self.learn(Method::Hardlink, error)?,
@@ -102,8 +183,13 @@ impl Placer {
         if self.folders.contains(&parent) {
             return Ok(());
         }
-        if make && !self.folders.contains(&self.root) {
-            fs::create_dir_all(&self.root)?;
+        if !self.folders.contains(&self.root) {
+            if make {
+                fs::create_dir_all(&self.root)?;
+            }
+            if self.checks_root {
+                real_folder(&self.root, false)?;
+            }
             self.folders.insert(self.root.clone());
         }
         let mut folder = self.root.clone();
@@ -127,7 +213,9 @@ impl Placer {
     pub(crate) fn remove(&mut self, path: &Path, prune: bool) -> io::Result<()> {
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
-        real_folder(&folder, false)?;
+        if self.checks_root {
+            real_folder(&folder, false)?;
+        }
         for part in parent
             .strip_prefix(&self.root)
             .unwrap_or(&parent)
@@ -165,22 +253,79 @@ impl Placer {
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
     /// again, and an error no other method can avoid, such as an existing destination, is returned.
-    fn learn(&mut self, method: Method, error: io::Error) -> io::Result<()> {
+    fn learn(&self, method: Method, error: io::Error) -> io::Result<()> {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
         }
         if is_refusal(&error) {
             match method {
-                Method::Reflink => self.can_reflink = false,
+                Method::Reflink => self.can_reflink.store(false, Ordering::Relaxed),
                 Method::Hardlink => {
-                    self.can_hardlink = false;
-                    self.other_volume = error.kind() == io::ErrorKind::CrossesDevices;
+                    self.can_hardlink.store(false, Ordering::Relaxed);
+                    let elsewhere = error.kind() == io::ErrorKind::CrossesDevices;
+                    self.other_volume.store(elsewhere, Ordering::Relaxed);
                 }
                 Method::Copy => {}
             }
         }
         Ok(())
     }
+}
+
+/// runs `job` on every item, on a few threads when there are many, and returns the results in
+/// the order of `items`.
+pub(crate) fn run_all<T: Sync, R: Send>(items: &[T], job: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let threads = threads.min(THREADS).min(items.len() / PER_THREAD);
+    if threads < 2 {
+        return items.iter().map(job).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            return done;
+                        };
+                        done.push((index, job(item)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    });
+    done.sort_unstable_by_key(|(index, _)| *index);
+    done.into_iter().map(|(_, result)| result).collect()
+}
+
+/// the orders reordered so that neighbours go to different folders. links made into one folder
+/// wait on each other, so threads taking the next order in turn would queue on one folder.
+fn spread<'o, 'p>(orders: Vec<(usize, &'o Order<'p>)>) -> Vec<(usize, &'o Order<'p>)> {
+    let mut seen: HashMap<&Path, usize> = HashMap::new();
+    let mut ranked: Vec<(usize, (usize, &Order))> = orders
+        .into_iter()
+        .map(|item| {
+            let destination = item.1.destination;
+            let rank = seen
+                .entry(destination.parent().unwrap_or(destination))
+                .or_default();
+            *rank += 1;
+            (*rank, item)
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, item)| item).collect()
 }
 
 /// whether `error` means the filesystem refuses the method that failed for every file, not only
@@ -601,8 +746,150 @@ mod tests {
         assert_eq!(method, Method::Hardlink);
     }
 
+    #[test]
+    fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
+        let folder = TempDir::new().unwrap();
+        let placer =
+            |synced| Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, synced);
+        let refused = || io::Error::from(io::ErrorKind::Unsupported);
+
+        let linking = placer(None);
+        assert_eq!(linking.unlinked(), None);
+        let no_links = placer(None);
+        no_links.learn(Method::Reflink, refused()).unwrap();
+        no_links.learn(Method::Hardlink, refused()).unwrap();
+        assert_eq!(no_links.unlinked(), Some(Unlinked::NoLinks));
+        let elsewhere = placer(None);
+        elsewhere.learn(Method::Reflink, refused()).unwrap();
+        elsewhere
+            .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
+            .unwrap();
+        assert_eq!(elsewhere.unlinked(), Some(Unlinked::OtherDrive));
+        let synced = placer(Some("onedrive"));
+        synced.learn(Method::Reflink, refused()).unwrap();
+        assert_eq!(synced.unlinked(), Some(Unlinked::Synced("onedrive")));
+    }
+
+    /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
+    /// and exFAT do not.
+    fn makes_hardlinks(folder: &Path) -> bool {
+        let original = folder.join("probe");
+        let link = folder.join("probe-link");
+        fs::write(&original, CONTENTS).unwrap();
+        let made = fs::hard_link(&original, &link).is_ok();
+        for probe in [link, original] {
+            let _ = fs::remove_file(probe);
+        }
+        made
+    }
+
+    #[test]
+    fn many_files_are_placed_on_several_threads_and_reported_in_order() {
+        let (folder, object) = cache(true);
+        let expected = if makes_hardlinks(folder.path()) {
+            Method::Hardlink
+        } else {
+            Method::Copy
+        };
+        let root = folder.path().join("data");
+        let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
+        let destinations: Vec<PathBuf> = (0..300)
+            .map(|index| {
+                root.join(format!("{}", index % 7))
+                    .join(format!("{index}.csv"))
+            })
+            .collect();
+        let mut orders: Vec<Order> = destinations
+            .iter()
+            .map(|destination| Order {
+                object: &object,
+                destination,
+                writable: false,
+            })
+            .collect();
+        // one order that cannot succeed, to see its error land in its own place
+        let taken = root.join("taken.csv");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&taken, "mine").unwrap();
+        orders.insert(
+            150,
+            Order {
+                object: &object,
+                destination: &taken,
+                writable: false,
+            },
+        );
+
+        let results = placer.place_all(&orders);
+
+        assert_eq!(results.len(), 301);
+        for (index, result) in results.iter().enumerate() {
+            match index {
+                150 => assert_eq!(
+                    result.as_ref().unwrap_err().kind(),
+                    io::ErrorKind::AlreadyExists
+                ),
+                _ => assert_eq!(result.as_ref().unwrap().0, expected, "{index}"),
+            }
+        }
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        }
+        assert_eq!(fs::read_to_string(&taken).unwrap(), "mine");
+    }
+
+    #[test]
+    fn neighbouring_orders_go_to_different_folders() {
+        let object = Path::new("object");
+        let paths: Vec<PathBuf> = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let orders: Vec<Order> = paths
+            .iter()
+            .map(|destination| Order {
+                object,
+                destination,
+                writable: false,
+            })
+            .collect();
+        let spread = spread(orders.iter().enumerate().collect());
+        let indexes: Vec<usize> = spread.iter().map(|(index, _)| *index).collect();
+        assert_eq!(indexes, [0, 3, 4, 1, 5, 2]);
+    }
+
+    #[test]
+    fn work_spread_over_threads_comes_back_in_order() {
+        let items: Vec<u64> = (0..1000).collect();
+        let doubled = run_all(&items, |item| item * 2);
+        assert_eq!(
+            doubled,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
+        assert_eq!(run_all(&Vec::<u64>::new(), |item| *item), Vec::<u64>::new());
+    }
+
     fn is_read_only(path: &Path) -> bool {
         fs::metadata(path).unwrap().permissions().readonly()
+    }
+
+    #[test]
+    fn a_link_at_the_root_is_never_followed() {
+        let (folder, object) = cache(true);
+        let outside = folder.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let root = folder.path().join("data");
+        if !link_folder(&outside, &root) {
+            return;
+        }
+        let mut placer = Placer::new(&root);
+
+        let error = placer
+            .place(&object, &root.join("placed.csv"), false)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("is a link"), "{error}");
+        assert!(!outside.join("placed.csv").exists());
     }
 
     #[test]
@@ -628,7 +915,7 @@ mod tests {
     }
 
     /// makes `link` point at the folder `target`: a junction on windows, which needs no admin.
-    fn link_folder(target: &Path, link: &Path) -> bool {
+    pub(super) fn link_folder(target: &Path, link: &Path) -> bool {
         #[cfg(windows)]
         let made = std::process::Command::new("cmd")
             .args(["/c", "mklink", "/J"])

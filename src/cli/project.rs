@@ -7,8 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
+use tracing::Instrument as _;
 
 use super::args::{self, Add, Remove};
+use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Placement};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
@@ -225,8 +227,16 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     lock.datasets.retain(|dataset| dataset.name != args.name);
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let placement = place::Placing::new(&project, &new_manifest, &lock, &open_cache()?, false)?
-        .remove_only(&context.output)?;
+    let survey = Survey::read(&project, &new_manifest.data_dir);
+    let placement = place::Placing::new(
+        &project,
+        &new_manifest,
+        &lock,
+        &open_cache()?,
+        false,
+        survey,
+    )?
+    .remove_only(&context.output)?;
     context.output.done(&format!("removed {}", args.name));
     Ok(Report {
         project: project.root,
@@ -467,9 +477,10 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
     if !fresh {
         return Ok(false);
     }
-    let state = project.state();
-    let disk = place::scan(&project.root, &manifest.data_dir);
-    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
+    let survey = Survey::read(project, &manifest.data_dir);
+    let cache = open_cache()?;
+    let elsewhere = survey.edited_elsewhere(&cache);
+    let planned = plan::from_cache(manifest, &lock, &cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(false);
     }
@@ -478,9 +489,13 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
         .iter()
         .filter(|target| target.dataset == name)
         .all(|target| {
-            state.files.get(&target.path).is_some_and(|placed| {
-                placed.sha256 == target.sha256 && disk.get(&target.path) == Some(&placed.look)
-            })
+            !elsewhere.contains(&target.path)
+                && survey.state.files.get(&target.path).is_some_and(|placed| {
+                    placed.sha256 == target.sha256
+                        && survey.disk.get(&target.path) == Some(&placed.look)
+                        && !survey.edited.contains(&target.path)
+                        && (!target.copy || placed.writable)
+                })
         }))
 }
 
@@ -493,13 +508,16 @@ async fn sync_all(
     force: bool,
     given: Option<(String, Listing)>,
 ) -> Result<(bool, Placement), Error> {
-    place::audit(work.project, manifest, &work.cache)?;
+    let mut survey = Survey::read(work.project, &manifest.data_dir);
+    survey.look_again(&work.project.root, &work.cache, force);
+    disk::audit(work.project, &survey, &work.cache)?;
     let empty = Lock::default();
     let lock = work
         .relock(manifest, old.unwrap_or(&empty), upgrade, given)
+        .instrument(tracing::debug_span!("relock"))
         .await?;
     let changed = work.write_lock(old, &lock)?;
-    let placement = work.place(manifest, &lock, force).await?;
+    let placement = work.place(manifest, &lock, force, survey).await?;
     work.drop_unpacked(&lock);
     // gc keeps what registered projects need, so a failure here only risks a later download
     if let Err(err) = work.cache.register(&work.project.root) {
@@ -584,12 +602,9 @@ async fn learn_name(
     if !remote.named_by_server {
         return Ok(());
     }
-    let (from, divert) = source::fetch_plan(&remote.url);
+
     let job = fetch::Job {
         fetch: Fetch {
-            url: remote.url.clone(),
-            from,
-            divert,
             expect: Expect {
                 sha256: remote.sha256,
                 md5: remote.md5,
@@ -597,6 +612,7 @@ async fn learn_name(
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
             unpack: extract && archive::by_name(&remote.path) == Some(Packed::Archive),
+            ..source::fetch_plan(&remote.url)
         },
         label: remote.path.clone(),
         dataset: None,

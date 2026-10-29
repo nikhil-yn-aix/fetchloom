@@ -61,9 +61,9 @@ $ fetchloom status
   hint: `fetchloom sync` brings the rest in line. edited and extra files stay as they are
 ```
 
-`status` compares recorded sizes and modification times, without hashing dataset contents or downloading. it also reports edited, untracked and outdated paths, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
+`status` compares recorded sizes and modification times, without downloading. it hashes only a file whose recorded time is not older than `.fetchloom/state` itself: a clock as coarse as FAT's two seconds gives a file edited just after it was placed the same size and time. `sync` writes the state again once such files prove unchanged, so later runs hash nothing. `status` also reports edited, untracked and outdated paths, hardlinks the cache marked as changed through another project, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
 
-`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
+`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. a hardlink `status` lists as changed through another project is put back instead, with a warning, and listed in `placement.restored`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
 
 default placements are read-only. for tools that write into their inputs, request `copy = true` in the dataset entry. see [placement and cache trust](architecture.md#placing-files) before changing a hardlink's permissions.
 
@@ -87,7 +87,7 @@ fetchloom get https://example.org/files/train.zip -o training
 fetchloom get https://example.org/files/train.zip --no-extract
 ```
 
-`get` uses the same cache without writing a manifest, lock or project state. stdout is the absolute output folder. a single file uses its filename stem for the folder; several files use a name made from the dataset title or reference. `-o` selects a folder instead.
+`get` uses the same cache without writing a manifest, lock or project state. stdout is the absolute output folder. a single file uses its filename stem for the folder; several files use a name made from the dataset title or reference. `-o` selects a folder instead. the output folder may be a link to a folder elsewhere; links below it are refused.
 
 for direct downloads, a `Content-Disposition` filename replaces the URL's guessed name. unsafe filename characters are replaced. names are shortened to 200 bytes before a reserved windows device name gets an extra `_` prefix.
 
@@ -136,7 +136,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
 
 - `get` checks the total known selected size, including cache hits.
 - project downloads check known bytes still missing from the cache.
-- for an unknown source size, a server's length is checked against the remaining download. if neither states a size, the question comes after that file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch.
+- for an unknown source size, a server's length is checked against the remaining download. if neither states a size, the question comes after that file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch. other large downloads with unknown source sizes wait for the same answer; a refusal stops them too.
 
 `--yes` or `-y` approves. questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer:
 

@@ -9,7 +9,7 @@ use super::super::Context;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::place::{Method, Placer};
+use crate::place::{Method, Placer, Unlinked};
 use crate::plan::Target;
 use crate::units;
 use crate::work::Work;
@@ -72,7 +72,7 @@ pub(super) fn put_all(
 ) -> Result<Vec<Outcome>, Error> {
     // an archive that holds nothing still leaves the folder get answers with
     fs::create_dir_all(folder).map_err(|err| local(folder, &err))?;
-    let mut placer = Placer::new(folder);
+    let mut placer = Placer::in_named_folder(folder);
     let mut outcomes = Vec::with_capacity(targets.len());
     for target in targets {
         outcomes.push(put(
@@ -220,33 +220,39 @@ fn tell_placed(
             ),
         ),
     }
-    let hint = if copied == 0 {
-        None
-    } else if let Some(client) = placer.synced() {
-        let things = if targets.len() == 1 {
-            "the file was"
-        } else {
-            "files were"
-        };
+    let things = if targets.len() == 1 {
+        "the file was"
+    } else {
+        "files were"
+    };
+    let why = placer.unlinked().filter(|_| copied > 0);
+    if let Some(Unlinked::Synced(client)) = why {
         output.warn(&format!(
             "{} is inside {client}, which breaks links, so {things} copied",
             folder.display()
         ));
-        Some(format!(
-            "a folder outside {client} gets links that use no extra disk"
-        ))
-    } else if placer.other_volume() {
-        Some("the cache is on another drive. set FETCHLOOM_CACHE to a folder on this drive to link files instead of copying them".to_owned())
-    } else {
-        None
-    };
+    }
     let what = match targets {
         [only] => only.path.clone(),
         _ => units::count(targets.len() as u64, "file", "files"),
     };
     output.done(&format!("fetched {what} into {}", folder.display()));
-    if let Some(hint) = hint {
-        output.hint(&hint);
+    if let Some(why) = why {
+        output.hint(&copy_hint(why, folder, things));
+    }
+}
+
+/// the hint after files were copied into `folder` for the reason `why`.
+fn copy_hint(why: Unlinked, folder: &Path, things: &str) -> String {
+    match why {
+        Unlinked::Synced(client) => {
+            format!("a folder outside {client} gets links that use no extra disk")
+        }
+        Unlinked::OtherDrive => "the cache is on another drive. set FETCHLOOM_CACHE to a folder on this drive to link files instead of copying them".to_owned(),
+        Unlinked::NoLinks => format!(
+            "the drive holding {} cannot link files, so {things} copied",
+            folder.display()
+        ),
     }
 }
 
@@ -255,4 +261,17 @@ fn local(path: &Path, err: &io::Error) -> Error {
         Kind::LocalIo,
         format!("could not write {}: {err}", path.display()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_copied_onto_a_drive_that_links_nothing_says_why() {
+        assert_eq!(
+            copy_hint(Unlinked::NoLinks, Path::new("iris"), "the file was"),
+            "the drive holding iris cannot link files, so the file was copied"
+        );
+    }
 }

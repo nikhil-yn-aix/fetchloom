@@ -138,14 +138,12 @@ impl Draft {
                 }
                 Some(_) => continue,
             };
-            let (from, divert) = source::fetch_plan(&remote.url);
+
             let fetch = Fetch {
-                url: remote.url.clone(),
-                from,
-                divert,
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 unpack: self.unpacks(file),
+                ..source::fetch_plan(&remote.url)
             };
             let job = Job {
                 fetch,
@@ -529,5 +527,52 @@ mod tests {
             carried(&locked, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
             "the bytes changed under the same link"
         );
+    }
+
+    #[test]
+    fn an_unknown_drive_size_is_pinned_from_downloaded_bytes() {
+        use crate::source::recorded::{Recorded, block_on};
+
+        let url =
+            "https://drive.google.com/embeddedfolderview?id=1-Z2wzjaaqqB1lBiPXNGfgkICA2Pc9q_U";
+        let recorded = Recorded::default().fixture(url, "drive/folder-deep-1-1.html");
+        let reference = Reference::parse("drive:folders/1-Z2wzjaaqqB1lBiPXNGfgkICA2Pc9q_U")
+            .unwrap()
+            .reference;
+        let listing = block_on(reference.resolve(&recorded)).unwrap();
+        assert_eq!(listing.files[0].size, None);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.sample]\nref = \"drive:folders/1-Z2wzjaaqqB1lBiPXNGfgkICA2Pc9q_U\"\n",
+        )
+        .unwrap();
+        let mut draft = Draft::new(
+            "sample",
+            &manifest.datasets["sample"],
+            listing,
+            None,
+            false,
+            &cache,
+        )
+        .unwrap();
+        let jobs = draft.jobs(&cache);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].1.fetch.expect.size, None);
+        let stored = store(&cache, b"data");
+        draft.learn(
+            0,
+            &Fetched {
+                digest: stored.digest,
+                size: stored.size,
+                name: Some("other.txt".to_owned()),
+                origin: crate::net::Origin::Network,
+            },
+        );
+        let locked = draft.finish("2026-10-29T00:00:00Z");
+        assert_eq!(locked.files.len(), 1);
+        assert_eq!(locked.files[0].path, "file.txt");
+        assert_eq!(locked.files[0].size, 4);
+        assert_eq!(locked.files[0].sha256, stored.digest);
     }
 }
