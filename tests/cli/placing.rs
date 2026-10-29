@@ -858,6 +858,49 @@ fn a_marked_object_that_cannot_be_removed_stops_sync() -> Result {
     Ok(())
 }
 
+#[cfg(windows)]
+#[test]
+fn an_unreadable_marked_link_stops_sync_without_replacing_it() -> Result {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("OneDrive", sandbox.work())
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state = fs::read(&state_path)?;
+    sandbox.wait_for_a_later_time(fs::metadata(&state_path)?.modified()?)?;
+    mark(&sandbox, &iris_object(&sandbox, &sandbox.work())?)?;
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&placed)?;
+
+    let synced = sandbox.run(&["sync"])?;
+    let status = sandbox.run(&["status"])?;
+
+    drop(held);
+    assert_eq!(fs::read(&placed)?, V1, "the unreadable file must stay");
+    assert_eq!(fs::read(&state_path)?, state, "the state must stay");
+    for output in [synced, status] {
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{stderr}");
+        assert!(
+            stderr.contains("could not read data/iris/iris.csv to check it"),
+            "missing 'could not read data/iris/iris.csv to check it': {stderr}"
+        );
+    }
+    Ok(())
+}
+
 /// a link may name an older copy of an object than the one that changed, such as one placed
 /// before gc freed the object and a download brought it back. sync hashes the project's own file
 /// once, keeps it without downloading, and nothing differs afterwards.
