@@ -470,8 +470,8 @@ pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
     Error::io(format_args!("could not place {}", path.display()), err)
 }
 
-/// what stops a run at a cached object in doubt: one hashing could not read, or one whose bytes
-/// changed and which could not be removed, so it would be placed again as if it held them.
+/// what stops a run at an object that could not be checked or sealed, or whose changed bytes
+/// could not be removed.
 pub(crate) fn doubtful(doubt: &Doubt) -> Error {
     let object = doubt.object.display();
     if doubt.changed {
@@ -481,7 +481,7 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
         )
     } else {
         Error::io(
-            format_args!("could not read {object} to check its bytes"),
+            format_args!("could not check and seal {object} for placement"),
             &doubt.error,
         )
     }

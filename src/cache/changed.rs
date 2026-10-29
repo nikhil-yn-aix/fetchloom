@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::Cache;
 use crate::digest::Sha256;
 
-/// an object in doubt that could not be hashed, or that held other bytes and could not be
-/// removed.
+/// an object in doubt that could not be hashed or sealed, or that held other bytes and could
+/// not be removed.
 #[derive(Debug)]
 pub(crate) struct Doubt {
     pub(crate) object: PathBuf,
@@ -25,7 +25,8 @@ pub(crate) struct Doubt {
 impl Cache {
     /// the object for `digest` when the cache holds it, with `size` when one is known, and its
     /// bytes can be trusted. a mark in `marks` newer than the object puts it in doubt, so it is
-    /// hashed first: one whose bytes changed is marked again and removed, so it is fetched again.
+    /// hashed first, as is a writable object. intact writable objects are sealed again; changed
+    /// ones are marked and removed, so they are fetched again.
     pub(crate) fn trusted(
         &self,
         digest: &Sha256,
@@ -39,12 +40,24 @@ impl Cache {
         if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
             return Ok(None);
         }
+        let mut permissions = metadata.permissions();
+        let writable = !permissions.readonly();
         let written = metadata.modified().map_or(0, nanos);
-        if marks.get(digest).is_none_or(|marked| *marked <= written) {
+        if !writable && marks.get(digest).is_none_or(|marked| *marked <= written) {
             return Ok(Some(path));
         }
         match Sha256::of_file(&path) {
-            Ok(actual) if actual == *digest => Ok(Some(path)),
+            Ok(actual) if actual == *digest => {
+                if writable {
+                    permissions.set_readonly(true);
+                    fs::set_permissions(&path, permissions).map_err(|error| Doubt {
+                        object: path.clone(),
+                        changed: false,
+                        error,
+                    })?;
+                }
+                Ok(Some(path))
+            }
             Ok(_) => {
                 if let Err(err) = self.mark_changed(digest) {
                     tracing::debug!(%err, "could not remember a changed object");
@@ -143,6 +156,43 @@ mod tests {
 
         assert_eq!(fs::read(outside).unwrap(), b"keep these bytes");
         assert_eq!(fs::read(mark).unwrap(), b"");
+    }
+
+    #[test]
+    fn writable_objects_are_hashed_and_resealed_before_use() {
+        for damaged in [false, true] {
+            let (_dir, cache) = cache();
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            let mut permissions = fs::metadata(&object).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the test models a user clearing a hardlink's flag"
+            )]
+            permissions.set_readonly(false);
+            fs::set_permissions(&object, permissions).unwrap();
+            if damaged {
+                fs::write(&object, b"evil").unwrap();
+            }
+
+            let found = cache
+                .trusted(&stored.digest, Some(4), &HashMap::new())
+                .unwrap();
+
+            if damaged {
+                assert!(found.is_none());
+                assert!(!object.exists());
+                assert!(cache.changed().contains_key(&stored.digest));
+            } else {
+                assert_eq!(found.as_deref(), Some(object.as_path()));
+                assert!(
+                    fs::metadata(&object).unwrap().permissions().readonly(),
+                    "a trusted object must be read-only"
+                );
+                assert_eq!(fs::read(&object).unwrap(), b"good");
+                assert!(cache.changed().is_empty());
+            }
+        }
     }
 
     #[test]

@@ -914,3 +914,46 @@ fn get_never_takes_a_marked_object() -> Result {
     assert_eq!(fs::read(folder.join("iris.csv"))?, V1, "{stderr}");
     Ok(())
 }
+
+#[test]
+fn a_new_project_reseals_an_object_made_writable_through_a_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let first = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut permissions = fs::metadata(&first)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test models a user clearing a hardlink's flag"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&first, permissions)?;
+    let other = sandbox.folder("second-project")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+
+    let synced = sandbox
+        .command_in(&other, &["sync", "--offline"])
+        .output()?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let placed = other.join("data").join("iris").join("iris.csv");
+    assert!(
+        fs::metadata(&placed)?.permissions().readonly(),
+        "the second project's input must be read-only"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    assert!(
+        fs::metadata(iris_object(&sandbox, &other)?)?
+            .permissions()
+            .readonly()
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

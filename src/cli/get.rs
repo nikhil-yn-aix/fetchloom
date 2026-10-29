@@ -207,9 +207,6 @@ fn known(
 /// downloads again.
 fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Result<(), Error> {
     let marks = cache.changed();
-    if marks.is_empty() {
-        return Ok(());
-    }
     for (remote, name) in files.iter().zip(names) {
         let record = cache.url_record(remote.url.as_str());
         let Some((digest, size)) = known(cache, remote, record.as_ref()) else {
