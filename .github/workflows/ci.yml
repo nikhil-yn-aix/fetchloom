@@ -71,7 +71,6 @@ jobs:
       # btrfs and xfs clone blocks, a path ext4 never takes
       - name: cargo test on btrfs and xfs
         if: runner.os == 'Linux'
-        continue-on-error: true
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
