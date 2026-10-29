@@ -77,6 +77,8 @@ fetchloom path eeg/sub-01
 
 `path` accepts a dataset, a file, or a subfolder containing locked files. it syncs the whole project when the requested dataset is not ready. a ready dataset takes no project lock. a waiting caller checks again after acquiring the lock.
 
+`path` exits 2 when the dataset has no regular files after extraction and explains how to keep the packed archive instead. `add` reports that its archives contain no regular files and omits the path hint.
+
 `path` prints the location, not an integrity check. sync can leave an edited file there.
 
 ## get without a project
