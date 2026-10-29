@@ -124,16 +124,25 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | plain URL | the parsed URL | the same URL |
 | zenodo | `zenodo:<concrete record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
 | figshare | `figshare:<id>@<version>` | the API's download URL |
-| dataverse | `dataverse:<host>/<persistent id>@<version>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
 | OSF | `osf:<node or file id>` | the download link with a file version |
-| drive file | `drive:<id>` | `https://drive.google.com/uc?id=<id>` |
+| drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
 | dropbox | the shared URL with `dl=1` | the same URL |
+| hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
+| kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
 
-DOIs route to one of these sources. hugging face and kaggle currently parse references but cannot list files, so they do not write lock entries.
+DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment.
+
+drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
+
+drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs entries stop the folder listing because exports can change between downloads. ask the owner to upload fixed files instead.
+
+dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins the zip; extraction adds its tree hash. an unnamed HTML answer fails instead of entering the cache as dataset bytes.
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and local cache records keep those URLs verbatim, so do not share them. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs mask recognized query secrets. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ### the tree hash
 
@@ -255,7 +264,9 @@ an invalid jobs value fails a named command even when it does not download. welc
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and known icloud and macos `CloudStorage` locations. system proxy settings and proxy environment variables are read by the HTTP stack.
 
-credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `~/.kaggle/kaggle.json` or `KAGGLE_USERNAME` and `KAGGLE_KEY`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `DATAVERSE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+
+`DATAVERSE_TOKEN` is not read. use public dataverse links; an access refusal needs a public copy from the dataset's owner.
 
 ## the JSON document
 

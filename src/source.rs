@@ -24,7 +24,7 @@ use url::Url;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Api, Credential, Divert, Response};
+use crate::net::{self, Api, Credential, Fetch, Response};
 
 /// the most files one dataset may list, so `data.lock` stays small and memory stays bounded.
 pub(crate) const MOST_FILES: usize = 100_000;
@@ -57,7 +57,7 @@ pub(crate) struct Parsed {
 /// what a source says a dataset holds, at one exact version.
 #[derive(Clone, Debug)]
 pub(crate) struct Listing {
-    /// the exact version, as a reference that keeps naming these same files.
+    /// the reference to resolve again, pinned to a version when the source provides one.
     pub(crate) resolved: Reference,
     pub(crate) title: Option<String>,
     pub(crate) version: Option<String>,
@@ -74,8 +74,8 @@ pub(crate) struct Remote {
     pub(crate) size: Option<u64>,
     pub(crate) sha256: Option<Sha256>,
     pub(crate) md5: Option<Md5>,
-    /// a URL that keeps serving these bytes. `data.lock` records it, so it never carries a token
-    /// or a signature.
+    /// the link project commands write to data.lock. redirects and source credentials are not
+    /// part of that record.
     pub(crate) url: Url,
     /// the path is only a guess from the link, and the name the server sends replaces it.
     pub(crate) named_by_server: bool,
@@ -203,9 +203,17 @@ impl fmt::Display for Reference {
     }
 }
 
-/// where to ask for a file's bytes, and how to read a page a host sends in their place.
-pub(crate) fn fetch_plan(url: &Url) -> (Url, Option<Divert>) {
-    drive::fetch_plan(url).unwrap_or_else(|| (url.clone(), None))
+/// a download request with the source's response handling.
+pub(crate) fn fetch_plan(url: &Url) -> Fetch {
+    let (from, divert) = drive::fetch_plan(url)
+        .or_else(|| dropbox::fetch_plan(url))
+        .unwrap_or_else(|| (url.clone(), None));
+    Fetch {
+        from,
+        divert,
+        expired: osf::expiry_check(url),
+        ..Fetch::new(url.clone())
+    }
 }
 
 /// every credential found where its source keeps it.
@@ -271,11 +279,15 @@ fn link(text: &str) -> Result<Parsed, Error> {
             hf::Repo::from_link(&url).map(|(repo, file)| (Reference::HuggingFace(repo), file))
         })
         .or_else(|| {
-            kaggle::Dataset::from_link(&url).map(|dataset| (Reference::Kaggle(dataset), None))
+            kaggle::Dataset::from_link(&url)
+                .map(|(dataset, file)| (Reference::Kaggle(dataset), file))
         })
         .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
         .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)));
     let Some((reference, file)) = routed else {
+        if let Some(competition) = kaggle::competition_link(&url) {
+            return Err(competition);
+        }
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,
@@ -304,14 +316,6 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "dropbox.com" | "www.dropbox.com" => "dropbox",
         _ => return None,
     })
-}
-
-/// the error for a source whose listing is not built yet.
-fn not_yet(source: &str) -> Error {
-    Error::new(
-        Kind::ReferenceInvalid,
-        format!("fetchloom cannot list {source} datasets yet"),
-    )
 }
 
 /// a plain link: one file, named by its last path segment until the server names it.

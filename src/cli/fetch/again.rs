@@ -93,14 +93,12 @@ pub(super) async fn recover(
         }
         return Err(failed.detail(format!("{} still lists the same link", again.resolved)));
     }
-    let (from, divert) = source::fetch_plan(&remote.url);
+
     let fetch = Fetch {
-        url: remote.url.clone(),
-        from,
-        divert,
         expect: job.fetch.expect,
         revalidate: false,
         unpack: false,
+        ..source::fetch_plan(&remote.url)
     };
     let fetched = net.download(&fetch, cache, on).await.map_err(|err| {
         err.detail(format!(

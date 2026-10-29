@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::Dataset;
+use super::{Dataset, Item};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::source::{Listing, Reference, Remote};
@@ -27,7 +27,7 @@ enum Data {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Version {
+pub(super) struct Version {
     dataset_persistent_id: String,
     #[serde(rename = "versionNumber")]
     major: u32,
@@ -37,7 +37,7 @@ struct Version {
     state: String,
     metadata_blocks: Metadata,
     license: Option<License>,
-    files: Vec<File>,
+    files: Option<Vec<File>>,
 }
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ struct License {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct File {
+pub(super) struct File {
     directory_label: Option<String>,
     restricted: bool,
     #[serde(rename = "dataFile")]
@@ -77,6 +77,7 @@ struct File {
 #[serde(rename_all = "camelCase")]
 struct DataFile {
     id: u64,
+    persistent_id: Option<String>,
     filename: String,
     filesize: Option<u64>,
     original_file_name: Option<String>,
@@ -112,12 +113,25 @@ impl Answer {
 }
 
 impl Version {
-    fn listing(self, dataset: &Dataset) -> Result<Listing, Error> {
-        let number = format!("{}.{}", self.major, self.minor);
-        self.check(dataset, &number)?;
-        let title = self.title(dataset)?;
+    fn listing(mut self, dataset: &Dataset) -> Result<Listing, Error> {
+        let item = Item::Dataset(self.dataset_persistent_id.clone());
         let files = self
             .files
+            .take()
+            .ok_or_else(|| dataset.invalid("the dataset version has no file list"))?;
+        self.pinned(dataset, item, files)
+    }
+
+    pub(super) fn pinned(
+        self,
+        dataset: &Dataset,
+        item: Item,
+        files: Vec<File>,
+    ) -> Result<Listing, Error> {
+        let number = format!("{}.{}", self.major, self.minor);
+        self.check(dataset, &number, &files)?;
+        let title = self.title(dataset)?;
+        let files = files
             .into_iter()
             .map(|file| file.remote(dataset))
             .collect::<Result<_, _>>()?;
@@ -129,7 +143,7 @@ impl Version {
         Ok(Listing {
             resolved: Reference::Dataverse(Dataset {
                 host: dataset.host.clone(),
-                pid: self.dataset_persistent_id,
+                item,
                 version: Some(number.clone()),
             }),
             title,
@@ -145,13 +159,12 @@ impl Version {
         })
     }
 
-    fn check(&self, dataset: &Dataset, number: &str) -> Result<(), Error> {
+    fn check(&self, dataset: &Dataset, number: &str, files: &[File]) -> Result<(), Error> {
         if self.state != "RELEASED" || self.major == 0 {
             return Err(dataset.invalid("the version is not published"));
         }
-        if !self
-            .dataset_persistent_id
-            .eq_ignore_ascii_case(&dataset.pid)
+        if let Item::Dataset(pid) = &dataset.item
+            && !self.dataset_persistent_id.eq_ignore_ascii_case(pid)
         {
             return Err(dataset.invalid("the persistent id does not match"));
         }
@@ -165,8 +178,7 @@ impl Version {
                 return Err(dataset.invalid("the version does not match"));
             }
         }
-        let restricted: Vec<_> = self
-            .files
+        let restricted: Vec<_> = files
             .iter()
             .filter(|file| file.restricted)
             .map(|file| format!("\"{}\"", file.path()))
@@ -198,6 +210,21 @@ impl Version {
 }
 
 impl File {
+    pub(super) fn id(&self) -> u64 {
+        self.data.id
+    }
+
+    pub(super) fn is(&self, id: &str) -> bool {
+        match id.parse::<u64>() {
+            Ok(number) => number == self.data.id,
+            Err(_) => self
+                .data
+                .persistent_id
+                .as_deref()
+                .is_some_and(|pid| pid.eq_ignore_ascii_case(id)),
+        }
+    }
+
     fn path(&self) -> String {
         let name = self
             .data

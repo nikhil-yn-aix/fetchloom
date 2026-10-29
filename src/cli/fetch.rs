@@ -59,14 +59,16 @@ impl Overall {
     }
 }
 
+type Approval = OnceLock<Result<(), Error>>;
+
 /// one download as it runs: its bar, its part of the overall progress, and the question before
 /// a large file whose size only its server tells.
 struct Watch<'a> {
     job: &'a Job,
     output: &'a Output,
     overall: &'a Overall,
-    /// whether this batch asked already, so it asks at most once.
-    asked: &'a AtomicBool,
+    /// another file must not proceed while the first file is still waiting for an answer.
+    approval: &'a Approval,
     yes: bool,
     bar: OnceLock<Bar>,
     /// whether the size the server told was added to the overall total.
@@ -82,14 +84,14 @@ impl<'a> Watch<'a> {
         job: &'a Job,
         output: &'a Output,
         overall: &'a Overall,
-        asked: &'a AtomicBool,
+        approval: &'a Approval,
         yes: bool,
     ) -> Watch<'a> {
         Watch {
             job,
             output,
             overall,
-            asked,
+            approval,
             yes,
             bar: OnceLock::new(),
             sized: AtomicBool::new(false),
@@ -104,6 +106,25 @@ impl<'a> Watch<'a> {
             .get_or_init(|| self.output.bar(self.job.label.clone()))
     }
 
+    fn approve(&self, size: &str) -> Result<(), Error> {
+        if let Some(answer) = self.approval.get() {
+            return answer.clone();
+        }
+        let decide = || {
+            self.approval
+                .get_or_init(|| super::ask(self.output, self.yes, &self.job.label, size))
+                .clone()
+        };
+        // a terminal question must not occupy a network worker while it waits for an answer.
+        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(decide)
+        } else {
+            decide()
+        }
+    }
+
     fn on(&self, event: &Event) -> Result<(), Error> {
         let label = &self.job.label;
         let bar = self.bar();
@@ -114,8 +135,8 @@ impl<'a> Watch<'a> {
             Event::Started { total, resumed, .. } => {
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {
-                    if left > super::ASK_ABOVE && !self.asked.swap(true, Ordering::Relaxed) {
-                        super::confirm(self.output, self.yes, label, left)?;
+                    if left > super::ASK_ABOVE {
+                        self.approve(&units::size(left))?;
                     }
                     if let Some(total) = total
                         && !self.sized.swap(true, Ordering::Relaxed)
@@ -132,12 +153,10 @@ impl<'a> Watch<'a> {
                 bar.advance(bytes);
                 self.overall.advance(bytes);
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
-                if self.unbounded.load(Ordering::Relaxed)
-                    && received > super::ASK_ABOVE
-                    && !self.asked.swap(true, Ordering::Relaxed)
-                {
+                if self.unbounded.load(Ordering::Relaxed) && received > super::ASK_ABOVE {
                     let size = format!("more than {}", units::size(super::ASK_ABOVE));
-                    super::ask(self.output, self.yes, label, &size)?;
+                    self.approve(&size)?;
+                    self.unbounded.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -164,25 +183,24 @@ pub(super) async fn all(
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.jobs * 2;
     let mut done = 0;
-    // a large file whose size the source did not state is asked about once its server tells
-    // the size, or once that much arrived when it never does, and only the first one asks
-    let asked = Arc::new(AtomicBool::new(false));
+    // unknown source sizes share one answer, once headers or received bytes show a large file.
+    let approval = Arc::new(Approval::new());
     let listings = again::Listings::default();
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
-            let (net, cache, output, overall, asked, listings) = (
+            let (net, cache, output, overall, approval, listings) = (
                 net.clone(),
                 cache.clone(),
                 context.output.clone(),
                 overall.clone(),
-                asked.clone(),
+                approval.clone(),
                 listings.clone(),
             );
             let yes = context.yes;
             tasks.spawn(async move {
-                let watch = Watch::new(&job, &output, &overall, &asked, yes);
+                let watch = Watch::new(&job, &output, &overall, &approval, yes);
                 // with no bar for them all, a lone download shows its bar while the server
                 // takes its time to answer
                 if alone {
@@ -330,8 +348,8 @@ mod tests {
             resumed: 0,
             name: None,
         };
-        let asked = AtomicBool::new(false);
-        let watch = Watch::new(&job, &output, &overall, &asked, false);
+        let approval = Approval::new();
+        let watch = Watch::new(&job, &output, &overall, &approval, false);
         watch.on(&unknown()).unwrap();
         watch.on(&Event::Bytes(super::super::ASK_ABOVE)).unwrap();
         let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
@@ -344,11 +362,19 @@ mod tests {
             stopped.help.as_deref(),
             Some("add --yes to download anyway")
         );
-        watch.on(&Event::Bytes(1)).unwrap();
-        let fresh = AtomicBool::new(false);
+        assert_eq!(
+            watch.on(&Event::Bytes(1)).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
+        let fresh = Approval::new();
         let approved = Watch::new(&job, &output, &overall, &fresh, true);
         approved.on(&unknown()).unwrap();
         approved
+            .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
+            .unwrap();
+        let another = Watch::new(&job, &output, &overall, &fresh, false);
+        another.on(&unknown()).unwrap();
+        another
             .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
             .unwrap();
         let told = Watch::new(&job, &output, &overall, &fresh, false);
@@ -359,5 +385,86 @@ mod tests {
         };
         told.on(&small).unwrap();
         told.on(&Event::Bytes(2 * super::super::ASK_ABOVE)).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_drive_size_asks_when_the_server_states_a_large_remainder() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = Job {
+            fetch: Fetch::new(
+                Url::parse("https://drive.google.com/uc?id=1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb")
+                    .unwrap(),
+            ),
+            label: "file.txt".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = Overall {
+            bar: None,
+            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+        };
+        for (total, resumed, needs_approval) in [
+            (super::super::ASK_ABOVE, 0, false),
+            (super::super::ASK_ABOVE + 1, 0, true),
+            (super::super::ASK_ABOVE + 1, 1, false),
+        ] {
+            let approval = Approval::new();
+            let watch = Watch::new(&job, &output, &overall, &approval, false);
+            let result = watch.on(&Event::Started {
+                total: Some(total),
+                resumed,
+                name: None,
+            });
+            if needs_approval {
+                assert_eq!(result.unwrap_err().kind, Kind::Unconfirmed);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn refusing_a_size_question_does_not_approve_another_file() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = |name: &str| Job {
+            fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
+            label: name.to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let first = job("first.bin");
+        let second = job("second.bin");
+        let overall = Overall {
+            bar: None,
+            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+        };
+        let approval = Approval::new();
+        let event = Event::Started {
+            total: Some(super::super::ASK_ABOVE + 1),
+            resumed: 0,
+            name: None,
+        };
+        let first = Watch::new(&first, &output, &overall, &approval, false);
+        assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+        let second = Watch::new(&second, &output, &overall, &approval, false);
+        assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
     }
 }

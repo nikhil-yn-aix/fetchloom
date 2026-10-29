@@ -1,14 +1,19 @@
 //! hugging face: dataset, model and space repositories, listed at one commit through the tree
 //! API and downloaded through `/resolve/<commit>/`.
 
+mod listing;
+mod revision;
+mod token;
+mod tree;
+
 use std::fmt;
 
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Listing, Var, malformed};
+use super::{Var, malformed};
 use crate::error::Error;
-use crate::net::{Api, Credential};
+use crate::net::Credential;
 
 /// first path segments on huggingface.co that are pages, not model repositories.
 const PAGES: [&str; 24] = [
@@ -43,6 +48,17 @@ pub(crate) enum RepoKind {
     Dataset,
     Model,
     Space,
+}
+
+impl RepoKind {
+    /// how the API and references name the kind.
+    fn plural(self) -> &'static str {
+        match self {
+            RepoKind::Dataset => "datasets",
+            RepoKind::Model => "models",
+            RepoKind::Space => "spaces",
+        }
+    }
 }
 
 /// a repository, at a revision (a branch, a tag or a commit) or at its default branch.
@@ -125,16 +141,6 @@ impl Repo {
         };
         Some((Repo { kind, id, revision }, file))
     }
-
-    /// lists the repository at one commit through the tree API.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "the listing arrives with the hugging face milestone"
-    )]
-    pub(super) async fn resolve(&self, _api: &impl Api) -> Result<Listing, Error> {
-        Err(super::not_yet("hugging face"))
-    }
 }
 
 /// one or two parts of letters, digits, `-`, `_` and `.`.
@@ -152,12 +158,7 @@ fn is_id(text: &str) -> bool {
 
 impl fmt::Display for Repo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match self.kind {
-            RepoKind::Dataset => "datasets",
-            RepoKind::Model => "models",
-            RepoKind::Space => "spaces",
-        };
-        write!(f, "hf:{kind}/{}", self.id)?;
+        write!(f, "hf:{}/{}", self.kind.plural(), self.id)?;
         if let Some(revision) = &self.revision {
             write!(f, "@{revision}")?;
         }
@@ -165,7 +166,38 @@ impl fmt::Display for Repo {
     }
 }
 
-/// a hugging face token, from where the hugging face tools keep it.
-pub(super) fn credentials(_var: Var<'_>) -> Vec<Credential> {
-    Vec::new()
+/// a hugging face token, sent to huggingface.co as a bearer token.
+pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
+    token::find(var)
+        .map(|token| Credential {
+            host: "huggingface.co",
+            header: "authorization",
+            value: format!("Bearer {token}"),
+        })
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::*;
+
+    #[test]
+    fn the_token_goes_to_huggingface_co_as_a_bearer_token() {
+        let var = |name: &str| (name == "HF_TOKEN").then(|| OsString::from("hf_abc"));
+        let found = credentials(&var);
+        let [credential] = found.as_slice() else {
+            panic!("{} credentials", found.len());
+        };
+        assert_eq!(
+            (
+                credential.host,
+                credential.header,
+                credential.value.as_str()
+            ),
+            ("huggingface.co", "authorization", "Bearer hf_abc")
+        );
+    }
 }

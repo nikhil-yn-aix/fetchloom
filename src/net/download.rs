@@ -27,8 +27,12 @@ const DIVERSIONS: u32 = 3;
 const LARGEST_PAGE: usize = 4 * 1024 * 1024;
 
 /// turns a page a server sent instead of the file, such as a confirmation form, into the URL that
-/// serves the file, or into an error saying why there is none, such as a download quota.
-pub(crate) type Divert = fn(&Url, &str) -> Result<Url, Error>;
+/// serves the file, or into an error saying why there is none, such as a download quota. it reads
+/// the page with the URL the page came from, after redirects, and its status.
+pub(crate) type Divert = fn(&Url, u16, &str) -> Result<Url, Error>;
+
+/// whether a forbidden XML answer names an expired source-issued download link.
+pub(crate) type Expired = fn(&str) -> bool;
 
 /// what a download must turn out to be, when something already says so.
 #[derive(Clone, Copy, Debug, Default)]
@@ -45,6 +49,7 @@ pub(crate) struct Fetch {
     /// where to ask first, when that differs from `url`.
     pub(crate) from: Url,
     pub(crate) divert: Option<Divert>,
+    pub(crate) expired: Option<Expired>,
     pub(crate) expect: Expect,
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
@@ -60,6 +65,7 @@ impl Fetch {
             from: url.clone(),
             url,
             divert: None,
+            expired: None,
             expect: Expect::default(),
             revalidate: false,
             unpack: false,
@@ -341,6 +347,27 @@ impl Net {
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
+        if let Some(divert) = fetch.divert
+            && is_page(status, &head)
+        {
+            let url = response.url().clone();
+            let page = self.page(from, response).await?;
+            return divert(&url, status.as_u16(), &page)
+                .map(Answer::Divert)
+                .map_err(Failure::Final);
+        }
+        if let Some(expired) = fetch.expired
+            && status == StatusCode::FORBIDDEN
+            && headers::is_xml(&head)
+        {
+            if self.expired_link(from, response, expired).await? {
+                return Err(failure::transient(format!(
+                    "{} supplied an expired download link",
+                    host(from)
+                )));
+            }
+            return Err(failure::refusal(from, status, &head));
+        }
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
                 return Ok(Answer::NotModified);
@@ -353,14 +380,6 @@ impl Net {
             StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => return Ok(Answer::StartOver),
             status => return Err(failure::refusal(from, status, &head)),
         };
-        if let Some(divert) = fetch.divert
-            && headers::is_html(&head)
-        {
-            let page = self.page(from, response).await?;
-            return divert(from, &page)
-                .map(Answer::Divert)
-                .map_err(Failure::Final);
-        }
         let total = headers::total_length(&head, status);
         let name = headers::file_name(&head);
         let validators = headers::validators(&head);
@@ -464,6 +483,26 @@ impl Net {
         Ok(writer)
     }
 
+    async fn expired_link(
+        &self,
+        url: &Url,
+        response: reqwest::Response,
+        expired: Expired,
+    ) -> Result<bool, Failure> {
+        let page = tokio::select! {
+            page = self.page(url, response) => page,
+            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+        };
+        match page {
+            Ok(text) => Ok(expired(&text)),
+            Err(Failure::Final(error)) if error.kind == Kind::Interrupted => {
+                Err(Failure::Final(error))
+            }
+            // without a readable expiry message, the original 403 remains an access refusal.
+            Err(_) => Ok(false),
+        }
+    }
+
     /// reads a page a server sent instead of the file.
     async fn page(&self, url: &Url, mut response: reqwest::Response) -> Result<String, Failure> {
         let mut page = Vec::new();
@@ -534,6 +573,16 @@ impl Net {
             origin: Origin::Network,
         }
     }
+}
+
+/// whether an answer is a page in place of the file: HTML that names no file to save, sent as a
+/// success or as a refusal that asking again would not change.
+fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
+    let settled = status == StatusCode::OK
+        || (status.is_client_error()
+            && !failure::is_transient(status)
+            && status != StatusCode::RANGE_NOT_SATISFIABLE);
+    settled && headers::is_html(head) && headers::file_name(head).is_none()
 }
 
 /// checks a finished download against what was expected of it.
@@ -650,3 +699,6 @@ fn progress_kept(error: Error, partial: &Partial) -> Error {
         None => error,
     }
 }
+
+#[cfg(test)]
+mod tests;

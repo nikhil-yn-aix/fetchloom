@@ -136,7 +136,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
 
 - `get` checks the total known selected size, including cache hits.
 - project downloads check known bytes still missing from the cache.
-- for an unknown source size, a server's length is checked against the remaining download. if neither states a size, the question comes after that file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch.
+- for an unknown source size, a server's length is checked against the remaining download. if neither states a size, the question comes after that file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch. other large downloads with unknown source sizes wait for the same answer; a refusal stops them too.
 
 `--yes` or `-y` approves. questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer:
 

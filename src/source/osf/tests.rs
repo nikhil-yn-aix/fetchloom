@@ -223,3 +223,18 @@ fn live_osf() {
     assert_eq!(listing.resolved.to_string(), "osf:ezcuj");
     assert_eq!(work.counts().requests, 2);
 }
+
+#[test]
+fn recorded_storage_expiry_is_distinct_from_an_auth_refusal() {
+    let url = Url::parse("https://osf.io/download/tfa5d/?version=1").unwrap();
+    let recorded = Recorded::default()
+        .on(url.as_str(), 403, fixture_bytes("osf/expired-storage.xml"))
+        .content_type(url.as_str(), "application/xml; charset=utf-8");
+    let answer = block_on(recorded.get(&url)).unwrap();
+    let check = crate::source::fetch_plan(&url).expired.unwrap();
+    assert!(check(&answer.text()));
+    let denied = answer
+        .text()
+        .replace("Request has expired.", "The request is not authorized.");
+    assert!(!check(&denied));
+}

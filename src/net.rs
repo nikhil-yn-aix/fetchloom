@@ -18,7 +18,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 pub(crate) use api::{Api, Response};
-pub(crate) use download::{Divert, Event, Expect, Fetch, Fetched, Origin};
+pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
 pub(crate) use shown::{Shown, secret};
 
@@ -245,3 +245,6 @@ fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
     let next = from.join(location).ok()?;
     (redirect && matches!(next.scheme(), "http" | "https")).then_some(next)
 }
+
+#[cfg(test)]
+mod credential_tests;

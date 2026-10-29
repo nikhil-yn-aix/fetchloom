@@ -59,8 +59,8 @@ source tests implement `Api` with in-memory recorded responses from `tests/fixtu
 | dataverse | native API, `format=original` for tabular files | checksum type per file, MD5 on harvard |
 | osf | files API, folders walked, `links.next` paging | SHA-256 and MD5 |
 | hugging face | tree API at a commit, `/resolve/` for bytes | SHA-256 for large files, served through a CDN with range support. a branch is resolved to its commit before locking |
-| kaggle | datasets API, then a redirect to signed storage | no checksum. a rate limit can look like a 404 |
-| google drive | the `uc` endpoint, then the confirm form for large files | "too many users" is its own retry-later error. folders are read from the folder page |
+| kaggle | API view for the newest version, list in pages of 200, then each file on its own with `raw=true`, redirected to signed storage | no checksum. public datasets need no token; a 403 can mean private or missing. competitions are refused |
+| google drive | direct downloads from `drive.usercontent.google.com`, with a confirmation-page handler | quota pages ask you to retry later. `open?id=` follows drive's redirect; folders are walked through `embeddedfolderview` |
 | dropbox | the shared link with `dl=1` | a folder arrives as one zip, treated as an archive |
 
 ## the cache
@@ -118,6 +118,8 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
 
+OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
+
 resumption uses a pinned SHA-256 or an `If-Range` validator: a strong `ETag`, else `Last-Modified`. unsuitable responses restart from zero. a resumed checksum mismatch gets one full restart before failing. unpinned `get` uses conditional requests for repeat downloads.
 
 a locked 404 or 410 can trigger one source re-resolution per recorded reference in the batch. a new URL is matched by file path, or by a lone file in a lone-file dataset. its bytes must satisfy the old pin. other failures do not trigger this recovery.
@@ -130,7 +132,7 @@ redirects are followed explicitly so every hop is checked. behind a proxy, untru
 
 source credentials attach only to their configured host over HTTPS on port 443. once a redirect leaves the original origin, no later hop receives those credentials. offline mode stops requests before sending and stops the resolver before lookup.
 
-project references reject recognized secret query keys on resolution. URL display masking is a wrapper used at call sites, not an invariant of `url::Url`. one-off URL records and successful `get` JSON retain raw URLs. do not share those records when fetching a signed link.
+project references reject recognized secret query keys on resolution. URL display masking is a wrapper used at call sites, not an invariant of `url::Url`. one-off URL records retain raw URLs; successful `get` JSON masks recognized query secrets. do not share local URL records when fetching a signed link.
 
 a shared writable cache trusts every writer. partial-download handles refuse links and special files; on unix, a resumed partial must belong to the current user and have one hardlink. cache subdirectories are checked when created or first used. these checks do not authenticate object contents or isolate users from one another.
 
@@ -164,4 +166,4 @@ human steps are printed directly. warnings are collected, and the JSON document 
 
 ## adding a source
 
-add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or a download-page handler when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.
+add a module and a `Reference` variant, then register parsing, pasted-link routing, resolution and display in `source.rs`. add credentials or source-specific download response handling when needed. source fixtures test listing behavior; CLI tests cover transfer and placement. one failing source can stop resolution of a project, so module separation does not mean independent success within a run.

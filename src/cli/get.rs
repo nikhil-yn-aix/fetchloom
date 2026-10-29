@@ -300,12 +300,8 @@ fn folder_for(
 /// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
 /// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
 fn job(remote: &Remote, name: &str, extract: bool) -> Job {
-    let (from, divert) = source::fetch_plan(&remote.url);
     Job {
         fetch: Fetch {
-            url: remote.url.clone(),
-            from,
-            divert,
             expect: Expect {
                 sha256: remote.sha256,
                 md5: remote.md5,
@@ -313,6 +309,7 @@ fn job(remote: &Remote, name: &str, extract: bool) -> Job {
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
             unpack: extract && archive::by_name(name) == Some(Packed::Archive),
+            ..source::fetch_plan(&remote.url)
         },
         label: remote.path.clone(),
         dataset: None,

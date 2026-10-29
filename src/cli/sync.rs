@@ -387,12 +387,9 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
         .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
     let pinned = lock.datasets.iter().find(|locked| locked.name == dataset);
-    let (from, divert) = source::fetch_plan(&url);
+
     Ok(Job {
         fetch: Fetch {
-            url,
-            from,
-            divert,
             expect: Expect {
                 sha256: Some(file.sha256),
                 md5: file.md5,
@@ -400,6 +397,7 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
             },
             revalidate: false,
             unpack: false,
+            ..source::fetch_plan(&url)
         },
         label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
