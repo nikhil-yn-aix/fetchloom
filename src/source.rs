@@ -365,6 +365,7 @@ fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
     let mut seen = HashSet::with_capacity(count);
     for path in listing.paths() {
         if let Some(reason) = name::escapes(path) {
+            let path = path.escape_debug();
             return Err(Error::new(
                 Kind::SourceInvalid,
                 format!(
@@ -522,6 +523,40 @@ mod tests {
         ] {
             let err = Reference::parse(text).unwrap_err();
             assert_eq!(err.kind, Kind::ReferenceInvalid, "{text}");
+        }
+    }
+
+    #[test]
+    fn bidi_controls_are_refused_in_listings() {
+        let url = Url::parse("https://example.org/x").unwrap();
+        let reference = Reference::Url(url.clone());
+        for unavailable in [false, true] {
+            let mut listing = single(&url);
+            let path = "report\u{202e}txt.exe".to_owned();
+            if unavailable {
+                listing.files.clear();
+                listing.unavailable.push(Unavailable {
+                    path,
+                    reason: "not downloadable".to_owned(),
+                });
+            } else {
+                listing.files[0].path = path;
+            }
+            let result = check(&reference, listing);
+            assert!(result.is_err(), "accepted bidi listed path");
+            let error = result.unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(
+                error.message.contains("control character"),
+                "{}",
+                error.message
+            );
+            assert!(
+                error.message.contains("report\\u{202e}txt.exe"),
+                "{}",
+                error.message
+            );
+            assert!(!error.message.contains('\u{202e}'), "{}", error.message);
         }
     }
 

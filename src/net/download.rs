@@ -380,7 +380,7 @@ impl Net {
             status => return Err(failure::refusal(from, status, &head)),
         };
         let total = headers::total_length(&head, status);
-        let name = headers::file_name(&head);
+        let name = server_name(&head)?;
         let validators = headers::validators(&head);
         let body = Body {
             offset,
@@ -571,6 +571,25 @@ impl Net {
             origin: Origin::Network,
         }
     }
+}
+
+fn server_name(head: &header::HeaderMap) -> Result<Option<String>, Failure> {
+    let name = headers::file_name(head);
+    if let Some(given) = name.as_deref()
+        && given.contains(crate::name::is_bidi_control)
+    {
+        return Err(Failure::Final(
+            Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "the server supplied a file name with a bidi control character: \"{}\"",
+                    given.escape_debug()
+                ),
+            )
+            .help("ask the file's publisher to remove the control character from its name"),
+        ));
+    }
+    Ok(name)
 }
 
 /// whether an answer is a page in place of the file: HTML that names no file to save, sent as a

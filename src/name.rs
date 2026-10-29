@@ -12,6 +12,9 @@ const LONGEST: usize = 200;
 /// a name a server or a link suggested, made safe to create anywhere: only its last path part,
 /// with the characters windows refuses replaced and the names windows reserves avoided.
 pub(crate) fn sanitize(raw: &str) -> Option<String> {
+    if raw.contains(is_bidi_control) {
+        return None;
+    }
     let last = raw.rsplit(['/', '\\']).next().unwrap_or_default();
     let replaced: String = last
         .chars()
@@ -151,6 +154,19 @@ pub(crate) fn folder_for(file: &str) -> String {
     }
 }
 
+/// whether a character is a control character, including unicode bidi controls.
+pub(crate) fn is_control(character: char) -> bool {
+    character.is_control() || is_bidi_control(character)
+}
+
+/// whether a character changes the reading direction of the surrounding text.
+pub(crate) fn is_bidi_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
 /// why a path inside a dataset or an archive is refused, if it is: it could reach outside its
 /// folder on some platform, or it holds a control character that terminals would act on. such a
 /// path is refused everywhere, so a `data.lock` works on every machine.
@@ -164,7 +180,7 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     if path.contains('\\') {
         return Some("it has a \\, which windows reads as a folder separator");
     }
-    if path.contains(char::is_control) {
+    if path.contains(is_control) {
         return Some("it holds a control character");
     }
     let bytes = path.as_bytes();
@@ -323,6 +339,24 @@ mod tests {
         assert_eq!(sanitize("com0").as_deref(), Some("com0"));
         assert_eq!(sanitize(".."), None);
         assert_eq!(sanitize(" "), None);
+    }
+
+    #[test]
+    fn bidi_controls_are_refused_in_names() {
+        for control in [
+            '\u{202e}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{061c}',
+        ] {
+            let path = format!("report{control}txt.exe");
+            assert!(escapes(&path).is_some(), "accepted bidi path: {path:?}");
+            assert_eq!(
+                sanitize(&path),
+                None,
+                "accepted bidi suggested name: {path:?}"
+            );
+        }
+        assert_eq!(escapes("data/נתונים.csv"), None);
+        assert_eq!(sanitize("נתונים.csv").as_deref(), Some("נתונים.csv"));
     }
 
     #[test]

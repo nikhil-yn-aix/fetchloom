@@ -144,6 +144,39 @@ fn an_html_file_the_server_names_is_the_file() {
 }
 
 #[test]
+fn bidi_controls_are_refused_in_server_names() {
+    for disposition in [
+        "attachment; filename=\"report\u{202e}txt.exe\"",
+        "attachment; filename*=UTF-8''report%E2%80%AEtxt.exe",
+    ] {
+        let (url, _) = serve(vec![reply(
+            "200 OK",
+            &[("Content-Disposition", disposition)],
+            "bytes",
+        )]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let fetch = Fetch::new(url.clone());
+        let result = block_on(net(&url).download(&fetch, &cache, &|_| Ok(())));
+        assert!(result.is_err(), "accepted bidi server filename");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(
+            error.message.contains("control character"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("report\\u{202e}txt.exe"),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains('\u{202e}'), "{}", error.message);
+        assert!(cache.objects().is_empty());
+    }
+}
+
+#[test]
 fn a_dropbox_page_never_enters_the_cache_as_a_file() {
     let shared = Url::parse("https://www.dropbox.com/s/abc/data.csv?dl=1").unwrap();
     let divert = crate::source::fetch_plan(&shared).divert;

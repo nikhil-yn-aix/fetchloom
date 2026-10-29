@@ -50,7 +50,7 @@ impl Names {
         } else {
             path.nfc().collect()
         };
-        if nfc.chars().any(char::is_control) {
+        if nfc.chars().any(name::is_control) {
             return Err(refused_member(
                 &raw.escape_debug().to_string(),
                 "it holds a control character, which no list of files can record safely",
@@ -172,6 +172,16 @@ mod tests {
         let err = add_all(&["a\tb.txt"]).unwrap_err();
         assert!(err.contains("a\\tb.txt"), "{err}");
         assert!(add_all(&["a\nb"]).is_err());
+    }
+
+    #[test]
+    fn bidi_controls_are_refused_in_members() {
+        let result = add_all(&["report\u{202e}txt.exe"]);
+        assert!(result.is_err(), "accepted bidi archive member");
+        let error = result.unwrap_err();
+        assert!(error.contains("control character"), "{error}");
+        assert!(error.contains("report\\u{202e}txt.exe"), "{error}");
+        assert!(!error.contains('\u{202e}'), "{error}");
     }
 
     #[test]
