@@ -216,6 +216,8 @@ archive bytes may be deleted after successful unpacking when no registered proje
 
 ## the .fetchloom folder
 
+`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, state or ignore file.
+
 | path | contents |
 |---|---|
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
