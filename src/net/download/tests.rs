@@ -133,3 +133,28 @@ fn an_html_file_the_server_names_is_the_file() {
     assert_eq!(fetched.name.as_deref(), Some("index.html"));
     assert_eq!(fetched.size, 13);
 }
+
+#[test]
+fn a_dropbox_page_never_enters_the_cache_as_a_file() {
+    let shared = Url::parse("https://www.dropbox.com/s/abc/data.csv?dl=1").unwrap();
+    let (_, divert) = crate::source::fetch_plan(&shared);
+    let divert = divert.unwrap();
+    let body = crate::source::recorded::fixture_bytes("dropbox/download-page.html");
+    let (url, _) = serve(vec![reply(
+        "200 OK",
+        &[HTML],
+        &String::from_utf8_lossy(&body),
+    )]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch {
+        from: url.clone(),
+        divert: Some(divert),
+        revalidate: true,
+        ..Fetch::new(shared.clone())
+    };
+    let error = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(cache.objects().is_empty());
+    assert!(cache.url_record(shared.as_str()).is_none());
+}

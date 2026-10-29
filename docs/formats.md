@@ -136,6 +136,8 @@ drive locks keep the file id and resource key, without a confirmation form's fie
 
 drive folders list no sizes. downloads supply the sizes written to the lock; [approval](cli.md#offline-recovery-and-approval) checks a server's length, or the bytes received when no length is stated. google docs entries stop the folder listing because exports can change between downloads. ask the owner to upload fixed files instead.
 
+dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins the zip; extraction adds its tree hash. an unnamed HTML answer fails instead of entering the cache as dataset bytes.
+
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
 when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and local cache records keep those URLs verbatim, so do not share them. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.

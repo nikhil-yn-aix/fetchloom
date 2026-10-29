@@ -205,7 +205,9 @@ impl fmt::Display for Reference {
 
 /// where to ask for a file's bytes, and how to read a page a host sends in their place.
 pub(crate) fn fetch_plan(url: &Url) -> (Url, Option<Divert>) {
-    drive::fetch_plan(url).unwrap_or_else(|| (url.clone(), None))
+    drive::fetch_plan(url)
+        .or_else(|| dropbox::fetch_plan(url))
+        .unwrap_or_else(|| (url.clone(), None))
 }
 
 /// every credential found where its source keeps it.
