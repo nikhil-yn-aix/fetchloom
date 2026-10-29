@@ -211,7 +211,7 @@ impl Cache {
                         if intact {
                             continue;
                         }
-                        let removed = fs::remove_file(&object.path).is_ok();
+                        let removed = self.volume.remove(&object.path).is_ok();
                         let mut found = changed
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -358,6 +358,23 @@ mod tests {
         drop(held);
         assert_eq!(checked.changed, vec![bad.digest]);
         assert_eq!(checked.stuck.is_empty(), !bad.path.exists());
+    }
+
+    #[test]
+    fn objects_whose_bytes_rotted_are_removed() {
+        for (_dir, cache) in [cache(), fat()] {
+            let rotten = [store(&cache, b"rot1"), store(&cache, b"rot2")];
+            for object in &rotten {
+                damage(&object.path);
+                // bytes that rot on disk leave the read-only flag as it was
+                seal(&object.path);
+            }
+            assert!(!cache.verify(&rotten[0].digest).unwrap());
+            let checked = cache.verify_all(2, &|_| {});
+            assert_eq!(checked.changed, vec![rotten[1].digest]);
+            assert_eq!(checked.stuck, vec![]);
+            assert!(rotten.iter().all(|object| !object.path.exists()));
+        }
     }
 
     fn damage(path: &Path) {

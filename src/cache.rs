@@ -146,7 +146,7 @@ impl Cache {
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
-                fs::remove_file(&path)?;
+                self.volume.remove(&path)?;
                 Ok(false)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
