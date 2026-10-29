@@ -1,6 +1,9 @@
 //! the little HTML drive's pages need read: the text between two markers, an attribute of a tag,
 //! and text with its tags and character references undone.
 
+// unicode scalars need at most six hex digits or seven decimal digits.
+const LONGEST_REFERENCE: usize = 10;
+
 /// the text between `start` and the next `end` after it.
 pub(super) fn between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
     let from = text.find(start)? + start.len();
@@ -35,8 +38,12 @@ pub(super) fn unescape(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         plain.push_str(&rest[..at]);
         rest = &rest[at..];
+        // an ASCII semicolon is a character boundary even when the lookahead ends inside UTF-8.
         let reference = rest
-            .find(';')
+            .as_bytes()
+            .iter()
+            .take(LONGEST_REFERENCE)
+            .position(|byte| *byte == b';')
             .and_then(|end| Some((character(&rest[1..end])?, end)));
         if let Some((c, end)) = reference {
             plain.push(c);
@@ -102,5 +109,37 @@ mod tests {
         );
         assert_eq!(between("<b>one</b><b>two</b>", "<b>", "</b>"), Some("one"));
         assert_eq!(between("<b>one", "<b>", "</b>"), None);
+    }
+
+    #[test]
+    fn a_maximum_sized_page_of_ampersands_has_bounded_work() {
+        let mut page = "&".repeat(4 * 1024 * 1024 - 1);
+        page.push(';');
+        let expected = page.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(unescape(&page));
+        });
+        let decoded = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|error| {
+                panic!("unescaping a maximum-sized page did not finish: {error}")
+            });
+        assert_eq!(decoded, expected);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn reference_lookahead_keeps_unicode_and_the_longest_scalars() {
+        assert_eq!(
+            unescape("&#x10FFFF;&#1114111;&#x1F600;"),
+            "\u{10ffff}\u{10ffff}\u{1f600}"
+        );
+        assert_eq!(
+            unescape(
+                "&\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}; &\u{6f22}\u{6f22}\u{6f22}; &\u{1f600}\u{1f600}\u{1f600}; &amp;"
+            ),
+            "&\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}; &\u{6f22}\u{6f22}\u{6f22}; &\u{1f600}\u{1f600}\u{1f600}; &"
+        );
     }
 }
