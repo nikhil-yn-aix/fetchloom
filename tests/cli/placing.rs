@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
 
@@ -32,6 +32,142 @@ fn requested(server: &Server, count: usize) -> Result {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    Ok(())
+}
+
+/// sets when `path` was last written, leaving its read-only flag as it was.
+fn set_time(path: &Path, time: SystemTime) -> Result {
+    let before = fs::metadata(path)?.permissions();
+    let mut writable = before.clone();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "only a writable file takes a new time"
+    )]
+    writable.set_readonly(false);
+    fs::set_permissions(path, writable)?;
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(time)?;
+    fs::set_permissions(path, before)?;
+    Ok(())
+}
+
+/// gives iris in `project`, and the state recording it, one whole second as their time, as a
+/// clock as coarse as FAT's does when both are written within that second.
+fn same_second(project: &Path) -> Result<SystemTime> {
+    let placed = project.join("data").join("iris").join("iris.csv");
+    let state_path = project.join(".fetchloom").join("state");
+    let seconds = fs::metadata(&placed)?
+        .modified()?
+        .duration_since(UNIX_EPOCH)?
+        .as_secs();
+    let second = UNIX_EPOCH + Duration::from_secs(seconds);
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    state["files"]["data/iris/iris.csv"]["look"]["modified"] =
+        serde_json::json!(u64::try_from(Duration::from_secs(seconds).as_nanos())?);
+    fs::write(&state_path, serde_json::to_vec(&state)?)?;
+    set_time(&placed, second)?;
+    set_time(&state_path, second)?;
+    Ok(second)
+}
+
+/// a coarse clock gives a file edited right after it was placed the size and time recorded for
+/// it. the state written in that same tick tells such a file apart, so it is hashed.
+#[test]
+fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let second = same_second(&sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(&placed, &edited)?;
+    set_time(&placed, second)?;
+
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
+    let kept = "data/iris/iris.csv was changed by hand, so it stays";
+    let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
+    assert!(
+        path.contains(kept),
+        "path trusted the file without syncing: {path}"
+    );
+    // the sync path ran found the object behind a hardlink changed and marked it, which must
+    // not turn this project's own edit into one made elsewhere
+    let synced = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(synced.contains(kept), "{synced}");
+    assert_eq!(fs::read(&placed)?, edited, "the edit stays without --force");
+    let forced = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
+    // only an edit through a hardlink reaches the cached object, which is then downloaded again
+    let links = sandbox.links()?;
+    let hardlinked = links.hardlink && !links.reflink;
+    assert_eq!(server.requests().len(), if hardlinked { 2 } else { 1 });
+    Ok(())
+}
+
+/// a file as new as the state is hashed once and settled by writing the state again, after which
+/// a sync hashes nothing and writes nothing.
+#[test]
+fn a_sync_settles_files_as_new_as_the_state_and_then_hashes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let second = same_second(&sandbox.work())?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let traces = sandbox.folder("traces")?;
+    let sync = |name: &str| -> Result<String> {
+        let trace = traces.join(name);
+        let output = sandbox
+            .command(&["sync"])
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains("nothing to do"), "{stderr}");
+        Ok(fs::read_to_string(trace)?)
+    };
+
+    let settling = sync("settling.json")?;
+    assert!(settling.contains("\"name\":\"hash_racy\""), "{settling}");
+    let settled = fs::metadata(&state_path)?.modified()?;
+    assert_ne!(settled, second, "the state is written again");
+    let quiet = sync("quiet.json")?;
+    assert!(!quiet.contains("\"name\":\"hash_racy\""), "{quiet}");
+    assert_eq!(fs::metadata(&state_path)?.modified()?, settled);
+    Ok(())
+}
+
+#[test]
+fn removing_a_dataset_keeps_an_edit_a_coarse_clock_hides() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let second = same_second(&sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(&placed, &edited)?;
+    set_time(&placed, second)?;
+
+    let removed = sandbox.run(&["remove", "iris"])?;
+
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("data/iris/iris.csv is no longer needed, but it was changed by hand"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, edited);
     Ok(())
 }
 
@@ -101,16 +237,26 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // a coarse clock, such as the tick linux stamps files with, can give the file placed last the
+    // state's own time, and the first sync settles it by writing the state again
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
     let written = |name: &str| fs::metadata(sandbox.work().join(name))?.modified();
     let before = (written("data.lock")?, written(".fetchloom/state")?);
     // a rewrite now would carry a later time
     std::thread::sleep(Duration::from_millis(50));
-    let output = sandbox.run(&["sync"])?;
+    let trace = sandbox.folder("traces")?.join("sync.json");
+    let output = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         (written("data.lock")?, written(".fetchloom/state")?),
         before
     );
+    let events = fs::read_to_string(&trace)?;
+    assert!(!events.contains("\"name\":\"hash_racy\""), "{events}");
     Ok(())
 }
 
