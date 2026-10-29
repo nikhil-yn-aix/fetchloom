@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, file, link_folder, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -420,5 +420,25 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         fs::read(sandbox.work().join("second").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+/// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
+/// into a home folder.
+#[test]
+fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
+    let sandbox = Sandbox::new()?;
+    let newer = b"sepal_length,species\n5.1,setosa\n";
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
+    let real = sandbox.folder("real")?;
+    if !link_folder(&real, &sandbox.work().join("linked")) {
+        return Ok(());
+    }
+    for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
+        let output = sandbox.run(&["get", &server.url, "-o", "linked"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{run} run: {stderr}");
+        assert_eq!(fs::read(real.join("iris.csv"))?, bytes, "{run} run");
+    }
     Ok(())
 }

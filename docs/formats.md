@@ -38,7 +38,7 @@ names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character 
 
 `add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
 
-`copy = true` applies when a file is placed. an existing read-only fallback copy is not made writable by changing this setting; recreate that file to apply it. save any edits first.
+`copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. turning it off leaves writable files as they are.
 
 ### patterns
 
@@ -169,6 +169,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>
   unpacked/<archive sha256>
   projects/<sha256 of project root>.json
+  changed/<object sha256>
   tmp/
 ```
 
@@ -198,6 +199,7 @@ the `.lock` file coordinates writers; its contents are unused. without OS file l
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
 - an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
+- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit or `cache verify` writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
@@ -222,6 +224,7 @@ state fields:
 | `files[path].method` | `reflink`, `hardlink` or `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
+| `files[path].writable` | `true` when the file was placed or adopted writable |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
@@ -280,14 +283,14 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
 | `get` | `folder`: absolute path; `files`: file records below |
 | `path` | absolute path string, for a dataset, file or subfolder |
-| `status` | `project`: absolute path; seven arrays below |
+| `status` | `project`: absolute path; eight arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hash array |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
-placement has integer counts `placed`, `replaced`, `removed`, `unchanged`, and `kept`, an array of `{path, reason}`. paths are project-relative. reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
@@ -299,7 +302,8 @@ status arrays:
 | `missing` | absent target paths |
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
-| `outdated` | unchanged managed paths pinned to other hashes now |
+| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
+| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after that time; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 

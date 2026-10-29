@@ -1,5 +1,6 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
+mod changed;
 mod object;
 mod partial;
 mod unpacked;
@@ -28,8 +29,8 @@ use crate::digest::{self, Md5, Sha256};
 
 const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
-const FOLDERS: [&str; 7] = [
-    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
+const FOLDERS: [&str; 8] = [
+    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
 ];
 
 #[derive(Clone, Debug)]
@@ -95,6 +96,7 @@ impl Cache {
 
     /// opens the cache at `root`, creating its folders the first time.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
+        let _span = tracing::debug_span!("open_cache").entered();
         fs::create_dir_all(&root)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder))?;
@@ -140,17 +142,28 @@ impl Cache {
     }
 
     /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
-    /// edited, is removed so the next run downloads it again. says whether it was intact.
+    /// edited, is removed so the next run downloads it again, and marked as changed so other
+    /// projects whose links to it still look as placed put their copies back. says whether it was
+    /// intact.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
+                self.remember_changed(digest);
                 self.volume.remove(&path)?;
                 Ok(false)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
+        }
+    }
+
+    /// marks an object as changed. without the mark, another project sees the change only where
+    /// its own listing shows it, which on windows it may not.
+    fn remember_changed(&self, digest: &Sha256) {
+        if let Err(err) = self.mark_changed(digest) {
+            tracing::debug!(%err, "could not remember a changed object");
         }
     }
 

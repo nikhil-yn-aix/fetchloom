@@ -45,7 +45,7 @@ fn cache_folders_cannot_be_links_to_another_folder() {
         return;
     }
     for name in [
-        "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp",
+        "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("cache");
@@ -147,4 +147,28 @@ fn a_partial_and_its_lock_never_open_a_link() {
     std::os::unix::fs::symlink(&outside, lock).unwrap();
     assert!(cache.claim(url).is_err());
     assert_eq!(fs::read(outside).unwrap(), b"keep these bytes");
+}
+
+#[test]
+fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
+    let (dir, cache) = super::tests::cache();
+    // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
+    if !hardlinks(dir.path()) {
+        return;
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let digest = crate::digest::sha256(b"object");
+    let kept = outside.join(digest.hex());
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let folder = cache.root.join("changed");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(&folder, cache.root.join("old-changed")).unwrap();
+    link_folder(&outside, &folder);
+
+    assert!(cache.mark_changed(&digest).is_err());
+    assert!(cache.changed().is_empty());
+    cache.forget_changed(&std::collections::HashSet::new());
+
+    assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
 }

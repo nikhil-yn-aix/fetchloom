@@ -145,6 +145,7 @@ impl Cache {
             }
         }
         freed.leftovers += self.sweep_partials(&old);
+        self.forget_changed(&needed.objects);
         for entry in fs::read_dir(self.root.join("tmp"))
             .into_iter()
             .flatten()
@@ -211,6 +212,7 @@ impl Cache {
                         if intact {
                             continue;
                         }
+                        self.remember_changed(&object.digest);
                         let removed = self.volume.remove(&object.path).is_ok();
                         let mut found = changed
                             .lock()
@@ -346,6 +348,11 @@ mod tests {
         assert_eq!(seen.load(Ordering::Relaxed), 8);
         assert!(cache.find(&good.digest, Some(4)).is_some());
         assert!(cache.find(&bad.digest, Some(4)).is_none());
+        assert_eq!(
+            cache.changed().into_keys().collect::<Vec<_>>(),
+            [bad.digest],
+            "projects linking to it can learn it changed"
+        );
     }
 
     #[test]
