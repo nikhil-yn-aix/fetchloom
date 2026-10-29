@@ -541,10 +541,15 @@ mod tests {
         let (folder, object) = cache(true);
         let destination = folder.path().join("placed.csv");
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+        let expected = if makes_hardlinks(folder.path()) {
+            Method::Hardlink
+        } else {
+            Method::Copy
+        };
 
         let method = placer.place(&object, &destination, false).unwrap();
 
-        assert_eq!(method, Method::Hardlink);
+        assert_eq!(method, expected);
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     }
 
@@ -597,6 +602,10 @@ mod tests {
     #[test]
     fn a_hardlink_keeps_the_objects_read_only_flag() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT make no hardlinks
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let destination = folder.path().join("placed.csv");
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
@@ -634,6 +643,10 @@ mod tests {
     #[test]
     fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT cannot hardlink, so nobody can swap in a second name of a file
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let destination = folder.path().join("placed.csv");
         let outside = folder.path().join("outside.csv");
         fs::write(&outside, "someone else's file").unwrap();
@@ -685,6 +698,10 @@ mod tests {
     #[test]
     fn the_whole_ladder_never_copies_within_one_volume() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT link nothing, so there every rung ends in a copy
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
 
         for name in ["first.csv", "second.csv"] {
@@ -752,6 +769,10 @@ mod tests {
     #[test]
     fn too_many_links_falls_back_for_that_file_alone() {
         let (folder, object) = cache(true);
+        // FAT32 and exFAT make no hardlinks to fall back from
+        if !makes_hardlinks(folder.path()) {
+            return;
+        }
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
         placer
@@ -813,7 +834,7 @@ mod tests {
 
     /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
     /// and exFAT do not.
-    fn makes_hardlinks(folder: &Path) -> bool {
+    pub(super) fn makes_hardlinks(folder: &Path) -> bool {
         let original = folder.join("probe");
         let link = folder.join("probe-link");
         fs::write(&original, CONTENTS).unwrap();
