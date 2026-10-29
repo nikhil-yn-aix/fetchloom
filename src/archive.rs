@@ -135,8 +135,10 @@ pub(crate) fn unpack(
     })
 }
 
-/// unpacks the archive the cache holds under `archive`, and records what it unpacked to. none
-/// when its bytes turn out to be no archive fetchloom unpacks, so the file stays as it is.
+/// unpacks the archive the cache holds under `archive`, and records what it unpacked to when
+/// that is `tree`, or when no tree is known yet. bytes that changed in the cache unpack to other
+/// files, and recording those would replace the tree data.lock pins. none when its bytes turn
+/// out to be no archive fetchloom unpacks, so the file stays as it is.
 ///
 /// # Errors
 ///
@@ -145,6 +147,7 @@ pub(crate) fn unpack_cached(
     cache: &Cache,
     archive: &Sha256,
     size: u64,
+    tree: Option<&Sha256>,
     watch: &dyn Fn(u64) -> bool,
 ) -> Result<Option<Unpacked>, Error> {
     let object = cache.find(archive, Some(size)).ok_or_else(|| {
@@ -159,9 +162,11 @@ pub(crate) fn unpack_cached(
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
     let unpacked = unpack(&object, format, &Limits::default(), cache, watch)?;
-    cache
-        .record_unpacked(archive, &unpacked.members)
-        .map_err(|err| Error::io("could not record what an archive unpacked to", &err))?;
+    if tree.is_none_or(|tree| *tree == unpacked.tree) {
+        cache
+            .record_unpacked(archive, &unpacked.members)
+            .map_err(|err| Error::io("could not record what an archive unpacked to", &err))?;
+    }
     Ok(Some(unpacked))
 }
 

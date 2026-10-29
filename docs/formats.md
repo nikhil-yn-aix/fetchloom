@@ -206,9 +206,9 @@ the `.lock` file coordinates writers; its contents are unused. gc removes an aba
 ### other indexes
 
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
-- an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied; a cache hit for the whole archive also requires every member object.
+- an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. a project sync's hardlink audit, `cache verify`, or a new copy of an object whose size changed in the cache writes it on finding that object's bytes changed, and its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
+- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. gc removes the marks of objects no registered project needs. [placement](architecture.md#placing-files) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 

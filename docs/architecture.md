@@ -154,7 +154,7 @@ links, devices, fifos, sparse tar files, encrypted zip entries and unsupported z
 
 members are written and sealed in staging files. none is published until the archive passes its checks. a publication IO failure can leave already published members for reuse or gc. the downloaded packed object can also remain after a refused extraction.
 
-successful unpacking records a sorted member tree under the archive hash. a locked tree hash is compared before placement. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
+unpacking records a sorted member tree under the archive hash, unless data.lock pins another tree. a locked tree hash is compared before placement. an archive that unpacks to another tree than the lock pins is hashed first: when its bytes changed in the cache, as a plain tar's can without any error, it is marked, dropped and downloaded again, and only an intact archive fails with advice to pin what this version unpacks. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
 
 ## project coordination and observability
 
