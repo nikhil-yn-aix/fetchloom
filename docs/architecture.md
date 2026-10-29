@@ -75,6 +75,8 @@ cache lookup checks file type and known size, not content. `cache verify` rehash
 
 successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable lock stops gc. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
 
+FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file there. when a removal is refused, the cache learns whether its volume can hardlink by trying once in `tmp/`. on a volume that cannot, the file has no other name, so the cache clears its read-only flag and removes it, and sets the flag again if the removal still fails. on a volume that can hardlink the flag stays: it belongs to every name of the file, including a hardlink a project placed.
+
 ## placing files
 
 new placements try reflink, then hardlink, then copy. a `Placer` remembers unsupported methods for its destination tree during the run, not in a persistent per-volume map. `copy = true` still allows a writable reflink, but skips hardlinks.

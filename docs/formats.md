@@ -174,7 +174,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 `layout` is created with `1\n`. an existing value is not validated or migrated. `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache.
 
-objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, and private downloads when file locking is unavailable. these records are local cache indexes, not files to commit.
+objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
 ### URL and partial records
 
