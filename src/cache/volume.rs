@@ -165,14 +165,12 @@ impl Volume {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::tests::{hardlinks, hold};
+    use crate::cache::tests::{hardlinks, hold, seal};
 
     /// a read-only file, as every object is.
     fn sealed(path: &Path) {
         fs::write(path, b"abc").unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(path, permissions).unwrap();
+        seal(path);
     }
 
     fn volume(dir: &Path, links: bool) -> Volume {

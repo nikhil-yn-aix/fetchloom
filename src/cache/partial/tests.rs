@@ -1,6 +1,6 @@
 //! resuming a download, what an earlier run left behind, and one process per download.
 
-use super::super::tests::{cache, fat, store};
+use super::super::tests::{cache, fat, seal, store};
 use super::*;
 
 fn owned(cache: &Cache, url: &str) -> Partial {
@@ -108,9 +108,7 @@ fn a_sealed_download_is_dropped_on_fat() {
     writer.save().unwrap();
     drop(writer);
     // a run that died while publishing leaves its record and the bytes it sealed
-    let mut permissions = fs::metadata(&partial.bytes).unwrap().permissions();
-    permissions.set_readonly(true);
-    fs::set_permissions(&partial.bytes, permissions).unwrap();
+    seal(&partial.bytes);
     drop(partial);
 
     let partial = owned(&cache, url);

@@ -339,6 +339,13 @@ pub(crate) mod tests {
         linked
     }
 
+    /// makes the file at `path` read-only, as every object is.
+    pub(super) fn seal(path: &Path) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
     /// keeps `path` from being removed while the result lives.
     #[cfg(windows)]
     pub(super) fn hold(path: &Path) -> impl Sized {
