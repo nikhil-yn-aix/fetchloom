@@ -1,17 +1,15 @@
 //! the volume under the cache. FAT32 and exFAT cannot hardlink, and on windows they refuse to
 //! remove a read-only file, which every object is.
 
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::partial::is_plain;
-
 /// how the volume under the cache links, renames and removes files, and whether it can hardlink
 /// at all, learned the first time a removal needs to know.
 #[derive(Debug)]
-pub(super) struct Volume {
+pub(crate) struct Volume {
     /// the cache's `tmp/`, where the probe link is made.
     tmp: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
@@ -21,7 +19,7 @@ pub(super) struct Volume {
 }
 
 impl Volume {
-    pub(super) fn new(tmp: PathBuf) -> Volume {
+    pub(crate) fn new(tmp: PathBuf) -> Volume {
         Volume {
             tmp,
             hard_link: |original, link| fs::hard_link(original, link),
@@ -31,11 +29,11 @@ impl Volume {
         }
     }
 
-    pub(super) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
+    pub(crate) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
         (self.hard_link)(original, link)
     }
 
-    pub(super) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+    pub(crate) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         (self.rename)(from, to)
     }
 
@@ -44,7 +42,7 @@ impl Volume {
     /// it is made writable for a second try. on a volume that can hardlink the refusal stands:
     /// read-only belongs to the file rather than one name, and clearing it could make a
     /// project's placed hardlink of an object writable.
-    pub(super) fn remove(&self, path: &Path) -> io::Result<()> {
+    pub(crate) fn remove(&self, path: &Path) -> io::Result<()> {
         match (self.remove_file)(path) {
             Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => {
                 self.remove_read_only(path).unwrap_or(Err(refused))
@@ -127,6 +125,19 @@ fn open_attributes(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
+/// whether `metadata` describes a plain file, not a link, a folder or a device.
+pub(crate) fn is_plain(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    metadata.file_type().is_file()
+}
+
 /// `permissions` that let the file's owner write it.
 fn writable(mut permissions: Permissions) -> Permissions {
     #[cfg(unix)]
@@ -147,7 +158,7 @@ fn writable(mut permissions: Permissions) -> Permissions {
 impl Volume {
     /// a volume that refuses to remove a read-only file, as FAT32 and exFAT do on windows, and
     /// that hardlinks only when `links` says so, which FAT cannot.
-    pub(super) fn refusing(tmp: PathBuf, links: bool) -> Volume {
+    pub(crate) fn refusing(tmp: PathBuf, links: bool) -> Volume {
         let hard_link: fn(&Path, &Path) -> io::Result<()> = if links {
             |original, link| fs::hard_link(original, link)
         } else {
@@ -171,7 +182,7 @@ impl Volume {
     /// this volume, losing every rename to another writer: just before the rename, that writer
     /// publishes the same file read-only at the destination, and the rename is then refused, as
     /// windows refuses to rename over a read-only file.
-    pub(super) fn losing_renames(self) -> Volume {
+    pub(crate) fn losing_renames(self) -> Volume {
         Volume {
             rename: |from, to| {
                 fs::copy(from, to)?;

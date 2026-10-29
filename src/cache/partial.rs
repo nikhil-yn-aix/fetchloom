@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Cache, Stored, Validators, real_folder};
 use crate::digest::{self, Hasher, Sha256};
+use crate::volume::is_plain;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
@@ -232,19 +233,6 @@ pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
     } else {
         Err(refused())
     }
-}
-
-/// whether `metadata` describes a plain file, not a link, a folder or a device.
-pub(super) fn is_plain(metadata: &Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return false;
-        }
-    }
-    metadata.file_type().is_file()
 }
 
 /// whether this process may write on into the file `metadata` describes: a plain file, still

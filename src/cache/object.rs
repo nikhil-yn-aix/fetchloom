@@ -7,9 +7,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::volume::Volume;
 use super::{Cache, Stored};
 use crate::digest::{Hasher, Sha256};
+use crate::volume::Volume;
 
 /// a new object being written into `tmp/`. dropped before it is sealed, it leaves nothing.
 pub(crate) struct NewObject {

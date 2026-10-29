@@ -21,6 +21,7 @@ mod project;
 mod source;
 mod stop;
 mod units;
+mod volume;
 mod work;
 
 /// runs fetchloom with the arguments of the current process and returns its exit code.
