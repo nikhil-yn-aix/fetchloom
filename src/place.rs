@@ -727,6 +727,14 @@ mod tests {
         placer.place(&object, &destination, false).unwrap();
 
         assert!(is_read_only(&destination));
+        // the copy is staged in a hidden file, and a placed file must not stay hidden
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_HIDDEN: u32 = 2;
+            let attributes = fs::metadata(&destination).unwrap().file_attributes();
+            assert_eq!(attributes & FILE_ATTRIBUTE_HIDDEN, 0);
+        }
     }
 
     #[test]
