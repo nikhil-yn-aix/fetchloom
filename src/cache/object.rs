@@ -117,9 +117,6 @@ fn create_sealed(path: &Path) -> io::Result<File> {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_ATTRIBUTE_READONLY: u32 = 1;
         options.attributes(FILE_ATTRIBUTE_READONLY);
-        // nothing else needs it while it is written, and defender scans an unshared new file
-        // about a fifth faster, as bsdtar's files are
-        options.share_mode(0);
     }
     #[cfg(unix)]
     {
@@ -209,18 +206,5 @@ mod tests {
         assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
         assert!(!syncfs_reports_errors(""));
         assert!(!syncfs_reports_errors("unknown"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn nothing_else_opens_an_object_while_it_is_written() {
-        const ERROR_SHARING_VIOLATION: i32 = 32;
-        let (_dir, cache) = super::super::tests::cache();
-        let object = cache.new_object().unwrap();
-        let opened = File::open(&object.temp.path);
-        assert_eq!(
-            opened.unwrap_err().raw_os_error(),
-            Some(ERROR_SHARING_VIOLATION)
-        );
     }
 }
