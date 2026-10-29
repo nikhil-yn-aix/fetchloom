@@ -80,17 +80,24 @@ impl Sandbox {
     pub(crate) fn wait_for_a_later_time(&self, time: SystemTime) -> Result {
         let probe = self.root.join(".clock");
         let started = Instant::now();
-        loop {
-            std::fs::write(&probe, b"")?;
-            let stamped = std::fs::metadata(&probe)?.modified()?;
-            std::fs::remove_file(&probe)?;
-            if stamped > time {
-                return Ok(());
+        // the probe is written over in place with bytes. exFAT need only stamp a write that
+        // changes a file's bytes or length, and on windows a file made again under a name just
+        // deleted gets the old file's creation time back.
+        let passed = loop {
+            std::fs::write(&probe, b"tick")?;
+            if std::fs::metadata(&probe)?.modified()? > time {
+                break true;
             }
             if started.elapsed() > Duration::from_secs(10) {
-                return Err("the filesystem's clock never passed the time".into());
+                break false;
             }
             std::thread::sleep(Duration::from_millis(10));
+        };
+        std::fs::remove_file(&probe)?;
+        if passed {
+            Ok(())
+        } else {
+            Err("the filesystem's clock never passed the time".into())
         }
     }
 
