@@ -163,7 +163,7 @@ impl Partial {
                 ));
             }
             None => {
-                if let Err(err) = fs::remove_file(&self.bytes)
+                if let Err(err) = self.cache.volume.remove(&self.bytes)
                     && err.kind() != io::ErrorKind::NotFound
                 {
                     return Err(err);
@@ -235,7 +235,7 @@ pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
 }
 
 /// whether `metadata` describes a plain file, not a link, a folder or a device.
-fn is_plain(metadata: &Metadata) -> bool {
+pub(super) fn is_plain(metadata: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

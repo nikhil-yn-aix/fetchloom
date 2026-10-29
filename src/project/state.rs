@@ -25,6 +25,8 @@ pub(crate) struct Placed {
     pub(crate) sha256: Sha256,
     pub(crate) method: Method,
     pub(crate) look: Look,
+    /// a file of its own that may be written to, as `copy = true` asks.
+    pub(crate) writable: bool,
 }
 
 /// how a file looks on disk without reading it: its size and modification time.
@@ -46,9 +48,14 @@ impl State {
     }
 
     pub(crate) fn render(&self) -> Vec<u8> {
-        let state = State {
+        #[derive(Serialize)]
+        struct Written<'a> {
+            version: u32,
+            files: &'a BTreeMap<String, Placed>,
+        }
+        let state = Written {
             version: VERSION,
-            files: self.files.clone(),
+            files: &self.files,
         };
         serde_json::to_vec(&state).unwrap_or_default()
     }
@@ -83,11 +90,12 @@ mod tests {
             Placed {
                 dataset: "iris".to_owned(),
                 sha256: digest::sha256(b"x"),
-                method: Method::Hardlink,
+                method: Method::Copy,
                 look: Look {
                     size: 1,
                     modified: 42,
                 },
+                writable: true,
             },
         );
         let read = State::parse(&state.render());
@@ -98,5 +106,9 @@ mod tests {
                 .files
                 .is_empty()
         );
+        let unrecorded = String::from_utf8(state.render())
+            .unwrap()
+            .replace(r#","writable":true"#, "");
+        assert!(State::parse(unrecorded.as_bytes()).files.is_empty());
     }
 }

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::Context;
-use super::sync::place;
+use super::sync::disk::Survey;
 use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
@@ -27,8 +27,12 @@ pub(super) struct Status {
     edited: Vec<String>,
     /// files where the lock places one, which fetchloom did not place.
     untracked: Vec<String>,
-    /// files fetchloom placed for an older lock, which `sync` replaces.
+    /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
+    /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
+    /// files placed as links whose bytes another project changed through its own link, which
+    /// `sync` puts back.
+    edited_elsewhere: Vec<String>,
     /// files in the data folder that no dataset places.
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -81,20 +85,23 @@ fn check(project: &Project) -> Result<Status, Error> {
             status.unlocked.push(name.clone());
         }
     }
-    let planned = plan::from_cache(&manifest, &lock, &super::open_cache()?)?;
+    let cache = super::open_cache()?;
+    let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
         .unknown
         .iter()
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     let targets = planned.targets;
-    let state = project.state();
-    let disk = place::scan(&project.root, &manifest.data_dir);
+    let survey = Survey::read(project, &manifest.data_dir);
+    let elsewhere: HashSet<String> = survey.edited_elsewhere(&cache).into_iter().collect();
     for target in &targets {
-        let list = match (disk.get(&target.path), state.files.get(&target.path)) {
+        let seen = survey.disk.get(&target.path);
+        let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => &mut status.missing,
+            (Some(_), Some(_)) if elsewhere.contains(&target.path) => &mut status.edited_elsewhere,
             (Some(seen), Some(record)) if record.look == *seen => {
-                if record.sha256 == target.sha256 {
+                if record.sha256 == target.sha256 && (!target.copy || record.writable) {
                     continue;
                 }
                 &mut status.outdated
@@ -105,7 +112,8 @@ fn check(project: &Project) -> Result<Status, Error> {
         list.push(target.path.clone());
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    status.extra = disk
+    status.extra = survey
+        .disk
         .into_keys()
         .filter(|path| !wanted.contains(path.as_str()))
         .collect();
@@ -132,6 +140,7 @@ impl Status {
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
+            || !self.edited_elsewhere.is_empty()
     }
 }
 
@@ -157,12 +166,23 @@ fn list(output: &Output, status: &Status) {
             &format!("{archive} · not unpacked on this machine yet"),
         );
     }
+    for path in status.edited_elsewhere.iter().take(SHOWN) {
+        output.mark(
+            "Edited",
+            &format!("{path} · through a link in another project"),
+        );
+    }
+    if status.edited_elsewhere.len() > SHOWN {
+        let more = status.edited_elsewhere.len() - SHOWN;
+        output.mark("", &format!("and {more} more"));
+    }
 }
 
 /// the closing line, and whether anything differs.
 fn sum_up(output: &Output, status: &Status) -> bool {
     let differences = status.unlocked.len()
         + status.not_unpacked.len()
+        + status.edited_elsewhere.len()
         + status
             .lists()
             .iter()

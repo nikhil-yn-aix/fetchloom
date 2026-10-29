@@ -1,6 +1,6 @@
 //! resuming a download, what an earlier run left behind, and one process per download.
 
-use super::super::tests::{cache, store};
+use super::super::tests::{cache, fat, hardlinks, seal, store};
 use super::*;
 
 fn owned(cache: &Cache, url: &str) -> Partial {
@@ -69,7 +69,12 @@ fn bytes_that_differ_from_their_record_are_never_continued() {
 
 #[test]
 fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
-    let (_dir, cache) = cache();
+    let (dir, cache) = cache();
+    // FAT32 and exFAT cannot hardlink, so there a sealed download is never a second name of its
+    // object, and a_sealed_download_is_dropped_on_fat covers them
+    if !hardlinks(dir.path()) {
+        return;
+    }
     let url = "https://example.org/sealed";
     let object = store(&cache, b"abc");
     let partial = owned(&cache, url);
@@ -94,6 +99,30 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     assert_eq!(fs::read(&writer.finish().unwrap().path).unwrap(), b"xyz");
     assert_eq!(fs::read(&object.path).unwrap(), b"abc");
     assert!(fs::metadata(&object.path).unwrap().permissions().readonly());
+}
+
+#[test]
+fn a_sealed_download_is_dropped_on_fat() {
+    let (_dir, cache) = fat();
+    let url = "https://example.org/sealed";
+    let partial = owned(&cache, url);
+    let mut writer = partial
+        .writer(0, Some(3), Validators::default(), false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    // a run that died while publishing leaves its record and the bytes it sealed
+    seal(&partial.bytes);
+    drop(partial);
+
+    let partial = owned(&cache, url);
+    assert!(partial.resumable().is_none());
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false)
+        .unwrap();
+    writer.write_all(b"xyz").unwrap();
+    assert_eq!(fs::read(&writer.finish().unwrap().path).unwrap(), b"xyz");
 }
 
 #[test]

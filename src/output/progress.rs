@@ -329,18 +329,24 @@ mod tests {
 
     type Heard = Arc<Mutex<Vec<String>>>;
 
-    fn ear() -> (Heard, impl Fn(&str, &str) + Send + 'static) {
+    fn ear() -> (
+        Heard,
+        std::sync::mpsc::Receiver<()>,
+        impl Fn(&str, &str) + Send + 'static,
+    ) {
         let heard = Heard::default();
         let kept = heard.clone();
+        let (announced, reported) = std::sync::mpsc::channel();
         let say = move |verb: &str, text: &str| {
             kept.lock().unwrap().push(format!("{verb} {text}"));
+            let _ = announced.send(());
         };
-        (heard, say)
+        (heard, reported, say)
     }
 
     #[test]
     fn a_quick_batch_adds_no_line() {
-        let (heard, say) = ear();
+        let (heard, _reported, say) = ear();
         let pace = (Duration::from_secs(5), Duration::from_secs(10));
         drop(Ticker::paced(
             "Downloading",
@@ -354,13 +360,15 @@ mod tests {
 
     #[test]
     fn a_long_batch_says_what_it_does_then_how_far_it_got() {
-        let (heard, say) = ear();
+        let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
         let ticker = Ticker::paced("Downloading", "3 files".to_owned(), (200, 1), pace, say);
         ticker.sized(100);
         ticker.sized(7);
         ticker.advance(150);
-        std::thread::sleep(Duration::from_millis(300));
+        for _ in 0..2 {
+            reported.recv_timeout(Duration::from_mins(1)).unwrap();
+        }
         drop(ticker);
         let heard = heard.lock().unwrap();
         assert_eq!(heard[0], "Downloading 3 files · 300 B", "{heard:?}");
@@ -395,10 +403,12 @@ mod tests {
 
     #[test]
     fn a_wait_without_bytes_says_what_it_waits_for() {
-        let (heard, say) = ear();
+        let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
         let ticker = Ticker::paced("Resolving", "zenodo:1".to_owned(), (0, 1), pace, say);
-        std::thread::sleep(Duration::from_millis(300));
+        for _ in 0..2 {
+            reported.recv_timeout(Duration::from_mins(1)).unwrap();
+        }
         drop(ticker);
         let heard = heard.lock().unwrap();
         assert_eq!(heard[0], "Resolving zenodo:1", "{heard:?}");
