@@ -294,6 +294,73 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
     Ok(())
 }
 
+/// gives iris in `project` back the modification time its state recorded, as a tool that keeps
+/// times would after an edit of the same size.
+fn keep_time(project: &Path) -> Result {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fetchloom").join("state"))?)?;
+    let modified = state["files"]["data/iris/iris.csv"]["look"]["modified"]
+        .as_u64()
+        .ok_or("a placed file has a time")?;
+    fs::File::options()
+        .write(true)
+        .open(project.join("data").join("iris").join("iris.csv"))?
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_nanos(modified))?;
+    Ok(())
+}
+
+/// an edit through one project's link that keeps the size and time shows in no listing on any
+/// platform, so the cache's mark is all the other project has. status, sync and path agree on
+/// it: sync puts the locked bytes back, and then nothing differs.
+#[test]
+fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+    let before = sandbox.command_in(&other, &["--json", "status"]).output()?;
+    let before: serde_json::Value = serde_json::from_slice(&before.stdout)?;
+    assert_eq!(
+        before["result"]["edited_elsewhere"],
+        serde_json::json!(["data/iris/iris.csv"])
+    );
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("data/iris/iris.csv was changed through a link in another project"),
+        "{stderr}"
+    );
+    let after = sandbox.command_in(&other, &["status"]).output()?;
+    assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
+    // a ready dataset answers without taking the project lock
+    let lock = other.join(".fetchloom").join("lock");
+    fs::remove_file(&lock)?;
+    let path = sandbox.command_in(&other, &["path", "iris"]).output()?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    assert!(!lock.exists(), "path synced again");
+    Ok(())
+}
+
 #[test]
 fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Result {
     let sandbox = Sandbox::new()?;

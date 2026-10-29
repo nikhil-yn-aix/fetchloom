@@ -63,7 +63,7 @@ $ fetchloom status
 
 `status` compares recorded sizes and modification times, without hashing dataset contents or downloading. it also reports edited, untracked and outdated paths, hardlinks the cache marked as changed through another project, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
 
-`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
+`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. a hardlink `status` lists as changed through another project is put back instead, with a warning, and listed in `placement.restored`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
 
 default placements are read-only. for tools that write into their inputs, request `copy = true` in the dataset entry. see [placement and cache trust](architecture.md#placing-files) before changing a hardlink's permissions.
 

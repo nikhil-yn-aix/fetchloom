@@ -99,7 +99,8 @@ impl<'a> Placing<'a> {
                     target,
                     survey.disk.get(&target.path),
                     survey.state.files.get(&target.path),
-                    force || survey.elsewhere.contains(&target.path),
+                    force,
+                    survey.elsewhere.contains(&target.path),
                     &project.root.join(&target.path),
                 )
             })
@@ -305,17 +306,21 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
+/// what the file at `destination` needs. `marked` says the cache found the bytes behind its
+/// hardlink changed after it was placed, which its size and time may not show.
 fn decide(
     target: &Target,
     look: Option<&Look>,
     placed: Option<&Placed>,
     force: bool,
+    marked: bool,
     destination: &Path,
 ) -> Result<Action, Error> {
     let Some(look) = look else {
         return Ok(Action::Place);
     };
     match placed {
+        Some(_) if marked => Ok(Action::Replace),
         Some(placed) if placed.look == *look => {
             let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {

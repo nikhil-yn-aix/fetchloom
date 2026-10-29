@@ -17,8 +17,8 @@ pub(crate) struct Survey {
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
-    /// files placed as hardlinks whose bytes were changed through another project's link, which
-    /// sync puts back without --force.
+    /// files placed as hardlinks whose object the cache marked as changed after they were placed,
+    /// which sync puts back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
 }
 
@@ -55,11 +55,12 @@ impl Survey {
             .collect()
     }
 
-    /// reads hardlinks again by name, which windows answers from the file itself where a listing
-    /// may be stale: those edited elsewhere, and with `force` every one, since --force asks for
-    /// every edit to be undone. what changed is remembered, for audit and for placing.
+    /// remembers the files edited elsewhere, then reads hardlinks again by name, which windows
+    /// answers from the file itself where a listing may be stale: those edited elsewhere, and with
+    /// `force` every one, since --force asks for every edit to be undone.
     pub(crate) fn look_again(&mut self, root: &Path, cache: &Cache, force: bool) {
-        let paths = if force && cfg!(windows) {
+        self.elsewhere = self.edited_elsewhere(cache).into_iter().collect();
+        let paths: Vec<String> = if force && cfg!(windows) {
             self.state
                 .files
                 .iter()
@@ -67,20 +68,12 @@ impl Survey {
                 .map(|(path, _)| path.clone())
                 .collect()
         } else {
-            self.edited_elsewhere(cache)
+            self.elsewhere.iter().cloned().collect()
         };
         for path in paths {
-            let Some(placed) = self.state.files.get(&path) else {
-                continue;
-            };
-            let Ok(metadata) = fs::symlink_metadata(root.join(&path)) else {
-                continue;
-            };
-            let look = Look::of(&metadata);
-            if look != placed.look && !force {
-                self.elsewhere.insert(path.clone());
+            if let Ok(metadata) = fs::symlink_metadata(root.join(&path)) {
+                self.disk.insert(path, Look::of(&metadata));
             }
-            self.disk.insert(path, look);
         }
     }
 }
