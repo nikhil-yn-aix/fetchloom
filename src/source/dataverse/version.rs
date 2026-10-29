@@ -141,6 +141,7 @@ impl Version {
             .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("doi"))
             .map(|(_, doi)| doi.to_owned());
         Ok(Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Dataverse(Dataset {
                 host: dataset.host.clone(),
                 item,

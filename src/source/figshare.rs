@@ -111,6 +111,7 @@ impl Article {
             })
             .collect::<Result<_, _>>()?;
         Ok(Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Figshare(resolved),
             title: Some(answer.title),
             license: answer.license.map(|license| license.name),

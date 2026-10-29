@@ -1,6 +1,8 @@
 //! a dataset on its way into data.lock: resolved and filtered, with every hash no source states
 //! filled in from earlier locks or from the bytes themselves.
 
+use std::collections::HashSet;
+
 use super::super::fetch::Job;
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
@@ -276,17 +278,27 @@ fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
 /// mistake worth stopping for, with real paths to compare against.
 pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
     for glob in &entry.select {
-        if !listing.files.iter().any(|file| glob.matches(&file.path)) {
+        if !listing.paths().any(|path| glob.matches(path)) {
             return Err(unmatched(name, entry, glob, listing));
         }
+    }
+    let selected = |path: &str| {
+        (entry.select.is_empty() || entry.select.iter().any(|glob| glob.matches(path)))
+            && !entry.exclude.iter().any(|glob| glob.matches(path))
+    };
+    let unavailable: Vec<_> = listing
+        .unavailable
+        .iter()
+        .filter(|item| selected(&item.path))
+        .collect();
+    if !unavailable.is_empty() {
+        let has_files = listing.files.iter().any(|file| selected(&file.path));
+        return Err(unavailable_selection(name, &unavailable, has_files));
     }
     let kept: Vec<Remote> = listing
         .files
         .iter()
-        .filter(|file| {
-            entry.select.is_empty() || entry.select.iter().any(|glob| glob.matches(&file.path))
-        })
-        .filter(|file| !entry.exclude.iter().any(|glob| glob.matches(&file.path)))
+        .filter(|file| selected(&file.path))
         .cloned()
         .collect();
     if kept.is_empty() {
@@ -303,6 +315,73 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
         }));
     }
     Ok(kept)
+}
+
+fn unavailable_selection(
+    name: &str,
+    entries: &[&crate::source::Unavailable],
+    has_files: bool,
+) -> Error {
+    let mut error = Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{name} has {} that fetchloom cannot download",
+            units::count(entries.len() as u64, "selected entry", "selected entries")
+        ),
+    );
+    for entry in entries {
+        error = error.detail(entry.path.clone());
+    }
+    let mut reasons = HashSet::new();
+    for entry in entries {
+        if reasons.insert(entry.reason.as_str()) {
+            error = error.detail(entry.reason.clone());
+        }
+    }
+    let flags = if entries.len() <= 5 {
+        entries
+            .iter()
+            .map(|entry| exclusion_flag(&entry.path))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        "an --exclude for each entry above".to_owned()
+    };
+    let purpose = if has_files {
+        "to fetch the other files"
+    } else {
+        "to leave the selected entries out"
+    };
+    let copy = if entries.len() == 1 {
+        "it as a file"
+    } else {
+        "them as files"
+    };
+    error.help(format!(
+        "add {flags} {purpose}, or ask the owner to add {copy} such as pdf or csv"
+    ))
+}
+
+fn exclusion_flag(path: &str) -> String {
+    let mut pattern = String::new();
+    for character in path.chars() {
+        match character {
+            '[' => pattern.push_str("[[]"),
+            '*' => pattern.push_str("[*]"),
+            '?' => pattern.push_str("[?]"),
+            other => pattern.push(other),
+        }
+    }
+    let quoted = if pattern.contains(['\'', '"', '$', '\u{60}']) {
+        if cfg!(windows) {
+            format!("'{}'", pattern.replace('\'', "''"))
+        } else {
+            format!("'{}'", pattern.replace('\'', "'\"'\"'"))
+        }
+    } else {
+        format!("\"{pattern}\"")
+    };
+    format!("--exclude {quoted}")
 }
 
 /// where an entry's patterns were written. `add` and `get` clear the lines of an entry they make
@@ -337,18 +416,23 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
     let deeper = Glob::new(&format!("**/{}", glob.as_str()))
         .ok()
         .filter(|deeper| {
-            glob.is_top_level_only() && listing.files.iter().any(|file| deeper.matches(&file.path))
+            glob.is_top_level_only() && listing.paths().any(|path| deeper.matches(path))
         });
     let example = match &deeper {
-        Some(deeper) => listing.files.iter().find(|file| deeper.matches(&file.path)),
-        None => listing.files.first(),
+        Some(deeper) => listing.paths().find(|path| deeper.matches(path)),
+        None => listing.paths().next(),
     };
     if let Some(example) = example {
-        let considered = units::count(listing.files.len() as u64, "file was", "files were");
-        error = error.detail(format!(
-            "{considered} considered, for example {}",
-            example.path
-        ));
+        let considered = if listing.unavailable.is_empty() {
+            units::count(listing.files.len() as u64, "file was", "files were")
+        } else {
+            units::count(
+                (listing.files.len() + listing.unavailable.len()) as u64,
+                "entry was",
+                "entries were",
+            )
+        };
+        error = error.detail(format!("{considered} considered, for example {example}"));
     }
     match deeper {
         Some(deeper) => error.help(format!(
@@ -387,6 +471,7 @@ mod tests {
         let manifest =
             Manifest::parse("[datasets.set]\nref = \"https://example.org/set.zip\"\n").unwrap();
         let listing = || Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Url(url.clone()),
             title: None,
             license: None,
@@ -444,6 +529,7 @@ mod tests {
         let manifest =
             Manifest::parse("[datasets.w]\nref = \"https://example.org/weights.npz\"\n").unwrap();
         let listing = || Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Url(url.clone()),
             title: None,
             license: None,
@@ -574,3 +660,6 @@ mod tests {
         assert_eq!(locked.files[0].sha256, stored.digest);
     }
 }
+
+#[cfg(test)]
+mod drive_docs_tests;

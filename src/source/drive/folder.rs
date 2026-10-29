@@ -8,11 +8,7 @@ use url::Url;
 use super::{Item, ItemKind, file_url, html};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Listing, MOST_FILES, Reference, Remote};
-use crate::units;
-
-/// how many of the items drive cannot send as files an error names. the rest are counted.
-const NAMED: usize = 5;
+use crate::source::{Listing, MOST_FILES, Reference, Remote, Unavailable};
 
 /// a drive id, with the resource key drive asks for along with items shared before 2021.
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +37,7 @@ struct Page {
 #[derive(Default)]
 struct Walk {
     files: Vec<Remote>,
+    unavailable: Vec<Unavailable>,
     folders: VecDeque<(Key, String)>,
     seen: HashSet<String>,
 }
@@ -60,7 +57,7 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
         let page = read(item, api, &key, &path).await?;
         walk.add(item, &path, page)?;
     }
-    if walk.files.is_empty() {
+    if walk.files.is_empty() && walk.unavailable.is_empty() {
         return Err(Error::new(
             Kind::ReferenceUnresolved,
             format!("{} holds no files", link(&item.id)),
@@ -68,6 +65,7 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
         .help("check the link in a browser. a link to one file looks like drive.google.com/file/d/..."));
     }
     Ok(Listing {
+        unavailable: walk.unavailable,
         resolved: Reference::Drive(item.clone()),
         title,
         license: None,
@@ -86,53 +84,40 @@ impl Walk {
                 format!("{parent}/{name}")
             }
         };
-        let unsent: Vec<String> = page
-            .entries
-            .iter()
-            .filter(|entry| entry.link.is_none())
-            .map(|entry| path(&entry.name))
-            .collect();
-        if !unsent.is_empty() {
-            return Err(unsent_items(item, parent, &unsent));
-        }
         for entry in page.entries {
-            let Some((key, folder)) = entry.link else {
-                continue;
-            };
             let path = path(&entry.name);
             if let Some(reason) = crate::name::escapes(&path) {
                 return Err(unreadable(item, &format!("the path {path} {reason}")));
             }
-            if folder {
-                if !self.seen.insert(key.id.clone()) {
-                    return Err(unreadable(
-                        item,
-                        &format!("the folder {path} appears twice"),
-                    ));
+            match entry.link {
+                None => self.unavailable.push(Unavailable {
+                    path,
+                    reason: "google docs exports can change between downloads, so a lock cannot pin them".to_owned(),
+                }),
+                Some((key, true)) => {
+                    if !self.seen.insert(key.id.clone()) {
+                        return Err(unreadable(
+                            item,
+                            &format!("the folder {path} appears twice"),
+                        ));
+                    }
+                    if self.seen.len() > MOST_FILES {
+                        return Err(unreadable(item, "the listing holds too many folders"));
+                    }
+                    self.folders.push_back((key, path));
                 }
-                if self.seen.len() > MOST_FILES {
-                    return Err(unreadable(item, "the listing holds too many folders"));
-                }
-                self.folders.push_back((key, path));
-            } else {
-                self.files.push(Remote {
+                Some((key, false)) => self.files.push(Remote {
                     path,
                     size: None,
                     sha256: None,
                     md5: None,
                     url: file_url(&key.id, key.resource.as_deref())?,
                     named_by_server: false,
-                });
+                }),
             }
-            if self.files.len() > MOST_FILES {
-                return Err(Error::new(
-                    Kind::SourceInvalid,
-                    format!(
-                        "{} holds more than {MOST_FILES} files, more than fetchloom handles in one dataset",
-                        link(&item.id)
-                    ),
-                )
-                .help("get the subfolders you need by their own links"));
+            if self.files.len() + self.unavailable.len() > MOST_FILES {
+                return Err(Error::new(Kind::SourceInvalid, format!("{} holds more than {MOST_FILES} entries, more than fetchloom handles in one dataset", link(&item.id)))
+                    .help("get the subfolders you need by their own links"));
             }
         }
         Ok(())
@@ -207,31 +192,6 @@ fn parse(text: &str) -> Option<Page> {
         entries.push(Entry { name, link });
     }
     Some(Page { name, entries })
-}
-
-/// the error for items in a folder that drive cannot send as files.
-fn unsent_items(item: &Item, parent: &str, paths: &[String]) -> Error {
-    let place = if parent.is_empty() {
-        link(&item.id)
-    } else {
-        format!("the folder {parent} in {}", link(&item.id))
-    };
-    let mut error = Error::new(
-        Kind::SourceInvalid,
-        format!(
-            "{place} holds {} drive cannot send as files",
-            units::count(paths.len() as u64, "item", "items")
-        ),
-    );
-    for path in paths.iter().take(NAMED) {
-        error = error.detail(path.clone());
-    }
-    if paths.len() > NAMED {
-        error = error.detail(format!("and {} more", paths.len() - NAMED));
-    }
-    error
-        .detail("google docs exports can change between downloads; fetchloom needs files with fixed bytes")
-        .help("ask the folder's owner to add them as files, such as pdf or csv, or get the other files by their own links")
 }
 
 fn unreadable(item: &Item, reason: &str) -> Error {

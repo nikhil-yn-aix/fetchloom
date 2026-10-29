@@ -258,7 +258,7 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     } else {
         args.filter.select.clone()
     };
-    if select.is_empty() && args.filter.exclude.is_empty() {
+    if select.is_empty() && args.filter.exclude.is_empty() && listing.unavailable.is_empty() {
         return Ok(listing.files.clone());
     }
     let alone = Manifest::parse(&manifest::with_dataset(
@@ -375,3 +375,6 @@ fn tell_fetched(
     }
     output.step("Downloaded", &text);
 }
+
+#[cfg(test)]
+mod drive_docs_tests;

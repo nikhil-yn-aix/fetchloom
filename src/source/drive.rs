@@ -114,6 +114,7 @@ impl Item {
             return folder::list(item, api).await;
         }
         Ok(Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Drive(item.clone()),
             title: None,
             license: None,

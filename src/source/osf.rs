@@ -162,6 +162,7 @@ struct IdentifierValue {
 impl Metadata {
     fn listing(self, node: &Node, files: Vec<Remote>) -> Listing {
         Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Osf(node.clone()),
             title: Some(self.attributes.title),
             license: self

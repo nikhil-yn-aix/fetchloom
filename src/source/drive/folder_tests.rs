@@ -89,20 +89,20 @@ fn a_file_shared_before_2021_keeps_its_resource_key() {
 }
 
 #[test]
-fn google_docs_stop_the_listing_by_name() {
-    let id = "1KpLl_1tcK0eeehzN980zbG-3M2nhbVks";
-    let recorded = Recorded::default().fixture(&page(id), "drive/folder-with-docs.html");
-    let err = block_on(folder(id).resolve(&recorded)).unwrap_err();
-    assert_eq!(err.kind, Kind::SourceInvalid);
+fn google_docs_stay_listed_beside_stored_files() {
+    let id = "12zxlvJtuHFV6awc3AINaNHnfvRttPv0i";
+    let recorded = Recorded::default().fixture(&page(id), "drive/folder-select-mixed.html");
+    let listing = block_on(folder(id).resolve(&recorded)).unwrap();
+    assert_eq!(listing.files.len(), 2);
     assert_eq!(
-        err.message,
-        format!(
-            "https://drive.google.com/drive/folders/{id} holds 2 items drive cannot send as files"
-        )
+        listing.unavailable,
+        [crate::source::Unavailable {
+            path: "gdown".to_owned(),
+            reason: "google docs exports can change between downloads, so a lock cannot pin them"
+                .to_owned(),
+        }]
     );
-    assert_eq!(err.details[..2], ["gdown.docx", "gdown.xlsx"]);
-    assert!(err.help.unwrap().contains("ask the folder's owner"));
-    assert_eq!(recorded.asked(), [page(id)], "no subfolder is read first");
+    assert_eq!(recorded.asked(), [page(id)]);
 }
 
 #[test]
@@ -227,4 +227,27 @@ fn unsafe_folder_names_are_refused_before_reading_them() {
     let error = block_on(folder(DEEP).resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert_eq!(recorded.asked(), [page(DEEP)]);
+}
+
+#[test]
+fn unavailable_entries_count_toward_the_listing_limit() {
+    for (count, allowed) in [(100_000, true), (100_001, false)] {
+        let mut body = String::from("<html><title>docs</title><div class=\"flip-entries\">");
+        for number in 0..count {
+            use std::fmt::Write as _;
+            write!(&mut body, "<div class=\"flip-entry\"><a href=\"https://docs.google.com/document/d/1TFYNzuZJTgNGzGmjraZ58ZVOh9_YoKeBnU-opWgXQL4/edit\"><div class=\"flip-entry-title\">doc-{number}</div></a></div>").unwrap();
+        }
+        body.push_str("</div></html>");
+        let recorded = Recorded::default().on(&page(DEEP), 200, body);
+        let result = block_on(Reference::Drive(folder(DEEP)).resolve(&recorded));
+        if allowed {
+            let listing = result.unwrap();
+            assert_eq!(listing.files, [] as [Remote; 0]);
+            assert_eq!(listing.unavailable.len(), count);
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(error.message.contains("more than 100000"));
+        }
+    }
 }

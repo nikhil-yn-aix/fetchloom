@@ -60,6 +60,7 @@ impl Link {
             _ => "download".to_owned(),
         };
         Listing {
+            unavailable: Vec::new(),
             resolved: Reference::Dropbox(self.clone()),
             title: None,
             license: None,

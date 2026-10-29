@@ -35,6 +35,7 @@ impl Repo {
         };
         let files = pinned.tree(api, &info.sha).await?;
         Ok(Listing {
+            unavailable: Vec::new(),
             resolved: Reference::HuggingFace(pinned),
             title: None,
             license: info.license(),
