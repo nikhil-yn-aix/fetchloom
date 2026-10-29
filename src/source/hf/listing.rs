@@ -297,7 +297,7 @@ mod tests {
     fn live_imdb_resolves_to_a_commit() {
         let work = Arc::new(Work::default());
         let options = Options {
-            offline: false,
+            offline: crate::net::Offline::No,
             jobs: 4,
             credentials: Vec::new(),
         };

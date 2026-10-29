@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap};
 use url::Url;
 
-use super::{Net, Notice, Shown, address, host};
+use super::{Net, Notice, Offline, Shown, address, host};
 use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
@@ -116,14 +116,14 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
 }
 
 /// a request that failed before any answer came, sorted into what to retry and what not to.
-pub(super) fn classify(url: &Url, err: &reqwest::Error) -> Failure {
+pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failure {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(current) = cause {
         if let Some(reason) = current.downcast_ref::<address::Refused>() {
             return Failure::Final(refused(url, reason));
         }
         if current.is::<address::Offline>() {
-            return Failure::Final(offline(url));
+            return Failure::Final(offline(url, mode));
         }
         cause = current.source();
     }
@@ -149,12 +149,12 @@ fn without_link(err: &reqwest::Error) -> String {
     }
 }
 
-pub(super) fn offline(url: &Url) -> Error {
+pub(super) fn offline(url: &Url, mode: Offline) -> Error {
     Error::new(
         Kind::OfflineMissing,
         format!("offline, and {} is not in the cache", Shown(url)),
     )
-    .help("run the same command without --offline to download it")
+    .help(format!("{} to download it", mode.retry()))
 }
 
 pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {

@@ -151,10 +151,10 @@ impl Net {
         } else {
             None
         };
-        if self.offline {
+        if self.offline.enabled() {
             return known
                 .map(|record| fetched(record, Origin::Cache))
-                .ok_or_else(|| failure::offline(&fetch.url));
+                .ok_or_else(|| failure::offline(&fetch.url, self.offline));
         }
         self.typed
             .check(&fetch.from)

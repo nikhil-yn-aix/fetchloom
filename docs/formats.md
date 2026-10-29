@@ -247,7 +247,7 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | variable | effect |
 |---|---|
 | `FETCHLOOM_CACHE` | nonempty cache root override |
-| `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it |
+| `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
