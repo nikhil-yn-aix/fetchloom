@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use unicode_normalization::{UnicodeNormalization, is_nfc};
+use icu_normalizer::ComposingNormalizerBorrowed;
 
 use super::{refused, refused_member};
 use crate::error::Error;
@@ -45,11 +45,9 @@ impl Names {
         if path.is_empty() || path == "." {
             return Ok(Named::Folder);
         }
-        let nfc = if is_nfc(path) {
-            path.to_owned()
-        } else {
-            path.nfc().collect()
-        };
+        let nfc = ComposingNormalizerBorrowed::new_nfc()
+            .normalize(path)
+            .into_owned();
         if nfc.chars().any(name::is_control) {
             return Err(refused_member(
                 &raw.escape_debug().to_string(),
