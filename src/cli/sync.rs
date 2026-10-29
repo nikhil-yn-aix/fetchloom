@@ -466,7 +466,17 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     );
     facts.push(units::count(listing.files.len() as u64, "file", "files"));
     let size: Option<u64> = listing.files.iter().map(|file| file.size).sum();
-    facts.extend(size.map(units::size));
+    facts.extend(
+        size.filter(|_| listing.unavailable.is_empty())
+            .map(units::size),
+    );
+    if !listing.unavailable.is_empty() {
+        facts.push(units::count(
+            listing.unavailable.len() as u64,
+            "unfetchable entry",
+            "unfetchable entries",
+        ));
+    }
     facts.extend(listing.license.clone());
     output.step("Resolved", &facts.join(" · "));
     if let Some(license) = &listing.license

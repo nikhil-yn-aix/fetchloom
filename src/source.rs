@@ -63,6 +63,24 @@ pub(crate) struct Listing {
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
     pub(crate) files: Vec<Remote>,
+    pub(crate) unavailable: Vec<Unavailable>,
+}
+
+impl Listing {
+    /// the paths select and exclude can match, including entries without downloadable bytes.
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &str> {
+        self.files
+            .iter()
+            .map(|file| file.path.as_str())
+            .chain(self.unavailable.iter().map(|entry| entry.path.as_str()))
+    }
+}
+
+/// a listed entry that cannot be fetched, retained so selection can explicitly leave it out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Unavailable {
+    pub(crate) path: String,
+    pub(crate) reason: String,
 }
 
 /// one file a source lists.
@@ -320,6 +338,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
 /// a plain link: one file, named by its last path segment until the server names it.
 fn single(url: &Url) -> Listing {
     Listing {
+        unavailable: Vec::new(),
         resolved: Reference::Url(url.clone()),
         title: None,
         license: None,
@@ -338,25 +357,25 @@ fn single(url: &Url) -> Listing {
 /// a listing is hostile input: every path must stay inside the dataset, and no path may appear
 /// twice.
 fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
-    if listing.files.len() > MOST_FILES {
-        return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {} files, more than the {MOST_FILES} fetchloom handles in one dataset", listing.files.len()))
+    let count = listing.files.len() + listing.unavailable.len();
+    if count > MOST_FILES {
+        return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {count} entries, more than the {MOST_FILES} fetchloom handles in one dataset"))
             .help("ask the dataset's authors to pack its files into archives, or fetch the files you need by their own links"));
     }
-    let mut seen = HashSet::with_capacity(listing.files.len());
-    for file in &listing.files {
-        if let Some(reason) = name::escapes(&file.path) {
+    let mut seen = HashSet::with_capacity(count);
+    for path in listing.paths() {
+        if let Some(reason) = name::escapes(path) {
             return Err(Error::new(
                 Kind::SourceInvalid,
                 format!(
-                    "{reference} lists a file at \"{}\", which fetchloom refuses because {reason}",
-                    file.path
+                    "{reference} lists a file at \"{path}\", which fetchloom refuses because {reason}"
                 ),
             ));
         }
-        if !seen.insert(file.path.as_str()) {
+        if !seen.insert(path) {
             return Err(Error::new(
                 Kind::SourceInvalid,
-                format!("{reference} lists \"{}\" twice", file.path),
+                format!("{reference} lists \"{path}\" twice"),
             ));
         }
     }
@@ -510,6 +529,7 @@ mod tests {
     fn listings_cannot_escape_their_folder_or_repeat_a_path() {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
+            unavailable: Vec::new(),
             files: paths
                 .iter()
                 .map(|path| Remote {

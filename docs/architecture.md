@@ -45,7 +45,7 @@ placement, project metadata and many cache-index operations run synchronously on
 
 ## sources
 
-`Reference` is a closed enum. each source returns a listing of paths, optional sizes and checksums, download URLs, and available metadata. credentials are collected by the command context, not stored on each file.
+`Reference` is a closed enum. each source returns a listing of paths, optional sizes and checksums, download URLs, and available metadata. a listing also keeps paths it cannot fetch, with their reasons, so selection can explicitly leave them out. credentials are collected by the command context, not stored on each file.
 
 DOIs use `https://doi.org/api/handles/<doi>`. the JSON handle's URL value selects a source. an unknown host or another DOI is refused; the landing page is not downloaded to discover its type.
 
