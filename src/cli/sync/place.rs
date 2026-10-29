@@ -187,6 +187,7 @@ impl<'a> Placing<'a> {
         let (todo, adopted) = settle(
             project,
             &mut placer,
+            cache,
             &mut survey,
             &targets,
             actions,
@@ -242,6 +243,7 @@ impl<'a> Placing<'a> {
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
+    cache: &Cache,
     survey: &mut Survey,
     targets: &'t [Target<'a>],
     actions: Vec<Action>,
@@ -253,8 +255,7 @@ fn settle<'t, 'a>(
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
-                let writable = now_writable(&project.root.join(&target.path));
-                let found = placed(target, Method::Copy, seen, writable);
+                let found = adoption(target, seen, &project.root.join(&target.path), cache);
                 survey.state.files.insert(target.path.clone(), found);
                 placement.unchanged += 1;
                 adopted = true;
@@ -416,6 +417,17 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool) -> Placed
         method,
         look,
         writable,
+    }
+}
+
+/// the record of a file at `path` found to hold the target's bytes. a link a run cut off before
+/// it wrote the state placed is the cached object under another name, so it is recorded as a
+/// hardlink, which the audit covers and whose read-only flag is never cleared.
+fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache) -> Placed {
+    if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
+        placed(target, Method::Hardlink, look, false)
+    } else {
+        placed(target, Method::Copy, look, now_writable(path))
     }
 }
 

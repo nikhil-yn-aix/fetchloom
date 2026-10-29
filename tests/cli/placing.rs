@@ -577,3 +577,30 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
     Ok(())
 }
+
+/// a run cut off between placing a link and writing the state leaves a file the next run adopts.
+/// it is the cached object under another name, so the state records it as a hardlink, and an
+/// edit through it is audited like any placed link.
+#[test]
+fn an_adopted_link_is_recorded_as_a_hardlink() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    fs::remove_file(&state_path)?;
+
+    let synced = sandbox.run(&["sync"])?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    assert_eq!(
+        state["files"]["data/iris/iris.csv"]["method"],
+        serde_json::json!("hardlink")
+    );
+    Ok(())
+}

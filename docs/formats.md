@@ -231,7 +231,7 @@ state fields:
 | `files` | object keyed by project-relative path, using `/` |
 | `files[path].dataset` | dataset name |
 | `files[path].sha256` | locked member or file hash, 64 hex digits |
-| `files[path].method` | `reflink`, `hardlink` or `copy` |
+| `files[path].method` | `reflink`, `hardlink` or `copy`. an adopted file is `hardlink` when it is the cached object's own file, else `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
