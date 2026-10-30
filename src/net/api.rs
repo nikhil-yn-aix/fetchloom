@@ -65,6 +65,7 @@ impl Api for Net {
             match self.answer(url).await {
                 Ok(response) => return Ok(response),
                 Err(Failure::Final(err)) => return Err(err),
+                Err(Failure::Limited { reason }) => retry.limited(reason, false).await?,
                 Err(Failure::Transient {
                     reason,
                     retry_after,

@@ -74,7 +74,7 @@ fn replacing_a_partial_folder_never_redirects_writes() {
     fs::rename(&partial, cache.root.join("previous-partial")).unwrap();
     link_folder(&outside, &partial);
     if let Ok(Claim::Owned(download)) = cache.claim("https://example.org/data")
-        && let Ok(mut writer) = download.writer(0, None, Validators::default(), false)
+        && let Ok(mut writer) = download.writer(0, None, Validators::default(), false, false)
     {
         writer.write_all(b"never outside").unwrap();
     }
@@ -93,7 +93,7 @@ fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
     fs::write(&outside, b"abc").unwrap();
     let download = owned(&cache, url);
     let mut writer = download
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
@@ -120,7 +120,7 @@ fn a_partial_and_its_lock_never_open_a_link() {
     let part = folder.join(format!("{}.part", key(url)));
     let download = owned(&cache, url);
     let mut writer = download
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"keep").unwrap();
     writer.save().unwrap();
@@ -135,7 +135,7 @@ fn a_partial_and_its_lock_never_open_a_link() {
     std::os::unix::fs::symlink(&outside, &part).unwrap();
     assert!(download.resumable().is_none(), "a link is never continued");
     let mut writer = download
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"new").unwrap();
     drop(writer);

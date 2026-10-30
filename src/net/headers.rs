@@ -81,6 +81,23 @@ pub(super) fn range_start(headers: &HeaderMap) -> Option<u64> {
     range.split_once('-')?.0.trim().parse().ok()
 }
 
+/// the last byte of a `Content-Range: bytes 100-199/200` answer.
+pub(super) fn range_end(headers: &HeaderMap) -> Option<u64> {
+    let value = headers.get(header::CONTENT_RANGE)?.to_str().ok()?;
+    let (range, _) = value.strip_prefix("bytes ")?.split_once('/')?;
+    range.split_once('-')?.1.trim().parse().ok()
+}
+
+/// whether a server says it answers requests for byte ranges.
+pub(super) fn accepts_ranges(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_RANGES)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|unit| unit.trim().eq_ignore_ascii_case("bytes"))
+}
+
 /// the size of the whole file, from a range answer or from the length of a full one.
 pub(super) fn total_length(headers: &HeaderMap, status: StatusCode) -> Option<u64> {
     if status == StatusCode::PARTIAL_CONTENT {
@@ -220,12 +237,22 @@ mod tests {
     fn ranges_and_lengths() {
         let partial = headers(&[(header::CONTENT_RANGE, "bytes 100-199/200")]);
         assert_eq!(range_start(&partial), Some(100));
+        assert_eq!(range_end(&partial), Some(199));
         assert_eq!(
             total_length(&partial, StatusCode::PARTIAL_CONTENT),
             Some(200)
         );
         let full = headers(&[(header::CONTENT_LENGTH, "4177")]);
         assert_eq!(total_length(&full, StatusCode::OK), Some(4177));
+        assert!(accepts_ranges(&headers(&[(
+            header::ACCEPT_RANGES,
+            "Bytes"
+        )])));
+        assert!(!accepts_ranges(&headers(&[(
+            header::ACCEPT_RANGES,
+            "none"
+        )])));
+        assert!(!accepts_ranges(&full));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap};
 use url::Url;
 
-use super::{Net, Notice, Offline, Shown, address, host};
+use super::{Net, Notice, Offline, Shown, address, host, pace};
 use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
@@ -14,12 +14,19 @@ use crate::work::Work;
 /// how many times a request is tried before giving up.
 pub(crate) const ATTEMPTS: u32 = 5;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
+/// how many times a request waits for a rate limit to reset before those waits count as tries.
+const LIMITED: u32 = 10;
 
 pub(super) enum Failure {
     Final(Error),
     Transient {
         reason: String,
         retry_after: Option<Duration>,
+    },
+    /// the host's rate limit is used up and resets within [`pace::LONGEST`]. the next try waits
+    /// for the reset before it is sent, and is not one of the request's tries.
+    Limited {
+        reason: String,
     },
 }
 
@@ -28,6 +35,7 @@ pub(super) struct Retry<'a> {
     net: &'a Net,
     url: &'a Url,
     attempt: u32,
+    limited: u32,
 }
 
 impl<'a> Retry<'a> {
@@ -36,7 +44,20 @@ impl<'a> Retry<'a> {
             net,
             url,
             attempt: 1,
+            limited: 0,
         }
+    }
+
+    /// counts a try a rate limit refused. the next one waits for the limit to reset and does not
+    /// spend a try, unless the host keeps refusing.
+    pub(super) async fn limited(&mut self, reason: String, has_copy: bool) -> Result<(), Error> {
+        if self.limited >= LIMITED {
+            return self.wait(reason, None, has_copy).await;
+        }
+        self.limited += 1;
+        tracing::debug!(%reason, "rate limited, trying again once the limit resets");
+        Work::add(&self.net.work.retries, 1);
+        Ok(())
     }
 
     /// waits before the next try, or says why there is none. `has_copy` says the cache holds an
@@ -88,11 +109,24 @@ pub(super) fn transient(reason: String) -> Failure {
 }
 
 /// a status that ends the download: a missing file, a refusal, or a transient failure to retry.
+/// a 429 whose limit resets soon enough is waited out; one that resets later asks for that wait,
+/// which fails as a rate limit.
 pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Failure {
     let code = status.as_u16();
     if is_transient(status) {
+        let reason = format!("{} answered {code}", host(url));
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let wait = pace::used_up(&pace::limits(status, headers, SystemTime::now()));
+            if wait.is_some_and(|wait| wait <= pace::LONGEST) {
+                return Failure::Limited { reason };
+            }
+            return Failure::Transient {
+                reason,
+                retry_after: wait.or_else(|| retry_after(headers)),
+            };
+        }
         return Failure::Transient {
-            reason: format!("{} answered {code}", host(url)),
+            reason,
             retry_after: retry_after(headers),
         };
     }

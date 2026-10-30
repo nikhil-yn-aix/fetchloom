@@ -2,6 +2,7 @@
 
 use super::super::tests::{cache, fat, hardlinks, seal, store};
 use super::*;
+use std::io::{Seek, SeekFrom};
 
 fn owned(cache: &Cache, url: &str) -> Partial {
     match cache.claim(url).unwrap() {
@@ -20,7 +21,7 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     };
     let partial = owned(&cache, url);
     let mut writer = partial
-        .writer(0, Some(6), validators.clone(), true)
+        .writer(0, Some(6), validators.clone(), true, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     writer.save().unwrap();
@@ -31,7 +32,9 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     assert_eq!(received, 3);
     assert_eq!(seen, validators);
 
-    let mut resumed = partial.writer(received, Some(6), seen, true).unwrap();
+    let mut resumed = partial
+        .writer(received, Some(6), seen, true, false)
+        .unwrap();
     assert_eq!(resumed.written(), 3);
     resumed.write_all(b"def").unwrap();
     let stored = resumed.finish().unwrap();
@@ -56,7 +59,7 @@ fn bytes_that_differ_from_their_record_are_never_continued() {
     let (_dir, cache) = cache();
     let partial = owned(&cache, "https://example.org/big");
     let mut writer = partial
-        .writer(0, Some(6), Validators::default(), false)
+        .writer(0, Some(6), Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     writer.save().unwrap();
@@ -64,7 +67,7 @@ fn bytes_that_differ_from_their_record_are_never_continued() {
     // a power cut can keep the record and lose the bytes it counts
     fs::write(&partial.bytes, b"\0\0\0").unwrap();
     let (received, validators) = partial.resumable().unwrap();
-    let Err(error) = partial.writer(received, Some(6), validators, false) else {
+    let Err(error) = partial.writer(received, Some(6), validators, false, false) else {
         panic!("zeros were continued as if they were abc");
     };
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
@@ -82,7 +85,7 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     let object = store(&cache, b"abc");
     let partial = owned(&cache, url);
     let mut writer = partial
-        .writer(0, Some(3), Validators::default(), false)
+        .writer(0, Some(3), Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     writer.save().unwrap();
@@ -96,7 +99,7 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     let partial = owned(&cache, url);
     assert!(partial.resumable().is_none());
     let mut writer = partial
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"xyz").unwrap();
     assert_eq!(
@@ -118,7 +121,7 @@ fn a_sealed_download_is_dropped_on_fat() {
     let url = "https://example.org/sealed";
     let partial = owned(&cache, url);
     let mut writer = partial
-        .writer(0, Some(3), Validators::default(), false)
+        .writer(0, Some(3), Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     writer.save().unwrap();
@@ -130,7 +133,7 @@ fn a_sealed_download_is_dropped_on_fat() {
     let partial = owned(&cache, url);
     assert!(partial.resumable().is_none());
     let mut writer = partial
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"xyz").unwrap();
     assert_eq!(
@@ -159,7 +162,7 @@ fn a_writer_keeps_its_download_claimed_until_it_stops() {
     let url = "https://example.org/held";
     let partial = owned(&cache, url);
     let writer = partial
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     // a stopped run drops its claim while a writer thread may still be writing
     drop(partial);
@@ -174,11 +177,156 @@ fn a_published_object_can_be_read_while_its_download_is_still_claimed() {
     let url = "https://example.org/a";
     let partial = owned(&cache, url);
     let mut writer = partial
-        .writer(0, None, Validators::default(), false)
+        .writer(0, None, Validators::default(), false, false)
         .unwrap();
     writer.write_all(b"abc").unwrap();
     let stored = writer.finish().unwrap();
     assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"abc");
     drop(partial);
     assert_eq!(store(&cache, b"abc").digest, stored.digest);
+}
+
+/// a writer for a 12 byte file, for streams that each write their own part of it.
+fn split_writer(partial: &Partial) -> PartialWriter {
+    partial
+        .writer(0, Some(12), Validators::default(), true, true)
+        .unwrap()
+}
+
+#[test]
+fn bytes_written_out_of_order_hash_as_the_whole_file() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/split");
+    let mut writer = split_writer(&partial);
+    writer.write_at(8, b"ijkl").unwrap();
+    writer.write_at(4, b"efgh").unwrap();
+    assert_eq!(
+        writer.written(),
+        0,
+        "nothing is hashed before the first byte"
+    );
+    writer.write_at(0, b"abcd").unwrap();
+    assert_eq!(writer.written(), 12);
+    assert_eq!(
+        writer.read_back(),
+        8,
+        "the prefix reads back what other streams wrote"
+    );
+    let stored = writer.finish().unwrap();
+    assert_eq!(stored.digest, crate::digest::sha256(b"abcdefghijkl"));
+    assert_eq!(
+        stored.md5.map(|md5| md5.hex()).as_deref(),
+        Some("9fc9d606912030dca86582ed62595cf7")
+    );
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"abcdefghijkl"
+    );
+}
+
+#[test]
+fn a_single_stream_reads_nothing_back() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/one");
+    let mut writer = split_writer(&partial);
+    writer.write_all(b"abcdef").unwrap();
+    writer.write_all(b"ghijkl").unwrap();
+    assert_eq!(writer.read_back(), 0);
+    assert_eq!(
+        writer.finish().unwrap().digest,
+        crate::digest::sha256(b"abcdefghijkl")
+    );
+}
+
+#[test]
+fn a_stream_the_prefix_reaches_is_hashed_as_it_writes() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/caught");
+    let mut writer = split_writer(&partial);
+    writer.write_at(4, b"ef").unwrap();
+    writer.write_at(0, b"abcd").unwrap();
+    assert_eq!(writer.read_back(), 2);
+    writer.write_at(6, b"ghijkl").unwrap();
+    assert_eq!(writer.read_back(), 2, "bytes at the prefix need no read");
+    assert_eq!(
+        writer.finish().unwrap().digest,
+        crate::digest::sha256(b"abcdefghijkl")
+    );
+}
+
+/// writes `abc` at the start and `ghi` in the middle of a 12 byte file, saves, and stops.
+fn two_parts(partial: &Partial) {
+    let mut writer = split_writer(partial);
+    writer.write_at(0, b"abc").unwrap();
+    writer.write_at(6, b"ghi").unwrap();
+    writer.save().unwrap();
+}
+
+#[test]
+fn a_resume_keeps_the_ranges_other_streams_finished() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/parts");
+    two_parts(&partial);
+    let (received, seen) = partial.resumable().unwrap();
+    assert_eq!(received, 3, "the prefix is what a plain resume continues");
+    let mut resumed = partial
+        .writer(received, Some(12), seen, true, true)
+        .unwrap();
+    assert_eq!(resumed.gaps(12), [(3, 6), (9, 12)]);
+    assert_eq!(resumed.kept(), 3);
+    resumed.write_at(9, b"jkl").unwrap();
+    resumed.write_at(3, b"def").unwrap();
+    let stored = resumed.finish().unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"abcdefghijkl"
+    );
+}
+
+#[test]
+fn a_kept_range_whose_bytes_changed_is_fetched_again() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/changed");
+    two_parts(&partial);
+    // a power cut can keep the record and lose the bytes it counts
+    let mut file = OpenOptions::new().write(true).open(&partial.bytes).unwrap();
+    file.seek(SeekFrom::Start(6)).unwrap();
+    file.write_all(b"\0\0\0").unwrap();
+    drop(file);
+    let (received, seen) = partial.resumable().unwrap();
+    let resumed = partial
+        .writer(received, Some(12), seen, true, true)
+        .unwrap();
+    assert_eq!(resumed.gaps(12), [(3, 12)]);
+}
+
+#[test]
+fn a_resume_that_does_not_split_forgets_kept_ranges() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/single");
+    two_parts(&partial);
+    let (received, seen) = partial.resumable().unwrap();
+    let mut resumed = partial
+        .writer(received, Some(12), seen, true, false)
+        .unwrap();
+    assert_eq!(resumed.gaps(12), [(3, 12)]);
+    assert_eq!(fs::metadata(&partial.bytes).unwrap().len(), 3);
+    resumed.write_all(b"defghijkl").unwrap();
+    let stored = resumed.finish().unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"abcdefghijkl"
+    );
+}
+
+#[test]
+fn a_download_with_gaps_is_never_published() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/gaps");
+    let mut writer = split_writer(&partial);
+    writer.write_at(0, b"abc").unwrap();
+    writer.write_at(6, b"ghi").unwrap();
+    let error = writer.finish().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(cache.objects().is_empty());
 }

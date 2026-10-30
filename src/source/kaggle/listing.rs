@@ -448,6 +448,7 @@ mod tests {
             offline: crate::net::Offline::No,
             jobs: 4,
             credentials: Vec::new(),
+            split: true,
         };
         let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
         let reference = Reference::parse("kaggle:uciml/iris").unwrap().reference;

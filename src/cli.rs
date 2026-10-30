@@ -14,7 +14,7 @@ mod usage;
 use std::borrow::Cow;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use serde::Serialize;
@@ -41,6 +41,9 @@ struct Context {
     offline: net::Offline,
     yes: bool,
     jobs: usize,
+    /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
+    /// for.
+    split: bool,
     work: Arc<Work>,
     stop: Arc<Stop>,
 }
@@ -53,6 +56,7 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
+            split: false,
             work: Arc::default(),
             stop: Arc::default(),
         }
@@ -70,14 +74,51 @@ impl Context {
                     net::ATTEMPTS
                 ));
             }
+            Notice::Waiting {
+                host,
+                quota,
+                window,
+                wait,
+            } => output.step("Waiting", &rate_wait(&host, quota, window, wait)),
         });
         let options = net::Options {
             offline: self.offline,
             jobs: self.jobs,
             credentials: source::credentials(&|name| std::env::var_os(name)),
+            split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
     }
+}
+
+/// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
+fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Duration) -> String {
+    let wait = units::seconds(Duration::from_secs(
+        wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
+    ));
+    let Some(quota) = quota else {
+        return format!("{wait} for {host}, which asked for a pause");
+    };
+    let every = window.map_or_else(String::new, |window| {
+        let seconds = window.as_secs();
+        match seconds {
+            60 => " every minute".to_owned(),
+            3600 => " every hour".to_owned(),
+            86_400 => " every day".to_owned(),
+            _ if seconds % 60 == 0 => format!(" every {} minutes", seconds / 60),
+            _ => format!(" every {seconds} s"),
+        }
+    });
+    format!(
+        "{wait} for {host}, whose limit of {}{every} is used up",
+        units::count(quota, "request", "requests")
+    )
+}
+
+/// whether large downloads may split: only when `FETCHLOOM_SPLIT=1` asks, since they lost on lan
+/// and home in the lab while they won on far.
+fn splits(value: Option<std::ffi::OsString>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 /// `FETCHLOOM_JOBS`, or the default.
@@ -158,6 +199,7 @@ pub(crate) fn run() -> ExitCode {
         var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
     );
     context.yes = global.yes;
+    context.split = splits(var("FETCHLOOM_SPLIT"));
     if args.version {
         return about(
             &context,
@@ -387,7 +429,7 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 
 #[cfg(test)]
 mod tests {
-    use super::{command_line, shell_word};
+    use super::*;
 
     #[test]
     fn the_command_line_is_named_as_typed_unless_it_holds_a_secret() {
@@ -416,5 +458,16 @@ mod tests {
         );
         assert_eq!(shell_word("*.csv"), "\"*.csv\"");
         assert_eq!(shell_word("my data"), "\"my data\"");
+    }
+
+    #[test]
+    fn downloads_split_only_when_asked() {
+        assert!(
+            !splits(None),
+            "split downloads lost in the lab on lan and home"
+        );
+        assert!(splits(Some("1".into())));
+        assert!(!splits(Some("0".into())));
+        assert!(!splits(Some(String::new().into())));
     }
 }

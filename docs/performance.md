@@ -6,7 +6,7 @@ fetchloom is fast because of how it is built: it streams, touches each byte once
 
 - stream everything. no file, listing or response is held whole in memory unless it is known to be small.
 - one pass over the bytes: read, hash and write in the same loop.
-- the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing.
+- the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing. with `FETCHLOOM_SPLIT=1`, a file of at least 64 MiB gets more requests, for ranges, only while each one makes it faster.
 - many small files from one host share a connection over HTTP/2.
 - new objects are flushed to disk before they are put in place under their hash, on several threads at once. publishing makes an object appear whole, and the flush makes it survive a power cut. on linux 5.8 and later an archive's members are flushed together, with one flush of the cache's filesystem before any is published, as git's batch mode does; one flush per small file cost twenty times more.
 - read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux listings carry neither, so there each file costs one stat, as in git.
@@ -88,6 +88,26 @@ a sync with nothing to do now skips reading archive member records, relocking an
 | 8,000 files in one folder, inside the command | 303 ms (174 to 480) | 158 ms (102 to 371) |
 | 10,000 files, start to exit | 1.27 s (1.11 to 3.18) | 1.21 s (1.07 to 1.61) |
 | 8,000 files, start to exit | 1.53 s (1.41 to 5.48) | 1.82 s (1.23 to 12.8) |
+
+## downloads over the network
+
+these runs went from windows to the network lab's server by its eth0 address, through its `tc` profiles. each run was `fetchloom -v get` of one file into an empty cache, and runs of one profile alternated between one stream, `FETCHLOOM_SPLIT=0`, and splitting, which that build did by default.
+
+### split downloads
+
+release build 1583af9, 2026-10-30. the times are medians, with the range in brackets.
+
+| profile | file | one stream | split | requests | change |
+|---|---|---|---|---|---|
+| lan | file-1g.bin | 5.96 s (5.01 to 7.41) | 7.00 s (6.99 to 8.57) | 6 | 17% slower |
+| home | file-1g.bin | 95.6 s (95.5 to 96.2) | 96.7 s (95.6 to 97.4) | 4 to 5 | 1% slower |
+| far | file-100m.bin | 500 s (490 to 531), 3 runs | 215 s (191 to 285), 3 runs | 2 to 4 | 57% faster |
+
+splitting won on far, where loss holds one TCP connection to about 2 Mbit/s, and lost on lan and home, so it is off unless `FETCHLOOM_SPLIT=1` asks for it: the bar was a 10% win on one profile and a loss on none. on home one stream already fills the link, and the second stream's range is read back to be hashed once the prefix reaches it. why lan lost a second was not found in the time box. far had three runs a side, not five: at 15:27 another session's lab traffic began and its `net.sh lan` removed the shaping during the fourth pair, and there was no time to repeat them. every run between then and 15:50 was discarded, and the home and lan rows were run again from 15:50 with the lab otherwise idle.
+
+### rate limits
+
+`fetchloom add zenodo:3684992 --yes`, 800 files and 19.3 MiB with no token, into an empty folder with an empty cache, over the internet with a debug build of 7a96361. before the change it failed after about 160 requests with exit 20: zenodo answered 429 once its 133 requests a minute were used up, and a request that met five 429s gave up. now it finished in 6 min 16 s with 836 requests, 35 of which zenodo answered 429 and fetchloom waited out without spending a try. each of zenodo's windows took 10 to 20 s of downloading and a wait of 30 to 48 s. zenodo also refused a few requests in the seconds after most resets, with 429s that asked for 1 to 4 s; those waits now pass without a line of their own.
 
 ## counters
 

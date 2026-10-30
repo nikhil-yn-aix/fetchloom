@@ -19,6 +19,10 @@ use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
 
+mod split;
+
+pub(crate) use split::{SMALLEST_PIECE, SPLIT_ABOVE, WINDOW};
+
 /// how often to look again while another fetchloom downloads the same URL.
 const POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// pages a server may send before the file, such as a confirmation form.
@@ -138,6 +142,8 @@ struct Body {
     total: Option<u64>,
     validators: Validators,
     md5: bool,
+    /// keep the ranges an earlier split download finished past `offset`.
+    keep: bool,
 }
 
 pub(crate) type Listener<'a> = &'a (dyn Fn(Event) -> Result<(), Error> + Sync);
@@ -194,10 +200,13 @@ impl Net {
         let mut from = fetch.from.clone();
         let mut diversions = 0;
         let mut restarted = false;
+        // a file stops being split once a server answered a range badly, or bytes from several
+        // answers did not match
+        let mut split = true;
         let mut retry = Retry::new(self, &fetch.url);
         loop {
             match self
-                .attempt(&from, fetch, partial, validators.as_ref(), on)
+                .attempt(&from, fetch, partial, validators.as_ref(), on, &mut split)
                 .await
             {
                 Ok(Answer::NotModified) => {
@@ -220,11 +229,13 @@ impl Net {
                     resumed,
                 }) => match verify(&fetch.url, &fetch.expect, &stored) {
                     Ok(()) => return Ok(self.remember(fetch, cache, &stored, validators, name)),
-                    // bytes from two connections may not belong together, so a resumed download
-                    // that does not match starts over once before it counts as a mismatch
+                    // bytes from two connections may not belong together, so a resumed or split
+                    // download that does not match starts over once, as one stream, before it
+                    // counts as a mismatch
                     Err(err) if resumed && !restarted => {
-                        tracing::debug!(%err, "a resumed download did not match, starting over");
+                        tracing::debug!(%err, "a download in pieces did not match, starting over");
                         restarted = true;
+                        split = false;
                         partial.discard();
                     }
                     Err(err) => return Err(err),
@@ -251,6 +262,12 @@ impl Net {
                     from = next;
                 }
                 Err(Failure::Final(err)) => return Err(progress_kept(err, partial)),
+                Err(Failure::Limited { reason }) => {
+                    retry
+                        .limited(reason, known.is_some())
+                        .await
+                        .map_err(|err| progress_kept(err, partial))?;
+                }
                 Err(Failure::Transient {
                     reason,
                     retry_after,
@@ -327,30 +344,15 @@ impl Net {
         partial: &Partial,
         known: Option<&Validators>,
         on: Listener<'_>,
+        split: &mut bool,
     ) -> Result<Answer, Failure> {
         // a pinned hash proves the result, so even a server without validators may continue
         let pinned = fetch.expect.sha256.is_some();
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| pinned || if_range(validators).is_some());
-        let conditions = |mut request: reqwest::RequestBuilder| {
-            if let Some((received, validators)) = &earlier {
-                request = request.header(header::RANGE, format!("bytes={received}-"));
-                if let Some(check) = if_range(validators) {
-                    request = request.header(header::IF_RANGE, check);
-                }
-            } else if let Some(known) = known {
-                if let Some(etag) = &known.etag {
-                    request = request.header(header::IF_NONE_MATCH, etag);
-                }
-                if let Some(date) = &known.last_modified {
-                    request = request.header(header::IF_MODIFIED_SINCE, date);
-                }
-            }
-            request
-        };
         Work::add(&self.work.requests, 1);
-        let response = self.send(from, conditions).await?;
+        let response = self.send(from, conditions(earlier.as_ref(), known)).await?;
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
@@ -395,33 +397,54 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = server_name(&head)?;
+        // ranges from several answers may be joined only when the server serves ranges and
+        // something proves they belong to one version: a pinned hash, or a validator for If-Range
+        let splits = *split
+            && self.split.enabled
+            && total.is_some_and(|total| total >= self.split.above)
+            && (status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(&head))
+            && (pinned || if_range(&validators).is_some());
         let body = Body {
             offset,
             total,
             validators: validators.clone(),
             md5: fetch.expect.needs_md5(),
+            keep: splits,
         };
         let Some(writer) = open(partial, body).await? else {
             return Ok(Answer::StartOver);
         };
+        let kept = writer.kept();
         on(Event::Started {
             total,
-            resumed: offset,
+            resumed: offset + kept,
         })
         .map_err(Failure::Final)?;
-        if offset > 0 {
+        if offset + kept > 0 {
             Work::add(&self.work.resumes, 1);
         }
-        let writer = self.stream(from, writer, response, total, on).await?;
-        let stored = tokio::task::spawn_blocking(move || writer.finish())
-            .await
-            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
-            .map_err(|err| Failure::Final(local(&err)))?;
+        let (writer, pieced) = match total.filter(|_| splits) {
+            Some(total) => {
+                let job = split::Job {
+                    from,
+                    key: &fetch.from,
+                    validators: &validators,
+                    total,
+                    on,
+                };
+                match self.split(job, writer, response, split).await? {
+                    split::Streamed::Whole { writer, pieced } => (*writer, pieced),
+                    split::Streamed::StartOver => return Ok(Answer::StartOver),
+                }
+            }
+            None => (self.stream(from, writer, response, total, on).await?, false),
+        };
+        let stored = finish(writer).await?;
         Ok(Answer::Stored {
             stored,
             validators,
             name,
-            resumed: offset > 0,
+            resumed: offset + kept > 0 || pieced,
         })
     }
 
@@ -689,6 +712,30 @@ fn local(err: &io::Error) -> Error {
     Error::io("could not write to the cache", err)
 }
 
+/// the headers that ask for the rest of an earlier download, which `If-Range` keeps to the
+/// version it came from, or else for the file only when it changed since `known`.
+fn conditions<'a>(
+    earlier: Option<&'a (u64, Validators)>,
+    known: Option<&'a Validators>,
+) -> impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder + 'a {
+    move |mut request| {
+        if let Some((received, validators)) = earlier {
+            request = request.header(header::RANGE, format!("bytes={received}-"));
+            if let Some(check) = if_range(validators) {
+                request = request.header(header::IF_RANGE, check);
+            }
+        } else if let Some(known) = known {
+            if let Some(etag) = &known.etag {
+                request = request.header(header::IF_NONE_MATCH, etag);
+            }
+            if let Some(date) = &known.last_modified {
+                request = request.header(header::IF_MODIFIED_SINCE, date);
+            }
+        }
+        request
+    }
+}
+
 /// opens the writing end of a download on a blocking thread, since continuing one hashes the
 /// bytes kept so far again. none when those bytes are not the ones recorded, so the download
 /// starts over.
@@ -698,10 +745,11 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
         total,
         validators,
         md5,
+        keep,
     } = body;
     let partial = partial.clone();
     let opened =
-        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5))
+        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5, keep))
             .await
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
     match opened {
@@ -712,6 +760,14 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
         }
         Err(err) => Err(Failure::Final(local(&err))),
     }
+}
+
+/// puts the finished file into the cache on a blocking thread, since that flushes it.
+async fn finish(writer: PartialWriter) -> Result<Stored, Failure> {
+    tokio::task::spawn_blocking(move || writer.finish())
+        .await
+        .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
+        .map_err(|err| Failure::Final(local(&err)))
 }
 
 /// tells a person who stopped, or whose network failed, that the bytes so far are not lost.
