@@ -49,6 +49,7 @@ what the measurements showed:
   - bsdtar still writes such a file in about 0.7 ms, and why was not found: defender's performance recorder, which would show it, needs an administrator. under the same load fetchloom unpacked the 10,000 files in 27 to 31 s and bsdtar extracted them in 19 s.
   - the rest belongs to the machine's owner: a dev drive, on which defender scans after the file operation returns, or an exclusion for the cache folder, as pnpm suggests for its store. both need an administrator and were not measured here.
 - `lock --check` reads and checks 10,000 locked files in about 26 ms on windows; starting any program there takes 12 ms.
+- hashing in memory on this cpu, best of three over 1 GiB: sha2's SHA-256 1.70 to 1.83 GB/s, ring's 1.63 to 1.69, MD5 0.68, and SHA-256 with MD5 in one pass 0.48. so sha2 stays, and a download computes an MD5 only when no SHA-256 is pinned: bytes that match the pin match the MD5 recorded beside it.
 
 ## counters
 

@@ -42,6 +42,14 @@ pub(crate) struct Expect {
     pub(crate) size: Option<u64>,
 }
 
+impl Expect {
+    /// whether the download must also compute an MD5. bytes that match a pinned SHA-256 match
+    /// the MD5 recorded beside it, and computing both costs over three times the hashing alone.
+    pub(crate) fn needs_md5(&self) -> bool {
+        self.md5.is_some() && self.sha256.is_none()
+    }
+}
+
 /// one file to download.
 pub(crate) struct Fetch {
     /// the URL the file is known by. it names the unfinished download and what the URL served.
@@ -391,7 +399,7 @@ impl Net {
             offset,
             total,
             validators: validators.clone(),
-            md5: fetch.expect.md5.is_some(),
+            md5: fetch.expect.needs_md5(),
         };
         let Some(writer) = open(partial, body).await? else {
             return Ok(Answer::StartOver);

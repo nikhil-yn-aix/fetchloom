@@ -7,6 +7,29 @@ use crate::net::Options;
 use crate::source::recorded::block_on;
 
 #[test]
+fn a_pinned_sha256_leaves_no_md5_to_compute() {
+    let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc");
+    let sha256 = Some(crate::digest::sha256(b"data"));
+    assert!(
+        !Expect {
+            sha256,
+            md5,
+            size: None,
+        }
+        .needs_md5(),
+        "bytes matching the pinned sha256 match the md5 recorded beside it"
+    );
+    assert!(
+        Expect {
+            md5,
+            ..Expect::default()
+        }
+        .needs_md5()
+    );
+    assert!(!Expect::default().needs_md5());
+}
+
+#[test]
 fn integrity_errors_mask_query_secrets() {
     let url = Url::parse("https://example.org/data?token=abc&download=1").unwrap();
     let stored = Stored {
