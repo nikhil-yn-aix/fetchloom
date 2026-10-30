@@ -245,11 +245,11 @@ mod tests {
 
         assert!(failure.is_none());
         for target in &targets {
-            let placed = &state.files[&target.path];
+            let record = &state.files[&target.path];
             // a filesystem that clones files gives each its own time
-            if placed.method == Method::Hardlink {
+            if record.method == Method::Hardlink {
                 assert_eq!(
-                    placed.look,
+                    record.look,
                     Look::of(&checked),
                     "a change made after the check was recorded as placed"
                 );
