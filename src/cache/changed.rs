@@ -81,12 +81,13 @@ impl Cache {
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
-    /// dates it just before `source` was written so the replacement stays out of doubt.
+    /// dates it before `source` was written so the replacement stays out of doubt, by two seconds
+    /// since FAT keeps times in two second steps.
     pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
         let written = fs::metadata(source)?.modified()?;
         self.mark_changed(digest)?;
         let before = written
-            .checked_sub(Duration::from_nanos(1))
+            .checked_sub(Duration::from_secs(2))
             .unwrap_or(written);
         fs::File::options()
             .write(true)
