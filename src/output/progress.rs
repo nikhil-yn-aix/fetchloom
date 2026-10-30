@@ -345,6 +345,62 @@ mod tests {
     }
 
     #[test]
+    fn narrow_progress_keeps_the_file_name() {
+        let amount = "1.0 MiB / 4.0 MiB · 512 KiB/s · 6 s left · 12 s";
+        let bar = "====>               ";
+        for width in [128, 100, 80, 60, 40, 20, 12, 8] {
+            let line = render("iris.csv", "-", bar, amount, width);
+            assert!(line.contains("iris.csv"), "{width}: {line}");
+            assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+        }
+        assert_eq!(render("iris.csv", "-", bar, amount, 8), "iris.csv");
+        let wide = render("iris.csv", "-", bar, amount, 128);
+        assert!(wide.contains("512 KiB/s"), "{wide}");
+        assert!(wide.contains("6 s left"), "{wide}");
+    }
+
+    #[test]
+    fn narrow_progress_shortens_long_names_in_the_middle() {
+        for (width, expected) in [
+            (12, "speci~stq.gz"),
+            (8, "spe~q.gz"),
+            (5, "sp~gz"),
+            (1, "~"),
+            (0, ""),
+        ] {
+            let line = render(
+                "specimen_replicate_01.fastq.gz",
+                "-",
+                "====>               ",
+                "1.0 MiB / 4.0 MiB · 512 KiB/s · 6 s left",
+                width,
+            );
+            assert_eq!(line, expected, "{width}");
+            assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+        }
+    }
+
+    #[test]
+    fn progress_width_counts_unicode_columns() {
+        for name in ["測定_非常に長い試料名.csv", "mesures_e\u{301}chantillon.csv"] {
+            for (bar, amount) in [
+                ("\x1b[36m━━╸─────────────────\x1b[0m", "1.0 MiB / 4.0 MiB · 12 s"),
+                ("", "1.0 MiB · 12 s"),
+                ("", ""),
+            ] {
+                for width in 0..=100 {
+                    let line = render(name, "\x1b[36m⠋\x1b[0m", bar, amount, width);
+                    assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+                    assert!(!line.contains('\n'), "{width}: {line}");
+                    if width >= console::measure_text_width(name) {
+                        assert!(line.contains(name), "{width}: {line}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_quick_batch_adds_no_line() {
         let (heard, _reported, say) = ear();
         let pace = (Duration::from_secs(5), Duration::from_secs(10));
