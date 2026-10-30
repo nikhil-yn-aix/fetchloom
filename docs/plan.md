@@ -19,9 +19,8 @@ every source was checked against the live service, and CI runs every test on lin
 
 1. flush copied files before the state is written, if a measurement shows the cost is small.
 2. close the budget misses [performance](performance.md#budgets) records: placing 10,000 files on windows takes 2.7 s where bare links take 1.3 s; adding 100,000 files peaks at 162 MiB on linux; small archive members take 1.4 to 1.6 times bsdtar's time on windows, where defender scans each new file as it closes, and bsdtar's files scan faster for a reason defender's performance recorder could show with an administrator; http/2 is on but unmeasured, and since four requests run per host it can save only a few TLS handshakes, so measure it on a real many-file dataset before keeping or removing it; a 1 GiB download runs at half of curl's speed on this machine, bound by hashing and the flush.
-3. remove doc comments that restate their item.
-4. publish 0.1.0 as [releases](engineering.md#releases) lists, with the wheels uploaded to PyPI by hand. then let release.yml publish them through a PyPI trusted publisher, and sign the windows binaries: on a managed windows machine, defender's ransomware rule blocked the unsigned `fl.exe` from a release build while `fetchloom.exe` ran. the source install in the README clones the default branch, which holds the old project until the rebuild replaces it.
-5. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
+3. publish 0.1.0 as [releases](engineering.md#releases) lists, with the wheels uploaded to PyPI by hand. then let release.yml publish them through a PyPI trusted publisher, and sign the windows binaries: on a managed windows machine, defender's ransomware rule blocked the unsigned `fl.exe` from a release build while `fetchloom.exe` ran. the source install in the README clones the default branch, which holds the old project until the rebuild replaces it.
+4. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
 
 ## a release is ready when
 

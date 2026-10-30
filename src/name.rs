@@ -69,7 +69,6 @@ pub(crate) fn dataset_name(text: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// whether `text` is a valid dataset name.
 pub(crate) fn is_dataset_name(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 64

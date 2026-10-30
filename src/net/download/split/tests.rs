@@ -19,7 +19,6 @@ use crate::source::recorded::block_on;
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 
-/// how the server answers.
 #[derive(Clone, Copy)]
 struct Serving {
     etag: Option<&'static str>,

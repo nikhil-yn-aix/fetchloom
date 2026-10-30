@@ -52,7 +52,6 @@ impl Kind {
         }
     }
 
-    /// the exit code a run ends with when this kind stops it.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Kind::Unconfirmed | Kind::Outdated => 1,

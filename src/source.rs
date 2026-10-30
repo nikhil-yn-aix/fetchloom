@@ -245,7 +245,6 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     found
 }
 
-/// the user's home folder.
 pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
     let set = |name: &str| {
         var(name)

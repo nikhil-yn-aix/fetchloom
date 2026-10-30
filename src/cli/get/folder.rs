@@ -67,7 +67,6 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
     .help("choose another folder with -o, or empty this one"))
 }
 
-/// puts every file into the folder, and says how.
 pub(super) fn put_all(
     context: &Context,
     cache: &Cache,

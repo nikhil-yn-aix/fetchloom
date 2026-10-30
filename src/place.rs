@@ -578,7 +578,6 @@ fn seal(destination: &Path, writable: bool) -> io::Result<()> {
     undo_on_error(set_writable(destination, writable), destination)
 }
 
-/// makes the file at `path` writable or read-only, as `writable_as` describes.
 fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
     let permissions = writable_as(fs::metadata(path)?.permissions(), writable);
     fs::set_permissions(path, permissions)
@@ -598,7 +597,6 @@ fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     permissions
 }
 
-/// `permissions` changed to make the file writable, or read-only.
 #[cfg(not(unix))]
 fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     permissions.set_readonly(!writable);

@@ -28,7 +28,6 @@ pub(crate) struct Lock {
     pub(crate) datasets: Vec<Locked>,
 }
 
-/// one dataset as it was resolved.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Locked {

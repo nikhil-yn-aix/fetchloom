@@ -120,7 +120,6 @@ mod tests {
         fs::write(path, text).unwrap();
     }
 
-    /// what `find` returns with this home folder and these variables.
     fn found(home: &Path, pairs: &[(&str, &OsStr)]) -> Option<String> {
         let var = |name: &str| {
             [

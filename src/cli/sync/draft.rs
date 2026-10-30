@@ -218,7 +218,6 @@ impl Draft {
         self.extract && archive::by_name(&file.path) == Some(Packed::Archive)
     }
 
-    /// the dataset's entry in data.lock.
     pub(super) fn finish(self, now: &str) -> Locked {
         let mut files: Vec<LockedFile> = self
             .files

@@ -18,7 +18,6 @@ use crate::digest::{self, Sha256};
 /// `get` from this morning, survives a gc.
 pub(super) const GRACE: Duration = Duration::from_hours(24);
 
-/// one object in the cache.
 pub(crate) struct Object {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
@@ -35,7 +34,6 @@ pub(crate) struct Needed {
     pub(crate) unpacked: HashSet<Sha256>,
 }
 
-/// what a sweep freed.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Freed {
     pub(crate) objects: u64,
@@ -44,7 +42,6 @@ pub(crate) struct Freed {
     pub(crate) leftovers: u64,
 }
 
-/// what verifying found.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Checked {
     pub(crate) objects: u64,
@@ -95,7 +92,6 @@ impl Cache {
         let _ = fs::remove_file(self.registration(root));
     }
 
-    /// every object the cache holds.
     pub(crate) fn objects(&self) -> Vec<Object> {
         let mut objects = Vec::new();
         let Ok(fans) = fs::read_dir(self.root.join("objects")) else {

@@ -18,7 +18,6 @@ pub(super) struct Info {
     tags: Vec<String>,
 }
 
-/// the reason the hub gives when it refuses.
 #[derive(Deserialize)]
 struct Refusal {
     error: String,

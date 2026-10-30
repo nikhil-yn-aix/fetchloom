@@ -17,7 +17,6 @@ struct Key {
     resource: Option<String>,
 }
 
-/// one entry of a folder page: its name, and what it links to.
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
     name: String,
@@ -26,7 +25,6 @@ struct Entry {
     link: Option<(Key, bool)>,
 }
 
-/// a folder page: the folder's name and its entries.
 #[derive(Debug, PartialEq, Eq)]
 struct Page {
     name: String,

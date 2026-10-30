@@ -23,7 +23,6 @@ const SMALL: usize = 1 << 20;
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
 const MOST_WRITERS: usize = 8;
 
-/// one member on its way into the cache.
 enum Job {
     Bytes(String, Vec<u8>),
     Written(String, Box<NewObject>),

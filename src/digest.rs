@@ -10,7 +10,6 @@ use md5::Digest as _;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// the SHA-256 of a file's bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct Sha256([u8; 32]);
 
@@ -157,7 +156,6 @@ impl Hasher {
     }
 }
 
-/// the SHA-256 of `bytes`.
 pub(crate) fn sha256(bytes: &[u8]) -> Sha256 {
     let mut hasher = Hasher::default();
     hasher.update(bytes);
