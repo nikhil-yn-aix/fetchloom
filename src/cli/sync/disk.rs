@@ -263,17 +263,21 @@ fn aliases<'a>(
             .and_modify(|listed| *listed = None)
             .or_insert(Some(path));
     }
+    let mut listings = Listings::new();
     missing
         .iter()
         .filter_map(|path| {
             let listed = folded.get(&name::fold(path))?.as_ref()?;
             let look = disk.get(*listed)?;
-            same_entry(root, path, listed, *look).then(|| (*path, (*listed).clone()))
+            same_entry(root, path, listed, *look, &mut listings).then(|| (*path, (*listed).clone()))
         })
         .collect()
 }
 
-fn same_entry(root: &Path, path: &str, listed: &str, look: Look) -> bool {
+/// the names in each folder read so far, by folder.
+type Listings = HashMap<std::path::PathBuf, HashSet<std::ffi::OsString>>;
+
+fn same_entry(root: &Path, path: &str, listed: &str, look: Look, listings: &mut Listings) -> bool {
     let Ok(metadata) = fs::symlink_metadata(root.join(path)) else {
         return false;
     };
@@ -284,6 +288,7 @@ fn same_entry(root: &Path, path: &str, listed: &str, look: Look) -> bool {
     {
         use std::os::unix::fs::MetadataExt as _;
 
+        let _ = listings;
         let Ok(other) = fs::symlink_metadata(root.join(listed)) else {
             return false;
         };
@@ -294,9 +299,29 @@ fn same_entry(root: &Path, path: &str, listed: &str, look: Look) -> bool {
     }
     #[cfg(not(unix))]
     {
+        // without a file id, two spellings that each appear in their folders are two files
         let _ = listed;
-        true
+        spelled_otherwise(root, path, listings)
     }
+}
+
+/// whether a folder on the way to `path`, or its file, lacks that exact name in its listing, so
+/// the filesystem matched the name to another spelling.
+#[cfg(any(not(unix), test))]
+fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
+    let mut folder = root.to_path_buf();
+    for part in path.split('/') {
+        let names = listings.entry(folder.clone()).or_insert_with(|| {
+            fs::read_dir(&folder)
+                .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+                .unwrap_or_default()
+        });
+        if !names.contains(std::ffi::OsStr::new(part)) {
+            return true;
+        }
+        folder.push(part);
+    }
+    false
 }
 
 /// every file under the data folder and how it looks, by its path in the project. links are
@@ -347,4 +372,30 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
         }
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn two_spellings_both_listed_are_two_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let composed = "caf\u{e9}";
+        let decomposed = "cafe\u{301}";
+        for name in [composed, decomposed] {
+            fs::create_dir_all(root.join("data").join(name)).unwrap();
+            fs::write(root.join("data").join(name).join("a.txt"), name).unwrap();
+        }
+        let mut listings = Listings::new();
+        for name in [composed, decomposed] {
+            let path = format!("data/{name}/a.txt");
+            assert!(!spelled_otherwise(root, &path, &mut listings), "{name}");
+        }
+        assert!(spelled_otherwise(root, "Data/caf\u{e9}/a.txt", &mut listings));
+    }
 }
