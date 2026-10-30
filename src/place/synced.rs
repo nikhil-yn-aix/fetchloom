@@ -1,5 +1,5 @@
-//! folders that onedrive, dropbox, icloud drive or google drive keep in sync. those clients
-//! break hardlinks or upload each link as a whole file, so files placed there are copied.
+//! folders that onedrive, dropbox or icloud drive keep in sync. those clients break hardlinks
+//! or upload each link as a whole file, so files placed there are copied.
 
 use std::ffi::OsString;
 use std::fs;
@@ -64,42 +64,10 @@ fn roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<(PathBuf, &'static str)>
                 .map(|root| (root, "dropbox")),
         );
     }
-    if let Some(home) = &home {
-        if cfg!(windows) {
-            roots.push((home.join("iCloudDrive"), "icloud drive"));
-        }
-        if cfg!(target_os = "macos") {
-            roots.extend(mac_roots(home));
-        }
-    }
-    roots
-}
-
-fn mac_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
-    let library = home.join("Library");
-    let mut roots = vec![(library.join("Mobile Documents"), "icloud drive")];
-    // macos keeps one folder here per file provider: OneDrive-…, Dropbox, GoogleDrive-…
-    if let Ok(entries) = fs::read_dir(library.join("CloudStorage")) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            let client = if name.starts_with("onedrive") {
-                "onedrive"
-            } else if name.starts_with("dropbox") {
-                "dropbox"
-            } else if name.starts_with("googledrive") {
-                "google drive"
-            } else {
-                "a sync client"
-            };
-            roots.push((entry.path(), client));
-        }
-    }
-    // with "desktop and documents folders" turned on, icloud drive syncs both
-    let documents = library.join("Mobile Documents").join("com~apple~CloudDocs");
-    for name in ["Desktop", "Documents"] {
-        if documents.join(name).is_dir() {
-            roots.push((home.join(name), "icloud drive"));
-        }
+    if let Some(home) = &home
+        && cfg!(windows)
+    {
+        roots.push((home.join("iCloudDrive"), "icloud drive"));
     }
     roots
 }
@@ -128,7 +96,7 @@ fn inside(folder: &Path, root: &Path) -> bool {
 }
 
 fn same(a: Component<'_>, b: Component<'_>) -> bool {
-    if cfg!(any(windows, target_os = "macos")) {
+    if cfg!(windows) {
         a.as_os_str().to_string_lossy().to_lowercase()
             == b.as_os_str().to_string_lossy().to_lowercase()
     } else {

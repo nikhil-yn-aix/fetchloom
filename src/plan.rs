@@ -1,6 +1,6 @@
 //! where every locked file lands in the project, checked for clashes before anything is written.
 //! names are compared the way a case-insensitive disk compares them, so a lock that places
-//! cleanly here places cleanly on windows and macos too.
+//! cleanly here places cleanly on windows too.
 
 use std::collections::{HashMap, HashSet};
 
@@ -535,7 +535,7 @@ mod tests {
         );
         assert!(
             targets(&one, &lock(&[("a", &["caf\u{e9}.csv", "cafe\u{301}.csv"])])).is_err(),
-            "macos sees one name in both unicode forms"
+            "two unicode spellings of one name count as one"
         );
         assert!(
             targets(&one, &lock(&[("a", &["x", "x/y"])])).is_err(),

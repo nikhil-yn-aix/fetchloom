@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,7 +35,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
-      # the default disks never show some paths: refs clones blocks, the way apfs does, while
+      # the default disks never show some paths: refs clones blocks, which ntfs never does, while
       # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
       # read-only file the way ntfs allows. every test runs again with its folders on each.
       # windows runners are admin, which diskpart needs

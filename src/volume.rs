@@ -147,15 +147,8 @@ fn win32(code: i32) -> u32 {
     }
 }
 
-/// `EPERM`, and `ENOTSUP`, which clonefile answers on a volume that cannot clone and which std
-/// leaves uncategorized.
-#[cfg(target_os = "macos")]
-fn refusal_code(code: i32) -> bool {
-    matches!(code, 1 | 45)
-}
-
 /// `EPERM`. linux reports the other refusals with codes std already calls unsupported.
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(windows))]
 fn refusal_code(code: i32) -> bool {
     code == 1
 }

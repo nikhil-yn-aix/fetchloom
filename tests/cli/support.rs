@@ -15,7 +15,7 @@ pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Erro
 /// machine's.
 pub(crate) struct Sandbox {
     /// the folder as fetchloom sees it. unix resolves links in a working folder, as getcwd does,
-    /// so a macos temporary folder under `/var` shows as `/private/var`.
+    /// so a temporary folder reached through a link shows by its real path.
     root: PathBuf,
     /// removes the folder when the sandbox goes.
     _folder: tempfile::TempDir,

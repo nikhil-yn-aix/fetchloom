@@ -9,7 +9,7 @@ fetchloom is fast because of how it is built: it streams, touches each byte once
 - the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing.
 - many small files from one host share a connection over HTTP/2.
 - new objects are flushed to disk before they are put in place under their hash, on several threads at once. publishing makes an object appear whole, and the flush makes it survive a power cut. on linux 5.8 and later an archive's members are flushed together, with one flush of the cache's filesystem before any is published, as git's batch mode does; one flush per small file cost twenty times more.
-- read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux and macos listings carry neither, so there each file costs one stat, as in git.
+- read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux listings carry neither, so there each file costs one stat, as in git.
 - spread placement over folders. making links in one folder serializes on that folder; neighbours in different folders do not wait for each other.
 - parallel work is bounded: a fixed number of downloads, hashing threads and placement workers, never one task per file.
 - startup does only what the command needs. TLS roots, proxy settings and sources load on first use.
@@ -21,7 +21,7 @@ measured on release builds. a budget is a number with a unit, or a comparison wi
 
 | what | budget | windows | linux |
 |---|---|---|---|
-| `fetchloom --version` | under 5 ms on linux and macos, within noise of an empty program on windows | 13.9 ms, an empty program 12.1 ms | 1.1 ms |
+| `fetchloom --version` | under 5 ms on linux, within noise of an empty program on windows | 13.9 ms, an empty program 12.1 ms | 1.1 ms |
 | first line of output | under 100 ms | 29 ms (`get` while the server waits), 64 ms (`status`) | 3.9 ms, 42 ms |
 | `sync` with nothing to do, 10,000 files | under 200 ms | 112 ms | 50 ms |
 | `status`, 10,000 files | under 150 ms | 89 ms | 42 ms |
@@ -60,7 +60,7 @@ every run counts its work: requests, bytes downloaded, retries, resumes, objects
 
 | need | tool |
 |---|---|
-| CPU profile | samply, on linux and macos; on windows it needs the windows performance toolkit |
+| CPU profile | samply on linux; on windows it needs the windows performance toolkit |
 | timeline of one run | `FETCHLOOM_TRACE=run.json`, opened in perfetto |
 | whole commands | hyperfine, warmed up, ten runs or more |
 | CI regression gate | the counters, asserted in tests |

@@ -84,8 +84,6 @@ impl Cache {
         }
         if cfg!(windows) {
             set("LOCALAPPDATA").map(|path| path.join("fetchloom"))
-        } else if cfg!(target_os = "macos") {
-            set("HOME").map(|home| home.join("Library").join("Caches").join("fetchloom"))
         } else {
             set("XDG_CACHE_HOME")
                 .or_else(|| set("HOME").map(|home| home.join(".cache")))

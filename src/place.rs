@@ -64,7 +64,7 @@ pub(crate) struct Order<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unlinked {
     /// the root sits inside a folder this sync client owns, which breaks links: "onedrive",
-    /// "dropbox", "icloud drive" or "google drive".
+    /// "dropbox" or "icloud drive".
     Synced(&'static str),
     /// hardlinks failed because the cache sits on another drive, which a cache on the same drive
     /// would fix.
@@ -982,9 +982,6 @@ mod tests {
             // how NTFS refuses a reflink: "incorrect function", wrapped in an HRESULT.
             #[cfg(windows)]
             io::Error::from_raw_os_error(0x8007_0001_u32.cast_signed()),
-            // ENOTSUP, how a mac volume without clones refuses one.
-            #[cfg(target_os = "macos")]
-            io::Error::from_raw_os_error(45),
         ];
         for refusal in refusals {
             let (folder, object) = cache(true);
@@ -1091,7 +1088,7 @@ mod tests {
         assert_eq!(placer.unlinked(), Some(Unlinked::NoLinks));
     }
 
-    /// whether the filesystem holding `folder` makes hardlinks, as NTFS, ext4 and APFS do and FAT
+    /// whether the filesystem holding `folder` makes hardlinks, as NTFS and ext4 do and FAT
     /// and exFAT do not.
     pub(super) fn makes_hardlinks(folder: &Path) -> bool {
         let original = folder.join("probe");

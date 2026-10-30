@@ -165,7 +165,6 @@ paths in this record retain their archive folders; placement may strip a shared 
 | platform | default root |
 |---|---|
 | linux | `$XDG_CACHE_HOME/fetchloom`, else `$HOME/.cache/fetchloom` |
-| macos | `$HOME/Library/Caches/fetchloom` |
 | windows | `%LOCALAPPDATA%\fetchloom` |
 
 nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`.
@@ -270,7 +269,7 @@ explicit `--color always` or `--color never` overrides color variables, not inte
 
 an invalid jobs value fails a named command even when it does not download. welcome, bare-project status, help and version bypass that check. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
-synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and known icloud and macos `CloudStorage` locations. system proxy settings and proxy environment variables are read by the HTTP stack.
+synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and the icloud drive folder on windows. system proxy settings and proxy environment variables are read by the HTTP stack.
 
 credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
 
