@@ -306,7 +306,10 @@ fn pin_command(args: &Get) -> Option<String> {
     let Cow::Borrowed(link) = net::mask_query(args.link.trim()) else {
         return None;
     };
-    let mut parts = vec!["fetchloom add".to_owned(), super::shell_word(link).into_owned()];
+    let mut parts = vec![
+        "fetchloom add".to_owned(),
+        super::shell_word(link).into_owned(),
+    ];
     for (flag, patterns) in [
         ("--select", &args.filter.select),
         ("--exclude", &args.filter.exclude),
@@ -468,7 +471,9 @@ mod tests {
         };
         assert_eq!(
             pin_command(&args).as_deref(),
-            Some("fetchloom add https://example.org/data.zip --select \"*.zip\" --select \"*.csv\" --exclude \"old/*\" --no-extract")
+            Some(
+                "fetchloom add https://example.org/data.zip --select \"*.zip\" --select \"*.csv\" --exclude \"old/*\" --no-extract"
+            )
         );
         args.link = "https://example.org/data.zip?token=secret".to_owned();
         assert_eq!(pin_command(&args), None);

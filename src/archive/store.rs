@@ -60,12 +60,11 @@ impl Writers<'_> {
             Some(object) => Job::Written(path, Box::new(object)),
             None => Job::Bytes(path, spill.bytes),
         };
-        match &self.jobs {
-            Some(jobs) => jobs.send(job).map_err(|_| stopped()),
-            None => {
-                locked(self.sealed).push(seal(self.staging, job, self.flush_each)?);
-                Ok(())
-            }
+        if let Some(jobs) = &self.jobs {
+            jobs.send(job).map_err(|_| stopped())
+        } else {
+            locked(self.sealed).push(seal(self.staging, job, self.flush_each)?);
+            Ok(())
         }
     }
 }
@@ -184,7 +183,7 @@ fn publish_all(
     } else {
         thread::scope(|scope| {
             for _ in 0..threads.min(count) {
-                scope.spawn(&publish);
+                scope.spawn(publish);
             }
         });
     }
@@ -287,9 +286,7 @@ mod tests {
         let bytes = vec![7; SMALL + 1];
         let (mut members, written) = store_all(&scratch.cache, Some(0), |writers| {
             assert!(writers.jobs.is_none());
-            for (name, mut bytes) in
-                [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())]
-            {
+            for (name, mut bytes) in [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())] {
                 writers.keep(&mut guard, name.to_owned(), &mut bytes, &mut [0; 1024])?;
             }
             Ok(())

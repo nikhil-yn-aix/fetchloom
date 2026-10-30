@@ -419,11 +419,18 @@ mod tests {
     #[test]
     fn cache_help_describes_marking_changed_files_for_replacement() {
         let help = every_help();
-        let verify = help.iter().find(|(name, _)| name == "cache verify").unwrap();
+        let verify = help
+            .iter()
+            .find(|(name, _)| name == "cache verify")
+            .unwrap();
         assert!(verify.1.contains("mark changed files for replacement"));
         assert!(!verify.1.contains("deletes cached files"));
         let cache = help.iter().find(|(name, _)| name == "cache").unwrap();
-        assert!(cache.1.contains("`cache verify` marks changed files for replacement"));
+        assert!(
+            cache
+                .1
+                .contains("`cache verify` marks changed files for replacement")
+        );
     }
 
     /// the words a shell makes of `line`, where double quotes keep a pattern such as "*.csv"

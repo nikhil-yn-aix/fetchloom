@@ -156,7 +156,10 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
     fs::write(object, b"")?;
     let output = sandbox.run(&["cache"])?;
     let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("0 B of it is needed by a project"), "{stderr}");
+    assert!(
+        stderr.contains("0 B of it is needed by a project"),
+        "{stderr}"
+    );
     assert!(stderr.contains("fetchloom cache gc"), "{stderr}");
     Ok(())
 }

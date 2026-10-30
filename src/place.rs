@@ -444,12 +444,7 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
 
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
-fn copy(
-    object: &Path,
-    destination: &Path,
-    writable: bool,
-    threads: Threads,
-) -> io::Result<()> {
+fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> io::Result<()> {
     let destination = std::path::absolute(destination)?;
     let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
     let destination = parent.join(destination.file_name().unwrap_or_default());
@@ -879,7 +874,10 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(!is_read_only(&destination));
-        let readonly = undo_on_error(fill(&object, &output, false, Threads::default()), &destination);
+        let readonly = undo_on_error(
+            fill(&object, &output, false, Threads::default()),
+            &destination,
+        );
         assert!(
             readonly.is_err(),
             "a real permission change must still fail"

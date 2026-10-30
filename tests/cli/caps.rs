@@ -92,7 +92,13 @@ fn one_thread_unpacks_places_and_verifies_a_project() -> Result {
         assert!(output.status.success(), "{}", text(&output.stdout)?);
     }
     assert_eq!(
-        std::fs::read(sandbox.work().join("data").join("dataset").join("README.md"))?,
+        std::fs::read(
+            sandbox
+                .work()
+                .join("data")
+                .join("dataset")
+                .join("README.md")
+        )?,
         b"# sample dataset\n"
     );
     assert_eq!(server.requests().len(), 1);

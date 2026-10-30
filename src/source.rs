@@ -280,7 +280,9 @@ fn link(text: &str) -> Result<Parsed, Error> {
             Kind::ReferenceInvalid,
             format!("\"{}\" names no host", net::mask_query(text)),
         )
-        .help("copy the complete link from your browser, including https:// and the website name"));
+        .help(
+            "copy the complete link from your browser, including https:// and the website name",
+        ));
     }
     let routed = doi::Doi::from_link(&url)
         .map(|doi| (Reference::Doi(doi), None))

@@ -28,9 +28,7 @@ struct Bucket {
 }
 
 impl Rate {
-    pub(crate) fn read(
-        var: &dyn Fn(&str) -> Option<OsString>,
-    ) -> Result<Option<Arc<Rate>>, Error> {
+    pub(crate) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Option<Arc<Rate>>, Error> {
         let Some(value) = var("FETCHLOOM_RATE").filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
@@ -46,7 +44,9 @@ impl Rate {
                         value.display()
                     ),
                 )
-                .help("unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M")
+                .help(
+                    "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M",
+                )
             })
     }
 
@@ -169,9 +169,24 @@ mod tests {
     #[test]
     fn invalid_rate_values_are_settings_errors() {
         for text in [
-            " ", "0", "0M", "0.1", "-1", "+1", "NaN", "inf", "1e3",
-            "10MB", "10m", ".5M", "1.M", "1..5M", "1 M", "M",
-            "18446744073709551616", "18446744073709551615T",
+            " ",
+            "0",
+            "0M",
+            "0.1",
+            "-1",
+            "+1",
+            "NaN",
+            "inf",
+            "1e3",
+            "10MB",
+            "10m",
+            ".5M",
+            "1.M",
+            "1..5M",
+            "1 M",
+            "M",
+            "18446744073709551616",
+            "18446744073709551615T",
         ] {
             assert_eq!(parse(text), None, "{text}");
             let error = Rate::read(&|_| Some(text.into())).err().unwrap();
@@ -188,10 +203,8 @@ mod tests {
         let stop = Stop::default();
         assert!(rate.take(4 * 1024 * 1024, &stop).await);
         let started = Instant::now();
-        let (first, second) = tokio::join!(
-            rate.take(1024 * 1024, &stop),
-            rate.take(1024 * 1024, &stop),
-        );
+        let (first, second) =
+            tokio::join!(rate.take(1024 * 1024, &stop), rate.take(1024 * 1024, &stop),);
         assert!(first && second);
         let elapsed = started.elapsed();
         assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");

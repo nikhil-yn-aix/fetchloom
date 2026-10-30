@@ -390,7 +390,9 @@ mod tests {
         assert_eq!(err.message, "kaggle:uciml/iris has no version 9");
         assert_eq!(
             err.help.as_deref(),
-            Some("check the versions at https://www.kaggle.com/datasets/uciml/iris and update the reference on the command line or in data.toml. the newest version is 2")
+            Some(
+                "check the versions at https://www.kaggle.com/datasets/uciml/iris and update the reference on the command line or in data.toml. the newest version is 2"
+            )
         );
     }
 

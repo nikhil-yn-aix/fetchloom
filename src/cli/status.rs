@@ -180,10 +180,7 @@ fn list(output: &Output, status: &Status) {
         );
     }
     for path in status.edited_elsewhere.iter().take(SHOWN) {
-        output.mark(
-            "Edited",
-            &format!("{path} · linked file has changed"),
-        );
+        output.mark("Edited", &format!("{path} · linked file has changed"));
     }
     if status.edited_elsewhere.len() > SHOWN {
         let more = status.edited_elsewhere.len() - SHOWN;

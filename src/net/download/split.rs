@@ -497,7 +497,9 @@ impl Net {
                 }
                 Ok(Ok(Some(chunk))) => chunk,
             };
-            self.throttle(url, chunk.len()).await.map_err(Ended::Failed)?;
+            self.throttle(url, chunk.len())
+                .await
+                .map_err(Ended::Failed)?;
             Work::add(&self.work.bytes_down, chunk.len() as u64);
             let (at, taken) = shared.board().deliver(id, chunk.len() as u64);
             let Ok(length) = usize::try_from(taken) else {

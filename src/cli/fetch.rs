@@ -491,9 +491,17 @@ mod tests {
             dataset: None,
             again: None,
         };
-        let error = explain(Error::new(Kind::IntegrityMismatch, "the file differs"), &job);
+        let error = explain(
+            Error::new(Kind::IntegrityMismatch, "the file differs"),
+            &job,
+        );
         assert_eq!(error.message, "the file differs");
-        assert!(error.help.unwrap().contains("published size or fingerprint"));
+        assert!(
+            error
+                .help
+                .unwrap()
+                .contains("published size or fingerprint")
+        );
     }
 
     #[test]
@@ -519,8 +527,11 @@ mod tests {
                 "help: check its link",
             ]
         );
-        assert_eq!(error.help.as_deref(), Some(
-            "downloaded files stay in the cache. fix the errors above, then run the same command again"
-        ));
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "downloaded files stay in the cache. fix the errors above, then run the same command again"
+            )
+        );
     }
 }

@@ -331,6 +331,9 @@ fn large_doc_only_refusals_do_not_promise_other_files() {
 fn a_selected_doc_in_data_toml_names_the_setting_to_edit() {
     let error = filter("docs", &entry(&[], &[], false), &mixed()).unwrap_err();
     let help = error.help.unwrap();
-    assert!(help.contains("exclude patterns in datasets.docs in data.toml"), "{help}");
+    assert!(
+        help.contains("exclude patterns in datasets.docs in data.toml"),
+        "{help}"
+    );
     assert!(!help.contains("--exclude"), "{help}");
 }

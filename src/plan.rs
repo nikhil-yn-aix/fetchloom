@@ -287,9 +287,7 @@ fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
             "set extract = false on datasets.{} in data.toml to keep its archives packed",
             target.dataset
         ),
-        (true, Patterns::OnCommandLine) => {
-            "pass --no-extract to keep archives packed".to_owned()
-        }
+        (true, Patterns::OnCommandLine) => "pass --no-extract to keep archives packed".to_owned(),
         (false, Patterns::InDataToml) => format!(
             "leave {what} out with an exclude pattern in datasets.{} in data.toml",
             target.dataset

@@ -800,7 +800,10 @@ fn status_and_sync_explain_untracked_conflicts() -> Result {
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert!(stderr.contains("1 file left unchanged"), "{stderr}");
-    assert!(!stderr.contains("all pinned files are in place"), "{stderr}");
+    assert!(
+        !stderr.contains("all pinned files are in place"),
+        "{stderr}"
+    );
     assert_eq!(fs::read(placed)?, b"my work");
     Ok(())
 }

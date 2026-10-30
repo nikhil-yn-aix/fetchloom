@@ -91,8 +91,7 @@ impl Context {
             credentials: source::credentials(&|name| std::env::var_os(name)),
             split: self.split,
         };
-        Net::new(options, self.work.clone(), self.stop.clone(), notify)
-            .with_rate(self.rate.clone())
+        Net::new(options, self.work.clone(), self.stop.clone(), notify).with_rate(self.rate.clone())
     }
 }
 
@@ -343,7 +342,9 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
         )),
         None => Err(Error::new(
             Kind::Unconfirmed,
-            format!("downloading {what} needs {size}, and fetchloom cannot ask for confirmation here"),
+            format!(
+                "downloading {what} needs {size}, and fetchloom cannot ask for confirmation here"
+            ),
         )
         .help("add --yes to approve this download")),
     }

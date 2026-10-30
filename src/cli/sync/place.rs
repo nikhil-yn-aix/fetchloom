@@ -183,8 +183,7 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer =
-            Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
+        let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
@@ -236,8 +235,7 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer =
-            Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
+        let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
             &mut placer,

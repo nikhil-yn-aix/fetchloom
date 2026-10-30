@@ -239,8 +239,14 @@ impl<'a> Loop<'a> {
                 continue;
             }
             if self.net.offline().enabled() {
-                return Err(Error::new(Kind::OfflineMissing, format!("offline, and {name} needs a new entry in data.lock"))
-                    .help(format!("{}, or restore matching data.toml and data.lock", self.net.offline().retry())));
+                return Err(Error::new(
+                    Kind::OfflineMissing,
+                    format!("offline, and {name} needs a new entry in data.lock"),
+                )
+                .help(format!(
+                    "{}, or restore matching data.toml and data.lock",
+                    self.net.offline().retry()
+                )));
             }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;

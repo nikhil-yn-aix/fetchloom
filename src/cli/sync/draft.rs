@@ -364,9 +364,9 @@ fn unavailable_selection(
         "them as files"
     };
     let change = match patterns {
-        Patterns::InDataToml => format!(
-            "add exclude patterns in datasets.{name} in data.toml for the entries above"
-        ),
+        Patterns::InDataToml => {
+            format!("add exclude patterns in datasets.{name} in data.toml for the entries above")
+        }
         Patterns::OnCommandLine => format!("add {flags}"),
     };
     error.help(format!(
