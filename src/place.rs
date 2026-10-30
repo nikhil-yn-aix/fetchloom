@@ -700,7 +700,9 @@ mod tests {
         let parent = folder.path().join("missing");
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
 
-        let error = placer.check_folders(&parent.join("file"), false).unwrap_err();
+        let error = placer
+            .check_folders(&parent.join("file"), false)
+            .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(!parent.exists());
@@ -714,7 +716,9 @@ mod tests {
         for make in [false, true] {
             let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
 
-            let error = placer.check_folders(&parent.join("child"), make).unwrap_err();
+            let error = placer
+                .check_folders(&parent.join("child"), make)
+                .unwrap_err();
 
             assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
             assert_eq!(fs::read(&parent).unwrap(), b"keep these bytes");

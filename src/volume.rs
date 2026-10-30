@@ -256,7 +256,8 @@ impl Volume {
             scratch,
             hard_link,
             rename: |from, to| {
-                if fs::symlink_metadata(to).is_ok_and(|metadata| metadata.permissions().readonly()) {
+                if fs::symlink_metadata(to).is_ok_and(|metadata| metadata.permissions().readonly())
+                {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
                 fs::rename(from, to)

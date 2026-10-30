@@ -457,7 +457,7 @@ mod tests {
         let record = owner_record(os);
         fs::write(&path, &record).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        let now = modified + Duration::from_secs(86_400);
+        let now = modified + Duration::from_hours(24);
         let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
             panic!("another os owns the project")
         };
@@ -531,8 +531,11 @@ mod tests {
             modified,
             modified + std::time::Duration::from_secs(10),
         ] {
-            assert!(matches!(project.hold_at("sync", now).unwrap(), Hold::Owner(_)));
-            assert!(fs::read(&path).unwrap().is_empty());
+            assert!(matches!(
+                project.hold_at("sync", now).unwrap(),
+                Hold::Owner(_)
+            ));
+            assert_eq!(fs::read(&path).unwrap(), b"");
         }
     }
 

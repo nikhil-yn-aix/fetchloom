@@ -261,7 +261,11 @@ mod tests {
     }
 
     fn staged(scratch: &Scratch) -> PathBuf {
-        let folder = scratch.cache.root().join("tmp").join("0123456789abcdef.stage");
+        let folder = scratch
+            .cache
+            .root()
+            .join("tmp")
+            .join("0123456789abcdef.stage");
         fs::create_dir(&folder).unwrap();
         fs::write(folder.join("lock"), b"").unwrap();
         let member = folder.join("member.new");
@@ -316,7 +320,10 @@ mod tests {
                 .unwrap()
                 .flatten()
                 .map(|entry| entry.path())
-                .find(|path| path.extension().is_some_and(|extension| extension == "stage"))
+                .find(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "stage")
+                })
                 .unwrap();
             let lock = fs::OpenOptions::new()
                 .read(true)
@@ -326,7 +333,10 @@ mod tests {
             assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
             let later = SystemTime::now() + Duration::from_hours(48);
             assert_eq!(
-                scratch.cache.sweep(&crate::cache::Needed::default(), later).leftovers,
+                scratch
+                    .cache
+                    .sweep(&crate::cache::Needed::default(), later)
+                    .leftovers,
                 0
             );
             assert!(folder.is_dir());
@@ -335,7 +345,9 @@ mod tests {
         .unwrap();
         scratch.assert_stored(&members[0], &bytes);
         assert_eq!(
-            fs::read_dir(scratch.cache.root().join("tmp")).unwrap().count(),
+            fs::read_dir(scratch.cache.root().join("tmp"))
+                .unwrap()
+                .count(),
             0
         );
     }

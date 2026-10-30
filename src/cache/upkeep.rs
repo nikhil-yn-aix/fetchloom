@@ -352,7 +352,9 @@ mod tests {
             seal(&member);
             assert_eq!(cache.sweep(&Needed::default(), now).leftovers, 0);
             assert_eq!(
-                cache.sweep(&Needed::default(), written + Duration::from_secs(60)).leftovers,
+                cache
+                    .sweep(&Needed::default(), written + Duration::from_secs(60))
+                    .leftovers,
                 0,
                 "a recent write keeps a member in an older folder"
             );
@@ -490,7 +492,7 @@ mod tests {
         let checked = cache.verify_all(2, &|_| {});
         drop(held);
         assert_eq!(checked.changed, vec![bad.digest]);
-        assert!(checked.stuck.is_empty());
+        assert_eq!(checked.stuck, []);
         assert_eq!(fs::read(&object).unwrap(), b"BAD!");
     }
 
@@ -506,7 +508,11 @@ mod tests {
             assert!(!cache.verify(&rotten[0].digest).unwrap());
             let checked = cache.verify_all(2, &|_| {});
             assert_eq!(checked.changed.len(), 2);
-            assert!(rotten.iter().all(|object| checked.changed.contains(&object.digest)));
+            assert!(
+                rotten
+                    .iter()
+                    .all(|object| checked.changed.contains(&object.digest))
+            );
             assert_eq!(checked.stuck, vec![]);
             assert!(
                 rotten

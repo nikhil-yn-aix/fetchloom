@@ -140,7 +140,9 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
-            output.warn(&format!("object {digest} had changed and awaits replacement"));
+            output.warn(&format!(
+                "object {digest} had changed and awaits replacement"
+            ));
         }
     }
     let verb = if checked.unreadable.is_empty() {
@@ -167,7 +169,9 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     for digest in checked.stuck.iter().take(5) {
         error = error.detail(cache.object_path(digest).display().to_string());
     }
-    Err(error.help("check permissions on the cache's changed folder, then run `fetchloom cache verify` again"))
+    Err(error.help(
+        "check permissions on the cache's changed folder, then run `fetchloom cache verify` again",
+    ))
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to

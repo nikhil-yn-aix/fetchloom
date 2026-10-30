@@ -642,7 +642,10 @@ fn a_changed_object_fails_verify_and_waits_for_replacement() -> Result {
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(30));
     let stderr = text(&verify.stderr)?;
-    assert!(stderr.contains("had changed and awaits replacement"), "{stderr}");
+    assert!(
+        stderr.contains("had changed and awaits replacement"),
+        "{stderr}"
+    );
     assert_eq!(fs::read(&object)?, b"damaged on disk");
     let synced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
