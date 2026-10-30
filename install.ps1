@@ -45,9 +45,9 @@ function Install-Fetchloom([string]$Version) {
             $key.Close()
         }
         # setting a variable through .NET tells explorer and other running programs to read the
-        # environment again
+        # environment again. powershell 7 passes $null as an empty string, which .NET keeps
         [Environment]::SetEnvironmentVariable('FETCHLOOM_INSTALL', '1', 'User')
-        [Environment]::SetEnvironmentVariable('FETCHLOOM_INSTALL', $null, 'User')
+        [Environment]::SetEnvironmentVariable('FETCHLOOM_INSTALL', [NullString]::Value, 'User')
         return $true
     }
 
