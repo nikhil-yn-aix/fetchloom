@@ -61,6 +61,24 @@ export PATH=$HOME/.local/bin:$PATH
 
 `run-lab.ps1` does all of it unattended: for each profile it shapes the lab, runs the windows plans, then the linux plans through WSL, and clears the shaping at the end. it stops first if WSL's eth0 has another address than the windows plans name. the lab is one server and one link, so nothing else may use it during a block, other people's runs included.
 
+## estimated time
+
+for 5 blocks: each run's time in the `lan` dry runs of 2026-10-30, plus, for a first fetch, the profile's transfer time: the bytes at the one-stream rate measured in the lab's README (93 Mbit/s at `home`, 2.1 at `far`, 0.6 at `poor`), capped by the link for tools with several streams (aria2c-tuned 16, curl-parallel 50, aria2c-j16 16, fetchloom's 8 jobs for many-1k), plus a round trip per request on each stream. second projects take their `lan` time. the windows dry run of the archives did not finish within the time set for this work, so four of its times are assumed: fetchloom 55 s to fetch and unpack, 10 s for its second project, curl-bsdtar 12 s and pooch's second project 20 s.
+
+| plans | windows, min | linux, min |
+|---|---|---|
+| `lab-lan-<system>` | 34 | 12 |
+| `lab-lan-<system>-urls` | 12 | 4 |
+| `lab-home-<system>` | 86 | 72 |
+| `lab-home-<system>-urls` | 15 | 6 |
+| `lab-far-<system>` | 20 | 22 |
+| `lab-far-<system>-urls` | 25 | 16 |
+| `lab-poor-<system>` | 63 | 73 |
+| total | 4.2 h | 3.4 h |
+
+`poor` is the largest part: each one-stream tool takes about 140 s for 10 MiB. on windows the timed runs pass the 4 h aim by about 12 minutes.
+
+the harness adds time the table leaves out: after each run it hashes every file the run left and reads each file's id for the disk count. on linux that takes seconds. on windows, defender scans a new file the first time it is opened, and after one run that left 10,000 files the harness took about 12 minutes. `lab-lan-windows` and `lab-home-windows` have 8 such runs per block, so they would take about 13 hours more over 5 blocks. hashing in parallel in the harness, or a Dev Drive or a defender exclusion for the scratch folder, both of which need an administrator, would cut this; until one of them is in place, the windows archive workloads do not fit the time.
 ## live
 
 `live-<source>.toml`, one per source, compare fetchloom with the source's own client, 3 blocks each, in WSL only. the method's changes say why.
