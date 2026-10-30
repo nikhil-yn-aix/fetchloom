@@ -113,6 +113,39 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
     Ok(())
 }
 
+/// a copy shares nothing with the cache, so no mark recalls an edit hidden by a coarse clock.
+/// a sync that keeps the edit and writes the state must still leave it for --force to undo.
+#[test]
+fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let first = sandbox.run(&["sync"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let second = same_second(&sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(&placed, &edited)?;
+    set_time(&placed, second)?;
+
+    let kept = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(
+        kept.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        "{kept}"
+    );
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
+    let forced = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
+    assert_eq!(server.requests().len(), 1, "the cache still holds iris");
+    Ok(())
+}
+
 /// a file as new as the state is hashed once and settled by writing the state again, after which
 /// a sync hashes nothing and writes nothing.
 #[test]
