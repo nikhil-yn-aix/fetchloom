@@ -1,10 +1,10 @@
 # fetchloom
 
-> fetchloom is a command line tool that pins the research datasets a project needs. data.toml lists the datasets, data.lock records every file by SHA-256, and `fetchloom sync` places them in data/ from a cache shared by every project on the machine.
+> fetchloom is uv for research data on windows and linux. data.toml is the shopping list, data.lock is the receipt pinning every file by SHA-256 and size, and the shared content-addressed cache is the pantry. `fetchloom sync` places those files in data/ by reflink, then hardlink, then copy where supported.
 
 ## docs
 
-- [README](README.md): install and a quick start
-- [cli](docs/cli.md): every command, option and output
-- [agents](docs/agents.md): driving fetchloom from scripts and agents, with --json recipes, error kinds and exit codes
-- [formats](docs/formats.md): data.toml, data.lock, the JSON document and exit codes
+- [README](README.md): install, quick start, source examples, everyday commands and troubleshooting
+- [cli](docs/cli.md): every command, option and output, plus archives, cache and environment settings
+- [agents](docs/agents.md): --json recipes, error kinds, exit codes, the python helper and offline use
+- [formats](docs/formats.md): data.toml, data.lock, cache records, environment settings and the JSON contract
