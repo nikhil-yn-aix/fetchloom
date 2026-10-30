@@ -25,7 +25,8 @@ def main():
     parser.add_argument("home", type=Path)
     parser.add_argument("source", help="a url, or doi:<doi> for a whole record")
     parser.add_argument("sha256", nargs="?", help="64 hex digits, or an expect file naming one file")
-    parser.add_argument("--unpack", choices=["zip", "tar"])
+    parser.add_argument("--unpack", choices=["", "zip", "tar"], default="",
+                        help="unpack with pooch.Unzip or pooch.Untar; empty for a plain file")
     parser.add_argument("--name", help="the cached file's name; pooch's default by default")
     args = parser.parse_args()
     cache = args.home / "pooch"
@@ -41,7 +42,7 @@ def main():
         return
     if not args.sha256:
         wrapping.fail("a url needs its sha256")
-    processor = {"zip": pooch.Unzip, "tar": pooch.Untar, None: None}[args.unpack]
+    processor = {"zip": pooch.Unzip, "tar": pooch.Untar, "": None}[args.unpack]
     result = pooch.retrieve(
         args.source,
         known_hash=f"sha256:{wrapping.pin(args.sha256)}",

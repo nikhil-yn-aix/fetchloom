@@ -1,0 +1,35 @@
+# the lab's 1,000 files of 100 KiB, each its own url, at the far profile, from WSL, over loopback.
+# every tool gets its list from the same wrapper, which writes it into the run's folder.
+# shape first: wsl -d Ubuntu-24.04 -u root -e bash bench/lab/net.sh far
+name = "lab-far-linux-urls"
+layer = "lab"
+profile = "far"
+repetitions = 5
+
+[vars]
+lab = "https://localhost:8443"
+py = "/home/fl/bench-venv/bin/python"
+wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+
+[[workload]]
+id = "many-1k"
+expect = "bench/expect/many-1k.sha256"
+primary = true
+timeout = 1800
+tools = ["fetchloom", "curl-parallel", "aria2c-j16"]
+
+[tool.fetchloom]
+first = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
+second = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
+ignore = [".fetchloom/*", "data.toml", "data.lock"]
+version = ["fetchloom", "--version"]
+
+[tool.curl-parallel]
+first = ["{py}", "{wrappers}/many_urls.py", "curl", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
+ignore = ["urls.curl"]
+version = ["curl", "--version"]
+
+[tool.aria2c-j16]
+first = ["{py}", "{wrappers}/many_urls.py", "aria2c", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400", "--", "-j", "16"]
+ignore = ["urls.aria2"]
+version = ["aria2c", "--version"]
