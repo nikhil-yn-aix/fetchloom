@@ -21,9 +21,9 @@ usage: fetchloom [options] <command>
 
 commands:
   add     add a dataset, pin it and download it into the data folder
-  remove  drop a dataset and the files fetchloom placed for it
+  remove  remove a dataset and the unchanged files fetchloom placed for it
   sync    make the data folder match data.lock on this machine
-  lock    bring data.lock in line with data.toml without downloading what is pinned
+  lock    update data.lock from data.toml without placing files in the data folder
   status  list files that are missing, changed by hand or extra
   path    print where a dataset or a file in it is, syncing first if needed
   cache   show the cache, free what no project needs, or check every file in it

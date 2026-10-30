@@ -56,7 +56,7 @@ on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchl
   fetchloom cache gc
   fetchloom cache verify
 
-on disk: nothing. `cache gc` and `cache verify` delete from the cache, never from data/";
+on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache verify` marks changed files for replacement. neither changes data/";
 
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
@@ -68,7 +68,7 @@ on disk: deletes cached files no project needs once they are a day old. data/ st
   fetchloom cache verify
   fetchloom cache verify --json
 
-on disk: deletes cached files whose bytes changed. data/ stays as it is";
+on disk: marks changed cached files for replacement on the next download. data/ stays as it is";
 
     pub(super) const GET: &str = "examples:
   fetchloom get zenodo:3608990
@@ -214,7 +214,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom add [options] <link>", help_template = TEMPLATE, after_help = examples::ADD)]
     Add(Add),
 
-    /// drop a dataset and the files fetchloom placed for it
+    /// remove a dataset and the unchanged files fetchloom placed for it
     #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, after_help = examples::REMOVE)]
     Remove(Remove),
 
@@ -222,7 +222,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom sync [options]", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
 
-    /// bring data.lock in line with data.toml without downloading what is pinned
+    /// update data.lock from data.toml without placing files in the data folder
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
@@ -283,7 +283,7 @@ pub(crate) enum CacheAction {
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
     Gc,
 
-    /// hash every file in the cache again and remove any that changed
+    /// check cached files and mark changed files for replacement
     #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
 }
@@ -319,7 +319,7 @@ pub(crate) struct Add {
     pub(crate) no_extract: bool,
 }
 
-/// drop a dataset and the files fetchloom placed for it
+/// remove a dataset and the unchanged files fetchloom placed for it
 #[derive(Debug, clap::Args)]
 pub(crate) struct Remove {
     /// the dataset's name in data.toml
@@ -338,7 +338,7 @@ pub(crate) struct Sync {
 /// bring data.lock in line with data.toml
 #[derive(Debug, clap::Args)]
 pub(crate) struct Lock {
-    /// re-resolve datasets, keeping explicit version pins
+    /// check sources again, keeping explicitly pinned versions
     #[arg(long, value_name = "name", num_args = 0.., help_heading = "options")]
     pub(crate) upgrade: Option<Vec<String>>,
 
@@ -410,10 +410,20 @@ mod tests {
             .render_help()
             .to_string();
         assert!(
-            help.contains("re-resolve datasets, keeping explicit version pins"),
+            help.contains("check sources again, keeping explicitly pinned versions"),
             "{help}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn cache_help_describes_marking_changed_files_for_replacement() {
+        let help = every_help();
+        let verify = help.iter().find(|(name, _)| name == "cache verify").unwrap();
+        assert!(verify.1.contains("mark changed files for replacement"));
+        assert!(!verify.1.contains("deletes cached files"));
+        let cache = help.iter().find(|(name, _)| name == "cache").unwrap();
+        assert!(cache.1.contains("`cache verify` marks changed files for replacement"));
     }
 
     /// the words a shell makes of `line`, where double quotes keep a pattern such as "*.csv"
