@@ -24,7 +24,6 @@ const QUIET: Duration = Duration::from_secs(10);
 /// a reset this large is a time in seconds since 1970, and a smaller one seconds from now.
 const EPOCH_FROM: u64 = 1_000_000_000;
 
-/// one limit an answer stated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Limit {
     /// the policy's name, empty for a host that states one limit.

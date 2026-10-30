@@ -208,7 +208,6 @@ impl Board {
     }
 }
 
-/// how a stream ended.
 enum Ended {
     /// the board has no more work for it.
     Done,
@@ -238,7 +237,6 @@ enum Probe {
     Settled,
 }
 
-/// what the streams of one download share.
 struct Streams<'a> {
     job: Job<'a>,
     board: Mutex<Board>,

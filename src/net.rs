@@ -105,7 +105,6 @@ pub(crate) struct Options {
     pub(crate) split: bool,
 }
 
-/// how a large download is split across streams.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Split {
     pub(crate) enabled: bool,

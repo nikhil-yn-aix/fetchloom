@@ -38,7 +38,6 @@ pub(crate) type Divert = fn(&Url, u16, &str) -> Result<Url, Error>;
 /// whether a forbidden XML answer names an expired source-issued download link.
 pub(crate) type Expired = fn(&str) -> bool;
 
-/// what a download must turn out to be, when something already says so.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Expect {
     pub(crate) sha256: Option<Sha256>,
@@ -54,7 +53,6 @@ impl Expect {
     }
 }
 
-/// one file to download.
 pub(crate) struct Fetch {
     /// the URL the file is known by. it names the unfinished download and what the URL served.
     pub(crate) url: Url,
@@ -97,7 +95,6 @@ pub(crate) enum Event {
     Bytes(u64),
 }
 
-/// where the bytes came from this time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Origin {
@@ -642,7 +639,6 @@ fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
     settled && headers::is_html(head) && headers::file_name(head).is_none()
 }
 
-/// checks a finished download against what was expected of it.
 fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     let shown = super::Shown(url);
     if let Some(size) = expect.size

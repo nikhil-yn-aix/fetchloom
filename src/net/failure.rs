@@ -11,7 +11,6 @@ use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
 
-/// how many times a request is tried before giving up.
 pub(crate) const ATTEMPTS: u32 = 5;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 /// how many times a request waits for a rate limit to reset before those waits count as tries.
