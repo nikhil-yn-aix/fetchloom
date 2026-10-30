@@ -370,27 +370,10 @@ impl Net {
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
-        if let Some(divert) = fetch.divert
-            && is_page(status, &head)
-        {
-            let url = response.url().clone();
-            let page = self.page(from, response).await?;
-            return divert(&url, status.as_u16(), &page)
-                .map(Answer::Divert)
-                .map_err(Failure::Final);
-        }
-        if let Some(expired) = fetch.expired
-            && status == StatusCode::FORBIDDEN
-            && headers::is_xml(&head)
-        {
-            if self.expired_link(from, response, expired).await? {
-                return Err(failure::transient(format!(
-                    "{} supplied an expired download link",
-                    host(from)
-                )));
-            }
-            return Err(failure::refusal(from, status, &head));
-        }
+        let response = match self.instead(from, fetch, response).await? {
+            Ok(response) => response,
+            Err(next) => return Ok(Answer::Divert(next)),
+        };
         let validators = headers::validators(&head);
         let offset = match status {
             StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
@@ -439,11 +422,11 @@ impl Net {
         }
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;
-        let pieces = total.filter(|_| splits);
-        let (writer, response, total, slow) = match pieces {
+        let watch = total.filter(|_| splits);
+        let (writer, response, total, slow) = match watch {
             Some(total) if at_once => (writer, response, total, None),
             _ => match self
-                .stream(from, writer, response, total, on, pieces)
+                .stream(from, writer, response, total, on, watch)
                 .await?
             {
                 Run::Whole(writer) => {
@@ -474,13 +457,46 @@ impl Net {
             split::Streamed::Whole { writer, pieced } => (*writer, pieced),
             split::Streamed::StartOver => return Ok(Answer::StartOver),
         };
-        let stored = finish(writer).await?;
         Ok(Answer::Stored {
-            stored,
+            stored: finish(writer).await?,
             validators,
             name,
             resumed: offset + kept > 0 || pieced,
         })
+    }
+
+    /// the answer itself when it brings the file. otherwise what it means instead: the URL a
+    /// page's handler says the file is at, or an expired link to try again or a refusal.
+    async fn instead(
+        &self,
+        from: &Url,
+        fetch: &Fetch,
+        response: reqwest::Response,
+    ) -> Result<Result<reqwest::Response, Url>, Failure> {
+        let status = response.status();
+        if let Some(divert) = fetch.divert
+            && is_page(status, response.headers())
+        {
+            let url = response.url().clone();
+            let page = self.page(from, response).await?;
+            return divert(&url, status.as_u16(), &page)
+                .map(Err)
+                .map_err(Failure::Final);
+        }
+        if let Some(expired) = fetch.expired
+            && status == StatusCode::FORBIDDEN
+            && headers::is_xml(response.headers())
+        {
+            let head = response.headers().clone();
+            if self.expired_link(from, response, expired).await? {
+                return Err(failure::transient(format!(
+                    "{} supplied an expired download link",
+                    host(from)
+                )));
+            }
+            return Err(failure::refusal(from, status, &head));
+        }
+        Ok(Ok(response))
     }
 
     /// moves the body to a writer thread, so the network never waits on the disk. with `watch`,
@@ -497,7 +513,7 @@ impl Net {
         on: Listener<'_>,
         watch: Option<u64>,
     ) -> Result<Run, Failure> {
-        let mut received = writer.written();
+        let mut reached = writer.written();
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
             while let Some(chunk) = receiver.blocking_recv() {
@@ -522,7 +538,7 @@ impl Net {
                     let slow = rate < self.split.slow as f64;
                     if let Some(total) = watch
                         && slow
-                        && total.saturating_sub(received) >= 2 * self.split.piece
+                        && total.saturating_sub(reached) >= 2 * self.split.piece
                     {
                         break Ok(Some((total, rate)));
                     }
@@ -550,7 +566,7 @@ impl Net {
                 Ok(Ok(Some(chunk))) => {
                     let length = chunk.len() as u64;
                     Work::add(&self.work.bytes_down, length);
-                    (received, moved) = (received + length, moved + length);
+                    (reached, moved) = (reached + length, moved + length);
                     if let Err(err) = on(Event::Bytes(length)) {
                         break Err(Failure::Final(err));
                     }
