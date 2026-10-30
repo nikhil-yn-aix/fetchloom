@@ -43,8 +43,16 @@ impl Volume {
     /// may require clearing the old file's read-only flag; restoring it through the same handle
     /// also restores any placed hardlinks, without changing the new file at the name.
     pub(crate) fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // FAT and exFAT on windows answer a rename over a read-only file with "already exists"
         let refused = match self.rename(from, to) {
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => err,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::AlreadyExists
+                ) =>
+            {
+                err
+            }
             renamed => return renamed,
         };
         let file = open_attributes(to)?;
@@ -54,9 +62,16 @@ impl Volume {
             return Err(refused);
         }
         file.set_permissions(writable(before.clone()))?;
-        let renamed = self.rename(from, to);
-        let restored = file.set_permissions(before);
-        renamed.and(restored)
+        match self.rename(from, to) {
+            // those volumes can rename over no file at all. they cannot hardlink either, so the
+            // old file has no other name and goes first, with its handle closed so its name frees
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                drop(file);
+                (self.remove_file)(to)?;
+                self.rename(from, to)
+            }
+            renamed => renamed.and(file.set_permissions(before)),
+        }
     }
 
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
