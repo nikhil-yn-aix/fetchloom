@@ -227,6 +227,7 @@ archive bytes may be deleted after successful unpacking when no registered proje
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
 | `.fetchloom/lock` | OS project lock; file contents are unused |
 | `.fetchloom/owner` | JSON identifying the modifying command, shared by windows and WSL |
+| `.fetchloom/owner.<pid>.<16 hex digits>.tmp` | owner record being written before hardlink publication; a hard kill can leave this file behind |
 | `.fetchloom/state` | compact JSON describing tracked placements |
 | `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
@@ -242,9 +243,9 @@ owner fields:
 | `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
 | `command` | subcommand name, without arguments or credentials |
 
-fetchloom takes the OS lock, then reserves `owner` with an exclusive file creation. the reservation is empty until a complete JSON record replaces it through a temporary file and rename. dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
+fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty. the temporary name is removed after the attempt. when hardlinks fail for another reason, fetchloom falls back to exclusive creation followed by a temporary-file write and rename; only this fallback can expose an empty reservation. dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
 
-an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale. any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
+an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale. before removing a stale record, fetchloom reads it again and requires the same bytes and modification time. any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
 
 state fields:
 

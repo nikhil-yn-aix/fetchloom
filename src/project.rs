@@ -47,14 +47,42 @@ struct Owner {
 
 impl Held {
     fn publish_owner(&mut self, path: &Path, record: &[u8]) -> io::Result<()> {
-        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        self.owner = Some(path.to_path_buf());
-        drop(file);
-        #[cfg(test)]
-        tests::owner_published(path);
-        // reserve the name across OS lock domains, then publish the whole record.
-        // a killed writer leaves either an empty reservation or a complete record.
-        write_atomically(path, record)
+        let (temporary, file) = loop {
+            let temporary = path.with_file_name(format!(
+                "owner.{}.{:016x}.tmp",
+                std::process::id(),
+                fastrand::u64(..)
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+        };
+        let published = (|| {
+            fill(file, record)?;
+            // windows and WSL do not share OS locks, so an empty reservation could be
+            // reclaimed while its writer is still publishing.
+            match fs::hard_link(&temporary, path) {
+                Ok(()) => self.owner = Some(path.to_path_buf()),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Err(err),
+                Err(_) => {
+                    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+                    self.owner = Some(path.to_path_buf());
+                    drop(file);
+                    write_atomically(path, record)?;
+                }
+            }
+            #[cfg(test)]
+            tests::owner_published(path);
+            Ok(())
+        })();
+        let removed = fs::remove_file(&temporary);
+        published.and(removed)
     }
 
     fn claim(mut self, path: &Path, command: &str, now: SystemTime) -> io::Result<Hold> {
@@ -119,7 +147,15 @@ impl Drop for Held {
     }
 }
 
-fn remove_stale_owner(path: &Path, _bytes: &[u8], _modified: SystemTime) -> io::Result<()> {
+fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Result<()> {
+    let (current, written) = match read_owner(path) {
+        Ok(read) => read,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if current.as_slice() != bytes || written != modified {
+        return Ok(());
+    }
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
