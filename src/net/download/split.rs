@@ -560,7 +560,7 @@ impl Net {
         };
         let window = self.split.window;
         let (before, added) = match *probe {
-            Probe::Measured { rate } => (rate, self.add_stream(shared, running)),
+            Probe::Measured { rate: before } => (before, self.add_stream(shared, running)),
             Probe::Measure {
                 since,
                 delivered: from,

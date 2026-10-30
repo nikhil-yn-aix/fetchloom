@@ -6,7 +6,7 @@ fetchloom is fast because of how it is built: it streams, touches each byte once
 
 - stream everything. no file, listing or response is held whole in memory unless it is known to be small.
 - one pass over the bytes: read, hash and write in the same loop.
-- the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing. with `FETCHLOOM_SPLIT=1`, a file of at least 64 MiB gets more requests, for ranges, only while each one makes it faster.
+- the network is the scarcest resource. one request where one is enough, no HEAD before a GET, one request per page of a listing. a file of at least 64 MiB whose one stream proves slow gets more requests, for ranges, only while each one makes it faster.
 - many small files from one host share a connection over HTTP/2.
 - new objects are flushed to disk before they are put in place under their hash, on several threads at once. publishing makes an object appear whole, and the flush makes it survive a power cut. on linux 5.8 and later an archive's members are flushed together, with one flush of the cache's filesystem before any is published, as git's batch mode does; one flush per small file cost twenty times more.
 - read file metadata from directory listings where they carry it. on windows a listing carries sizes and times and is about 15 times faster than one call per file; linux listings carry neither, so there each file costs one stat, as in git.
