@@ -19,6 +19,7 @@ import os
 import platform
 import random
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
@@ -33,13 +34,23 @@ from pathlib import Path
 import psutil
 
 BENCH = Path(__file__).resolve().parent
-LEDGER = BENCH / "results" / "ledger.csv"
+LEDGER = Path(os.environ.get("BENCH_LEDGER", BENCH / "results" / "ledger.csv"))
 BUDGET = 25 * 10**9
 SAMPLE_SECONDS = 0.05
 COLUMNS = [
     "when", "plan", "layer", "profile", "workload", "tool", "phase", "rep", "position", "run",
     "wall_s", "cpu_s", "peak_mb", "net_mb", "files", "ok", "exit", "disk_mb", "note",
 ]
+
+
+def remove_tree(path):
+    """removes a folder holding files a tool sealed read-only, which windows will not delete."""
+    def unseal(func, target, _):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if os.path.lexists(path):
+        shutil.rmtree(path, onexc=unseal)
 
 
 def fill(value, names):
@@ -309,7 +320,7 @@ def main():
                     rows += run_tool(plan, workload, tool_name, names, want, rep, position,
                                      scratch, out_dir, writer)
                     file.flush()
-    shutil.rmtree(scratch, ignore_errors=True)
+    remove_tree(scratch)
     summarize(rows, plan, reps, out_dir)
 
 
@@ -355,9 +366,9 @@ def run_tool(plan, workload, tool_name, names, want, rep, position, scratch, out
         rows.append(row)
         print(f"{workload['id']} {tool_name} {phase} block {rep}: {wall:.2f} s "
               f"{'ok' if ok else 'FAILED'}", flush=True)
-    shutil.rmtree(home, ignore_errors=True)
+    remove_tree(home)
     for folder in folders:
-        shutil.rmtree(folder, ignore_errors=True)
+        remove_tree(folder)
     return rows
 
 
