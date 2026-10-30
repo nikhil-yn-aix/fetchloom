@@ -419,12 +419,20 @@ impl Net {
         }
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;
-        // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
-        let watch = total.filter(|_| splits && self.rate.is_none());
+        let watch = total.filter(|_| splits);
         let (writer, response, total, slow) = match watch {
             Some(total) if at_once => (writer, response, total, None),
             _ => match self
-                .stream(from, writer, response, total, on, watch)
+                .stream(
+                    from,
+                    writer,
+                    response,
+                    total,
+                    on,
+                    // a stream held back by FETCHLOOM_RATE looks slow, and more streams
+                    // share the same cap
+                    watch.filter(|_| self.rate.is_none()),
+                )
                 .await?
             {
                 Run::Whole(writer) => {
