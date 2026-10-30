@@ -277,7 +277,7 @@ credentials are read from where each source already keeps them: `HF_TOKEN` or `~
 
 ## the JSON document
 
-`--json` prints one document on stdout, including usage errors, welcome and version. `--help` still prints text. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
+`--json` prints one document on stdout, including usage errors, welcome and version. `--help` and `fetchloom help` still print text; an unknown help topic is a usage error with a null command. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
 
 | field | value |
 |---|---|

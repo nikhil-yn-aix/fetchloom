@@ -76,6 +76,13 @@ on disk: deletes cached files whose bytes changed. data/ stays as it is";
   fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
 
 on disk: writes the output folder through the cache. no data.toml, data.lock or data/";
+
+    pub(super) const HELP: &str = "examples:
+  fetchloom help concepts
+  fetchloom help add
+  fetchloom help cache gc
+
+on disk: nothing";
 }
 
 /// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
@@ -207,6 +214,10 @@ pub(crate) enum Command {
     /// fetch something once, without a project
     #[command(override_usage = "fetchloom get [options] <link>", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
+
+    /// explain the ideas behind fetchloom, or one command
+    #[command(override_usage = "fetchloom help [topic]", help_template = TEMPLATE, after_help = examples::HELP)]
+    Help(Help),
 }
 
 impl Command {
@@ -227,6 +238,7 @@ impl Command {
                 action: Some(CacheAction::Verify),
             }) => "cache verify",
             Command::Get(_) => "get",
+            Command::Help(_) => "help",
         }
     }
 }
@@ -333,6 +345,14 @@ pub(crate) struct Get {
     /// keep zip and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+}
+
+/// explain the ideas behind fetchloom, or one command
+#[derive(Debug, clap::Args)]
+pub(crate) struct Help {
+    /// concepts, or a command such as add or cache gc
+    #[arg(value_name = "topic", help_heading = "arguments")]
+    pub(crate) topic: Vec<String>,
 }
 
 #[cfg(test)]

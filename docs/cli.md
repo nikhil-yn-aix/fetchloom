@@ -184,7 +184,7 @@ a missing manifest removes a project's registration. an unreadable lock stops in
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
-`-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. there is no `help` subcommand. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
+`-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. `fetchloom help concepts` explains data.toml, data.lock, the cache and sync; `fetchloom help <command>` prints the same text as `fetchloom <command> --help`. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
 
 command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeated `--select <glob>` and `--exclude <glob>` on both, `--no-extract` on both, `sync --force`, and `lock --upgrade [name ...]` or `--check`. defaults come from [settings](formats.md#settings).
 

@@ -28,6 +28,7 @@ commands:
   path    print where a dataset or a file in it is, syncing first if needed
   cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project
+  help    explain the ideas behind fetchloom, or one command
 
 options:
   -q, --quiet         print only the answer and errors

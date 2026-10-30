@@ -4,6 +4,7 @@ mod args;
 mod cache;
 mod fetch;
 mod get;
+mod help;
 mod logs;
 mod project;
 mod status;
@@ -162,6 +163,9 @@ pub(crate) fn run() -> ExitCode {
             started,
         );
     }
+    if let Some(args::Command::Help(asked)) = &args.command {
+        return help::show(&context, &asked.topic, started);
+    }
     let name = args.command.as_ref().map(args::Command::name);
     let _command = tracing::debug_span!("command", name).entered();
     if let Some(folder) = &global.directory
@@ -227,6 +231,7 @@ fn dispatch(context: &Context, command: args::Command, started: Instant) -> Exit
             let outcome = block_on(context, get::run(context, args));
             finish(context, name, outcome, started)
         }
+        args::Command::Help(asked) => help::show(context, &asked.topic, started),
     }
 }
 

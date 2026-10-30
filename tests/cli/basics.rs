@@ -131,6 +131,49 @@ fn help_opens_like_the_first_run() -> Result {
 }
 
 #[test]
+fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["help", "concepts"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let stdout = text(&output.stdout)?;
+    assert!(stdout.lines().count() < 30, "{stdout}");
+    for line in ANALOGY {
+        assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
+    }
+    assert_eq!(
+        sandbox.run(&["--json", "help", "concepts"])?.stdout,
+        output.stdout,
+        "help stays text"
+    );
+    insta::assert_snapshot!(stdout);
+    Ok(())
+}
+
+#[test]
+fn help_shows_a_command_and_suggests_a_topic() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (topic, flag) in [
+        (&[][..], &["--help"][..]),
+        (&["get"], &["get", "--help"]),
+        (&["cache", "gc"], &["cache", "gc", "--help"]),
+    ] {
+        let help = sandbox.run(&[&["help"][..], topic].concat())?;
+        assert!(help.status.success(), "{topic:?}");
+        assert_eq!(help.stdout, sandbox.run(flag)?.stdout, "{topic:?}");
+    }
+    let typo = sandbox.run(&["--json", "help", "concept"])?;
+    assert_eq!(typo.status.code(), Some(2));
+    let document: Value = serde_json::from_slice(&typo.stdout)?;
+    assert_eq!(document["command"], Value::Null, "help runs no command");
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["help"],
+        "did you mean `fetchloom help concepts`?"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_unknown_option_is_a_usage_error() -> Result {
     let output = Sandbox::new()?.run(&["--verison"])?;
     assert_eq!(output.status.code(), Some(2));

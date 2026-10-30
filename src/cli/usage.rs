@@ -30,7 +30,11 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
             (level(quiet, read.get_count("verbose")), color)
         });
     let output = Output::new(Style::detect(color), level, asks_for_json(), false);
-    let command = read.as_ref().and_then(named_command);
+    // help prints text, never a document, so a mistake after it names no command
+    let command = read
+        .as_ref()
+        .and_then(named_command)
+        .filter(|name| name != "help");
     finish::<()>(
         &Context::new(output),
         command.as_deref(),

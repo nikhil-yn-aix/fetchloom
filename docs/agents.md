@@ -14,7 +14,7 @@ a script or an AI agent drives fetchloom with the same commands a person types. 
 
 ## the JSON document
 
-with `--json`, every run prints one line of JSON on stdout, on success and on failure, usage errors included. `--help` stays text.
+with `--json`, every run prints one line of JSON on stdout, on success and on failure, usage errors included. `--help` and `fetchloom help` stay text.
 
 | field | value |
 |---|---|
