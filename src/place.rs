@@ -58,9 +58,6 @@ pub(crate) struct Order<'a> {
     pub(crate) object: &'a Path,
     pub(crate) destination: &'a Path,
     pub(crate) writable: bool,
-    /// the object's metadata as read when it was checked before placing, if it was. a hardlink
-    /// is the object itself, so this stands for the placed file without reading it again.
-    pub(crate) checked: Option<&'a Metadata>,
 }
 
 /// why a placer copied files it would rather have linked.
@@ -156,10 +153,9 @@ impl Placer {
     }
 
     /// places every order and says how each went, in order, with the metadata of each placed file
-    /// read right after it was placed, so a later edit is never taken for the placed file. a
-    /// hardlink to an object checked before placing gets the metadata read then instead: it is the
-    /// same file, and a change made since the check shows as an edit. the first goes alone, so it
-    /// learns which methods the filesystem allows before the rest go several at once.
+    /// read right after it was placed, so a later edit is never taken for the placed file. the
+    /// first goes alone, so it learns which methods the filesystem allows before the rest go
+    /// several at once.
     pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<(Method, Metadata)>> {
         let mut results = Vec::with_capacity(orders.len());
         let mut ready = Vec::with_capacity(orders.len());
@@ -174,13 +170,7 @@ impl Placer {
         let put = |(index, order): &(usize, &Order)| {
             let placed = this
                 .put(order.object, order.destination, order.writable)
-                .and_then(|method| {
-                    let metadata = match order.checked {
-                        Some(checked) if method == Method::Hardlink => checked.clone(),
-                        _ => fs::symlink_metadata(order.destination)?,
-                    };
-                    Ok((method, metadata))
-                });
+                .and_then(|method| Ok((method, fs::symlink_metadata(order.destination)?)));
             (*index, placed)
         };
         if let Some((first, rest)) = ready.split_first() {
@@ -1133,7 +1123,6 @@ mod tests {
                 object: &object,
                 destination,
                 writable: false,
-                checked: None,
             })
             .collect();
         // one order that cannot succeed, to see its error land in its own place
@@ -1146,7 +1135,6 @@ mod tests {
                 object: &object,
                 destination: &taken,
                 writable: false,
-                checked: None,
             },
         );
 
@@ -1181,7 +1169,6 @@ mod tests {
                 object,
                 destination,
                 writable: false,
-                checked: None,
             })
             .collect();
         let spread = spread(orders.iter().enumerate().collect());

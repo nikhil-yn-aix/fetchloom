@@ -5,8 +5,8 @@
 mod put;
 mod tell;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, Metadata};
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -77,8 +77,6 @@ pub(crate) struct Placing<'a> {
     actions: Vec<Action>,
     data_dir: PathBuf,
     survey: Survey,
-    /// the objects found in the cache while looking for missing ones, as they looked then.
-    checked: HashMap<Sha256, Metadata>,
 }
 
 impl<'a> Placing<'a> {
@@ -109,7 +107,6 @@ impl<'a> Placing<'a> {
             actions,
             data_dir,
             survey,
-            checked: HashMap::new(),
         })
     }
 
@@ -129,12 +126,8 @@ impl<'a> Placing<'a> {
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
     /// object a mark puts in doubt is hashed first, and one whose bytes changed is removed, so it
-    /// is listed too; one that cannot be removed is an error. the objects found are remembered as
-    /// they looked, for placing.
-    pub(crate) fn missing(
-        &mut self,
-        cache: &Cache,
-    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+    /// is listed too; one that cannot be removed is an error.
+    pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -151,17 +144,18 @@ impl<'a> Placing<'a> {
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
         let marks = cache.changed();
         let found = place::run_all(&objects, |(digest, size)| {
-            cache.trusted_metadata(digest, Some(*size), &marks)
+            cache.trusted(digest, Some(*size), &marks)
         });
+        let mut present = HashSet::new();
         for ((digest, _), found) in objects.iter().zip(found) {
-            if let Some(metadata) = found.map_err(|doubt| doubtful(&doubt))? {
-                self.checked.insert(*digest, metadata);
+            if found.map_err(|doubt| doubtful(&doubt))?.is_some() {
+                present.insert(*digest);
             }
         }
         let mut seen = HashSet::new();
         Ok(needed
             .into_iter()
-            .filter(|target| !self.checked.contains_key(&target.sha256))
+            .filter(|target| !present.contains(&target.sha256))
             .filter(|target| seen.insert(target.locked.sha256))
             .map(|target| (target.dataset.clone(), target.locked))
             .collect())
@@ -185,7 +179,6 @@ impl<'a> Placing<'a> {
             data_dir,
             mut survey,
             unknown,
-            checked: objects,
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
@@ -208,10 +201,6 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         )?;
-        let todo: Vec<(&Target, Option<&Metadata>)> = todo
-            .into_iter()
-            .map(|target| (target, objects.get(&target.sha256)))
-            .collect();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let state = &mut survey.state;
@@ -645,7 +634,6 @@ mod tests {
             actions,
             data_dir: project.root.join("data"),
             survey,
-            checked: HashMap::new(),
         };
         let output = Output::new(
             Style {
