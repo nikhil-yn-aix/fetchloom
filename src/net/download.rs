@@ -524,9 +524,10 @@ impl Net {
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
+        let mut idle = tokio::time::Instant::now() + IDLE;
         let body = loop {
             let next = tokio::select! {
-                next = tokio::time::timeout(IDLE, response.chunk()) => next,
+                next = tokio::time::timeout_at(idle, response.chunk()) => next,
                 () = &mut lap, if watch.is_some() => {
                     let now = std::time::Instant::now();
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
@@ -562,6 +563,7 @@ impl Net {
                 }
                 Ok(Ok(None)) => break Ok(None),
                 Ok(Ok(Some(chunk))) => {
+                    idle = tokio::time::Instant::now() + IDLE;
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }
