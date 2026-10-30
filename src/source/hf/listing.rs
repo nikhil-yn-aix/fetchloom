@@ -300,7 +300,7 @@ mod tests {
             offline: crate::net::Offline::No,
             jobs: 4,
             credentials: Vec::new(),
-            split: true,
+            split: crate::net::Splitting::WhenSlow,
         };
         let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
         let reference = Reference::parse("hf:datasets/stanfordnlp/imdb")

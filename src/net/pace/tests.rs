@@ -84,7 +84,7 @@ fn a_host_is_asked_no_faster_than_its_limit_allows() {
         offline: Offline::No,
         jobs: 8,
         credentials: Vec::new(),
-        split: true,
+        split: crate::net::Splitting::WhenSlow,
     };
     let waits = Arc::new(Mutex::new(Vec::new()));
     let heard = waits.clone();

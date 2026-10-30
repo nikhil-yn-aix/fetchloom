@@ -43,9 +43,8 @@ struct Context {
     jobs: usize,
     rate: Option<Arc<net::Rate>>,
     threads: Threads,
-    /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
-    /// for.
-    split: bool,
+    /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
+    split: net::Splitting,
     work: Arc<Work>,
     stop: Arc<Stop>,
 }
@@ -60,7 +59,7 @@ impl Context {
             jobs: JOBS,
             rate: None,
             threads: Threads::default(),
-            split: false,
+            split: net::Splitting::WhenSlow,
             work: Arc::default(),
             stop: Arc::default(),
         }
@@ -119,10 +118,15 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
     )
 }
 
-/// whether large downloads may split: only when `FETCHLOOM_SPLIT=1` asks, since they lost on lan
-/// and home in the lab while they won on far.
-fn splits(value: Option<std::ffi::OsString>) -> bool {
-    value.is_some_and(|value| value == "1")
+/// when large downloads split, by `FETCHLOOM_SPLIT`: `0` never, `1` from the first answer, and
+/// otherwise once one stream proves slow. splitting from the start lost in the lab on lan and
+/// home, while it won on far, where one stream is slow.
+fn splits(value: Option<std::ffi::OsString>) -> net::Splitting {
+    match value {
+        Some(value) if value == "0" => net::Splitting::Never,
+        Some(value) if value == "1" => net::Splitting::Always,
+        _ => net::Splitting::WhenSlow,
+    }
 }
 
 /// `FETCHLOOM_JOBS`, or the default.
@@ -495,13 +499,17 @@ mod tests {
     }
 
     #[test]
-    fn downloads_split_only_when_asked() {
-        assert!(
-            !splits(None),
-            "split downloads lost in the lab on lan and home"
+    fn downloads_split_once_one_stream_is_slow_unless_told_otherwise() {
+        use net::Splitting::{Always, Never, WhenSlow};
+        assert_eq!(splits(None), WhenSlow);
+        assert_eq!(splits(Some("0".into())), Never);
+        assert_eq!(
+            splits(Some("1".into())),
+            Always,
+            "kept to measure splitting from the start"
         );
-        assert!(splits(Some("1".into())));
-        assert!(!splits(Some("0".into())));
-        assert!(!splits(Some(String::new().into())));
+        for other in ["", "2", "yes", " 1"] {
+            assert_eq!(splits(Some(other.into())), WhenSlow, "{other:?}");
+        }
     }
 }

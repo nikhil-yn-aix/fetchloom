@@ -1,6 +1,7 @@
 //! one large file over several streams at once. each stream fetches a range and writes it where
 //! it belongs, a stream that runs out of work takes half of the largest range left, and a stream
-//! is added only while each one has made the whole download faster.
+//! is added only while each one has made the whole download faster. a download usually gets here
+//! from one stream that proved slow, whose answer goes on as the first stream.
 
 use std::future::{Future, poll_fn};
 use std::io;
@@ -31,6 +32,10 @@ pub(crate) const MOST_STREAMS: usize = 8;
 pub(crate) const SMALLEST_PIECE: u64 = 8 * 1024 * 1024;
 /// how long a rate is measured before and after a stream is added.
 pub(crate) const WINDOW: Duration = Duration::from_secs(2);
+/// bytes a second below which one stream, over a window, hands its download over to be split.
+/// a live server that gave one stream 5.6 MB/s finished a third later when split, while a lossy
+/// link at 0.25 MB/s finished in half the time.
+pub(crate) const SLOW: u64 = 1_000_000;
 /// how much faster the whole download must get with each added stream before another is added.
 const GAIN: f64 = 1.15;
 /// failed streams after which a download asks for no more ranges.
@@ -44,6 +49,8 @@ pub(super) struct Job<'a> {
     pub(super) validators: &'a Validators,
     pub(super) total: u64,
     pub(super) on: Listener<'a>,
+    /// the rate of the one stream that proved slow before it handed over, in bytes a second.
+    pub(super) slow: Option<f64>,
 }
 
 pub(super) enum Streamed {
@@ -223,6 +230,9 @@ enum Ended {
 /// whether to add a stream, by the rate the download had before and after the last one.
 #[derive(Clone, Copy)]
 enum Probe {
+    /// one stream was measured at this rate before the download split, so a stream is added at
+    /// once.
+    Measured { rate: f64 },
     /// measuring the rate of the streams running now.
     Measure { since: Instant, delivered: u64 },
     /// a stream was added and has delivered nothing yet.
@@ -276,6 +286,13 @@ impl Net {
         allowed: &mut bool,
     ) -> Result<Streamed, Failure> {
         let (from, total) = (job.from, job.total);
+        let mut probe = match job.slow {
+            Some(rate) => Probe::Measured { rate },
+            None => Probe::Measure {
+                since: Instant::now(),
+                delivered: 0,
+            },
+        };
         let gaps = writer.gaps(total);
         let (sender, receiver) = tokio::sync::mpsc::channel::<(u64, Bytes)>(16);
         let writing = write_at_places(writer, receiver);
@@ -288,10 +305,6 @@ impl Net {
         let mut running: Running<'_> = vec![Box::pin(async move {
             (0, self.split_stream(shared, 0, Some(response)).await)
         })];
-        let mut probe = Probe::Measure {
-            since: Instant::now(),
-            delivered: 0,
-        };
         let mut tick = tokio::time::interval(self.split.window / 8);
         let (mut failures, mut outcome) = (0, None);
         let (mut interrupted, mut start_over) = (false, false);
@@ -550,6 +563,7 @@ impl Net {
         };
         let window = self.split.window;
         let (before, added) = match *probe {
+            Probe::Measured { rate: before } => (before, self.add_stream(shared, running)),
             Probe::Measure {
                 since,
                 delivered: from,

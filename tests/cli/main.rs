@@ -14,5 +14,6 @@ mod project;
 mod proxy;
 mod recovery;
 mod secrets;
+mod split;
 mod support;
 mod unattended;

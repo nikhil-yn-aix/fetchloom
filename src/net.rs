@@ -101,19 +101,32 @@ pub(crate) struct Options {
     /// downloads running at once, across all hosts.
     pub(crate) jobs: usize,
     pub(crate) credentials: Vec<Credential>,
-    /// whether a large download may be split across streams.
-    pub(crate) split: bool,
+    /// when a large download is split across streams.
+    pub(crate) split: Splitting,
+}
+
+/// when a large download that may split across streams does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Splitting {
+    /// every file comes over one stream.
+    Never,
+    /// the file comes over one stream until that stream proves slow.
+    WhenSlow,
+    /// the file splits from its first answer on.
+    Always,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Split {
-    pub(crate) enabled: bool,
+    pub(crate) when: Splitting,
     /// the smallest file split.
     pub(crate) above: u64,
     /// the smallest piece a stream takes from another.
     pub(crate) piece: u64,
     /// how long a rate is measured before and after a stream is added.
     pub(crate) window: Duration,
+    /// bytes a second below which one stream, over a window, hands over to be split.
+    pub(crate) slow: u64,
 }
 
 pub(crate) struct Net {
@@ -219,10 +232,11 @@ impl Net {
             paces: pace::Paces::default(),
             rate: None,
             split: Split {
-                enabled: options.split,
+                when: options.split,
                 above: download::SPLIT_ABOVE,
                 piece: download::SMALLEST_PIECE,
                 window: download::WINDOW,
+                slow: download::SLOW,
             },
             work,
             stop,
@@ -443,7 +457,7 @@ mod tests {
             offline: Offline::No,
             jobs: 1,
             credentials: Vec::new(),
-            split: true,
+            split: Splitting::WhenSlow,
         };
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         assert!(net.wire.get().is_none());

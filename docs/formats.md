@@ -276,7 +276,7 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
 | `FETCHLOOM_RATE` | positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`; for example `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; unset or empty keeps the default worker counts; surrounding whitespace is accepted |
-| `FETCHLOOM_SPLIT` | exactly `1` lets files of at least 64 MiB split across streams; otherwise every file comes over one stream |
+| `FETCHLOOM_SPLIT` | `0` keeps every file to one stream. `1` splits a file of at least 64 MiB across streams from its first answer, to measure the split path. unset or anything else splits such a file once its one stream moved less than 1 MB/s over 2 s |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |

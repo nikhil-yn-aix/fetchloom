@@ -13,7 +13,7 @@ use super::*;
 use crate::cache::{Cache, Validators};
 use crate::digest::sha256;
 use crate::net::download::{Expect, Fetch, Fetched};
-use crate::net::{Offline, Options, PER_HOST, Split};
+use crate::net::{Offline, Options, PER_HOST, Split, Splitting};
 use crate::source::recorded::block_on;
 
 const KIB: u64 = 1024;
@@ -224,21 +224,22 @@ fn read_head(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&head).into_owned()
 }
 
-/// the network with `jobs` downloads at once, and splitting scaled down to small files and short
-/// windows.
+/// the network with `jobs` downloads at once, and splitting from the first answer, scaled down
+/// to small files and short windows.
 fn net(url: &Url, jobs: usize) -> Net {
     let options = Options {
         offline: Offline::No,
         jobs,
         credentials: Vec::new(),
-        split: true,
+        split: Splitting::Always,
     };
     let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
     net.split = Split {
-        enabled: true,
+        when: Splitting::Always,
         above: MIB,
         piece: 64 * KIB,
         window: Duration::from_millis(100),
+        slow: 4 * MIB,
     };
     net.typed(url);
     net
@@ -334,7 +335,11 @@ fn a_file_is_split_only_when_it_is_large_and_its_ranges_are_safe_to_join() {
         let body = body(size);
         let server = serve(body.clone(), serving);
         let mut net = net(&server.url, 8);
-        net.split.enabled = enabled;
+        net.split.when = if enabled {
+            Splitting::Always
+        } else {
+            Splitting::Never
+        };
         let (_folder, cache) = cache();
         let fetched = download(&net, &cache, &server.url, Expect::default());
         assert_eq!(fetched.digest, sha256(&body), "{why}");
@@ -366,24 +371,75 @@ fn a_pinned_file_splits_without_validators() {
 
 #[test]
 fn a_whole_answer_to_a_range_stops_splitting() {
-    let body = body(4 * MIB);
-    let server = serve(
-        body.clone(),
-        Serving {
-            whole_for_parts: true,
-            ..SERVING
-        },
-    );
-    let net = net(&server.url, 8);
+    for when in [Splitting::Always, Splitting::WhenSlow] {
+        let body = body(4 * MIB);
+        let server = serve(
+            body.clone(),
+            Serving {
+                whole_for_parts: true,
+                ..SERVING
+            },
+        );
+        let mut net = net(&server.url, 8);
+        net.split.when = when;
+        let (_folder, cache) = cache();
+        let fetched = download(&net, &cache, &server.url, Expect::default());
+        assert_eq!(fetched.digest, sha256(&body), "{when:?}");
+        assert_eq!(
+            parts(&server).len(),
+            1,
+            "no range is asked for after a 200, {when:?}"
+        );
+        assert_eq!(
+            net.work.counts().retries,
+            0,
+            "the first answer covers the rest, {when:?}"
+        );
+    }
+}
+
+#[test]
+fn a_slow_stream_hands_its_answer_over_to_more_streams() {
+    let body = body(8 * MIB);
+    let server = serve(body.clone(), SERVING);
+    let mut net = net(&server.url, 8);
+    net.split.when = Splitting::WhenSlow;
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));
-    assert_eq!(parts(&server).len(), 1, "no range is asked for after a 200");
+    let heads = server.heads();
+    assert!(!heads[0].contains("range:"), "{}", heads[0]);
     assert_eq!(
-        net.work.counts().retries,
-        0,
-        "the first answer covers the rest"
+        heads.len() - parts(&server).len(),
+        1,
+        "the first answer is read on from where the one stream stopped"
     );
+    assert!(server.most() >= 2, "{} streams at once", server.most());
+    for head in &parts(&server) {
+        assert!(head.contains("if-range: \"v1\""), "{head}");
+    }
+    let counts = net.work.counts();
+    assert_eq!(counts.requests, heads.len() as u64);
+    assert_eq!(counts.resumes, 0);
+}
+
+#[test]
+fn a_fast_stream_is_never_split() {
+    let body = body(8 * MIB);
+    let server = serve(
+        body.clone(),
+        Serving {
+            rate: 64 * MIB,
+            ..SERVING
+        },
+    );
+    let mut net = net(&server.url, 8);
+    net.split.when = Splitting::WhenSlow;
+    let (_folder, cache) = cache();
+    let fetched = download(&net, &cache, &server.url, Expect::default());
+    assert_eq!(fetched.digest, sha256(&body));
+    assert_eq!(server.heads().len(), 1);
+    assert_eq!(net.work.counts().bytes_down, 8 * MIB);
 }
 
 #[test]
@@ -421,38 +477,41 @@ fn a_stream_is_added_only_when_a_slot_is_free() {
 
 #[test]
 fn a_resume_fetches_only_the_ranges_not_kept() {
-    let body = body(4 * MIB);
-    let server = serve(body.clone(), SERVING);
-    let net = net(&server.url, 8);
-    let (_folder, cache) = cache();
-    let validators = Validators {
-        etag: Some("\"v1\"".to_owned()),
-        last_modified: None,
-    };
-    let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
-        panic!("nothing else holds the download");
-    };
-    let mut writer = partial
-        .writer(0, Some(4 * MIB), validators, false, true)
-        .unwrap();
-    let mib = usize::try_from(MIB).unwrap();
-    writer.write_at(0, &body[..mib]).unwrap();
-    writer.write_at(3 * MIB, &body[3 * mib..]).unwrap();
-    writer.save().unwrap();
-    drop(writer);
-    drop(partial);
-    let fetched = download(&net, &cache, &server.url, Expect::default());
-    assert_eq!(fetched.digest, sha256(&body));
-    let first = &server.heads()[0];
-    assert!(first.contains(&format!("range: bytes={MIB}-")), "{first}");
-    assert!(first.contains("if-range: \"v1\""), "{first}");
-    let counts = net.work.counts();
-    assert_eq!(counts.resumes, 1);
-    assert!(
-        counts.bytes_down < 3 * MIB,
-        "the kept megabyte at the end came again: {} bytes",
-        counts.bytes_down
-    );
+    for when in [Splitting::Always, Splitting::WhenSlow] {
+        let body = body(4 * MIB);
+        let server = serve(body.clone(), SERVING);
+        let mut net = net(&server.url, 8);
+        net.split.when = when;
+        let (_folder, cache) = cache();
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            last_modified: None,
+        };
+        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
+            panic!("nothing else holds the download");
+        };
+        let mut writer = partial
+            .writer(0, Some(4 * MIB), validators, false, true)
+            .unwrap();
+        let mib = usize::try_from(MIB).unwrap();
+        writer.write_at(0, &body[..mib]).unwrap();
+        writer.write_at(3 * MIB, &body[3 * mib..]).unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        drop(partial);
+        let fetched = download(&net, &cache, &server.url, Expect::default());
+        assert_eq!(fetched.digest, sha256(&body), "{when:?}");
+        let first = &server.heads()[0];
+        assert!(first.contains(&format!("range: bytes={MIB}-")), "{first}");
+        assert!(first.contains("if-range: \"v1\""), "{first}");
+        let counts = net.work.counts();
+        assert_eq!(counts.resumes, 1, "{when:?}");
+        assert!(
+            counts.bytes_down < 3 * MIB,
+            "the kept megabyte at the end came again, {when:?}: {} bytes",
+            counts.bytes_down
+        );
+    }
 }
 
 #[test]
