@@ -35,7 +35,7 @@ impl Bar {
 
     pub(super) fn add(bars: &MultiProgress, message: String, unicode: bool) -> Bar {
         let bar = bars.add(ProgressBar::no_length().with_message(message));
-        bar.set_style(style(unicode, false));
+        bar.set_style(style(unicode, false, &bar.message()));
         bar.enable_steady_tick(TICK);
         Bar {
             bar: Some(bar),
@@ -65,13 +65,14 @@ impl Bar {
 
     pub(crate) fn message(&self, text: String) {
         if let Some(bar) = &self.bar {
+            bar.set_style(style(self.unicode, bar.length().is_some(), &text));
             bar.set_message(text);
         }
     }
 
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.bar {
-            bar.set_style(style(self.unicode, total.is_some()));
+            bar.set_style(style(self.unicode, total.is_some(), &bar.message()));
             if let Some(total) = total {
                 bar.set_length(total);
             }
@@ -95,18 +96,108 @@ impl Drop for Bar {
     }
 }
 
-fn style(unicode: bool, sized: bool) -> ProgressStyle {
-    let template = if sized {
-        "{spinner:.cyan} {wide_msg} {bar:20.cyan/dim} {amount}"
-    } else {
-        "{spinner:.cyan} {wide_msg} {amount}"
-    };
-    let fill = if unicode { "━╸─" } else { "=> " };
-    ProgressStyle::with_template(template)
+fn style(unicode: bool, sized: bool, message: &str) -> ProgressStyle {
+    let spinner = ProgressStyle::default_spinner().tick_chars(ticks(unicode));
+    let name = super::plain(message).into_owned();
+    ProgressStyle::with_template("{line}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
-        .tick_chars(ticks(unicode))
-        .progress_chars(fill)
-        .with_key("amount", amount)
+        .with_key(
+            "line",
+            move |state: &ProgressState, out: &mut dyn fmt::Write| {
+                let elapsed = state.elapsed();
+                let tick =
+                    u64::try_from(elapsed.as_millis() / TICK.as_millis()).unwrap_or(u64::MAX);
+                let spinner = console::style(spinner.get_tick_str(tick))
+                    .for_stderr()
+                    .cyan()
+                    .to_string();
+                let bar = if sized {
+                    meter(state.pos(), state.len().unwrap_or(0), unicode)
+                } else {
+                    String::new()
+                };
+                let amount = measure(
+                    state.pos(),
+                    state.len(),
+                    state.per_sec(),
+                    elapsed,
+                    state.eta(),
+                );
+                let width = usize::from(console::Term::stderr().size().1);
+                let _ = out.write_str(&render(&name, &spinner, &bar, &amount, width));
+            },
+        )
+}
+
+fn meter(done: u64, total: u64, unicode: bool) -> String {
+    let filled = if total == 0 {
+        20
+    } else {
+        usize::try_from(u128::from(done.min(total)) * 20 / u128::from(total)).unwrap_or(20)
+    };
+    let (fill, head, empty) = if unicode {
+        ("━", "╸", "─")
+    } else {
+        ("=", ">", " ")
+    };
+    let head = if filled < 20 { head } else { "" };
+    let filled_text = format!("{}{head}", fill.repeat(filled));
+    let rest = empty.repeat(20 - filled - usize::from(filled < 20));
+    format!(
+        "{}{}",
+        console::style(filled_text).for_stderr().cyan(),
+        console::style(rest).for_stderr().dim()
+    )
+}
+
+/// counters and bar space give way before the name, including the spinner when only the name fits.
+fn render(name: &str, spinner: &str, bar: &str, amount: &str, width: usize) -> String {
+    let line = |bar: &str, amount: &str| {
+        [spinner, name, bar, amount]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut kept = amount;
+    loop {
+        let shown = line(bar, kept);
+        if console::measure_text_width(&shown) <= width {
+            return shown;
+        }
+        if kept.is_empty() {
+            break;
+        }
+        kept = kept
+            .rsplit_once(" · ")
+            .or_else(|| kept.split_once(" / "))
+            .map_or("", |(head, _)| head);
+    }
+    let shown = line("", "");
+    if console::measure_text_width(&shown) <= width {
+        return shown;
+    }
+    middle(name, width)
+}
+
+fn middle(name: &str, width: usize) -> String {
+    if console::measure_text_width(name) <= width {
+        return name.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let kept = width - 1;
+    let head = console::truncate_str(name, kept / 2, "");
+    let mut tail = "";
+    for (offset, _) in name.char_indices().rev() {
+        let candidate = &name[offset..];
+        if console::measure_text_width(candidate) > kept - kept / 2 {
+            break;
+        }
+        tail = candidate;
+    }
+    format!("{head}~{tail}")
 }
 
 fn ticks(unicode: bool) -> &'static str {
@@ -115,18 +206,6 @@ fn ticks(unicode: bool) -> &'static str {
     } else {
         "-\\|/ "
     }
-}
-
-/// what a bar shows of its progress, from what `indicatif` measured.
-fn amount(state: &ProgressState, out: &mut dyn fmt::Write) {
-    let shown = measure(
-        state.pos(),
-        state.len(),
-        state.per_sec(),
-        state.elapsed(),
-        state.eta(),
-    );
-    let _ = out.write_str(&shown);
 }
 
 /// `1.2 MiB / 4.1 MiB · 3.4 MiB/s · 1 s left`, in the units the rest of fetchloom prints, and
@@ -351,7 +430,10 @@ mod tests {
         for width in [128, 100, 80, 60, 40, 20, 12, 8] {
             let line = render("iris.csv", "-", bar, amount, width);
             assert!(line.contains("iris.csv"), "{width}: {line}");
-            assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+            assert!(
+                console::measure_text_width(&line) <= width,
+                "{width}: {line}"
+            );
         }
         assert_eq!(render("iris.csv", "-", bar, amount, 8), "iris.csv");
         let wide = render("iris.csv", "-", bar, amount, 128);
@@ -376,21 +458,33 @@ mod tests {
                 width,
             );
             assert_eq!(line, expected, "{width}");
-            assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+            assert!(
+                console::measure_text_width(&line) <= width,
+                "{width}: {line}"
+            );
         }
     }
 
     #[test]
     fn progress_width_counts_unicode_columns() {
-        for name in ["測定_非常に長い試料名.csv", "mesures_e\u{301}chantillon.csv"] {
+        for name in [
+            "測定_非常に長い試料名.csv",
+            "mesures_e\u{301}chantillon.csv",
+        ] {
             for (bar, amount) in [
-                ("\x1b[36m━━╸─────────────────\x1b[0m", "1.0 MiB / 4.0 MiB · 12 s"),
+                (
+                    "\x1b[36m━━╸─────────────────\x1b[0m",
+                    "1.0 MiB / 4.0 MiB · 12 s",
+                ),
                 ("", "1.0 MiB · 12 s"),
                 ("", ""),
             ] {
                 for width in 0..=100 {
                     let line = render(name, "\x1b[36m⠋\x1b[0m", bar, amount, width);
-                    assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+                    assert!(
+                        console::measure_text_width(&line) <= width,
+                        "{width}: {line}"
+                    );
                     assert!(!line.contains('\n'), "{width}: {line}");
                     if width >= console::measure_text_width(name) {
                         assert!(line.contains(name), "{width}: {line}");
