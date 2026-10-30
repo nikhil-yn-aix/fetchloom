@@ -14,6 +14,10 @@ pub(crate) enum ColorChoice {
 
 /// what stderr can show: color, unicode symbols, and live bars and questions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a yes or no about the terminal"
+)]
 pub(crate) struct Style {
     pub(crate) color: bool,
     pub(crate) unicode: bool,
