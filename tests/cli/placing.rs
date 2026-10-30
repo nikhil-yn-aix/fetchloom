@@ -373,7 +373,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
 
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
-    let kept = "data/iris/iris.csv was changed by hand, so it stays";
+    let kept = "data/iris/iris.csv has changed, so it stays";
     let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
     assert!(
         path.contains(kept),
@@ -415,7 +415,7 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
 
     let kept = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(
-        kept.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        kept.contains("data/iris/iris.csv has changed, so it stays"),
         "{kept}"
     );
     let status = text(&sandbox.run(&["status"])?.stderr)?;
@@ -481,7 +481,7 @@ fn removing_a_dataset_keeps_an_edit_a_coarse_clock_hides() -> Result {
     let stderr = text(&removed.stderr)?;
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("data/iris/iris.csv is no longer needed, but it was changed by hand"),
+        stderr.contains("data/iris/iris.csv is no longer needed, but it has changed"),
         "{stderr}"
     );
     assert_eq!(fs::read(&placed)?, edited);
@@ -538,11 +538,11 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
     assert_eq!(fs::read(&outdated)?, b"my notes on iris\n", "{stderr}");
     assert_eq!(fs::read(&unneeded)?, b"my notes on cows\n", "{stderr}");
     assert!(
-        stderr.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        stderr.contains("data/iris/iris.csv has changed, so it stays"),
         "{stderr}"
     );
     assert!(
-        stderr.contains("data/cows/cows.csv is no longer needed, but it was changed by hand"),
+        stderr.contains("data/cows/cows.csv is no longer needed, but it has changed"),
         "{stderr}"
     );
     Ok(())
@@ -612,7 +612,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     edit(&placed, b"sepal_length,species\n5.1,setosa\nedited\n")?;
     let (said, third) = sync("third.json")?;
     assert!(
-        said.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        said.contains("data/iris/iris.csv has changed, so it stays"),
         "{said}"
     );
     assert!(plans(&third), "{third}");
@@ -634,7 +634,7 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     let foreign = clone.join("data").join("iris");
     fs::create_dir_all(&foreign)?;
     fs::write(foreign.join("iris.csv"), V2)?;
-    let kept = "data/iris/iris.csv was not placed by fetchloom and holds other bytes";
+    let kept = "data/iris/iris.csv is not recorded by fetchloom and has different contents";
 
     for _ in 0..2 {
         let synced = sandbox.command_in(&clone, &["sync"]).output()?;
@@ -855,7 +855,7 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
         "{stderr}"
     );
     assert!(
-        stderr.contains("data/iris/iris.csv was changed through a link in another project"),
+        stderr.contains("data/iris/iris.csv is a linked file whose contents changed"),
         "{stderr}"
     );
     let edited = fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?;
@@ -916,7 +916,7 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
         "{stderr}"
     );
     assert!(
-        stderr.contains("data/iris/iris.csv was changed through a link in another project"),
+        stderr.contains("data/iris/iris.csv is a linked file whose contents changed"),
         "{stderr}"
     );
     let after = sandbox.command_in(&other, &["status"]).output()?;

@@ -276,7 +276,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     .remove_only(&context.output)?;
     context.output.done(&format!("removed {}", args.name));
     context.output.next(
-        "commit data.toml and data.lock; other clones drop its files at their next `fetchloom sync`",
+        "commit data.toml and data.lock; after pulling, other clones remove unchanged files with `fetchloom sync`",
     );
     Ok(Report {
         project: project.root,
@@ -320,16 +320,28 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     {
         context
             .output
-            .done("everything already matches data.lock. nothing to do");
+            .done("all pinned files are in place. nothing to do");
     } else {
         let datasets = units_datasets(manifest.datasets.len());
-        context
-            .output
-            .done(&format!("synced {datasets} into {}", manifest.data_dir));
+        if placement.kept.is_empty() {
+            context
+                .output
+                .done(&format!("synced {datasets} into {}", manifest.data_dir));
+        } else {
+            let kept = crate::units::count(
+                placement.kept.len() as u64,
+                "file left unchanged",
+                "files left unchanged",
+            );
+            context.output.done(&format!(
+                "finished syncing {datasets} into {}. {kept}; see the warnings above",
+                manifest.data_dir
+            ));
+        }
         if lock_changed {
             context
                 .output
-                .next("commit data.lock, so every clone gets these exact files");
+                .next("commit data.toml and data.lock, so other clones use these pins");
         } else if let Some(name) = manifest.datasets.keys().next()
             && placement.placed + placement.replaced > 0
         {
@@ -387,9 +399,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         context
             .output
             .done("data.lock is up to date with data.toml");
-        context
-            .output
-            .next("run `fetchloom sync` to update data/, then commit data.lock");
+        context.output.next(&format!(
+            "run `fetchloom sync` to update {}/, then commit data.toml and data.lock",
+            manifest.data_dir
+        ));
     } else {
         context
             .output

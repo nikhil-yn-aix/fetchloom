@@ -69,8 +69,8 @@ fetchloom puts the exact research data a project needs into its data/ folder.
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by every project on this machine
-  sync, restocking: data/ ends up matching the receipt
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
 
 try it with zenodo:3608990, a 4 KB iris.csv:
 
@@ -110,7 +110,7 @@ fetchloom sync
 another sync with unchanged managed files reports on stderr:
 
 ```text
-✓ everything already matches data.lock. nothing to do
+✓ all pinned files are in place. nothing to do
 ```
 
 for a download without a project:

@@ -6,8 +6,8 @@ fetchloom puts the exact research data a project needs into its data/ folder.
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by every project on this machine
-  sync, restocking: data/ ends up matching the receipt
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
 
 try it with zenodo:3608990, a 4 KB iris.csv:
 
@@ -22,9 +22,9 @@ usage: fetchloom [options] <command>
 commands:
   add     add a dataset, pin it and download it into the data folder
   remove  remove a dataset and the unchanged files fetchloom placed for it
-  sync    make the data folder match data.lock on this machine
+  sync    place the files pinned in data.lock on this machine
   lock    update data.lock from data.toml without placing files in the data folder
-  status  list files that are missing, changed by hand or extra
+  status  list files that are missing, changed locally or extra
   path    print where a dataset or a file in it is, syncing first if needed
   cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project

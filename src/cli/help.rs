@@ -20,8 +20,8 @@ kitchen:
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by every project on this machine
-  sync, restocking: data/ ends up matching the receipt
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
 
 a dataset is one entry in data.toml: a name, such as iris, and a reference to where it is
 published, such as zenodo:3608990, a DOI or a link. --select and --exclude choose which of its
@@ -34,7 +34,8 @@ the cache keeps each file once, under its fingerprint. data/ links to it where t
 so projects that use the same file store it once. files in data/ are read-only by default.
 
 commit data.toml and data.lock with your code, and leave data/ out. anyone who clones the
-project runs `fetchloom sync` and gets the same files. `fetchloom status` shows what differs.
+project runs `fetchloom sync` to place the pinned files. sync warns when it keeps edited or
+conflicting files. `fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a quick look.";
 

@@ -133,7 +133,7 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         text(&output.stderr)?,
-        "✓ everything already matches data.lock. nothing to do\n"
+        "✓ all pinned files are in place. nothing to do\n"
     );
     let quiet = json(&sandbox.run(&["--json", "sync"])?)?;
     assert_eq!(quiet["work"]["requests"], 0);
@@ -199,7 +199,7 @@ fn hand_edits_survive_sync_until_forced() -> Result {
     let kept = sandbox.run(&["sync"])?;
     assert_eq!(kept.status.code(), Some(0));
     assert!(
-        text(&kept.stderr)?.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        text(&kept.stderr)?.contains("data/iris/iris.csv has changed, so it stays"),
         "{}",
         text(&kept.stderr)?
     );
@@ -574,7 +574,7 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     let missing = sandbox.run(&[])?;
     assert_eq!(
         text(&missing.stderr)?,
-        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs, and `fetchloom sync` brings it in line\n"
+        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs\n"
     );
     let document = json(&sandbox.run(&["--json"])?)?;
     assert_eq!(document["command"], "status");
@@ -782,5 +782,25 @@ fn duplicate_add_chooses_the_entry_with_matching_settings() -> Result {
     );
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, locked);
     assert_eq!(server.requests().len(), requests);
+    Ok(())
+}
+
+#[test]
+fn status_and_sync_explain_untracked_conflicts() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    fs::remove_file(sandbox.work().join(".fetchloom").join("state"))?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, b"my work")?;
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(stderr.contains("fetchloom sync --force"), "{stderr}");
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(stderr.contains("1 file left unchanged"), "{stderr}");
+    assert!(!stderr.contains("all pinned files are in place"), "{stderr}");
+    assert_eq!(fs::read(placed)?, b"my work");
     Ok(())
 }

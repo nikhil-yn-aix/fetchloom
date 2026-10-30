@@ -29,7 +29,7 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
   fetchloom sync --offline
   fetchloom sync --force
 
-on disk: makes data/ match data.lock, and writes data.lock first when data.toml changed";
+on disk: updates the data folder from data.lock, writing data.lock first if needed. reports files it cannot replace without --force";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock
@@ -75,7 +75,7 @@ on disk: marks changed cached files for replacement on the next download. data/ 
   fetchloom get zenodo:3608990 -o flowers
   fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
 
-on disk: writes the output folder through the cache. no data.toml, data.lock or data/";
+on disk: writes the output folder through the cache. does not create project files";
 
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
@@ -92,8 +92,8 @@ pub(crate) const INTRO: &str =
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by every project on this machine
-  sync, restocking: data/ ends up matching the receipt
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
 
 try it with zenodo:3608990, a 4 KB iris.csv:
 
@@ -218,7 +218,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, after_help = examples::REMOVE)]
     Remove(Remove),
 
-    /// make the data folder match data.lock on this machine
+    /// place the files pinned in data.lock on this machine
     #[command(override_usage = "fetchloom sync [options]", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
 
@@ -226,7 +226,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
-    /// list files that are missing, changed by hand or extra
+    /// list files that are missing, changed locally or extra
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status,
 
@@ -327,7 +327,7 @@ pub(crate) struct Remove {
     pub(crate) name: String,
 }
 
-/// make the data folder match data.lock on this machine
+/// place the files pinned in data.lock on this machine
 #[derive(Debug, clap::Args)]
 pub(crate) struct Sync {
     /// replace conflicting files at locked paths, including untracked files

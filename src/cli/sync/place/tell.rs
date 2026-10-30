@@ -51,15 +51,15 @@ pub(super) fn tell(
     for kept in &placement.kept {
         let message = match kept.reason {
             Reason::Changed => format!(
-                "{} was changed by hand, so it stays. `fetchloom sync --force` replaces it",
+                "{} has changed, so it stays. `fetchloom sync --force` replaces it",
                 kept.path
             ),
             Reason::Foreign => format!(
-                "{} was not placed by fetchloom and holds other bytes, so it stays. `fetchloom sync --force` replaces it",
+                "{} is not recorded by fetchloom and has different contents, so it stays. `fetchloom sync --force` replaces it",
                 kept.path
             ),
             Reason::Unneeded => format!(
-                "{} is no longer needed, but it was changed by hand, so it stays. delete it if you do not need it",
+                "{} is no longer needed, but it has changed, so it stays. delete it if you do not need it",
                 kept.path
             ),
         };
@@ -67,7 +67,7 @@ pub(super) fn tell(
     }
     for path in &placement.restored {
         output.warn(&format!(
-            "{path} was changed through a link in another project, so the locked bytes were put back"
+            "{path} is a linked file whose contents changed, so the pinned file was restored"
         ));
     }
 }
