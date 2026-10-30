@@ -39,8 +39,8 @@ struct Context {
     offline: net::Offline,
     yes: bool,
     jobs: usize,
-    /// whether a large download may be split across streams. `FETCHLOOM_SPLIT=0` turns it off,
-    /// for comparisons.
+    /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
+    /// for.
     split: bool,
     work: Arc<Work>,
     stop: Arc<Stop>,
@@ -54,7 +54,7 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
-            split: true,
+            split: false,
             work: Arc::default(),
             stop: Arc::default(),
         }
@@ -111,6 +111,12 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
         "{wait} for {host}, whose limit of {}{every} is used up",
         units::count(quota, "request", "requests")
     )
+}
+
+/// whether large downloads may split: only when `FETCHLOOM_SPLIT=1` asks, since they lost on lan
+/// and home in the lab while they won on far.
+fn splits(value: Option<std::ffi::OsString>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 /// `FETCHLOOM_JOBS`, or the default.
@@ -189,7 +195,7 @@ pub(crate) fn run() -> ExitCode {
         var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
     );
     context.yes = global.yes;
-    context.split = var("FETCHLOOM_SPLIT").is_none_or(|value| value != "0");
+    context.split = splits(var("FETCHLOOM_SPLIT"));
     if args.version {
         return about(
             &context,
@@ -389,5 +395,21 @@ fn level(quiet: bool, verbose: u8) -> Level {
         (false, 0) => Level::Normal,
         (false, 1) => Level::Verbose,
         (false, _) => Level::Debug,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloads_split_only_when_asked() {
+        assert!(
+            !splits(None),
+            "split downloads lost in the lab on lan and home"
+        );
+        assert!(splits(Some("1".into())));
+        assert!(!splits(Some("0".into())));
+        assert!(!splits(Some(String::new().into())));
     }
 }
