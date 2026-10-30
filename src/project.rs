@@ -142,7 +142,6 @@ impl Project {
         self.root.join(manifest::FILE)
     }
 
-    /// data.toml's text and what it says.
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
         let _span = tracing::debug_span!("read_manifest").entered();
         let text = fs::read_to_string(self.manifest_path()).map_err(|err| {
