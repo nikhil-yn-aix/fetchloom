@@ -264,6 +264,73 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     Ok(())
 }
 
+/// after a sync that left every file in place, a sync with data.toml and data.lock unchanged
+/// plans nothing while every file looks as placed. an edit still sends it the long way.
+#[test]
+fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // the state the first sync writes must be newer than the file, even on a coarse clock
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    let traces = sandbox.folder("traces")?;
+    let sync = |name: &str| -> Result<(String, String)> {
+        let trace = traces.join(name);
+        let output = sandbox
+            .command(&["sync"])
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok((stderr, fs::read_to_string(trace)?))
+    };
+    let plans = |events: &str| events.contains("\"name\":\"plan\"");
+
+    let (_, first) = sync("first.json")?;
+    assert!(plans(&first), "{first}");
+    let (said, second) = sync("second.json")?;
+    assert!(said.contains("nothing to do"), "{said}");
+    assert!(!plans(&second), "{second}");
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    edit(&placed, b"sepal_length,species\n5.1,setosa\nedited\n")?;
+    let (said, third) = sync("third.json")?;
+    assert!(
+        said.contains("data/iris/iris.csv was changed by hand, so it stays"),
+        "{said}"
+    );
+    assert!(plans(&third), "{third}");
+    Ok(())
+}
+
+/// a sync that left a file out records data.toml and data.lock as unsettled, so the next one
+/// plans again and still tells about the file, though nothing it recorded changed.
+#[test]
+fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let foreign = clone.join("data").join("iris");
+    fs::create_dir_all(&foreign)?;
+    fs::write(foreign.join("iris.csv"), V2)?;
+    let kept = "data/iris/iris.csv was not placed by fetchloom and holds other bytes";
+
+    for _ in 0..2 {
+        let synced = sandbox.command_in(&clone, &["sync"]).output()?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(kept), "{stderr}");
+    }
+    assert_eq!(fs::read(foreign.join("iris.csv"))?, V2);
+    Ok(())
+}
+
 #[test]
 fn a_trace_shows_each_phase_of_a_sync() -> Result {
     let sandbox = Sandbox::new()?;

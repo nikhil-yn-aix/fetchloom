@@ -5,8 +5,8 @@
 mod put;
 mod tell;
 
-use std::collections::{BTreeMap, HashSet};
-use std::fs;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::{self, Metadata};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -23,7 +23,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed};
+use crate::project::state::{Look, Placed, Synced};
 use crate::work::Work;
 
 /// what placing did.
@@ -77,6 +77,8 @@ pub(crate) struct Placing<'a> {
     actions: Vec<Action>,
     data_dir: PathBuf,
     survey: Survey,
+    /// the objects found in the cache while looking for missing ones, as they looked then.
+    checked: HashMap<Sha256, Metadata>,
 }
 
 impl<'a> Placing<'a> {
@@ -107,6 +109,7 @@ impl<'a> Placing<'a> {
             actions,
             data_dir,
             survey,
+            checked: HashMap::new(),
         })
     }
 
@@ -126,8 +129,12 @@ impl<'a> Placing<'a> {
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
     /// object a mark puts in doubt is hashed first, and one whose bytes changed is removed, so it
-    /// is listed too; one that cannot be removed is an error.
-    pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+    /// is listed too; one that cannot be removed is an error. the objects found are remembered as
+    /// they looked, for placing.
+    pub(crate) fn missing(
+        &mut self,
+        cache: &Cache,
+    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -144,29 +151,30 @@ impl<'a> Placing<'a> {
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
         let marks = cache.changed();
         let found = place::run_all(&objects, |(digest, size)| {
-            cache.trusted(digest, Some(*size), &marks)
+            cache.trusted_metadata(digest, Some(*size), &marks)
         });
-        let mut present = HashSet::new();
         for ((digest, _), found) in objects.iter().zip(found) {
-            if found.map_err(|doubt| doubtful(&doubt))?.is_some() {
-                present.insert(*digest);
+            if let Some(metadata) = found.map_err(|doubt| doubtful(&doubt))? {
+                self.checked.insert(*digest, metadata);
             }
         }
         let mut seen = HashSet::new();
         Ok(needed
             .into_iter()
-            .filter(|target| !present.contains(&target.sha256))
+            .filter(|target| !self.checked.contains_key(&target.sha256))
             .filter(|target| seen.insert(target.locked.sha256))
             .map(|target| (target.dataset.clone(), target.locked))
             .collect())
     }
 
-    /// removes what no dataset needs, places what is missing or outdated, and records it.
+    /// removes what no dataset needs, places what is missing or outdated, and records it, with
+    /// `synced` marked complete when every file the lock asks for ended up in place.
     pub(crate) fn apply(
         self,
         output: &Output,
         work: &Work,
         cache: &Cache,
+        synced: Option<Synced>,
     ) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("place").entered();
         let Placing {
@@ -177,6 +185,7 @@ impl<'a> Placing<'a> {
             data_dir,
             mut survey,
             unknown,
+            checked: objects,
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
@@ -199,11 +208,19 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         )?;
+        let todo: Vec<(&Target, Option<&Metadata>)> = todo
+            .into_iter()
+            .map(|target| (target, objects.get(&target.sha256)))
+            .collect();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
-        if removed || adopted || needs_writing || !tallies.is_empty() {
+        let complete = failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
+        let synced = synced.map(|synced| Synced { complete, ..synced });
+        let resynced = state.synced != synced;
+        state.synced = synced;
+        if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
             project.write_state(state)?;
         }
         if let Some(error) = failure {
@@ -236,12 +253,55 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        if removed || survey.needs_writing {
+        let forgot = survey.state.synced.take().is_some();
+        if removed || forgot || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
     }
+}
+
+/// data.toml and data.lock as a sync read them before it began.
+pub(crate) struct Seen {
+    pub(crate) manifest: Sha256,
+    /// none when the project had no data.lock yet.
+    pub(crate) lock: Option<Sha256>,
+}
+
+/// what a sync with nothing to do placed, found without reading what archives unpack to or
+/// planning: data.toml and data.lock are byte for byte as a sync that left every file they ask
+/// for in place left them, so the state records exactly those files, and each one still looks as
+/// recorded. anything else, or any doubt the survey raised, takes the long way.
+pub(crate) fn untouched(
+    project: &Project,
+    manifest: &Manifest,
+    survey: &Survey,
+    seen: &Seen,
+) -> Result<Option<Placement>, Error> {
+    let _span = tracing::debug_span!("untouched").entered();
+    let state = &survey.state;
+    let settled = state.synced.is_some_and(|synced| {
+        synced.complete && synced.manifest == seen.manifest && Some(synced.lock) == seen.lock
+    });
+    if !settled
+        || survey.needs_writing
+        || !survey.edited.is_empty()
+        || !survey.elsewhere.is_empty()
+        || !survey.vouched.is_empty()
+        || state
+            .files
+            .iter()
+            .any(|(path, placed)| survey.disk.get(path) != Some(&placed.look))
+    {
+        return Ok(None);
+    }
+    // placing refuses a data folder that became a link, and so does this
+    project.data_dir(manifest)?;
+    Ok(Some(Placement {
+        unchanged: state.files.len() as u64,
+        ..Placement::default()
+    }))
 }
 
 /// carries out every decision short of placing files: counts what stays, records files found to
@@ -585,6 +645,7 @@ mod tests {
             actions,
             data_dir: project.root.join("data"),
             survey,
+            checked: HashMap::new(),
         };
         let output = Output::new(
             Style {
@@ -596,7 +657,9 @@ mod tests {
             false,
             false,
         );
-        placing.apply(&output, &Work::default(), &cache).unwrap();
+        placing
+            .apply(&output, &Work::default(), &cache, None)
+            .unwrap();
         let (recorded, _) = project.state();
         for name in names {
             let checked = recorded.files[&format!("data/weather/{name}.csv")].checked;

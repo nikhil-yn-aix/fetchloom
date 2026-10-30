@@ -4,7 +4,7 @@
 //! it.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, Metadata};
 use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +33,18 @@ impl Cache {
         size: Option<u64>,
         marks: &HashMap<Sha256, u64>,
     ) -> Result<Option<PathBuf>, Doubt> {
+        Ok(self
+            .trusted_metadata(digest, size, marks)?
+            .map(|_| self.object_path(digest)))
+    }
+
+    /// as `trusted`, with the object's metadata as read for the check instead of its path.
+    pub(crate) fn trusted_metadata(
+        &self,
+        digest: &Sha256,
+        size: Option<u64>,
+        marks: &HashMap<Sha256, u64>,
+    ) -> Result<Option<Metadata>, Doubt> {
         let path = self.object_path(digest);
         let Ok(metadata) = fs::metadata(&path) else {
             return Ok(None);
@@ -44,7 +56,7 @@ impl Cache {
         let writable = !permissions.readonly();
         let written = metadata.modified().map_or(0, nanos);
         if !writable && marks.get(digest).is_none_or(|marked| *marked <= written) {
-            return Ok(Some(path));
+            return Ok(Some(metadata));
         }
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => {
@@ -56,7 +68,7 @@ impl Cache {
                         error,
                     })?;
                 }
-                Ok(Some(path))
+                Ok(Some(metadata))
             }
             Ok(_) => {
                 if let Err(err) = self.mark_changed(digest) {

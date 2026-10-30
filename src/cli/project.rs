@@ -11,16 +11,18 @@ use tracing::Instrument as _;
 
 use super::args::{self, Add, Remove};
 use super::sync::disk::{self, Survey};
-use super::sync::place::{self, Placement};
+use super::sync::place::{self, Placement, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
 use crate::archive::{self, Packed};
+use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::{Expect, Fetch, Net};
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
+use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
 use crate::source::{self, Listing, Parsed, Reference};
 
@@ -110,6 +112,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         &Upgrade::Nothing,
         false,
         Some((name.clone(), listing)),
+        None,
     )
     .await;
     let (lock_changed, placement) =
@@ -205,7 +208,7 @@ async fn again(
         )));
     }
     let (lock_changed, placement) =
-        sync_all(work, manifest, old, &Upgrade::Nothing, false, None).await?;
+        sync_all(work, manifest, old, &Upgrade::Nothing, false, None, None).await?;
     let contents = if has_files(work, manifest, name)? {
         format!("its files are in {}", plan::folder(manifest, name))
     } else {
@@ -280,8 +283,15 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let project = find()?;
     let _held = hold(context, &project).await?;
-    let (_, manifest) = project.manifest()?;
-    let old = project.lock()?;
+    let (text, manifest) = project.manifest()?;
+    let read = project.lock_and_text()?;
+    let seen = Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: read
+            .as_ref()
+            .map(|(_, text)| digest::sha256(text.as_bytes())),
+    };
+    let old = read.map(|(lock, _)| lock);
     let work = Loop::new(
         context,
         &project,
@@ -295,6 +305,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         &Upgrade::Nothing,
         args.force,
         None,
+        Some(&seen),
     )
     .await?;
     if !lock_changed
@@ -435,6 +446,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                 &Upgrade::Nothing,
                 false,
                 None,
+                None,
             )
             .await?;
         }
@@ -540,7 +552,9 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
         }))
 }
 
-/// the lock, the cache and the data folder brought in line, in that order.
+/// the lock, the cache and the data folder brought in line, in that order. given data.toml and
+/// data.lock as `seen` before the run, a data folder still as a complete sync left them needs no
+/// plan, and the state records them as this run leaves them.
 async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -548,23 +562,47 @@ async fn sync_all(
     upgrade: &Upgrade,
     force: bool,
     given: Option<(String, Listing)>,
+    seen: Option<&Seen>,
 ) -> Result<(bool, Placement), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir);
     survey.look_again(&work.project.root, &work.cache, force)?;
     disk::audit(work.project, &survey, &work.cache)?;
+    if let Some(seen) = seen
+        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen)?
+    {
+        register(work);
+        return Ok((false, placement));
+    }
     let empty = Lock::default();
     let lock = work
         .relock(manifest, old.unwrap_or(&empty), upgrade, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
     let changed = work.write_lock(old, &lock)?;
-    let placement = work.place(manifest, &lock, force, survey).await?;
+    let synced = seen.and_then(|seen| {
+        let written = if changed {
+            digest::sha256(lock.render().as_bytes())
+        } else {
+            seen.lock?
+        };
+        Some(Synced {
+            manifest: seen.manifest,
+            lock: written,
+            complete: false,
+        })
+    });
+    let placement = work.place(manifest, &lock, force, survey, synced).await?;
     work.drop_unpacked(&lock);
-    // gc keeps what registered projects need, so a failure here only risks a later download
+    register(work);
+    Ok((changed, placement))
+}
+
+/// registers the project with the cache. gc keeps what registered projects need, so a failure
+/// here only risks a later download.
+fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
         tracing::debug!(%err, "could not register the project with the cache");
     }
-    Ok((changed, placement))
 }
 
 /// the project around the current folder.
