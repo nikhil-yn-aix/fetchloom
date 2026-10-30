@@ -4,24 +4,60 @@ one rust crate builds `fetchloom` and `fl`. both call the same library entry poi
 
 ## modules
 
-| module | owns |
-|---|---|
-| `cli` | argument parsing, settings, command orchestration and final reports |
-| `cli/sync` | relocking, download selection, archive work and placement decisions |
-| `project` | manifest, lock and state types, project discovery, metadata writes and project locking |
-| `source` | reference parsing, DOI routing and source listings |
-| `net` | HTTP, retries, rate limits, partial-download streaming, split downloads, credentials and address checks |
-| `cache` | objects, partials, indexes, project registrations, gc and verification |
-| `archive` | format readers, member checks, limits and staged member writes |
-| `threads` | the optional local worker ceiling and archive worker budgets |
-| `plan` | destination expansion and collision checks |
-| `place` | reflinks, hardlinks, copies, directory checks and synced-folder detection |
-| `output` | human rendering, progress, warnings and the JSON envelope |
-| `digest`, `name`, `glob`, `units`, `stop`, `work` | hashes, paths, patterns, formatting, cancellation and counters |
+| module | what it owns | key files and types | its tests |
+|---|---|---|---|
+| entry points | both executable names | `src/main.rs`, `src/bin/fl.rs`, `src/lib.rs`: `main` | `tests/cli/basics.rs` |
+| `cli` | arguments, settings and command reports | `src/cli.rs`: `Context`; `src/cli/args.rs`: `Args`, `Command` | inline tests in both files; `tests/cli/basics.rs`, `tests/cli/caps.rs` |
+| `cli::sync` | relocking, scans and placement decisions | `src/cli/sync.rs`: `Loop`; `src/cli/sync/draft.rs`: `Draft`; `src/cli/sync/disk.rs`: `Survey`; `src/cli/sync/place.rs`: `Placing` | inline tests in draft and place; `src/cli/sync/place/put.rs` tests; `tests/cli/project.rs`, `tests/cli/recovery.rs` |
+| `project` | project discovery, metadata and locking | `src/project.rs`: `Project`; `src/project/manifest.rs`: `Manifest`; `src/project/lock.rs`: `Lock`, `LockedFile`; `src/project/state.rs`: `State`, `Look` | inline tests in those files; `tests/cli/concurrent.rs`, `tests/cli/moved.rs` |
+| `source` | reference parsing and source listings | `src/source.rs`: `Reference`, `Listing`, `Remote`; `src/source/recorded.rs`: `Recorded` | adapter tests under `src/source/`, using `tests/fixtures/sources/` |
+| `net` | HTTP, retries, credentials and download scheduling | `src/net.rs`: `Net`; `src/net/api.rs`: `Api`; `src/net/download.rs`: `Fetch`, `Fetched`; `src/net/download/split.rs`; `src/net/rate.rs`: `Rate` | `src/net/download/tests.rs`, `src/net/download/split/tests.rs`, `src/net/pace/tests.rs`, `src/net/credential_tests.rs`; `tests/cli/split.rs`, `tests/cli/proxy.rs`, `tests/cli/secrets.rs` |
+| `cache` | objects, partials, indexes and upkeep | `src/cache.rs`: `Cache`; `src/cache/partial.rs`: `PartialWriter`; `src/cache/staging.rs`: `Staging` | inline tests in cache and its submodules; `src/cache/partial/tests.rs`, `src/cache/link_tests.rs`; `tests/cli/cache.rs` |
+| `archive` | decoders, member checks and staged writes | `src/archive.rs`: `Packed`, `Limits`, `Unpacked`; `src/archive/store.rs`: `Writers` | `src/archive/tests.rs`; inline submodule tests; `tests/cli/archives.rs`; `tests/fixtures/archives/` |
+| `plan` | destination expansion and collision checks | `src/plan.rs`: `Plan`, `Target` | inline tests; `tests/cli/placing.rs` |
+| `place`, `volume` | links, copies, directory checks and filesystem capabilities | `src/place.rs`: `Placer`, `Method`; `src/place/synced.rs`; `src/volume.rs`: `Volume` | inline tests; `tests/cli/placing.rs`, `tests/cli/moved.rs` |
+| `threads` | local worker ceilings | `src/threads.rs`: `Threads` | inline tests; `tests/cli/caps.rs` |
+| `output`, `work` | rendering, progress and counters | `src/output.rs`: `Output`; `src/output/progress.rs`: `Bar`; `src/work.rs`: `Work`, `Counts` | inline output tests; `tests/cli/progress.rs`, `tests/cli/get.rs`; `tests/cli/snapshots/` |
+| `digest`, `name`, `glob` | hashes, safe paths and selection patterns | `src/digest.rs`: `Sha256`, `Md5`; `src/name.rs`; `src/glob.rs`: `Glob` | inline tests in each file |
+| `error`, `stop`, `units` | error kinds, cancellation and units | `src/error.rs`: `Error`, `Kind`; `src/stop.rs`: `Stop`; `src/units.rs` | inline error and units tests; `tests/cli/recovery.rs`, `tests/cli/unattended.rs` |
+
+```mermaid
+flowchart TD
+    entry[fetchloom and fl] --> cli
+    cli --> project
+    cli --> sync[cli::sync]
+    cli --> output
+    sync --> source
+    source --> net
+    sync --> plan
+    sync --> archive
+    sync --> place
+    net --> cache
+    archive --> cache
+    place --> cache
+```
 
 there is no separate model crate. the python module in `python/fetchloom` has no bindings: it runs the installed `fetchloom` with `--json`. core types live with their owners. `net` writes through `cache`; `cli/sync/place` combines the plan, state and filesystem. dependencies such as `url::Url` cross module boundaries.
 
 ## the project loop
+
+```mermaid
+flowchart TD
+    read[read manifest, lock and state] --> scan[scan placed files]
+    scan --> settled{settled and unchanged?}
+    settled -->|yes| done[register project and finish]
+    settled -->|no| relock[relock and write changed lock]
+    relock --> missing{member records missing?}
+    missing -->|yes| expand[download and unpack unknown trees]
+    missing -->|no| plan[plan destinations and actions]
+    expand --> plan
+    plan --> download[download missing objects]
+    download --> unpack[unpack needed archives]
+    unpack --> place[remove and place files]
+    place --> state[write changed state]
+    state --> register[drop packed objects and register project]
+    register --> finish[done]
+```
 
 1. read the manifest, lock and local state. keep lock entries whose spec hashes match, unless an upgrade requests them again.
 2. resolve changed entries and filter their source listings. known hashes may come from the source, the old lock or the MD5 index. download unknown hashes and unpack new archives to learn their tree hashes.
@@ -30,7 +66,7 @@ there is no separate model crate. the python module in `python/fetchloom` has no
 5. fetch only the bytes needed by place and replace actions. a missing archive member requires the original archive again when it is not cached. check pinned size, SHA-256 and any stated MD5 on downloads.
 6. remove unwanted unchanged tracked files, place the targets, and write state if it changed or settles files hashed for being as new as the old state. drop unneeded packed objects and register the project for cache retention.
 
-the state also records the SHA-256 of `data.toml` and `data.lock` as `sync` leaves them, and whether every file they ask for ended up in place. when the next `sync` reads both byte for byte the same after such a complete run, the state records exactly the files they ask for. if the scan in step 1 then finds each of them as recorded, with nothing hashed as racy or put in doubt by a mark, the run is done: it reads no archive member records, does not relock and plans nothing. the scan still runs, so an edit still sends the run through every step. a run that left a file out, kept an edited one or failed records itself as incomplete, and other commands that change the state drop the record.
+the state also records the SHA-256 of `data.toml` and `data.lock` as `sync` leaves them, and whether every file they ask for ended up in place. when the next `sync` reads both byte for byte the same after such a complete run, the state records exactly the files they ask for. if the scan in step 1 then finds each of them as recorded, with nothing hashed as racy or put in doubt by a mark, the run is done: it reads no archive member records, does not relock and plans nothing. the scan still runs, so an edit still sends the run through every step. a run that left a file out, kept an edited one or failed records itself as incomplete, and other commands that change the state drop the record. the shortcut still registers the project for cache retention.
 
 `add` first resolves its new reference, sometimes downloading a single file to learn its name. it writes the manifest before syncing and attempts to restore that manifest on sync failure. `remove` changes the manifest and lock, then removes unwanted tracked files without downloading.
 
@@ -56,19 +92,22 @@ DOIs use `https://doi.org/api/handles/<doi>`. the JSON handle's URL value select
 
 source tests implement `Api` with in-memory recorded responses from `tests/fixtures/sources`. they are source-specific tests, not a shared conformance suite. current adapter coverage is in [scope](scope.md#sources), and recorded references are in [formats](formats.md#what-each-source-records).
 
-| source | how | notes |
-|---|---|---|
-| URL | one GET | the first download defines the SHA-256 |
-| zenodo | records API | MD5 per file, rate limit headers, old `/record/` URLs redirect |
-| figshare | articles API | MD5, an id with a version pins it |
-| dataverse | native API, `format=original` for tabular files | checksum type per file, MD5 on harvard |
-| osf | files API, folders walked, `links.next` paging | SHA-256 and MD5 |
-| hugging face | tree API at a commit, `/resolve/` for bytes | SHA-256 for large files, served through a CDN with range support. a branch is resolved to its commit before locking |
-| kaggle | API view for the newest version, list in pages of 200, then each file on its own with `raw=true`, redirected to signed storage | no checksum. public datasets need no token; a 403 can mean private or missing. competitions are refused |
-| google drive | direct downloads from `drive.usercontent.google.com`, with a confirmation-page handler | quota pages ask you to retry later. `open?id=` follows drive's redirect; folders are walked through `embeddedfolderview` |
-| dropbox | the shared link with `dl=1` | a folder arrives as one zip, treated as an archive |
-
 ## the cache
+
+```mermaid
+flowchart LR
+    root[cache root] --> objects[objects: payloads]
+    root --> partial[partial: resumable downloads]
+    root --> tmp[tmp: temporary writes]
+    tmp --> staging[staging: per-archive .stage folders]
+    root --> unpacked[unpacked: member trees]
+    root --> urls[urls: revalidation records]
+    root --> stated[stated: checksum mappings]
+    root --> changed[changed: object marks]
+    root --> projects[projects: registrations]
+```
+
+[formats](formats.md#the-cache) defines the paths and records.
 
 objects are read-only files named by SHA-256. an ordinary download writes to a partial file, computes its hash, flushes and seals it, then publishes under that hash. the caller checks expected size and checksums after publication; a rejected transfer can leave an unreferenced object for gc.
 
@@ -76,7 +115,7 @@ publication normally uses a hardlink that fails if the destination exists. the f
 
 partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and, for a split download, each range finished past it with its own hash. they are saved about once a second. resuming rehashes that prefix before appending, keeps the ranges whose bytes still match and fetches the rest.
 
-cache lookup checks file type and known size. writable objects and objects no newer than their change marks are hashed too, so retained damaged bytes are cache misses. `cache verify` rehashes every object and marks damage without deleting it. the [layout and records](formats.md#the-cache) separate objects from URL history, MD5 mappings, archive trees, change marks and project registrations.
+cache lookup checks file type and known size. writable objects and objects no newer than their change marks are hashed too, so retained damaged bytes are cache misses. `cache verify` rehashes every object and marks damage without deleting it.
 
 successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable lock stops gc. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
 
@@ -100,20 +139,36 @@ when a recorded path is absent from a listing, the scan looks for exactly one li
 
 manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; a project's data folder is checked again, while the folder `get` writes into may itself be a link. deletion rechecks its parent chain the same way. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
 
-metadata files other than the [owner record](formats.md#the-fetchloom-folder) stage in `.fetchloom/` when it exists, otherwise beside their destination; they are flushed and renamed into place. data-file replacement removes the old file first. copies are written to hidden `.fetchloom-<16 hex digits>.copy` files in the destination folder, then published without overwriting an existing name. a hard interruption can leave a missing destination or a hidden copy temporary, but never partial bytes at the destination name. `get` ignores these copy temporaries on its next run. an interruption after the new file is placed and before the state is written leaves the locked bytes recorded as the old file. a changed file of the locked size is therefore hashed, and one that holds the locked bytes is adopted with its new size and time. if `copy = true` asks for a writable file, a read-only match is replaced instead.
+metadata files other than the [owner record](formats.md#the-fetchloom-folder) stage in `.fetchloom/` when it exists, otherwise beside their destination; they are flushed and renamed into place. data-file replacement removes the old file first. copies are written to hidden `.fetchloom-<16 hex digits>.copy` files in the destination folder, then published without overwriting an existing name. the copy path does not flush those bytes before the state write; [plan](plan.md#pending-code) tracks that gap. a hard interruption can leave a missing destination or a hidden copy temporary, but never partial bytes at the destination name. `get` ignores these copy temporaries on its next run. an interruption after the new file is placed and before the state is written leaves the locked bytes recorded as the old file. a changed file of the locked size is therefore hashed, and one that holds the locked bytes is adopted with its new size and time. if `copy = true` asks for a writable file, a read-only match is replaced instead.
 
 sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays. state records each placed file's size and time as read right after that file is placed, so an edit made while later files are placed shows as an edit too.
 
-state stores hash, method, size, modification time, whether the file was placed writable, and when fetchloom last knew it held its locked bytes, with no file id. a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. an adopted file that is the cached object under another name, as a run cut off before its state write leaves one, is recorded as a hardlink, so the audit covers it. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
+a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. an adopted file that is the cached object under another name, as a run cut off before its state write leaves one, is recorded as a hardlink, so the audit covers it. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
 
 ## the network
+
+```mermaid
+flowchart TD
+    request[request] --> stream[read response chunks]
+    stream --> writer[writer thread: write and hash]
+    stream --> slow{eligible stream is slow?}
+    slow -->|yes| handover[drain writer and hand over response]
+    handover --> ranges[adaptive range streams]
+    ranges --> writer
+    writer --> checkpoint[save hashed checkpoint]
+    checkpoint --> writer
+    writer -->|complete| flush[flush and seal]
+    flush --> publish[publish object]
+    publish --> check[check expected size and hashes]
+```
+
+checkpoints record hashes without flushing the payload each time. a resume rechecks those bytes; publication waits for the final payload flush.
 
 reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is selected as the crypto provider. the system proxy settings are enabled. the user agent is `fetchloom/<version>`.
 
 | control | value |
 |---|---|
-| active network operations | 8 by default; `FETCHLOOM_JOBS` accepts 1 to 256 |
-| download bandwidth | uncapped by default; `FETCHLOOM_RATE` sets one shared byte budget for all response bodies, split streams included |
+| active network operations | 8 by default; [settings](formats.md#settings) defines the override |
 | per-host slots | 4, keyed by the initial hostname, including while following redirects |
 | connect timeout | 45 s |
 | send and response-header deadline | 75 s per hop, combining connect and response allowances |
@@ -123,7 +178,6 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 | transient retry budget | 5 attempts including the first |
 | backoff | jittered exponential delay; `Retry-After` is a floor; above 60 s fails instead of waiting |
 | rate limit waits | until the host's limit resets, when that is within 120 s; at most 10 for one request before they count as attempts |
-| split downloads | files of at least 64 MiB, once their one stream moved less than 1 MB/s over 2 s; then up to 8 streams within the host's free slots. `FETCHLOOM_SPLIT=0` never splits, and `FETCHLOOM_SPLIT=1` splits from the first answer. under `FETCHLOOM_RATE` a stream is never judged slow, since more streams would share the same cap |
 | download diversion pages | at most 3, each at most 4 MiB, when a source supplies a page handler |
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
@@ -140,7 +194,7 @@ a 429 uses up the limits it names, or all it states, for at least its `Retry-Aft
 
 ### split downloads
 
-a download of at least 64 MiB may run over several streams when the server answers ranges, by a `206` or `Accept-Ranges: bytes`, and something proves the pieces belong to one version: a pinned SHA-256, or a validator for `If-Range`. it still starts as one stream, written in order like any other, and measures what that stream moves in each 2 s window. once a window moved less than 1 MB/s while at least 16 MiB are left, the stream hands over: its writer, and the rest of its answer, read exactly up to the bytes the writer holds, go on as the first stream of the split. a stream that keeps up never enters the split path: in the lab, splitting from the first answer made a 1 GiB file 17% slower on lan, where one stream moved about 180 MiB/s. `FETCHLOOM_SPLIT=0` keeps every file to one stream, and `FETCHLOOM_SPLIT=1` splits from the first answer, to measure the split path. a resumed download whose checkpoint holds ranges past its prefix goes to the split path at once, since only it fills the gaps between them.
+a download of at least 64 MiB may run over several streams when the server answers ranges, by a `206` or `Accept-Ranges: bytes`, and something proves the pieces belong to one version: a pinned SHA-256, or a validator for `If-Range`. it still starts as one stream, written in order like any other, and measures what that stream moves in each 2 s window. once a window moved less than 1 MB/s while at least 16 MiB are left, the stream hands over: its writer, and the rest of its answer, read exactly up to the bytes the writer holds, go on as the first stream of the split. a stream that keeps up never enters the split path. [performance](performance.md#adaptive-splitting) records the trigger measurements; [settings](formats.md#settings) defines the overrides. a bandwidth-capped stream is not judged slow. with no bandwidth cap and splitting enabled, a resumed download whose checkpoint holds ranges past its prefix goes to the split path at once, since only it skips those saved ranges.
 
 the split path adds a second stream at once when the one stream's rate is known, and otherwise after one window. every 250 ms it checks its rate over 2 s windows, and adds a stream while each added stream raised the total by at least 15%, up to 8 and only when the host and the overall limit have a slot that nothing else waits for. added streams use HTTP/1.1 connections of their own, since streams of one HTTP/2 connection share its window, and each asks for its range with `If-Range`. a stream that finishes takes the upper half of the largest range left when that half is at least 8 MiB. a `200` answer to a range, or three failed streams, stop the splitting for that file, and the rest comes over one stream. a range answer from another version restarts the download. a split download whose hash does not match is restarted once as one stream before it fails, as a resumed one is.
 
@@ -190,7 +244,7 @@ commands that modify the project acquire the OS lock on `.fetchloom/lock`, then 
 
 human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 
-`-v` adds details and total counters; `-vv` enables debug events. `FETCHLOOM_TRACE` records instrumented spans and events: the command, source resolution, and the phases of a project sync from reading the manifest, lock and state through scanning, relocking, planning and placing. downloads and unpacking have no spans of their own. there is no custom panic report. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
+there is no custom panic report. [engineering](engineering.md#profiling) covers traces and profilers. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
 
 ## adding a source
 

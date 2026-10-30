@@ -15,12 +15,15 @@
 
 every source was checked against the live service, and CI runs every test on linux and windows.
 
+## pending code
+
+1. flush copied files before the state is written, if a measurement shows the cost is small. `src/place.rs` copies into a temporary and publishes it without a payload flush; `src/cli/sync/place.rs` writes state after placement. the state write flushes its own record, not the copied files.
+2. address the remaining [budget misses](performance.md#budgets): the 1 GiB local-download gap to curl, placing 10,000 cached files on windows under load, and peak memory when adding or placing 100,000 files on linux. [memory](performance.md#memory) records the reduced placement peak and the allocator experiment. [small-file unpacking](performance.md#small-files-on-windows) is limited by defender's trust-dependent scans; changing flushes or publication does not offer a measured fix. adaptive splitting and the HTTP/2 comparison need no further budget work from these measurements.
+
 ## next
 
-1. flush copied files before the state is written, if a measurement shows the cost is small.
-2. close the budget misses [performance](performance.md#budgets) records: placing 10,000 files on windows takes 2.7 s where bare links take 1.3 s; adding 100,000 files peaks at 162 MiB on linux; small archive members take 1.4 to 1.6 times bsdtar's time on windows, where defender scans each new file as it closes, and bsdtar's files scan faster for a reason defender's performance recorder could show with an administrator; http/2 is on but unmeasured, and since four requests run per host it can save only a few TLS handshakes, so measure it on a real many-file dataset before keeping or removing it; a 1 GiB download runs at half of curl's speed on this machine, bound by hashing and the flush.
-3. publish 0.1.0 as [releases](engineering.md#releases) lists, with the wheels uploaded to PyPI by hand. then let release.yml publish them through a PyPI trusted publisher, and sign the windows binaries: on a managed windows machine, defender's ransomware rule blocked the unsigned `fl.exe` from a release build while `fetchloom.exe` ran. the source install in the README clones the default branch, which holds the old project until the rebuild replaces it.
-4. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
+1. publish 0.1.0 using [releases](engineering.md#releases), with wheels uploaded to PyPI by hand. then configure a PyPI trusted publisher for release.yml and sign the windows binaries. on a managed windows machine, defender's ransomware rule blocked the unsigned `fl.exe` from a release build while `fetchloom.exe` ran. check that a source install from the default branch builds the release before publishing it.
+2. have the maintainer and two or three researchers use real projects. record failed links, confusing output and recovery work before expanding the command set.
 
 ## a release is ready when
 

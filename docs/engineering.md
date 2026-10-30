@@ -6,7 +6,7 @@
 
 ```sh
 cargo build --locked
-cargo run -- --version
+cargo run --locked -- --version
 ```
 
 the compression dependencies need native build tools. keep `Cargo.lock` when building this application. [README](../README.md#install) covers source installation.
@@ -15,32 +15,42 @@ the compression dependencies need native build tools. keep `Cargo.lock` when bui
 
 parsers, digest types, glob matching and destination expansion can be tested as functions over data. project and cache modules own disk records. the CLI orders their effects; the HTTP layer also writes through the cache. [architecture](architecture.md#modules) maps the modules.
 
+the cache writes no `layout` marker; [formats](formats.md#the-cache) defines its records.
+
 `Api` is the source-listing test seam. tests also inject environment readers and archive limits. retry timing still uses the real clock and randomness. dependencies are not all hidden behind private adapters: `url::Url`, for example, crosses module boundaries.
 
-the crate forbids unsafe code. cargo configures warnings for missing public docs, unreachable public items and clippy's pedantic group, plus unwraps, expects, panics, debug prints and unfinished-code macros. errors use a hand-written `Error` and `Kind`, not `thiserror`. dead code fails the build like any other warning.
+the crate forbids unsafe code. cargo configures warnings for missing public docs, unreachable public items and clippy's pedantic group, plus unwraps, expects, panics, debug prints and unfinished-code macros. errors use a hand-written `Error` and `Kind`, not `thiserror`. the clippy check treats every warning, including dead code, as an error.
 
 keep modules focused and comments useful. there is no enforced file-length or function-length limit. lint exceptions need reasons. writing and commit rules are in [style](style.md).
 
 ## checks
 
+start with the test that covers your change:
+
+```sh
+cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers_and_writers -- --exact
+cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_and_get_take -- --exact
+```
+
+the first selects one library test. the second runs one real-binary integration test, which compares the option sentence in `docs/scope.md` with help. other markdown examples are not executed.
+
+widen to the affected module when the individual test passes:
+
+```sh
+cargo test --locked --lib source::zenodo::
+cargo test --locked --lib archive::
+cargo test --locked --test cli placing::
+```
+
+choose the selector for the code you changed. `cargo test --locked --test cli` runs every CLI case; reserve it for changes that need that coverage. at a milestone, before merging, or after changes across command boundaries, run the full gate:
+
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-after a dependency change, also run `cargo deny check`, installed with `cargo install --locked cargo-deny`.
-
-run the smallest relevant selector while working, then the full suite when the change crosses command boundaries:
-
-```sh
-cargo test --locked --test cli
-cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_and_get_take
-cargo test --locked source::zenodo
-cargo test --locked archive::
-```
-
-the first command runs the real-binary integration target. the second checks the option sentence in `docs/scope.md`. other markdown examples are not executed by the test suite.
+after a dependency change, also run `cargo deny --locked check advisories licenses bans sources`. install it with `cargo install --locked cargo-deny` if it is missing.
 
 ## test layers
 
@@ -60,6 +70,57 @@ the CLI harness creates a private working directory, cache and home. it removes 
 snapshot filters replace sandbox paths, ports and durations, normalize path separators, and remove variable rates. review the unfiltered output when changing wording; a filtered snapshot does not prove every displayed value is right. snapshots and JSON counters check different contracts.
 
 for a bug fix, first add a test that fails for the reported behavior. use the lowest layer that demonstrates it. add a CLI case when exit codes, stdout, files left on disk or cross-command recovery are part of the bug. do not weaken an assertion to hide a failure.
+
+## profiling
+
+use a release build for timings:
+
+```sh
+cargo build --locked --release
+```
+
+`-v` prints work counters; `--json` includes them in the `work` field. [formats](formats.md#work-counters) defines what each counter counts. `-vv` enables debug events.
+
+on linux, record a timeline with:
+
+```sh
+FETCHLOOM_TRACE=run.json target/release/fetchloom sync
+```
+
+on windows:
+
+```powershell
+$env:FETCHLOOM_TRACE = "run.json"
+.\target\release\fetchloom.exe sync
+Remove-Item Env:\FETCHLOOM_TRACE
+```
+
+open `run.json` in [perfetto](https://ui.perfetto.dev). spans cover the command, source resolution and sync phases: reading metadata, scanning, relocking, planning and placing. downloads and unpacking have no spans of their own, so use a CPU profile when the surrounding span does not explain the cost.
+
+samply records CPU samples on linux:
+
+```sh
+samply record target/release/fetchloom sync
+```
+
+on windows, samply needs the windows performance toolkit. to keep symbols in a linux profiling build while retaining release optimizations:
+
+```sh
+CARGO_PROFILE_RELEASE_DEBUG=line-tables-only CARGO_PROFILE_RELEASE_STRIP=none cargo build --locked --release
+```
+
+heaptrack on linux records allocations. replace `<binary>` with the release executable, `<arguments>` with its command arguments, and `<recording>` with the output path heaptrack prints:
+
+```text
+heaptrack -o out <binary> <arguments>
+heaptrack_print <recording>
+```
+
+use this order for a memory investigation: measure peak RSS without the profiler, find retained allocations with heaptrack, then repeat the unprofiled workload after the change. profiler timings include its overhead. [performance](performance.md#memory) records the large-project measurement.
+
+## benchmarks
+
+[benchmarks](benchmarks.md) defines fixtures, network profiles, run order and comparison rules. [bench/](../bench/) holds the harness and live source matrix. keep the cache state, build, machine load and repetitions with each result; interleave compared builds when the machine or live service varies. [performance](performance.md#budgets) holds the budgets and measurements.
 
 ## fuzzing
 
@@ -87,7 +148,7 @@ cargo bolero builds with the `fuzz` profile in `Cargo.toml`. without the two fol
 
 [ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks. [release.yml](../.github/workflows/release.yml) builds a release from a version tag, as [releases](#releases) describes.
 
-nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. fuzzing uses bolero, described above. `bench/` holds the benchmark harness and the live source matrix; [benchmarks](benchmarks.md) is their method. add tooling with the job it will run; do not document it as an existing gate first.
+nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. fuzzing uses bolero, described above. add tooling with the job it will run; do not document it as an existing gate first.
 
 ## releases
 
@@ -155,7 +216,7 @@ FETCHLOOM_DOWNLOAD_URL=http://127.0.0.1:8000 sh install.sh
 
 on windows, set `$env:FETCHLOOM_DOWNLOAD_URL` and run `.\install.ps1`. to keep your own install apart, set `HOME` on linux or `LOCALAPPDATA` on windows to a scratch folder; the windows installer still adds that folder to your user PATH.
 
-`data.lock` and JSON each use format version 1. format readers and recovery behavior are in [formats](formats.md); a version field alone is not a migration system.
+check format changes against the readers and recovery behavior in [formats](formats.md).
 
 ## license
 
