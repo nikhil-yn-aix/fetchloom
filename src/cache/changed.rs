@@ -1,6 +1,6 @@
 //! objects found changed, remembered after replacement so projects can check their old hardlinks.
 //! marked objects stay at their names until a verified copy replaces them. lookup hashes objects
-//! no newer than their marks, including equal timestamps on filesystems with coarse clocks.
+//! no newer than their marks, or newer by less than a coarse clock's two second step.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -81,13 +81,13 @@ impl Cache {
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
-    /// dates it before `source` was written so the replacement stays out of doubt, by two seconds
-    /// since FAT keeps times in two second steps.
+    /// dates it before `source` was written so the replacement stays out of doubt, by three of
+    /// FAT's two second steps: the mark's own time may round up one step and doubt allows another.
     pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
         let written = fs::metadata(source)?.modified()?;
         self.mark_changed(digest)?;
         let before = written
-            .checked_sub(Duration::from_secs(2))
+            .checked_sub(Duration::from_secs(6))
             .unwrap_or(written);
         fs::File::options()
             .write(true)
@@ -148,8 +148,14 @@ impl Cache {
 
 pub(super) fn doubted(metadata: &fs::Metadata, marked: Option<u64>) -> bool {
     !metadata.permissions().readonly()
-        || marked.is_some_and(|marked| marked >= metadata.modified().map_or(0, nanos))
+        || marked.is_some_and(|marked| {
+            marked.saturating_add(COARSE) >= metadata.modified().map_or(0, nanos)
+        })
 }
+
+/// the step of the coarsest clock a cache may sit on: FAT and exFAT round a file's time up to
+/// two seconds, so an object edited just before its mark can look newer than the mark.
+const COARSE: u64 = 2_000_000_000;
 
 /// `time` in nanoseconds since 1970, as projects record the times of their files.
 fn nanos(time: SystemTime) -> u64 {
