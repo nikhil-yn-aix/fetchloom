@@ -140,7 +140,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
-            output.warn(&format!("object {digest} had changed and was removed"));
+            output.warn(&format!("object {digest} had changed and awaits replacement"));
         }
     }
     let verb = if checked.unreadable.is_empty() {
@@ -161,13 +161,13 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         );
     }
     error = error.detail(format!(
-        "{} could not be removed:",
+        "{} could not be marked for repair:",
         units::count(checked.stuck.len() as u64, "of them", "of them")
     ));
     for digest in checked.stuck.iter().take(5) {
         error = error.detail(cache.object_path(digest).display().to_string());
     }
-    Err(error.help("delete them by hand, then run `fetchloom cache verify` again. if others write to this cache, check who changed them"))
+    Err(error.help("check permissions on the cache's changed folder, then run `fetchloom cache verify` again"))
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to

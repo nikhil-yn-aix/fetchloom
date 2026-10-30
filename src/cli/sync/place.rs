@@ -125,8 +125,8 @@ impl<'a> Placing<'a> {
 
     /// the locked files whose bytes placing needs and the cache lacks, each once, with the
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
-    /// object a mark puts in doubt is hashed first, and one whose bytes changed is removed, so it
-    /// is listed too; one that cannot be removed is an error.
+    /// object a mark puts in doubt is hashed first, and changed bytes are listed for replacement.
+    /// a failed read, seal or change mark stops the run.
     pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
@@ -533,13 +533,12 @@ pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
     Error::io(format_args!("could not place {}", path.display()), err)
 }
 
-/// what stops a run at an object that could not be checked or sealed, or whose changed bytes
-/// could not be removed.
+/// what stops a run at an object that could not be checked, sealed or marked for repair.
 pub(crate) fn doubtful(doubt: &Doubt) -> Error {
     let object = doubt.object.display();
     if doubt.changed {
         Error::io(
-            format_args!("could not remove {object}, a cached file whose bytes changed"),
+            format_args!("could not mark {object}, a cached file whose bytes changed"),
             &doubt.error,
         )
     } else {

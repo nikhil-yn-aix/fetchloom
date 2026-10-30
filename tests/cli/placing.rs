@@ -824,8 +824,7 @@ fn iris_object(sandbox: &Sandbox, project: &Path) -> Result<std::path::PathBuf> 
         .join(&digest[2..]))
 }
 
-/// marks `object` as changed, as `cache verify` does when it cannot remove an object whose bytes
-/// changed.
+/// marks `object` as changed, as `cache verify` does before a new copy replaces its bytes.
 fn mark(sandbox: &Sandbox, object: &Path) -> Result {
     let fan = object
         .parent()
@@ -890,7 +889,7 @@ fn hold(path: &Path) -> Result<Option<Unwritable>> {
     Ok(Some(held))
 }
 
-/// a mark on an object still in the cache, as `cache verify` leaves one it could not remove, whose
+/// a mark on an object still in the cache, as `cache verify` leaves one awaiting repair, whose
 /// bytes changed while its size and time stayed. sync hashes the object before it places anything
 /// from it, so the project sharing the link gets the locked bytes from a new download instead of
 /// the changed object linked again.
@@ -967,12 +966,15 @@ fn a_copy_is_never_made_from_a_marked_object() -> Result {
     Ok(())
 }
 
-/// a marked object another program holds open cannot be removed. sync stops with an error that
-/// names it, rather than placing its bytes again as if they were the locked ones.
+/// a marked object another program holds open cannot be replaced. sync names the refused object
+/// and leaves its old bytes in place.
 #[test]
-fn a_marked_object_that_cannot_be_removed_stops_sync() -> Result {
+fn a_marked_object_that_cannot_be_replaced_stops_sync() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
     let Some(other) = shared_and_edited(&sandbox, &server)? else {
         return Ok(());
     };

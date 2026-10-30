@@ -205,8 +205,7 @@ fn known(
 }
 
 /// hashes the cached objects in doubt that this run would take for `files`, and those an archive
-/// among them unpacked to, before anything downloads, so one whose bytes changed is removed and
-/// downloads again.
+/// among them unpacked to, before anything downloads, so changed bytes are marked for replacement.
 fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Result<(), Error> {
     let marks = cache.changed();
     for (remote, name) in files.iter().zip(names) {

@@ -643,9 +643,9 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
 }
 
 #[test]
-fn a_changed_object_fails_verify_and_leaves_the_cache() -> Result {
+fn a_changed_object_fails_verify_and_waits_for_replacement() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let objects = sandbox.cache().join("objects");
     let fan = fs::read_dir(&objects)?
@@ -663,8 +663,11 @@ fn a_changed_object_fails_verify_and_leaves_the_cache() -> Result {
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(30));
     let stderr = text(&verify.stderr)?;
-    assert!(stderr.contains("had changed and was removed"), "{stderr}");
-    assert!(!object.exists());
+    assert!(stderr.contains("had changed and awaits replacement"), "{stderr}");
+    assert_eq!(fs::read(&object)?, b"damaged on disk");
+    let synced = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(&object)?, IRIS);
     Ok(())
 }
 

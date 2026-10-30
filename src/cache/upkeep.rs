@@ -51,7 +51,7 @@ pub(crate) struct Checked {
     pub(crate) bytes: u64,
     /// objects whose bytes no longer matched their name.
     pub(crate) changed: Vec<Sha256>,
-    /// changed objects that could not be removed, so they are still in the cache.
+    /// changed objects whose repair marks could not be written.
     pub(crate) stuck: Vec<Sha256>,
     /// objects that could not be read, left untouched and without a new change mark.
     pub(crate) unreadable: Vec<Sha256>,
@@ -198,7 +198,7 @@ impl Cache {
         removed
     }
 
-    /// hashes every object again on `threads` threads and removes any whose bytes changed.
+    /// hashes every object again on `threads` threads and marks changed bytes for replacement.
     /// `progress` hears each object's size after its read attempt.
     pub(crate) fn verify_all(&self, threads: usize, progress: &(dyn Fn(u64) + Sync)) -> Checked {
         let objects = self.objects();
@@ -226,13 +226,12 @@ impl Cache {
                             }
                             Ok(_) => {}
                         }
-                        self.remember_changed(&object.digest);
-                        let removed = self.volume.remove(&object.path).is_ok();
+                        let marked = self.mark_changed(&object.digest).is_ok();
                         let mut found = checked
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         found.changed.push(object.digest);
-                        if !removed {
+                        if !marked {
                             found.stuck.push(object.digest);
                         }
                     }
@@ -356,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn verifying_removes_objects_whose_bytes_changed() {
+    fn verifying_marks_objects_whose_bytes_changed() {
         let (_dir, cache) = cache();
         let good = store(&cache, b"good");
         let bad = store(&cache, b"bad!");
@@ -436,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_object_that_cannot_be_removed_is_still_reported() {
+    fn a_changed_object_held_open_is_still_marked() {
         let (_dir, cache) = cache();
         let bad = store(&cache, b"bad!");
         let object = cache.object_path(&bad.digest);
@@ -445,11 +444,12 @@ mod tests {
         let checked = cache.verify_all(2, &|_| {});
         drop(held);
         assert_eq!(checked.changed, vec![bad.digest]);
-        assert_eq!(checked.stuck.is_empty(), !object.exists());
+        assert!(checked.stuck.is_empty());
+        assert_eq!(fs::read(&object).unwrap(), b"BAD!");
     }
 
     #[test]
-    fn objects_whose_bytes_rotted_are_removed() {
+    fn objects_whose_bytes_rotted_wait_for_replacement() {
         for (_dir, cache) in [cache(), fat()] {
             let rotten = [store(&cache, b"rot1"), store(&cache, b"rot2")];
             for object in &rotten {
@@ -459,12 +459,13 @@ mod tests {
             }
             assert!(!cache.verify(&rotten[0].digest).unwrap());
             let checked = cache.verify_all(2, &|_| {});
-            assert_eq!(checked.changed, vec![rotten[1].digest]);
+            assert_eq!(checked.changed.len(), 2);
+            assert!(rotten.iter().all(|object| checked.changed.contains(&object.digest)));
             assert_eq!(checked.stuck, vec![]);
             assert!(
                 rotten
                     .iter()
-                    .all(|object| !cache.object_path(&object.digest).exists())
+                    .all(|object| cache.object_path(&object.digest).exists())
             );
         }
     }
