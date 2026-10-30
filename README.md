@@ -6,7 +6,44 @@ a shared local cache reuses the bytes across projects. files land in `data/` by 
 
 ## install
 
-build from source with rust 1.99.1 and a C toolchain:
+on linux:
+
+```sh
+curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
+```
+
+on windows, in powershell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
+```
+
+the installer downloads the latest release, checks it against the release's `SHA256SUMS`, and puts `fetchloom` and `fl` in `~/.local/bin` on linux or `%LOCALAPPDATA%\Programs\fetchloom\bin` on windows. when that folder is not on your PATH, it adds it to your shell profiles on linux or to your user PATH on windows. to install another version, give it as the first argument or in `FETCHLOOM_VERSION`:
+
+```sh
+curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh -s -- 0.1.0
+```
+
+the release binaries are x86_64 only: windows 10 or later, and linux with any C library, since they are static.
+
+with pip, on python 3.9 or later:
+
+```sh
+pip install fetchloom
+```
+
+the wheel installs both commands and a python module that runs `fetchloom` with `--json`:
+
+```python
+import fetchloom
+
+iris = fetchloom.path("iris")  # a pathlib.Path; syncs the project first if iris is missing
+project = fetchloom.sync()
+```
+
+a failure raises `fetchloom.Error`, whose `kind` and `message` come from the JSON error. [agents](docs/agents.md#error-kinds-and-exit-codes) lists the kinds. both functions take `project=`, a folder in the project, which defaults to the working directory.
+
+from source, with rust 1.99.1 and a C toolchain:
 
 ```sh
 git clone https://github.com/nikhil-yn-aix/fetchloom.git
@@ -19,7 +56,7 @@ fetchloom --version
 fetchloom 0.1.0
 ```
 
-both `fetchloom` and `fl` are installed. use `fetchloom` in powershell, where `fl` already means `Format-List`. python wheels and standalone installers are not built yet.
+each way installs both `fetchloom` and `fl`. use `fetchloom` in powershell, where `fl` already means `Format-List`.
 
 ## quick start
 
@@ -99,7 +136,7 @@ files are read-only by default. `sync` preserves hand edits unless you use `--fo
 | [decisions](docs/decisions.md) | reasons behind the design |
 | [plan](docs/plan.md) | built milestones and remaining work |
 | [performance](docs/performance.md) | measurements and budgets |
-| [engineering](docs/engineering.md) | building and testing |
+| [engineering](docs/engineering.md) | building, testing and releases |
 | [style](docs/style.md) | writing rules |
 
 ## license
