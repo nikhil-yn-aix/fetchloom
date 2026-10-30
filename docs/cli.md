@@ -99,7 +99,7 @@ on another run, a known SHA-256 or MD5 can find cached bytes. an unpinned URL is
 
 a destination with unrelated top-level entries is refused. hidden `.fetchloom-<16 hex digits>.copy` files left by interrupted copies are ignored. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
 
-in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
+in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. project commands point to the dataset's `exclude` setting in `data.toml` instead of suggesting a command-line flag. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
 
 ## archives
 
@@ -147,8 +147,8 @@ approval is required above 1 GiB, not at exactly 1 GiB:
 `--yes` or `-y` approves. questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer:
 
 ```text
-✗ downloading huge.bin needs 2.0 GiB, and there is no terminal to ask first
-  help: add --yes to download anyway
+✗ downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here
+  help: add --yes to approve this download
 ```
 
 at a download question, the first ctrl-c stops the command with the interrupted error and exit code 130. during other asynchronous work, the first ctrl-c asks it to stop and keep resumable bytes. a second exits immediately with code 130.
