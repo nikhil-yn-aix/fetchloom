@@ -63,11 +63,16 @@ impl Project {
 
     /// data.lock, or nothing when the project has none yet.
     pub(crate) fn lock(&self) -> Result<Option<Lock>, Error> {
+        Ok(self.lock_and_text()?.map(|(lock, _)| lock))
+    }
+
+    /// data.lock with the text it was read from, or nothing when the project has none yet.
+    pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                Lock::parse(&text).map(Some)
+                Ok(Some((Lock::parse(&text)?, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(

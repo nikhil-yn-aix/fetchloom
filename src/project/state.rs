@@ -18,6 +18,19 @@ pub(crate) struct State {
     version: u32,
     /// keyed by the file's path in the project, with `/` between folders.
     pub(crate) files: BTreeMap<String, Placed>,
+    /// data.toml and data.lock as the last sync left them.
+    #[serde(default)]
+    pub(crate) synced: Option<Synced>,
+}
+
+/// the SHA-256 of data.toml and data.lock as a sync left them, and whether that sync left every
+/// file they ask for in place. while both stay the same byte for byte after a complete sync, the
+/// files recorded here are exactly the files they ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Synced {
+    pub(crate) manifest: Sha256,
+    pub(crate) lock: Sha256,
+    pub(crate) complete: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,10 +69,13 @@ impl State {
         struct Written<'a> {
             version: u32,
             files: &'a BTreeMap<String, Placed>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            synced: Option<Synced>,
         }
         let state = Written {
             version: VERSION,
             files: &self.files,
+            synced: self.synced,
         };
         serde_json::to_vec(&state).unwrap_or_default()
     }
@@ -106,6 +122,14 @@ mod tests {
         );
         let read = State::parse(&state.render());
         assert_eq!(read.files, state.files);
+        assert_eq!(read.synced, None, "a state from before syncs were recorded");
+        state.synced = Some(Synced {
+            manifest: digest::sha256(b"data.toml"),
+            lock: digest::sha256(b"data.lock"),
+            complete: true,
+        });
+        assert_eq!(State::parse(&state.render()).synced, state.synced);
+        state.synced = None;
         assert!(State::parse(b"not json").files.is_empty());
         assert!(
             State::parse(br#"{"version": 9, "files": {}}"#)

@@ -23,7 +23,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed};
+use crate::project::state::{Look, Placed, Synced};
 use crate::work::Work;
 
 /// what placing did.
@@ -161,12 +161,14 @@ impl<'a> Placing<'a> {
             .collect())
     }
 
-    /// removes what no dataset needs, places what is missing or outdated, and records it.
+    /// removes what no dataset needs, places what is missing or outdated, and records it, with
+    /// `synced` marked complete when every file the lock asks for ended up in place.
     pub(crate) fn apply(
         self,
         output: &Output,
         work: &Work,
         cache: &Cache,
+        synced: Option<Synced>,
     ) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("place").entered();
         let Placing {
@@ -203,7 +205,11 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
-        if removed || adopted || needs_writing || !tallies.is_empty() {
+        let complete = failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
+        let synced = synced.map(|synced| Synced { complete, ..synced });
+        let resynced = state.synced != synced;
+        state.synced = synced;
+        if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
             project.write_state(state)?;
         }
         if let Some(error) = failure {
@@ -236,12 +242,55 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
-        if removed || survey.needs_writing {
+        let forgot = survey.state.synced.take().is_some();
+        if removed || forgot || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         tell(output, manifest, &placer, &BTreeMap::new(), &placement);
         Ok(placement)
     }
+}
+
+/// data.toml and data.lock as a sync read them before it began.
+pub(crate) struct Seen {
+    pub(crate) manifest: Sha256,
+    /// none when the project had no data.lock yet.
+    pub(crate) lock: Option<Sha256>,
+}
+
+/// what a sync with nothing to do placed, found without reading what archives unpack to or
+/// planning: data.toml and data.lock are byte for byte as a sync that left every file they ask
+/// for in place left them, so the state records exactly those files, and each one still looks as
+/// recorded. anything else, or any doubt the survey raised, takes the long way.
+pub(crate) fn untouched(
+    project: &Project,
+    manifest: &Manifest,
+    survey: &Survey,
+    seen: &Seen,
+) -> Result<Option<Placement>, Error> {
+    let _span = tracing::debug_span!("untouched").entered();
+    let state = &survey.state;
+    let settled = state.synced.is_some_and(|synced| {
+        synced.complete && synced.manifest == seen.manifest && Some(synced.lock) == seen.lock
+    });
+    if !settled
+        || survey.needs_writing
+        || !survey.edited.is_empty()
+        || !survey.elsewhere.is_empty()
+        || !survey.vouched.is_empty()
+        || state
+            .files
+            .iter()
+            .any(|(path, placed)| survey.disk.get(path) != Some(&placed.look))
+    {
+        return Ok(None);
+    }
+    // placing refuses a data folder that became a link, and so does this
+    project.data_dir(manifest)?;
+    Ok(Some(Placement {
+        unchanged: state.files.len() as u64,
+        ..Placement::default()
+    }))
 }
 
 /// carries out every decision short of placing files: counts what stays, records files found to
@@ -597,7 +646,9 @@ mod tests {
             false,
             false,
         );
-        placing.apply(&output, &Work::default(), &cache).unwrap();
+        placing
+            .apply(&output, &Work::default(), &cache, None)
+            .unwrap();
         let (recorded, _) = project.state();
         for name in names {
             let checked = recorded.files[&format!("data/weather/{name}.csv")].checked;

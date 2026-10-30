@@ -27,6 +27,7 @@ use crate::output::Output;
 use crate::project::Project;
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
+use crate::project::state::Synced;
 use crate::source::{self, Listing, Reference, Remote};
 use crate::units;
 
@@ -78,13 +79,15 @@ impl<'a> Loop<'a> {
 
     /// makes the data folder match `lock`, starting from `survey` of it. what each file needs is
     /// decided first, so only the bytes placing lacks are downloaded. archives this machine never
-    /// unpacked are unpacked first, since what they hold decides where files go.
+    /// unpacked are unpacked first, since what they hold decides where files go. `synced` names
+    /// data.toml and data.lock as this run leaves them, for the state to record.
     pub(super) async fn place(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         force: bool,
         survey: Survey,
+        synced: Option<Synced>,
     ) -> Result<Placement, Error> {
         let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let unknown = placing.unknown();
@@ -103,7 +106,12 @@ impl<'a> Loop<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
         self.unpack_locked(lock, &archives).await?;
-        placing.apply(&self.context.output, &self.context.work, &self.cache)
+        placing.apply(
+            &self.context.output,
+            &self.context.work,
+            &self.cache,
+            synced,
+        )
     }
 
     /// the lock data.toml asks for. datasets whose entry changed are resolved again, and files

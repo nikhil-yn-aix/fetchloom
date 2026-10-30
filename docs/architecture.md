@@ -29,6 +29,8 @@ there is no separate model crate or python wrapper. core types live with their o
 5. fetch only the bytes needed by place and replace actions. a missing archive member requires the original archive again when it is not cached. check pinned size, SHA-256 and any stated MD5 on downloads.
 6. remove unwanted unchanged tracked files, place the targets, and write state if it changed or settles files hashed for being as new as the old state. drop unneeded packed objects and register the project for cache retention.
 
+the state also records the SHA-256 of `data.toml` and `data.lock` as `sync` leaves them, and whether every file they ask for ended up in place. when the next `sync` reads both byte for byte the same after such a complete run, the state records exactly the files they ask for. if the scan in step 1 then finds each of them as recorded, with nothing hashed as racy or put in doubt by a mark, the run is done: it reads no archive member records, does not relock and plans nothing. the scan still runs, so an edit still sends the run through every step. a run that left a file out, kept an edited one or failed records itself as incomplete, and other commands that change the state drop the record.
+
 `add` first resolves its new reference, sometimes downloading a single file to learn its name. it writes the manifest before syncing and attempts to restore that manifest on sync failure. `remove` changes the manifest and lock, then removes unwanted tracked files without downloading.
 
 planning produces target paths, not a serialized dry-run action plan. JSON contains the completed command's report. resolving, downloading unknown hashes and writing the lock can precede detection of a destination clash.
