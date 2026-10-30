@@ -1,0 +1,38 @@
+# live: kaggle datasets, fetchloom against kagglehub, in WSL.
+# every tool keeps the files as the source serves them, so fetchloom runs with --no-extract.
+# unpacking is compared in the lab. bench/expect-live.py writes the expect files with a first
+# verified download before the first block.
+name = "live-kaggle"
+layer = "live"
+repetitions = 3
+
+[vars]
+py = "/home/fl/bench-venv/bin/python"
+wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+
+[[workload]]
+id = "kaggle-s1"
+expect = "bench/expect/live/kaggle-s1.sha256"
+bytes = 125204
+timeout = 3600
+tools = ["fetchloom", "kagglehub"]
+vars = { ref = "kaggle:uciml/breast-cancer-wisconsin-data@2", expect = "bench/expect/live/kaggle-s1.sha256", client = "uciml/breast-cancer-wisconsin-data@2" }
+
+[[workload]]
+id = "kaggle-m1000"
+expect = "bench/expect/live/kaggle-m1000.sha256"
+bytes = 228459385
+timeout = 3600
+tools = ["fetchloom", "kagglehub"]
+vars = { ref = "kaggle:tongpython/cat-and-dog@1", expect = "bench/expect/live/kaggle-m1000.sha256", client = "tongpython/cat-and-dog@1" }
+
+[tool.fetchloom]
+first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+second = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+env = { FETCHLOOM_CACHE = "{home}/cache" }
+version = ["fetchloom", "--version"]
+
+[tool.kagglehub]
+first = ["{py}", "{wrappers}/kagglehub_download.py", "{out}", "{home}", "{client}"]
+second = ["{py}", "{wrappers}/kagglehub_download.py", "{out}", "{home}", "{client}"]
+version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('kagglehub', version('kagglehub'))"]

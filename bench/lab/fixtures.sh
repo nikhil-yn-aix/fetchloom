@@ -38,7 +38,7 @@ mkdir -p "$data"
 cd "$data"
 rm -rf .stage
 
-for size in 1m 100m 1g; do
+for size in 1m 10m 100m 1g; do
   if need "file-$size.bin"; then
     stream "file-$size.bin" "${size^^}" > "file-$size.bin.part"
     seal "file-$size.bin"
@@ -83,7 +83,7 @@ if need big.tar.gz; then
   seal big.tar.gz
 fi
 
-sha256sum file-1m.bin file-100m.bin file-1g.bin files-10k.zip files-10k.tar.zst big-members.zip big.tar.gz
+sha256sum file-1m.bin file-10m.bin file-100m.bin file-1g.bin files-10k.zip files-10k.tar.zst big-members.zip big.tar.gz
 for dir in files-10k many-1k; do
   sum=$(cd "$dir" && find . -type f | sort | xargs sha256sum | sha256sum)
   echo "${sum%% *}  $dir/"
