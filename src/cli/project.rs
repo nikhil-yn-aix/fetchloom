@@ -264,7 +264,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     lock.datasets.retain(|dataset| dataset.name != args.name);
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let survey = Survey::read(&project, &new_manifest.data_dir);
+    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
     let placement = place::Placing::new(
         &project,
         &new_manifest,
@@ -446,13 +446,13 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
-    if !ready(&project, &manifest, name)? {
+    if !ready(context, &project, &manifest, name)? {
         let _held = hold(context, &project, "path").await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
         manifest = project.manifest()?.1;
         known(&manifest, name, "path")?;
-        if !ready(&project, &manifest, name)? {
+        if !ready(context, &project, &manifest, name)? {
             let work = Loop::new(
                 context,
                 &project,
@@ -536,7 +536,12 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
 
 /// whether a dataset is locked as data.toml asks and every file of it sits unchanged where it
 /// belongs, so `path` can answer without the project lock.
-fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Error> {
+fn ready(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+) -> Result<bool, Error> {
     let Some(lock) = project.lock()? else {
         return Ok(false);
     };
@@ -549,7 +554,7 @@ fn ready(project: &Project, manifest: &Manifest, name: &str) -> Result<bool, Err
     if !fresh {
         return Ok(false);
     }
-    let survey = Survey::read(project, &manifest.data_dir);
+    let survey = Survey::read(project, &manifest.data_dir, context.threads);
     let cache = open_cache()?;
     // a file a mark puts in doubt waits for a sync, which hashes it once and records it
     let doubted = survey.doubted(&cache);
@@ -584,7 +589,7 @@ async fn sync_all(
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
 ) -> Result<(bool, Placement), Error> {
-    let mut survey = Survey::read(work.project, &manifest.data_dir);
+    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.look_again(&work.project.root, &work.cache, force)?;
     disk::audit(work.project, &survey, &work.cache)?;
     if let Some(seen) = seen

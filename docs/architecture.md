@@ -13,6 +13,7 @@ one rust crate builds `fetchloom` and `fl`. both call the same library entry poi
 | `net` | HTTP, retries, rate limits, partial-download streaming, split downloads, credentials and address checks |
 | `cache` | objects, partials, indexes, project registrations, gc and verification |
 | `archive` | format readers, member checks, limits and staged member writes |
+| `threads` | the optional local worker ceiling and archive worker budgets |
 | `plan` | destination expansion and collision checks |
 | `place` | reflinks, hardlinks, copies, directory checks and synced-folder detection |
 | `output` | human rendering, progress, warnings and the JSON envelope |
@@ -39,11 +40,13 @@ planning produces target paths, not a serialized dry-run action plan. JSON conta
 
 ## concurrency
 
+the worker counts below are the defaults. the command context reads `FETCHLOOM_THREADS` once and passes its ceiling to each local worker group and the async runtime. unset or empty preserves those counts. the cap does not bound the process's total OS threads: blocking network writers, DNS helpers and progress threads are separate.
+
 the async command runtime uses up to four worker threads. file-download tasks are queued at up to twice `FETCHLOOM_JOBS`; network permits bound active metadata requests and downloads. each response streams through a 16-slot channel to a blocking writer that hashes and writes it. the streams of a split download share one writer, which puts each piece at its offset and hashes the contiguous prefix as it grows; bytes that arrived past the prefix are read back and hashed once the prefix reaches them. prefix hashing and final flushes also use blocking tasks.
 
-archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
+archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads, no more than the logical CPU count. with a thread cap, active archive readers share that budget with their writers; a reader with no writer budget stores and publishes members itself. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
 
-placement, project metadata and many cache-index operations run synchronously on command futures. placing files and looking up their objects use up to eight threads, at most one per 64 files and no more than the logical CPU count. the first file is placed alone, so the others start knowing which methods the filesystem refuses. off linux, large fallback copies overlap reading and writing with three reusable 1 MiB buffers; linux copies inside the kernel with `copy_file_range`. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
+placement, project metadata and many cache-index operations run synchronously on command futures. placing files and looking up their objects use up to eight threads, at most one per 64 files and no more than the logical CPU count. the same worker ceiling applies when hashing files whose metadata cannot establish that they are unchanged. the first file is placed alone, so the others start knowing which methods the filesystem refuses. off linux, uncapped large fallback copies overlap reading and writing with three reusable 1 MiB buffers. with a thread cap, each placement worker copies without a reader thread of its own. linux copies inside the kernel with `copy_file_range`. cache verification uses the logical CPU count for its worker count. `FETCHLOOM_JOBS` does not control those workers.
 
 ## sources
 
@@ -110,6 +113,7 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 | control | value |
 |---|---|
 | active network operations | 8 by default; `FETCHLOOM_JOBS` accepts 1 to 256 |
+| download bandwidth | uncapped by default; `FETCHLOOM_RATE` sets one shared byte budget for all response bodies, split streams included |
 | per-host slots | 4, keyed by the initial hostname, including while following redirects |
 | connect timeout | 45 s |
 | send and response-header deadline | 75 s per hop, combining connect and response allowances |
@@ -123,6 +127,10 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 | download diversion pages | at most 3, each at most 4 MiB, when a source supplies a page handler |
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
+
+### bandwidth cap
+
+`net/rate` owns the shared token bucket. the command context passes the same bucket to every network client it creates, so retries, metadata requests and split streams spend one budget. the bucket starts full and holds one second's bytes or 1 MiB, whichever is larger. each received chunk waits for its tokens before reaching its writer or in-memory body. waits use tokio time and select on the stop signal; they do not count toward the server's body idle timeout. a queued stream keeps its turn while sleeping, so other streams cannot take its refill. an unset cap adds only an optional-value check on the chunk path, with no locks or atomics.
 
 ### rate limits
 

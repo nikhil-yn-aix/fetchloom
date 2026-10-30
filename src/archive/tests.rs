@@ -20,9 +20,14 @@ fn fixture(name: &str) -> Result<Unpacked, Error> {
         panic!("{name} is not detected as an archive");
     };
     let scratch = Scratch::new();
-    let unpacked = unpack(&path, format, &Limits::default(), &scratch.cache, &|_| {
-        false
-    });
+    let unpacked = unpack(
+        &path,
+        format,
+        &Limits::default(),
+        &scratch.cache,
+        &|_| false,
+        None,
+    );
     if let Ok(unpacked) = &unpacked {
         for member in &unpacked.members {
             assert!(
@@ -213,6 +218,7 @@ fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
         archive.size,
         Some(&pinned),
         &|_| false,
+        None,
     )
     .unwrap();
     assert_eq!(scratch.cache.unpacked_tree(&archive.digest), Some(pinned));
@@ -253,6 +259,7 @@ fn many_small_files() {
             &Limits::default(),
             &scratch.cache,
             &|_| false,
+            None,
         )
         .unwrap();
         println!(

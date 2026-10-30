@@ -7,6 +7,7 @@ mod download;
 mod failure;
 mod headers;
 mod pace;
+mod rate;
 mod shown;
 
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ use url::Url;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
 pub(crate) use failure::ATTEMPTS;
+pub(crate) use rate::Rate;
 pub(crate) use shown::{Shown, mask_query, secret};
 
 use self::failure::Failure;
@@ -125,6 +127,7 @@ pub(crate) struct Net {
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
+    rate: Option<Arc<Rate>>,
     split: Split,
     work: Arc<Work>,
     stop: Arc<Stop>,
@@ -215,6 +218,7 @@ impl Net {
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
+            rate: None,
             split: Split {
                 enabled: options.split,
                 above: download::SPLIT_ABOVE,

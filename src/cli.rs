@@ -24,6 +24,7 @@ use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
 use crate::source;
 use crate::stop::Stop;
+use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
 
@@ -40,6 +41,8 @@ struct Context {
     offline: net::Offline,
     yes: bool,
     jobs: usize,
+    rate: Option<Arc<net::Rate>>,
+    threads: Threads,
     /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
     /// for.
     split: bool,
@@ -55,6 +58,8 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
+            rate: None,
+            threads: Threads::default(),
             split: false,
             work: Arc::default(),
             stop: Arc::default(),
@@ -87,6 +92,7 @@ impl Context {
             split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
+            .with_rate(self.rate.clone())
     }
 }
 
@@ -216,11 +222,19 @@ pub(crate) fn run() -> ExitCode {
     {
         return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
     }
+    match Threads::read(&var) {
+        Ok(threads) => context.threads = threads,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
     let Some(command) = args.command else {
         return alone(&context, started);
     };
     match jobs(&var) {
         Ok(jobs) => context.jobs = jobs,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    match net::Rate::read(&var) {
+        Ok(rate) => context.rate = rate,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     dispatch(&context, command, started)
@@ -342,7 +356,7 @@ fn block_on<T>(
 ) -> Result<T, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
+        .worker_threads(context.threads.limit(workers))
         .enable_all()
         .build()
         .map_err(|err| Error::io("could not start", &err))?;

@@ -108,7 +108,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         .output
         .ticker("Checking", what.to_owned(), [Some(total)]);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let checked = cache.verify_all(threads, &|bytes| {
+    let checked = cache.verify_all(context.threads.limit(threads), &|bytes| {
         bar.advance(bytes);
         ticker.advance(bytes);
     });

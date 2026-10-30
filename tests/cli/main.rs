@@ -3,6 +3,7 @@
 mod archives;
 mod basics;
 mod cache;
+mod caps;
 mod concurrent;
 mod get;
 mod hints;

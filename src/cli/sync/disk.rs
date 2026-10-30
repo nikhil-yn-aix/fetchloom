@@ -15,9 +15,11 @@ use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::Project;
 use crate::project::state::{Look, State, nanos};
+use crate::threads::Threads;
 
 /// the data folder as fetchloom recorded placing it and as it is now.
 pub(crate) struct Survey {
+    pub(super) threads: Threads,
     /// the scan's start, so marks written while placing files still put them in doubt.
     pub(crate) started: u64,
     pub(crate) state: State,
@@ -42,10 +44,11 @@ pub(crate) struct Survey {
 impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
-    pub(crate) fn read(project: &Project, data_dir: &str) -> Survey {
+    pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
         let started = nanos(SystemTime::now());
         let (state, written) = project.state();
         let mut survey = Survey {
+            threads,
             started,
             state,
             disk: scan(&project.root, data_dir),
@@ -95,7 +98,7 @@ impl Survey {
             return;
         }
         let _span = tracing::debug_span!("hash_racy", files = racy.len()).entered();
-        let unchanged = place::run_all(&racy, |(path, sha256)| {
+        let unchanged = place::run_all(&racy, self.threads, |(path, sha256)| {
             Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == **sha256)
         });
         for ((path, _), unchanged) in racy.into_iter().zip(unchanged) {
@@ -187,7 +190,7 @@ impl Survey {
         }
         let _span = tracing::debug_span!("hash_doubted", files = doubted.len()).entered();
         let files = &self.state.files;
-        let intact = place::run_all(&doubted, |path| {
+        let intact = place::run_all(&doubted, self.threads, |path| {
             Sha256::of_file(&root.join(path)).map(|digest| digest == files[path].sha256)
         });
         for (path, intact) in doubted.into_iter().zip(intact) {
