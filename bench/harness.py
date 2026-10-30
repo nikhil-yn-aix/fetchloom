@@ -27,6 +27,7 @@ import tempfile
 import time
 import tomllib
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from fnmatch import fnmatch
 from pathlib import Path
@@ -215,22 +216,27 @@ def expected(manifest):
     return hashes
 
 
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        while chunk := file.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def produced(folders, ignore):
-    """the sha256 of every file under the folders, except paths matching an ignore pattern."""
-    hashes = Counter()
-    count = 0
+    """the sha256 of every file under the folders, except paths matching an ignore pattern. the
+    files are read on several threads: on windows the antivirus scans each new file when it is
+    first opened, and one thread would wait for every scan in turn."""
+    paths = []
     for folder in folders:
         for path in Path(folder).rglob("*"):
             relative = path.relative_to(folder).as_posix()
-            if not path.is_file() or path.is_symlink() or any(fnmatch(relative, p) for p in ignore):
-                continue
-            digest = hashlib.sha256()
-            with open(path, "rb") as file:
-                while chunk := file.read(1 << 20):
-                    digest.update(chunk)
-            hashes[digest.hexdigest()] += 1
-            count += 1
-    return hashes, count
+            if path.is_file() and not path.is_symlink() and not any(fnmatch(relative, p) for p in ignore):
+                paths.append(path)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        hashes = Counter(pool.map(sha256_of, paths))
+    return hashes, len(paths)
 
 
 def disk_bytes(folders):
