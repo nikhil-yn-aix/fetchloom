@@ -343,9 +343,9 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
         )),
         None => Err(Error::new(
             Kind::Unconfirmed,
-            format!("downloading {what} needs {size}, and there is no terminal to ask first"),
+            format!("downloading {what} needs {size}, and fetchloom cannot ask for confirmation here"),
         )
-        .help("add --yes to download anyway")),
+        .help("add --yes to approve this download")),
     }
 }
 
@@ -409,8 +409,7 @@ fn level(quiet: bool, verbose: u8) -> Level {
     }
 }
 
-/// `word` as a shell reads it back whole: in double quotes when it holds more than letters,
-/// digits and the marks links use, such as `?` or `&`.
+/// quotes a word so suggested commands preserve spaces, patterns and shell metacharacters.
 fn shell_word(word: &str) -> Cow<'_, str> {
     if !word.is_empty()
         && word
@@ -418,6 +417,13 @@ fn shell_word(word: &str) -> Cow<'_, str> {
             .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,~".contains(c))
     {
         Cow::Borrowed(word)
+    } else if word.contains(['\'', '"', '$', '\u{60}', '\\']) {
+        let quoted = if cfg!(windows) {
+            word.replace('\'', "''")
+        } else {
+            word.replace('\'', "'\"'\"'")
+        };
+        Cow::Owned(format!("'{quoted}'"))
     } else {
         Cow::Owned(format!("\"{word}\""))
     }
@@ -471,6 +477,21 @@ mod tests {
         );
         assert_eq!(shell_word("*.csv"), "\"*.csv\"");
         assert_eq!(shell_word("my data"), "\"my data\"");
+    }
+
+    #[test]
+    fn suggested_commands_keep_shell_metacharacters_literal() {
+        assert_eq!(shell_word("$notes"), "'$notes'");
+        assert_eq!(shell_word("a\"b"), "'a\"b'");
+        assert_eq!(shell_word(r"data\notes"), r"'data\notes'");
+        assert_eq!(
+            shell_word("a'b"),
+            if cfg!(windows) {
+                "'a''b'"
+            } else {
+                "'a'\"'\"'b'"
+            }
+        );
     }
 
     #[test]

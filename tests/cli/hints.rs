@@ -169,7 +169,7 @@ fn offline_hints_name_the_settings_that_enabled_it() -> Result {
             sandbox.work(),
             "is not in the cache",
         ),
-        (&["sync"], unresolved, "its entry in data.toml changed"),
+        (&["sync"], unresolved, "needs a new entry in data.lock"),
         (&["sync"], locked, "the lock names is not in the cache"),
     ];
     for (flag, environment, expected) in [

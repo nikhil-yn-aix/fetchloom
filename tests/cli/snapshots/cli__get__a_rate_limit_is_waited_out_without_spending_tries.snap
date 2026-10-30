@@ -4,5 +4,5 @@ expression: stderr
 ---
     Waiting [time] for 127.0.0.1, whose limit of 133 requests is used up
  Downloaded iris.csv · 81 B in [time]
-     Placed iris/iris.csv · linked, no extra disk
+     Placed iris/iris.csv · linked from the cache
 ✓ fetched iris.csv into iris

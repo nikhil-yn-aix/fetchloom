@@ -106,9 +106,9 @@ impl Doi {
     fn invalid(&self, reason: &str) -> Error {
         Error::new(
             Kind::SourceInvalid,
-            format!("doi.org sent an invalid handle for {self}: {reason}"),
+            format!("doi.org sent a record for {self} that fetchloom cannot use: {reason}"),
         )
-        .help("check the DOI in a browser and report the invalid handle to its publisher")
+        .help("check the DOI in a browser and report this response to its publisher")
     }
 }
 

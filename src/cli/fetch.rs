@@ -287,12 +287,17 @@ fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error>
         } else {
             format!("{label}: {}", failure.message)
         });
+        if shared_help.is_none()
+            && let Some(help) = &failure.help
+        {
+            error = error.detail(format!("help: {help}"));
+        }
     }
     if failed.len() > NAMED {
         error = error.detail(format!("and {} more", failed.len() - NAMED));
     }
     Some(error.help(shared_help.unwrap_or_else(|| {
-        "the files that arrived are kept, so if you run the same command again, it downloads only the rest"
+        "downloaded files stay in the cache. fix the errors above, then run the same command again"
             .to_owned()
     })))
 }
@@ -302,9 +307,14 @@ fn explain(error: Error, job: &Job) -> Error {
     // an MD5 mismatch comes with its own help, since the source contradicts itself
     let changed_upstream = error.kind == Kind::IntegrityMismatch
         && error.help.is_none()
-        && job.fetch.expect.sha256.is_some();
+        && job.fetch.expect.sha256.is_some()
+        && job.dataset.is_some();
     if !changed_upstream {
-        return error;
+        return if error.kind == Kind::IntegrityMismatch {
+            error.or_help("run the same command again later. if it keeps happening, ask the dataset's owner to check the file and its published size or fingerprint")
+        } else {
+            error
+        };
     }
     let mut error = Error {
         message: format!("{} is not the file that was locked", job.label),
@@ -356,11 +366,11 @@ mod tests {
         assert_eq!(stopped.kind, Kind::Unconfirmed);
         assert_eq!(
             stopped.message,
-            "downloading big.bin needs more than 1.0 GiB, and there is no terminal to ask first"
+            "downloading big.bin needs more than 1.0 GiB, and fetchloom cannot ask for confirmation here"
         );
         assert_eq!(
             stopped.help.as_deref(),
-            Some("add --yes to download anyway")
+            Some("add --yes to approve this download")
         );
         assert_eq!(
             watch.on(&Event::Bytes(1)).unwrap_err().kind,
@@ -465,5 +475,52 @@ mod tests {
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
         let second = Watch::new(&second, &output, &overall, &approval, false);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    #[test]
+    fn an_unpinned_download_is_not_described_as_locked() {
+        let job = Job {
+            fetch: Fetch {
+                expect: crate::net::Expect {
+                    sha256: Some(crate::digest::sha256(b"expected")),
+                    ..crate::net::Expect::default()
+                },
+                ..Fetch::new(Url::parse("https://example.org/data.csv").unwrap())
+            },
+            label: "data.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let error = explain(Error::new(Kind::IntegrityMismatch, "the file differs"), &job);
+        assert_eq!(error.message, "the file differs");
+        assert!(error.help.unwrap().contains("published size or fingerprint"));
+    }
+
+    #[test]
+    fn different_download_failures_keep_their_recovery_steps() {
+        let labels = vec!["a.csv".to_owned(), "b.csv".to_owned()];
+        let failed = vec![
+            (
+                0,
+                Error::new(Kind::AuthRequired, "access refused").help("set HF_TOKEN"),
+            ),
+            (
+                1,
+                Error::new(Kind::ReferenceUnresolved, "file missing").help("check its link"),
+            ),
+        ];
+        let error = together(&labels, failed).unwrap();
+        assert_eq!(
+            error.details,
+            [
+                "a.csv: access refused",
+                "help: set HF_TOKEN",
+                "b.csv: file missing",
+                "help: check its link",
+            ]
+        );
+        assert_eq!(error.help.as_deref(), Some(
+            "downloaded files stay in the cache. fix the errors above, then run the same command again"
+        ));
     }
 }

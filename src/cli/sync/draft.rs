@@ -293,7 +293,12 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
         .collect();
     if !unavailable.is_empty() {
         let has_files = listing.files.iter().any(|file| selected(&file.path));
-        return Err(unavailable_selection(name, &unavailable, has_files));
+        return Err(unavailable_selection(
+            name,
+            &unavailable,
+            has_files,
+            written(entry),
+        ));
     }
     let kept: Vec<Remote> = listing
         .files
@@ -321,6 +326,7 @@ fn unavailable_selection(
     name: &str,
     entries: &[&crate::source::Unavailable],
     has_files: bool,
+    patterns: Patterns,
 ) -> Error {
     let mut error = Error::new(
         Kind::SourceInvalid,
@@ -357,8 +363,14 @@ fn unavailable_selection(
     } else {
         "them as files"
     };
+    let change = match patterns {
+        Patterns::InDataToml => format!(
+            "add exclude patterns in datasets.{name} in data.toml for the entries above"
+        ),
+        Patterns::OnCommandLine => format!("add {flags}"),
+    };
     error.help(format!(
-        "add {flags} {purpose}, or ask the owner to add {copy} such as pdf or csv"
+        "{change} {purpose}, or ask the owner to add {copy} such as pdf or csv"
     ))
 }
 

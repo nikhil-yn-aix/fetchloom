@@ -43,7 +43,8 @@ impl Repo {
                 return Err(Error::new(
                     Kind::SourceInvalid,
                     format!("huggingface.co sent more than {MOST_PAGES} pages listing {self}"),
-                ));
+                )
+                .help("ask the dataset's owner to pack the files into archives, or use a smaller dataset"));
             }
             let response = api.get(&url).await?;
             let entries: Vec<Entry> = crate::source::json(self, &response)?;
@@ -70,10 +71,11 @@ impl Repo {
                 Error::new(
                     Kind::SourceInvalid,
                     format!(
-                        "huggingface.co gave {} in {self} an LFS id that is not a SHA-256",
+                        "huggingface.co gave {} in {self} a file fingerprint that is not a SHA-256",
                         entry.path
                     ),
                 )
+                .help("ask the dataset's owner to check that file's fingerprint on huggingface.co")
             })?),
         };
         let mut segments = self.page_segments();

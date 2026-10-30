@@ -69,8 +69,8 @@ fetchloom puts the exact research data a project needs into its data/ folder.
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by every project on this machine
-  sync, restocking: data/ ends up matching the receipt
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
 
 try it with zenodo:3608990, a 4 KB iris.csv:
 
@@ -93,7 +93,7 @@ the story goes to stderr. the time and the placement method depend on your machi
    Resolved zenodo:3608990 · DatasetIris · 1 file · 4.1 KiB · cc-by-4.0
  Downloaded 1 file · 4.1 KiB in 354 ms
      Locked iris · 1 file in data.lock
-     Placed data/iris · 1 file linked, no extra disk
+     Placed data/iris · 1 file linked from the cache
 ✓ added iris. its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
@@ -110,7 +110,7 @@ fetchloom sync
 another sync with unchanged managed files reports on stderr:
 
 ```text
-✓ everything already matches data.lock. nothing to do
+✓ all pinned files are in place. nothing to do
 ```
 
 for a download without a project:

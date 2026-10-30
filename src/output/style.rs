@@ -48,10 +48,6 @@ impl Style {
         if self.unicode { "✓" } else { "[ok]" }
     }
 
-    pub(crate) fn warned(self) -> &'static str {
-        if self.unicode { "!" } else { "[!]" }
-    }
-
     /// what ends text that was cut short.
     pub(crate) fn more(self) -> &'static str {
         if self.unicode { "…" } else { "..." }

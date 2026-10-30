@@ -89,19 +89,74 @@ fn unreadable_objects_have_their_own_report() -> Result {
             let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(document["errors"][0]["kind"], "local.io");
             assert!(document["result"].is_null());
-            document["warnings"].to_string()
+            document["warnings"]
+                .as_array()
+                .ok_or("warnings is not an array")?
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
         } else {
             text(&output.stderr)?
         };
         assert!(
-            report
-                .lines()
-                .any(|line| line.contains(digest) && line.contains("unreadable")),
+            report.lines().any(|line| {
+                line.contains(&object.display().to_string()) && line.contains("unreadable")
+            }),
             "{report}"
         );
         assert!(object.is_file());
         assert_eq!(fs::read(&object)?, b"abc");
         assert_eq!(fs::read_dir(sandbox.cache().join("changed"))?.count(), 0);
     }
+    Ok(())
+}
+
+#[test]
+fn warnings_name_the_problem_with_or_without_color() -> Result {
+    let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    for (choice, colored) in [("always", true), ("never", false), ("auto", false)] {
+        let sandbox = Sandbox::new()?;
+        let object = sandbox
+            .cache()
+            .join("objects")
+            .join(&digest[..2])
+            .join(&digest[2..]);
+        fs::create_dir_all(object.parent().ok_or("object has no parent")?)?;
+        fs::write(&object, b"changed")?;
+        let output = sandbox
+            .command(&["cache", "verify", "--color", choice])
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR_FORCE", "1")
+            .output()?;
+        assert_eq!(output.status.code(), Some(30));
+        let stderr = text(&output.stderr)?;
+        assert!(stderr.contains("warning:"), "{stderr}");
+        assert!(
+            stderr.contains("changed and was marked for replacement"),
+            "{stderr}"
+        );
+        assert_eq!(stderr.contains("\x1b["), colored, "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let empty = sandbox.run(&["cache"])?;
+    assert!(text(&empty.stderr)?.contains("the cache has no data files"));
+    let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&digest[..2])
+        .join(&digest[2..]);
+    fs::create_dir_all(object.parent().ok_or("object has no parent")?)?;
+    fs::write(object, b"")?;
+    let output = sandbox.run(&["cache"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(stderr.contains("0 B of it is needed by a project"), "{stderr}");
+    assert!(stderr.contains("fetchloom cache gc"), "{stderr}");
     Ok(())
 }

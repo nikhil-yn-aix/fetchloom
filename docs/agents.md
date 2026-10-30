@@ -42,7 +42,7 @@ branch on `status`, the exit code and `errors[0].kind`, never on message text. `
 | 50 | `local.io`, `local.not_empty`, `project.invalid` |
 | 130 | `interrupted` |
 
-`status` finding differences and `sync` keeping files edited by hand still exit 0. read `result` to see them.
+`status` finding differences and `sync` keeping edited or conflicting files still exit 0. read `result` to see them. the sync summary counts the files left unchanged; the warnings explain why.
 
 ## recipes
 

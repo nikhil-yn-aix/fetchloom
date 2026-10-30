@@ -3,5 +3,5 @@ source: tests/cli/get.rs
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
-   Replaced iris/iris.csv · linked, no extra disk
+   Replaced iris/iris.csv · linked from the cache
 ✓ fetched iris.csv into iris

@@ -153,8 +153,8 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
 pub(crate) const ANALOGY: [&str; 4] = [
     "data.toml, the shopping list: which datasets you want",
     "data.lock, the receipt: the exact files and their fingerprints",
-    "the cache, the pantry: shared by every project on this machine",
-    "sync, restocking: data/ ends up matching the receipt",
+    "the cache, the pantry: shared by projects using it",
+    "sync, restocking: fill data/ from the receipt",
 ];
 
 #[test]

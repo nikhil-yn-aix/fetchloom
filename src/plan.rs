@@ -278,25 +278,23 @@ fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
     let unpacked = [first, second]
         .into_iter()
         .find(|target| target.locked.unpacks_to.is_some());
-    match (unpacked, patterns) {
-        (Some(target), Patterns::InDataToml) => format!(
-            "set extract = false on datasets.{} in data.toml to keep its archives packed",
-            target.dataset
-        ),
-        (Some(_), Patterns::OnCommandLine) => {
-            "pass --no-extract to keep archives packed".to_owned()
-        }
-        (None, _) => leave_out("one of them", second, patterns),
-    }
+    leave_out("one of them", unpacked.unwrap_or(second), patterns)
 }
 
 fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
-    match patterns {
-        Patterns::InDataToml => format!(
-            "leave {what} out with an exclude pattern in datasets.{}",
+    match (target.locked.unpacks_to.is_some(), patterns) {
+        (true, Patterns::InDataToml) => format!(
+            "set extract = false on datasets.{} in data.toml to keep its archives packed",
             target.dataset
         ),
-        Patterns::OnCommandLine => format!("leave {what} out with --exclude"),
+        (true, Patterns::OnCommandLine) => {
+            "pass --no-extract to keep archives packed".to_owned()
+        }
+        (false, Patterns::InDataToml) => format!(
+            "leave {what} out with an exclude pattern in datasets.{} in data.toml",
+            target.dataset
+        ),
+        (false, Patterns::OnCommandLine) => format!("leave {what} out with --exclude"),
     }
 }
 
@@ -473,6 +471,29 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn a_refused_archive_member_suggests_keeping_the_archive_packed() {
+        let mut locked = lock(&[("a", &["data.zip"])]);
+        locked.datasets[0].files[0].unpacks_to = Some(digest::sha256(b"tree"));
+        let members = vec![member("safe.csv"), member(".git/config")];
+        let mut planned = Plan::default();
+        expand(
+            &mut planned,
+            "a",
+            "",
+            false,
+            &locked.datasets[0].files,
+            &|_| Some(members.clone()),
+        );
+        for (patterns, expected) in [
+            (Patterns::InDataToml, "extract = false"),
+            (Patterns::OnCommandLine, "--no-extract"),
+        ] {
+            let error = check(&planned.targets, patterns).unwrap_err();
+            assert!(error.help.unwrap().contains(expected));
+        }
     }
 
     #[test]

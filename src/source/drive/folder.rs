@@ -202,7 +202,7 @@ fn unreadable(item: &Item, reason: &str) -> Error {
             link(&item.id)
         ),
     )
-    .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+    .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
 }
 
 /// a folder's link as drive shares it.

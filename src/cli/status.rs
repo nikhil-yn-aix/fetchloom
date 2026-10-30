@@ -49,10 +49,11 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
     if sum_up(output, &status) {
         if status.needs_sync() {
             output.hint(
-                "`fetchloom sync` brings the rest in line. edited and extra files stay as they are",
+                "`fetchloom sync` places missing or updated files and reports any conflicts it keeps",
             );
-        } else if !status.edited.is_empty() {
-            output.hint("`fetchloom sync --force` puts the locked files back over edited ones");
+        }
+        if !status.edited.is_empty() || !status.untracked.is_empty() {
+            output.hint("save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock");
         }
     }
     Ok(status)
@@ -63,11 +64,7 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     let status = check(project, context.threads)?;
     let output = &context.output;
     if sum_up(output, &status) {
-        output.hint(if status.needs_sync() {
-            "`fetchloom status` lists what differs, and `fetchloom sync` brings it in line"
-        } else {
-            "`fetchloom status` lists what differs"
-        });
+        output.hint("`fetchloom status` lists what differs");
     }
     Ok(status)
 }
@@ -185,7 +182,7 @@ fn list(output: &Output, status: &Status) {
     for path in status.edited_elsewhere.iter().take(SHOWN) {
         output.mark(
             "Edited",
-            &format!("{path} · through a link in another project"),
+            &format!("{path} · linked file has changed"),
         );
     }
     if status.edited_elsewhere.len() > SHOWN {

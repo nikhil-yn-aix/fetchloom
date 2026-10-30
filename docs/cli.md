@@ -14,7 +14,7 @@ when every managed file is already in place:
 
 ```text
 $ fetchloom sync
-✓ everything already matches data.lock. nothing to do
+✓ all pinned files are in place. nothing to do
 ```
 
 project commands use the nearest `data.toml` at or above the working directory. `-C <dir>` changes where that search starts. bare `fetchloom` shows a short status inside a project and a welcome outside one.
@@ -58,14 +58,14 @@ $ fetchloom status
     Missing data/iris/iris.csv
       Extra data/iris/notes.txt
 ✓ found 2 differences from data.lock
-  hint: `fetchloom sync` brings the rest in line. edited and extra files stay as they are
+  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
 ```
 
-`status` compares recorded sizes and modification times, without downloading. it hashes three kinds of file. one is a file whose recorded time is not older than `.fetchloom/state` itself: a clock as coarse as FAT's two seconds gives a file edited just after it was placed the same size and time. `sync` writes the state again once such files prove unchanged, so later runs hash nothing. another is a changed file of the locked size, which counts as placed when it holds the locked bytes: a run cut off after it replaced a file and before it wrote the state leaves the new bytes recorded as the old file. the last is a hardlink whose cached object was marked as changed since fetchloom last knew the file; `sync` records the ones that prove intact, so they are hashed once. `status` also reports edited, untracked and outdated paths, hardlinks changed through another project, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
+`status` compares recorded sizes and modification times, without downloading. it hashes three kinds of file. one is a file whose recorded time is not older than `.fetchloom/state` itself: a clock as coarse as FAT's two seconds gives a file edited just after it was placed the same size and time. `sync` writes the state again once such files prove unchanged, so later runs hash nothing. another is a changed file of the locked size, which counts as placed when it holds the locked bytes: a run cut off after it replaced a file and before it wrote the state leaves the new bytes recorded as the old file. the last is a hardlink whose cached object was marked as changed since fetchloom last knew the file; `sync` records the ones that prove intact, so they are hashed once. `status` also reports edited, untracked and outdated paths, changed hardlinks, changed manifest entries, and archives not yet unpacked here. [JSON status fields](formats.md#command-results) define each category.
 
 on windows, an edit through another project's hardlink can stay invisible to your project's `status` until that project syncs, `cache verify` runs, or `sync --force` reads each hardlink by name.
 
-`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. a hardlink `status` lists as changed through another project is put back instead, with a warning, and listed in `placement.restored`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
+`sync` keeps edited or conflicting files and warns. it can still exit 0, so scripts must inspect `placement.kept`. a hardlink `status` lists as changed is put back instead, with a warning, and listed in `placement.restored`. `sync --force` replaces conflicts at locked destinations, including files fetchloom did not create. it does not delete unrelated extras or edited files no longer needed.
 
 default placements are read-only. for tools that write into their inputs, request `copy = true` in the dataset entry. see [placement and cache trust](architecture.md#placing-files) before changing a hardlink's permissions.
 
@@ -99,7 +99,7 @@ on another run, a known SHA-256 or MD5 can find cached bytes. an unpinned URL is
 
 a destination with unrelated top-level entries is refused. hidden `.fetchloom-<16 hex digits>.copy` files left by interrupted copies are ignored. nested extras beneath an expected folder can remain. an existing target is kept when it matches; other contents can be replaced only when those bytes also exist in the cache. this is a cache-membership check, not a record of who created the file. `get` has no `--force`; use another folder when you need to keep its contents.
 
-in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
+in drive folders, `--select` and `--exclude` match google docs entries as well as stored files. a selected doc is refused because its exported bytes can change between downloads. the error lists every selected doc. for up to five entries it gives exact exclusion flags, such as `--exclude "gdown"`; for more, it asks for an exclusion for each entry. `add` records that exclusion in `data.toml`. project commands point to the dataset's `exclude` setting in `data.toml` instead of suggesting a command-line flag. selecting only a doc gives the same refusal; excluding every entry still gives the empty-selection error.
 
 ## archives
 
@@ -147,8 +147,8 @@ approval is required above 1 GiB, not at exactly 1 GiB:
 `--yes` or `-y` approves. questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer:
 
 ```text
-✗ downloading huge.bin needs 2.0 GiB, and there is no terminal to ask first
-  help: add --yes to download anyway
+✗ downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here
+  help: add --yes to approve this download
 ```
 
 at a download question, the first ctrl-c stops the command with the interrupted error and exit code 130. during other asynchronous work, the first ctrl-c asks it to stop and keep resumable bytes. a second exits immediately with code 130.
@@ -161,11 +161,11 @@ fetchloom cache gc
 fetchloom cache verify
 ```
 
-`cache` prints its root on stdout and reports object bytes and registered projects on stderr. byte totals exclude indexes and partial downloads.
+`cache` prints its root on stdout and reports cached file sizes and registered projects on stderr. byte totals exclude indexes and partial downloads.
 
 `cache gc` keeps what registered project locks need, including unpacked members. unneeded objects and unpack records become eligible after 24 hours by modification time, not last use. abandoned partials and temporary files are cleaned too. `get` and standalone `lock` do not register projects for retention.
 
-a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact.
+a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact. the removal summary counts bytes removed from the cache, not disk space freed.
 
 `cache verify` rehashes objects, marks those whose bytes differ, and exits 30 if it found any. marked damage stays at its name until a download replaces it, and does not count as a cache hit. failures to write change marks are reported too. unreadable objects get their own warning and stay in the cache without a new change mark; when none changed, an unreadable object makes the command exit 50. close any program using the object or check its permissions, then verify again. it does not verify independent copies under `data/`.
 
@@ -206,7 +206,7 @@ rate suffixes use binary units, matching displayed sizes: `K` is 1024 bytes and 
 
 stdout carries paths, version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` needs no closing summary; successful `lock --check` is silent unless verbose or JSON output was requested.
 
-when stdout and stderr are both terminals, `add`, `remove`, `get`, a `lock` that changed data.lock and a `sync` that placed files or changed data.lock end with a dim `next:` line naming the usual next step, such as committing data.toml and data.lock. `-q`, `--json` and a redirected stdout leave it out.
+when stdout and stderr are both terminals, `add`, `remove`, `get`, a `lock` that changed data.lock and a `sync` that placed files or changed data.lock end with a dim `next:` line naming the usual next step, such as committing data.toml and data.lock. `-q`, `--json` and a redirected stdout leave it out. the `get` hint keeps its select, exclude and extraction options when suggesting `fetchloom add`; it leaves out links containing secrets.
 
 resolved lines omit unavailable metadata, show total size only when every listed size is known, and shorten titles to 50 characters plus an ellipsis. plain URLs have no resolved line. licenses containing `-NC` or `-ND`, ignoring case, get a warning; other restrictions are not interpreted.
 
@@ -214,7 +214,7 @@ on an interactive terminal, resolution waits show spinners and active downloads 
 
 without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings): color is off for pipes and files, with `NO_COLOR` and with `--color never`.
 
-with color on, success is green with ✓, warnings yellow with !, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
+with color on, success is green with ✓, warnings yellow with `warning:`, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
 
 ```text
 $ fetchloom get
