@@ -5,8 +5,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::Cache;
 use crate::digest::Sha256;
@@ -78,6 +78,27 @@ impl Cache {
         let folder = self.changed_folder();
         real_folder(&folder, FolderUse::Cache)?;
         self.write_atomically(&folder.join(digest.hex()), b"")
+    }
+
+    /// marks a changed object that `source`, written earlier, is about to replace. a mark newer
+    /// than the bytes replacing it would put the good copy in doubt for good, so an older mark
+    /// stays, and a new one is dated just before `source` was written.
+    pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
+        let written = fs::metadata(source)?.modified()?;
+        if self
+            .changed_at(digest)
+            .is_some_and(|marked| marked < nanos(written))
+        {
+            return Ok(());
+        }
+        self.mark_changed(digest)?;
+        let before = written
+            .checked_sub(Duration::from_nanos(1))
+            .unwrap_or(written);
+        fs::File::options()
+            .write(true)
+            .open(self.changed_folder().join(digest.hex()))?
+            .set_modified(before)
     }
 
     /// every object found changed, with when it was found, in nanoseconds since 1970 like the

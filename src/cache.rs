@@ -162,7 +162,6 @@ impl Cache {
         }
     }
 
-
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
         let text = fs::read(self.url_record_path(url)).ok()?;
         let record: UrlRecord = serde_json::from_slice(&text).ok()?;
@@ -290,14 +289,15 @@ impl Cache {
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
                     if found.is_ok() {
-                        self.mark_changed(digest)?;
+                        self.mark_replaced(digest, source)?;
                     }
                     match volume.replace(source, path) {
                         Ok(()) => return Ok(true),
                         // another repair may have replaced the read-only destination while ours
                         // was being opened to clear its flag
-                        Err(_) if source.exists()
-                            && Sha256::of_file(path).is_ok_and(|actual| actual == *digest) => {}
+                        Err(_)
+                            if source.exists()
+                                && Sha256::of_file(path).is_ok_and(|actual| actual == *digest) => {}
                         Err(err) => {
                             return Err(io::Error::new(
                                 err.kind(),
@@ -442,10 +442,10 @@ pub(crate) mod tests {
         let checked = cache.verify_all(1, &|_| {});
         assert_eq!(checked.objects, 1);
         assert_eq!(checked.bytes, 3);
-        assert!(checked.changed.is_empty());
-        assert!(checked.stuck.is_empty());
-        assert!(checked.unreadable.is_empty());
-        assert!(cache.projects().is_empty());
+        assert_eq!(checked.changed, []);
+        assert_eq!(checked.stuck, []);
+        assert_eq!(checked.unreadable, []);
+        assert_eq!(cache.projects(), Vec::<PathBuf>::new());
 
         let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);
         let freed = cache.sweep(&Needed::default(), later);
@@ -453,7 +453,10 @@ pub(crate) mod tests {
         assert_eq!(freed.bytes, 3);
         assert_eq!(freed.leftovers, 0);
         for name in ["layout", "unknown"] {
-            assert_eq!(fs::read(cache.root.join(name)).unwrap(), b"leave this alone");
+            assert_eq!(
+                fs::read(cache.root.join(name)).unwrap(),
+                b"leave this alone"
+            );
         }
     }
 
@@ -466,7 +469,10 @@ pub(crate) mod tests {
             let error = Cache::open(dir.path().to_path_buf()).unwrap_err();
 
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-            assert_eq!(fs::read(dir.path().join(name)).unwrap(), b"keep these bytes");
+            assert_eq!(
+                fs::read(dir.path().join(name)).unwrap(),
+                b"keep these bytes"
+            );
         }
     }
 
