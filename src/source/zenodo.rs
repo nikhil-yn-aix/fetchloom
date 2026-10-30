@@ -359,7 +359,7 @@ mod tests {
                 offline: crate::net::Offline::No,
                 jobs: 4,
                 credentials: Vec::new(),
-                split: true,
+                split: crate::net::Splitting::WhenSlow,
             },
             work.clone(),
             Arc::default(),

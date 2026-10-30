@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -348,6 +349,143 @@ impl Server {
             .lock()
             .map(|requests| requests.clone())
             .unwrap_or_default()
+    }
+}
+
+/// a server on this machine for one large file, as file servers send one: to any number of
+/// connections at once, with a strong `ETag`, byte ranges and `If-Range`, and each answer paced
+/// to a rate of its own, as when loss holds every connection of a far link to a few Mbit/s.
+pub(crate) struct Ranged {
+    pub(crate) url: String,
+    site: Arc<Site>,
+}
+
+/// what every connection to a [`Ranged`] server shares.
+struct Site {
+    body: Vec<u8>,
+    /// bytes a second for each answer, or none for full speed.
+    rate: AtomicU64,
+    requests: Mutex<Vec<String>>,
+    active: AtomicUsize,
+    most: AtomicUsize,
+}
+
+impl Ranged {
+    /// serves `body` at `path`, each answer at `rate` bytes a second, or at full speed for 0.
+    pub(crate) fn start(path: &str, body: Vec<u8>, rate: u64) -> Result<Ranged> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}{path}", listener.local_addr()?);
+        let site = Arc::new(Site {
+            body,
+            rate: AtomicU64::new(rate),
+            requests: Mutex::default(),
+            active: AtomicUsize::new(0),
+            most: AtomicUsize::new(0),
+        });
+        let shared = site.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let site = shared.clone();
+                std::thread::spawn(move || site.answer(stream));
+            }
+        });
+        Ok(Ranged { url, site })
+    }
+
+    /// paces the answers from now on to `rate` bytes a second, or none for 0.
+    pub(crate) fn pace(&self, rate: u64) {
+        self.site.rate.store(rate, Ordering::SeqCst);
+    }
+
+    /// the head of every request so far, lowercased.
+    pub(crate) fn requests(&self) -> Vec<String> {
+        self.site
+            .requests
+            .lock()
+            .map(|requests| requests.clone())
+            .unwrap_or_default()
+    }
+
+    /// the requests that asked for a range with an end, as the added streams of a split
+    /// download do.
+    pub(crate) fn parts(&self) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .filter(|head| {
+                head.lines()
+                    .any(|line| line.starts_with("range: bytes=") && !line.ends_with('-'))
+            })
+            .collect()
+    }
+
+    /// the most answers the server sent at once.
+    pub(crate) fn most(&self) -> usize {
+        self.site.most.load(Ordering::SeqCst)
+    }
+}
+
+impl Site {
+    fn answer(&self, mut stream: TcpStream) {
+        let request = read_head(&mut stream).to_ascii_lowercase();
+        if let Ok(mut requests) = self.requests.lock() {
+            requests.push(request.clone());
+        }
+        let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most.fetch_max(now, Ordering::SeqCst);
+        self.respond(&mut stream, &request);
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn respond(&self, stream: &mut TcpStream, request: &str) {
+        const ETAG: &str = "\"v1\"";
+        let size = self.body.len();
+        let current = request
+            .lines()
+            .find_map(|line| line.strip_prefix("if-range: "))
+            .is_none_or(|tag| tag.trim() == ETAG);
+        let asked = request
+            .lines()
+            .find_map(|line| line.strip_prefix("range: bytes="))
+            .and_then(|range| {
+                let (start, end) = range.trim().split_once('-')?;
+                let start: usize = start.parse().ok()?;
+                let end = match end {
+                    "" => size,
+                    end => end.parse::<usize>().ok()?.saturating_add(1).min(size),
+                };
+                (start < end).then_some((start, end))
+            })
+            .filter(|_| current);
+        let (start, end) = asked.unwrap_or((0, size));
+        let length = (end - start).to_string();
+        let mut headers = vec![
+            ("Content-Length", length.as_str()),
+            ("ETag", ETAG),
+            ("Accept-Ranges", "bytes"),
+        ];
+        let range = format!("bytes {start}-{}/{size}", end.saturating_sub(1));
+        let status = if asked.is_some() {
+            headers.push(("Content-Range", &range));
+            "206 Partial Content"
+        } else {
+            "200 OK"
+        };
+        if stream.write_all(&head(status, &headers)).is_err() {
+            return;
+        }
+        let begun = Instant::now();
+        let mut sent: u64 = 0;
+        for chunk in self.body[start..end].chunks(64 * 1024) {
+            let rate = self.rate.load(Ordering::SeqCst);
+            if let Some(nanos) = (sent * 1_000_000_000).checked_div(rate) {
+                let due = begun + Duration::from_nanos(nanos);
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            }
+            if stream.write_all(chunk).is_err() {
+                return;
+            }
+            sent += chunk.len() as u64;
+        }
     }
 }
 
