@@ -591,6 +591,7 @@ mod tests {
                 color: false,
                 unicode: false,
                 interactive: false,
+                watched: false,
             },
             Level::Quiet,
             false,

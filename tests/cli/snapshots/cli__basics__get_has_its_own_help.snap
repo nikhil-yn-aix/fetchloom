@@ -1,6 +1,5 @@
 ---
 source: tests/cli/basics.rs
-assertion_line: 41
 expression: text(&output.stdout)?
 ---
 fetch something once, without a project
@@ -23,3 +22,10 @@ options:
       --color <when>    when to use color [default: auto] [possible values: auto, always, never]
   -C <dir>              run as if fetchloom started in <dir>
   -h, --help            print help
+
+examples:
+  fetchloom get zenodo:3608990
+  fetchloom get zenodo:3608990 -o flowers
+  fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
+
+on disk: writes the output folder through the cache. no data.toml, data.lock or data/

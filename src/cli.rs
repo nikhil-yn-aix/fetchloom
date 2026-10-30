@@ -4,12 +4,14 @@ mod args;
 mod cache;
 mod fetch;
 mod get;
+mod help;
 mod logs;
 mod project;
 mod status;
 mod sync;
 mod usage;
 
+use std::borrow::Cow;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
@@ -95,7 +97,9 @@ fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error
                     value.display()
                 ),
             )
-            .help(format!("unset it to use the default of {JOBS}"))
+            .help(format!(
+                "unset FETCHLOOM_JOBS to use the default of {JOBS}, or set it to a number from 1 to 256"
+            ))
         })
 }
 
@@ -134,7 +138,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
             path.display()
         ),
     )
-    .help("move the project to a folder with a shorter path")
+    .help("move the project to a folder with a shorter path, then run the same command there")
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -160,6 +164,9 @@ pub(crate) fn run() -> ExitCode {
             &format!("fetchloom {}", env!("CARGO_PKG_VERSION")),
             started,
         );
+    }
+    if let Some(args::Command::Help(asked)) = &args.command {
+        return help::show(&context, &asked.topic, started);
     }
     let name = args.command.as_ref().map(args::Command::name);
     let _command = tracing::debug_span!("command", name).entered();
@@ -226,6 +233,7 @@ fn dispatch(context: &Context, command: args::Command, started: Instant) -> Exit
             let outcome = block_on(context, get::run(context, args));
             finish(context, name, outcome, started)
         }
+        args::Command::Help(asked) => help::show(context, &asked.topic, started),
     }
 }
 
@@ -253,7 +261,7 @@ fn alone(context: &Context, started: Instant) -> ExitCode {
         }
         Err(_) => about(
             context,
-            &format!("fetchloom {}\n\n{WELCOME}", env!("CARGO_PKG_VERSION")),
+            &format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO),
             started,
         ),
     }
@@ -319,6 +327,10 @@ fn finish<T: Serialize>(
 ) -> ExitCode {
     let elapsed = started.elapsed();
     let counts = context.work.counts();
+    let outcome = outcome.map_err(|error| match command_line(std::env::args_os().skip(1)) {
+        Some(line) => error.naming(&line),
+        None => error,
+    });
     context
         .output
         .document(command, outcome.as_ref(), counts, elapsed);
@@ -332,20 +344,6 @@ fn finish<T: Serialize>(
     }
 }
 
-/// what `fetchloom` alone prints outside a project, below the version. it ends with a command to
-/// copy.
-const WELCOME: &str = "  fetchloom add <link>    add a dataset, pin it and download it into data/
-  fetchloom sync          make data/ match data.lock on this machine
-  fetchloom status        see what changed
-  fetchloom path <name>   print where a dataset is, for scripts
-  fetchloom get <link>    fetch something once, without a project
-
-<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
-
-get a first dataset into this folder:
-
-  fetchloom add zenodo:3608990";
-
 /// how much of the story `-q` and `-v` ask for.
 fn level(quiet: bool, verbose: u8) -> Level {
     match (quiet, verbose) {
@@ -353,5 +351,70 @@ fn level(quiet: bool, verbose: u8) -> Level {
         (false, 0) => Level::Normal,
         (false, 1) => Level::Verbose,
         (false, _) => Level::Debug,
+    }
+}
+
+/// `word` as a shell reads it back whole: in double quotes when it holds more than letters,
+/// digits and the marks links use, such as `?` or `&`.
+fn shell_word(word: &str) -> Cow<'_, str> {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,~".contains(c))
+    {
+        Cow::Borrowed(word)
+    } else {
+        Cow::Owned(format!("\"{word}\""))
+    }
+}
+
+/// the command line as typed, ready to copy, for help that says to run it again. none when an
+/// argument holds a secret no message may repeat, such as a token in a link, or is not unicode.
+fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
+    let mut line = String::from("fetchloom");
+    for arg in args {
+        let arg = arg.into_string().ok()?;
+        let login = url::Url::parse(&arg)
+            .is_ok_and(|url| !url.username().is_empty() || url.password().is_some());
+        if login || matches!(net::mask_query(&arg), Cow::Owned(_)) {
+            return None;
+        }
+        line.push(' ');
+        line.push_str(&shell_word(&arg));
+    }
+    Some(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_line, shell_word};
+
+    #[test]
+    fn the_command_line_is_named_as_typed_unless_it_holds_a_secret() {
+        let line = |args: &[&str]| command_line(args.iter().map(std::ffi::OsString::from));
+        assert_eq!(
+            line(&["add", "zenodo:3608990", "--select", "*.csv"]).as_deref(),
+            Some("fetchloom add zenodo:3608990 --select \"*.csv\"")
+        );
+        assert_eq!(
+            line(&["-C", "my project", "sync"]).as_deref(),
+            Some("fetchloom -C \"my project\" sync")
+        );
+        assert_eq!(line(&["get", "https://example.org/a.csv?token=abc"]), None);
+        assert_eq!(
+            line(&["get", "https://user:secret@example.org/a.csv"]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_word_a_shell_would_split_or_expand_is_quoted() {
+        assert_eq!(shell_word("zenodo:3608990"), "zenodo:3608990");
+        assert_eq!(
+            shell_word("https://example.org/a.csv?download=1&v=2"),
+            "\"https://example.org/a.csv?download=1&v=2\""
+        );
+        assert_eq!(shell_word("*.csv"), "\"*.csv\"");
+        assert_eq!(shell_word("my data"), "\"my data\"");
     }
 }

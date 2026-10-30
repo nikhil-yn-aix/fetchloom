@@ -14,3 +14,4 @@ mod proxy;
 mod recovery;
 mod secrets;
 mod support;
+mod unattended;

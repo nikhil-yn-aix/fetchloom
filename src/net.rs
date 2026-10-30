@@ -78,9 +78,9 @@ impl Offline {
     pub(crate) fn retry(self) -> &'static str {
         match self {
             Self::No => "run the same command when you are online",
-            Self::Flag => "run the same command without --offline",
+            Self::Flag => "run it again without --offline",
             Self::Environment => "unset FETCHLOOM_OFFLINE, then run the same command",
-            Self::Both => "remove --offline and unset FETCHLOOM_OFFLINE, then run the same command",
+            Self::Both => "unset FETCHLOOM_OFFLINE, then run it again without --offline",
         }
     }
 }

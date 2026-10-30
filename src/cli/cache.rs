@@ -156,7 +156,9 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         ),
     );
     if checked.stuck.is_empty() {
-        return Err(error.help("the next sync downloads what a project still needs"));
+        return Err(
+            error.help("run `fetchloom sync` in each project to download what it still needs")
+        );
     }
     error = error.detail(format!(
         "{} could not be removed:",
@@ -165,7 +167,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     for digest in checked.stuck.iter().take(5) {
         error = error.detail(cache.object_path(digest).display().to_string());
     }
-    Err(error.help("remove them by hand. if others write to this cache, check who changed them"))
+    Err(error.help("delete them by hand, then run `fetchloom cache verify` again. if others write to this cache, check who changed them"))
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to

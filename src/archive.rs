@@ -199,7 +199,7 @@ fn not_written(path: &str, err: &io::Error) -> Error {
         format_args!("could not write \"{path}\" into the cache"),
         err,
     )
-    .or_help("check that the cache's disk has room and that fetchloom may write to it")
+    .or_help("free space on the cache's disk, or set FETCHLOOM_CACHE to a folder fetchloom may write to, then run the same command again")
 }
 
 fn unreadable(archive: &Path, err: &io::Error) -> Error {

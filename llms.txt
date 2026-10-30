@@ -1,0 +1,10 @@
+# fetchloom
+
+> fetchloom is a command line tool that pins the research datasets a project needs. data.toml lists the datasets, data.lock records every file by SHA-256, and `fetchloom sync` places them in data/ from a cache shared by every project on the machine.
+
+## docs
+
+- [README](README.md): install and a quick start
+- [cli](docs/cli.md): every command, option and output
+- [agents](docs/agents.md): driving fetchloom from scripts and agents, with --json recipes, error kinds and exit codes
+- [formats](docs/formats.md): data.toml, data.lock, the JSON document and exit codes

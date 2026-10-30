@@ -82,17 +82,113 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     Ok(())
 }
 
+/// the analogy a beginner meets on the first run, in the top of `--help` and in `help concepts`.
+pub(crate) const ANALOGY: [&str; 4] = [
+    "data.toml, the shopping list: which datasets you want",
+    "data.lock, the receipt: the exact files and their fingerprints",
+    "the cache, the pantry: shared by every project on this machine",
+    "sync, restocking: data/ ends up matching the receipt",
+];
+
 #[test]
 fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
-    assert_eq!(
-        stdout.lines().last(),
-        Some("  fetchloom add zenodo:3608990"),
-        "the welcome ends with a command to copy"
+    assert!(stdout.lines().count() <= 16, "{stdout}");
+    for line in ANALOGY {
+        assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
+    }
+    assert!(
+        stdout.contains("\n  fetchloom add zenodo:3608990 "),
+        "the welcome has a first command to copy"
+    );
+    assert!(
+        stdout
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("`fetchloom help concepts`")),
+        "the welcome ends with where to learn more"
     );
     insta::assert_snapshot!(stdout);
+    Ok(())
+}
+
+/// the quick start in README.md shows the first run as it is.
+#[test]
+fn the_readme_quick_start_is_the_first_run() -> Result {
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
+    )?
+    .replace("\r\n", "\n");
+    let (_, start) = readme
+        .split_once("## quick start\n")
+        .ok_or("README.md has no quick start")?;
+    let (_, block) = start
+        .split_once("```text\n")
+        .ok_or("the quick start shows no first run")?;
+    let (shown, _) = block.split_once("```").ok_or("the first run never ends")?;
+    let welcome = text(&Sandbox::new()?.run(&[])?.stdout)?;
+    assert_eq!(shown, welcome);
+    Ok(())
+}
+
+#[test]
+fn help_opens_like_the_first_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let welcome = text(&sandbox.run(&[])?.stdout)?;
+    let (version, intro) = welcome
+        .split_once("\n\n")
+        .ok_or("the welcome has no version line")?;
+    assert_eq!(version, format!("fetchloom {}", env!("CARGO_PKG_VERSION")));
+    let help = text(&sandbox.run(&["--help"])?.stdout)?;
+    assert!(
+        help.starts_with(&format!("{}\n\nusage: ", intro.trim_end())),
+        "{help}"
+    );
+    Ok(())
+}
+
+#[test]
+fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["help", "concepts"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let stdout = text(&output.stdout)?;
+    assert!(stdout.lines().count() < 30, "{stdout}");
+    for line in ANALOGY {
+        assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
+    }
+    assert_eq!(
+        sandbox.run(&["--json", "help", "concepts"])?.stdout,
+        output.stdout,
+        "help stays text"
+    );
+    insta::assert_snapshot!(stdout);
+    Ok(())
+}
+
+#[test]
+fn help_shows_a_command_and_suggests_a_topic() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (topic, flag) in [
+        (&[][..], &["--help"][..]),
+        (&["get"], &["get", "--help"]),
+        (&["cache", "gc"], &["cache", "gc", "--help"]),
+    ] {
+        let help = sandbox.run(&[&["help"][..], topic].concat())?;
+        assert!(help.status.success(), "{topic:?}");
+        assert_eq!(help.stdout, sandbox.run(flag)?.stdout, "{topic:?}");
+    }
+    let typo = sandbox.run(&["--json", "help", "concept"])?;
+    assert_eq!(typo.status.code(), Some(2));
+    let document: Value = serde_json::from_slice(&typo.stdout)?;
+    assert_eq!(document["command"], Value::Null, "help runs no command");
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["help"],
+        "did you mean `fetchloom help concepts`?"
+    );
     Ok(())
 }
 
@@ -124,6 +220,35 @@ fn a_usage_error_follows_verbose_and_color() -> Result {
     assert!(stderr.starts_with("\u{1b}["), "{stderr}");
     let plain = sandbox.run(&["sycn"])?;
     assert!(!text(&plain.stderr)?.contains('\u{1b}'));
+    Ok(())
+}
+
+#[test]
+fn color_marks_meaning_with_a_symbol_and_stays_off_when_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let colored = text(&sandbox.run(&["--color", "always", "sycn"])?.stderr)?;
+    assert!(
+        colored.contains("31m✗"),
+        "an error is red and marked: {colored}"
+    );
+    assert!(
+        colored.contains("\u{1b}[36m`fetchloom sync`\u{1b}[0m"),
+        "a command takes the accent: {colored}"
+    );
+    for (flag, variables) in [
+        (&["--color", "never"][..], &[("CLICOLOR_FORCE", "1")][..]),
+        (&[], &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]),
+        (&[], &[]),
+    ] {
+        let mut command = sandbox.command(&[flag, &["sycn"]].concat());
+        command.envs(variables.iter().copied());
+        let stderr = text(&command.output()?.stderr)?;
+        assert!(
+            !stderr.contains('\u{1b}'),
+            "{flag:?} {variables:?}: {stderr}"
+        );
+        assert!(stderr.starts_with('✗'), "{stderr}");
+    }
     Ok(())
 }
 

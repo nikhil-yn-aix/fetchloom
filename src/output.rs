@@ -86,7 +86,10 @@ impl Output {
     pub(crate) fn step(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             let green = Paint::new().fg_color(Some(AnsiColor::Green.into())).bold();
-            self.line(&format!("{green}{verb:>11}{green:#} {}", plain(text)));
+            self.line(&format!(
+                "{green}{verb:>11}{green:#} {}",
+                subject(&plain(text))
+            ));
         }
     }
 
@@ -94,7 +97,10 @@ impl Output {
     pub(crate) fn mark(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
-            self.line(&format!("{yellow}{verb:>11}{yellow:#} {}", plain(text)));
+            self.line(&format!(
+                "{yellow}{verb:>11}{yellow:#} {}",
+                subject(&plain(text))
+            ));
         }
     }
 
@@ -116,7 +122,7 @@ impl Output {
             self.line(&format!(
                 "{yellow}{}{yellow:#} {}",
                 self.style.warned(),
-                plain(text)
+                accented(&plain(text), Paint::new())
             ));
         }
     }
@@ -128,7 +134,7 @@ impl Output {
             self.line(&format!(
                 "{green}{}{green:#} {}",
                 self.style.done(),
-                plain(text)
+                accented(&plain(text), Paint::new())
             ));
         }
     }
@@ -136,8 +142,28 @@ impl Output {
     pub(crate) fn hint(&self, text: &str) {
         if self.tells(Level::Normal) {
             let bold = Paint::new().bold();
-            self.line(&format!("  {bold}hint:{bold:#} {}", plain(text)));
+            self.line(&format!(
+                "  {bold}hint:{bold:#} {}",
+                accented(&plain(text), Paint::new())
+            ));
         }
+    }
+
+    /// the step a person usually takes after a run that worked, such as committing data.lock.
+    pub(crate) fn next(&self, text: &str) {
+        if self.shows_next() {
+            let dim = Paint::new().dimmed();
+            self.line(&format!(
+                "  {dim}next: {}{dim:#}",
+                accented(&plain(text), dim)
+            ));
+        }
+    }
+
+    /// whether [`Output::next`] prints: only to a person at a terminal, never with `-q` or
+    /// `--json`, or when stdout goes to a pipe or a file.
+    fn shows_next(&self) -> bool {
+        self.style.watched && self.tells(Level::Normal)
     }
 
     /// free text from a source, such as a title, cut to fit one line of the story.
@@ -163,13 +189,17 @@ impl Output {
         let mut text = format!(
             "{red}{}{red:#} {}",
             self.style.failed(),
-            plain(&error.message)
+            accented(&plain(&error.message), Paint::new())
         );
         for line in &error.details {
-            let _ = write!(text, "\n  {}", plain(line));
+            let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim));
         }
         if let Some(help) = &error.help {
-            let _ = write!(text, "\n  {bold}help:{bold:#} {}", plain(help));
+            let _ = write!(
+                text,
+                "\n  {bold}help:{bold:#} {}",
+                accented(&plain(help), Paint::new())
+            );
         }
         if self.level >= Level::Verbose {
             let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
@@ -326,6 +356,42 @@ impl Output {
     }
 }
 
+/// the one color for names and commands, wherever they appear. the stream drops it, like every
+/// color, when color is off.
+const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
+
+/// `text` with each command in backticks in the accent, then back to `around`. the backticks
+/// stay, so a command still stands out without color.
+fn accented(text: &str, around: Paint) -> String {
+    let mut shown = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(start) = rest.find('`') {
+        let Some(length) = rest[start + 1..].find('`') else {
+            break;
+        };
+        let end = start + length + 2;
+        let _ = write!(
+            shown,
+            "{}{ACCENT}{}{ACCENT:#}{around}",
+            &rest[..start],
+            &rest[start..end]
+        );
+        rest = &rest[end..];
+    }
+    shown.push_str(rest);
+    shown
+}
+
+/// a step's facts with what it is about, such as a file or a dataset, in the accent: the text
+/// before the first `·`, or the whole text when it is one word.
+fn subject(text: &str) -> String {
+    match text.split_once(" · ") {
+        Some((name, facts)) => format!("{ACCENT}{name}{ACCENT:#} · {facts}"),
+        None if !text.is_empty() && !text.contains(' ') => format!("{ACCENT}{text}{ACCENT:#}"),
+        None => accented(text, Paint::new()),
+    }
+}
+
 /// one line on stderr, with its colors only when they are on.
 fn write_line(color: bool, text: &str) {
     let choice = if color {
@@ -356,12 +422,65 @@ fn plain(text: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::plain;
+    use anstyle::Style as Paint;
+
+    use super::{Level, Output, Style, accented, plain, subject};
+
+    #[test]
+    fn commands_in_backticks_take_the_accent_and_keep_their_backticks() {
+        let dim = Paint::new().dimmed();
+        assert_eq!(
+            accented("run `fetchloom sync` again", Paint::new()),
+            "run \u{1b}[36m`fetchloom sync`\u{1b}[0m again"
+        );
+        assert_eq!(
+            accented("commit it; then `fetchloom sync`", dim),
+            "commit it; then \u{1b}[36m`fetchloom sync`\u{1b}[0m\u{1b}[2m"
+        );
+        assert_eq!(accented("an odd ` mark", Paint::new()), "an odd ` mark");
+    }
+
+    #[test]
+    fn a_step_names_its_subject_in_the_accent() {
+        assert_eq!(
+            subject("iris · 1 file in data.lock"),
+            "\u{1b}[36miris\u{1b}[0m · 1 file in data.lock"
+        );
+        assert_eq!(
+            subject("data/iris/iris.csv"),
+            "\u{1b}[36mdata/iris/iris.csv\u{1b}[0m"
+        );
+        assert_eq!(
+            subject("for another fetchloom working in this project"),
+            "for another fetchloom working in this project"
+        );
+    }
 
     #[test]
     fn server_text_cannot_steer_the_terminal() {
         assert_eq!(plain("iris.csv · 4.1 KiB"), "iris.csv · 4.1 KiB");
         assert_eq!(plain("\u{1b}[2Jgone"), "\\u{1b}[2Jgone");
         assert_eq!(plain("two\nlines"), "two\\nlines");
+    }
+
+    #[test]
+    fn the_next_step_is_only_for_a_person_at_a_terminal() {
+        let shows = |watched, level, json| {
+            let style = Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched,
+            };
+            Output::new(style, level, json, false).shows_next()
+        };
+        assert!(shows(true, Level::Normal, false));
+        assert!(shows(true, Level::Verbose, false));
+        assert!(!shows(true, Level::Quiet, false), "-q");
+        assert!(!shows(true, Level::Normal, true), "--json");
+        assert!(
+            !shows(false, Level::Normal, false),
+            "stdout or stderr is not a terminal"
+        );
     }
 }

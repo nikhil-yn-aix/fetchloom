@@ -4,6 +4,7 @@
 
 mod folder;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,6 +122,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     unpacking::drop_archives(&cache, &unpacked, None);
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     context.output.answer(&folder.display().to_string());
+    tell_next(context, &args.link);
     let origins: HashMap<&str, Origin> = locked
         .iter()
         .zip(&fetched)
@@ -289,6 +291,17 @@ fn planned<'a>(cache: &Cache, files: &'a [LockedFile]) -> Result<Plan<'a>, Error
     }
     plan::check(&planned.targets, Patterns::OnCommandLine)?;
     Ok(planned)
+}
+
+/// the step after a download for a person at a terminal: pinning the same link in a project.
+fn tell_next(context: &Context, link: &str) {
+    // a link holding a secret is one `add` refuses, and no message may repeat it
+    if let Cow::Borrowed(link) = net::mask_query(link.trim()) {
+        context.output.next(&format!(
+            "to pin it in a project instead, run `fetchloom add {}` there",
+            super::shell_word(link)
+        ));
+    }
 }
 
 /// the files `--select` and `--exclude` keep, or the one file a pasted link names.

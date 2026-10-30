@@ -1,18 +1,20 @@
 ---
 source: tests/cli/basics.rs
-assertion_line: 57
 expression: stdout
 ---
 fetchloom 0.1.0
 
-  fetchloom add <link>    add a dataset, pin it and download it into data/
-  fetchloom sync          make data/ match data.lock on this machine
-  fetchloom status        see what changed
-  fetchloom path <name>   print where a dataset is, for scripts
-  fetchloom get <link>    fetch something once, without a project
+fetchloom puts the exact research data a project needs into its data/ folder.
 
-<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
+  data.toml, the shopping list: which datasets you want
+  data.lock, the receipt: the exact files and their fingerprints
+  the cache, the pantry: shared by every project on this machine
+  sync, restocking: data/ ends up matching the receipt
 
-get a first dataset into this folder:
+try it with zenodo:3608990, a 4 KB iris.csv:
 
-  fetchloom add zenodo:3608990
+  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
+  fetchloom sync                 restock data/ in a project you cloned
+  fetchloom get zenodo:3608990   fetch it once, without a project
+
+learn more with `fetchloom help concepts` and `fetchloom <command> --help`

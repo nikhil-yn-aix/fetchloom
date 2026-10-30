@@ -184,7 +184,7 @@ a missing manifest removes a project's registration. an unreadable lock stops in
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
-`-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. there is no `help` subcommand. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
+`-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. `fetchloom help concepts` explains data.toml, data.lock, the cache and sync; `fetchloom help <command>` prints the same text as `fetchloom <command> --help`. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
 
 command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeated `--select <glob>` and `--exclude <glob>` on both, `--no-extract` on both, `sync --force`, and `lock --upgrade [name ...]` or `--check`. defaults come from [settings](formats.md#settings).
 
@@ -192,11 +192,15 @@ command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeate
 
 stdout carries paths, version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` needs no closing summary; successful `lock --check` is silent unless verbose or JSON output was requested.
 
+when stdout and stderr are both terminals, `add`, `remove`, `get`, a `lock` that changed data.lock and a `sync` that placed files or changed data.lock end with a dim `next:` line naming the usual next step, such as committing data.toml and data.lock. `-q`, `--json` and a redirected stdout leave it out.
+
 resolved lines omit unavailable metadata, show total size only when every listed size is known, and shorten titles to 50 characters plus an ellipsis. plain URLs have no resolved line. licenses containing `-NC` or `-ND`, ignoring case, get a warning; other restrictions are not interpreted.
 
 on an interactive terminal, resolution waits show spinners and active downloads show bars. several downloads get an overall bar. elapsed time appears after two seconds. after three seconds, a positive rate is shown; remaining time also needs a known total. finished bars clear and the command prints its summaries. debug logging disables bars.
 
-without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings).
+without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings): color is off for pipes and files, with `NO_COLOR` and with `--color never`.
+
+with color on, success is green with ✓, warnings yellow with !, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
 
 ```text
 $ fetchloom get
@@ -213,4 +217,4 @@ when a download no longer matches its lock:
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```
 
-a separate help line is optional when the error itself says what to change or do next. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).
+a separate help line is optional when the error itself says what to change or do next. help that says to run a command again names it as typed, such as ``run `fetchloom sync` again``, unless an argument holds a secret. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).

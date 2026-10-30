@@ -17,7 +17,7 @@ pub(super) fn divert(page: &Url, status: u16, text: &str) -> Result<Url, Error> 
             )
             .detail(link)
             .detail("this is a temporary limit on google's side, usually lifted within a day")
-            .help("try again later, or ask the owner for another link"));
+            .help("run the same command again later, or ask the owner for another link"));
         }
         return Err(Error::new(
             Kind::SourceInvalid,
@@ -31,7 +31,7 @@ pub(super) fn divert(page: &Url, status: u16, text: &str) -> Result<Url, Error> 
             Kind::AuthRequired,
             format!("{link} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link. fetchloom does not sign in to google"));
+        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google"));
     }
     match status {
         200 => form(page, text).ok_or_else(|| {
@@ -158,7 +158,7 @@ mod tests {
             );
             assert_eq!(
                 err.help.as_deref(),
-                Some("try again later, or ask the owner for another link")
+                Some("run the same command again later, or ask the owner for another link")
             );
         }
     }

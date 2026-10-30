@@ -658,7 +658,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
             ),
         )
         .detail(format!("stated md5 {stated}, got {got}"))
-        .help("try again later. if it keeps happening, the copy on the server may be damaged"));
+        .help("run the same command again later. if it keeps happening, the copy on the server may be damaged"));
     }
     Ok(())
 }
