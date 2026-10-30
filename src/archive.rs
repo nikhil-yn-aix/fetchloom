@@ -97,7 +97,7 @@ pub(crate) struct Unpacked {
 type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), Error> + 'k;
 
 /// unpacks every file in `archive` into the cache. an archive refused part way leaves no object
-/// behind. writers caps its writer threads; zero keeps storage on the reading thread.
+/// behind. `writers` caps its writer threads; zero keeps storage on the reading thread.
 ///
 /// # Errors
 ///

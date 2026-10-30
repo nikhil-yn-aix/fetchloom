@@ -274,6 +274,8 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
+| `FETCHLOOM_RATE` | positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`; for example `500K` or `2.5M`; unset or empty means no cap |
+| `FETCHLOOM_THREADS` | integer from 1 to 256; unset or empty keeps the default worker counts; surrounding whitespace is accepted |
 | `FETCHLOOM_SPLIT` | exactly `1` lets files of at least 64 MiB split across streams; otherwise every file comes over one stream |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
@@ -286,7 +288,9 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 
 explicit `--color always` or `--color never` overrides color variables, not interactivity. in automatic mode the color order is `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0`, `TERM=dumb`, `CI`, then whether stderr is a terminal.
 
-an invalid jobs value fails a named command even when it does not download. welcome, bare-project status, help and version bypass that check. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
+rate values accept surrounding whitespace and a decimal fraction with digits on both sides of the point. suffixes multiply by powers of 1024; fractions round down to whole bytes per second. the resulting rate must be from 1 to 18,446,744,073,709,551,615. signs, exponent notation, lowercase suffixes and suffixes such as `MB` are refused.
+
+invalid jobs and rate values fail a named command with kind `usage` and exit 2, even when it does not download. welcome, bare-project status, help and version bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help and version bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and the icloud drive folder on windows. system proxy settings and proxy environment variables are read by the HTTP stack.
 

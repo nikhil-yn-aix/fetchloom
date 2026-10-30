@@ -190,6 +190,18 @@ help follows the same color settings as other output, including `--color` before
 
 command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeated `--select <glob>` and `--exclude <glob>` on both, `--no-extract` on both, `sync --force`, and `lock --upgrade [name ...]` or `--check`. defaults come from [settings](formats.md#settings).
 
+## environment variables
+
+| variable | effect |
+|---|---|
+| `FETCHLOOM_JOBS` | cap active network operations at 1 to 256; the default is 8 |
+| `FETCHLOOM_RATE` | cap response-body bytes per second across the process, including split downloads; for example, `500K`, `10M` or `2.5M` |
+| `FETCHLOOM_THREADS` | cap each local worker group and the async runtime's workers at 1 to 256; unset or empty keeps the existing worker counts |
+
+rate suffixes use binary units, matching displayed sizes: `K` is 1024 bytes and `M` is 1024 squared. `2.5M` allows 2,621,440 bytes per second. unset or empty means no rate cap. the shared bucket permits a burst of one second's bytes or 1 MiB, whichever is larger; a small download may finish within that burst. ctrl-c interrupts a wait for bytes.
+
+`FETCHLOOM_THREADS` limits placement, object lookup, file hashing, cache verification and archive extraction. archives share the budget between their readers and writers; at `1`, one reader also writes its members. it does not change `FETCHLOOM_JOBS` or bound the process's total OS thread count. [concurrency](architecture.md#concurrency) lists the worker groups and their defaults; [settings](formats.md#settings) defines accepted values and when invalid settings fail.
+
 ## output and errors
 
 stdout carries paths, version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` needs no closing summary; successful `lock --check` is silent unless verbose or JSON output was requested.
