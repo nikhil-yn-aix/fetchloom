@@ -91,11 +91,11 @@ a sync with nothing to do now skips reading archive member records, relocking an
 
 ## downloads over the network
 
-these runs went from windows to the network lab's server by its eth0 address, through its `tc` profiles. each run was `fetchloom -v get` of one file into an empty cache, and runs of one profile alternated between one stream, `FETCHLOOM_SPLIT=0`, and splitting, which that build did by default.
+these runs went from windows to the network lab's server by its eth0 address, through its `tc` profiles. each run was `fetchloom -v get` of one file into an empty cache, and runs of one profile alternated between one stream, `FETCHLOOM_SPLIT=0`, and the build's default.
 
-### split downloads
+### splitting from the first answer
 
-release build 1583af9, 2026-10-30. the times are medians, with the range in brackets.
+release build 1583af9, 2026-10-30, which split every file that could split from its first answer, as `FETCHLOOM_SPLIT=1` does now. the times are medians, with the range in brackets.
 
 | profile | file | one stream | split | requests | change |
 |---|---|---|---|---|---|
@@ -103,7 +103,7 @@ release build 1583af9, 2026-10-30. the times are medians, with the range in brac
 | home | file-1g.bin | 95.6 s (95.5 to 96.2) | 96.7 s (95.6 to 97.4) | 4 to 5 | 1% slower |
 | far | file-100m.bin | 500 s (490 to 531), 3 runs | 215 s (191 to 285), 3 runs | 2 to 4 | 57% faster |
 
-splitting won on far, where loss holds one TCP connection to about 2 Mbit/s, and lost on lan and home, so it is off unless `FETCHLOOM_SPLIT=1` asks for it: the bar was a 10% win on one profile and a loss on none. on home one stream already fills the link, and the second stream's range is read back to be hashed once the prefix reaches it. why lan lost a second was not found in the time box. far had three runs a side, not five: at 15:27 another session's lab traffic began and its `net.sh lan` removed the shaping during the fourth pair, and there was no time to repeat them. every run between then and 15:50 was discarded, and the home and lan rows were run again from 15:50 with the lab otherwise idle.
+splitting won on far, where loss holds one TCP connection to about 2 Mbit/s, and lost on lan and home, so that build kept it off unless `FETCHLOOM_SPLIT=1` asked for it: the bar was a 10% win on one profile and a loss on none. on home one stream already fills the link, and the second stream's range is read back to be hashed once the prefix reaches it. on lan one stream moved about 180 MiB/s and the split runs still added streams, 6 requests each; why that lost a second was not found in the time box. far had three runs a side, not five: at 15:27 another session's lab traffic began and its `net.sh lan` removed the shaping during the fourth pair, and there was no time to repeat them. every run between then and 15:50 was discarded, and the home and lan rows were run again from 15:50 with the lab otherwise idle.
 
 ### rate limits
 
