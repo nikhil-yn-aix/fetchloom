@@ -182,12 +182,16 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   unpacked/<archive sha256>
   projects/<sha256 of project root>.json
   changed/<object sha256>
+  tmp/<random>.stage/lock
+  tmp/<random>.stage/<random>.new
   tmp/
 ```
 
 `layout` is created with `1\n`. an existing value is not validated or migrated. `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache.
 
-objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
+objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup. the next unpack or gc removes a staging folder as soon as it can take that lock. where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. a folder starts with the `.starting` suffix until its lock is ready; unfinished setup also uses the age rule. random names use 16 hexadecimal digits. older loose `.new` files still use the age rule.
+
+`tmp/` also holds atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
 ### URL and partial records
 

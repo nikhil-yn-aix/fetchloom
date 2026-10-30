@@ -3,6 +3,7 @@
 mod changed;
 mod object;
 mod partial;
+mod staging;
 mod unpacked;
 mod upkeep;
 
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) use changed::Doubt;
 pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
 

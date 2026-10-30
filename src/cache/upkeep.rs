@@ -16,7 +16,7 @@ use crate::digest::{self, Sha256};
 
 /// how long an object no project needs stays, so a download a project has not locked yet, or a
 /// `get` from this morning, survives a gc.
-const GRACE: Duration = Duration::from_hours(24);
+pub(super) const GRACE: Duration = Duration::from_hours(24);
 
 /// one object in the cache.
 pub(crate) struct Object {
@@ -124,7 +124,7 @@ impl Cache {
     }
 
     /// removes every object not in `needed` that is older than a day, the records of archives no
-    /// project uses, and the unfinished downloads and temporary files left that long.
+    /// project uses, abandoned archive staging, and other temporary files left that long.
     pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
         let mut freed = Freed::default();
@@ -147,6 +147,7 @@ impl Cache {
             }
         }
         freed.leftovers += self.sweep_partials(&old);
+        freed.leftovers += self.sweep_staging(now);
         self.forget_changed(&needed.objects);
         for entry in fs::read_dir(self.root.join("tmp"))
             .into_iter()
@@ -340,10 +341,23 @@ mod tests {
             fs::write(folder.join("unlocked"), b"").unwrap();
             let member = folder.join("member.new");
             fs::write(&member, b"unfinished").unwrap();
+            let now = SystemTime::now();
+            let written = now + GRACE;
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&member)
+                .unwrap()
+                .set_modified(written)
+                .unwrap();
             seal(&member);
-            assert_eq!(cache.sweep(&Needed::default(), SystemTime::now()).leftovers, 0);
+            assert_eq!(cache.sweep(&Needed::default(), now).leftovers, 0);
+            assert_eq!(
+                cache.sweep(&Needed::default(), written + Duration::from_secs(60)).leftovers,
+                0,
+                "a recent write keeps a member in an older folder"
+            );
             assert!(member.exists());
-            let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+            let later = written + GRACE + Duration::from_secs(60);
             assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 1);
             assert!(!folder.exists());
         }

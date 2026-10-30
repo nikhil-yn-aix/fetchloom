@@ -8,12 +8,12 @@ use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use super::guard::Guard;
 use super::not_written;
-use crate::cache::{Cache, Member, NewObject, Sealed};
+use crate::cache::{Cache, Member, NewObject, Sealed, Staging};
 use crate::error::{Error, Kind};
 
 /// members up to this size reach a writer as bytes in memory. a larger one is written by the
@@ -31,7 +31,7 @@ enum Job {
 
 /// where the reading thread hands each member.
 pub(super) struct Writers<'s> {
-    cache: &'s Cache,
+    staging: &'s Arc<Staging>,
     jobs: SyncSender<Job>,
     failed: &'s AtomicBool,
 }
@@ -49,7 +49,7 @@ impl Writers<'_> {
             return Err(stopped());
         }
         let mut spill = Spill {
-            cache: self.cache,
+            staging: self.staging,
             bytes: Vec::new(),
             object: None,
         };
@@ -69,6 +69,9 @@ pub(super) fn store_all(
     cache: &Cache,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, u64), Error> {
+    let staging = cache
+        .staging()
+        .map_err(|err| Error::io("could not stage the archive's files", &err))?;
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
@@ -96,7 +99,7 @@ pub(super) fn store_all(
                     if failed.load(Ordering::Relaxed) {
                         continue;
                     }
-                    match seal(cache, job, flush_each) {
+                    match seal(&staging, job, flush_each) {
                         Ok(done) => locked(&sealed).push(done),
                         Err(err) => {
                             failed.store(true, Ordering::Relaxed);
@@ -107,7 +110,7 @@ pub(super) fn store_all(
             });
         }
         let writers = Writers {
-            cache,
+            staging: &staging,
             jobs,
             failed: &failed,
         };
@@ -177,10 +180,10 @@ fn publish_all(
     }
 }
 
-fn seal(cache: &Cache, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
+fn seal(staging: &Arc<Staging>, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
     let (path, object) = match job {
         Job::Bytes(path, bytes) => {
-            let object = cache.new_object().and_then(|mut object| {
+            let object = staging.new_object().and_then(|mut object| {
                 object.write_all(&bytes)?;
                 Ok(object)
             });
@@ -206,7 +209,7 @@ fn stopped() -> Error {
 
 /// a member's bytes: in memory while small, in a new object once they outgrow that.
 struct Spill<'c> {
-    cache: &'c Cache,
+    staging: &'c Arc<Staging>,
     bytes: Vec<u8>,
     object: Option<NewObject>,
 }
@@ -220,7 +223,7 @@ impl Write for Spill<'_> {
             self.bytes.extend_from_slice(buffer);
             return Ok(buffer.len());
         }
-        let mut object = self.cache.new_object()?;
+        let mut object = self.staging.new_object()?;
         object.write_all(&std::mem::take(&mut self.bytes))?;
         let written = object.write(buffer)?;
         self.object = Some(object);
