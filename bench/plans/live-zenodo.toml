@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "zenodo-s100"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/zenodo-s100.sha256"
 bytes = 20287660
 timeout = 3600
 tools = ["fetchloom", "zenodo_get", "datahugger", "pooch"]
-vars = { ref = "zenodo:3684992", expect = "bench/expect/live/zenodo-s100.sha256", record = "3684992", doi = "10.5281/zenodo.3684992" }
+vars = { ref = "zenodo:3684992", expect = "{repo}/bench/expect/live/zenodo-s100.sha256", record = "3684992", doi = "10.5281/zenodo.3684992" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

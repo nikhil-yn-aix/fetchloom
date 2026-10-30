@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "dropbox-s1"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/dropbox-s1.sha256"
 bytes = 775543
 timeout = 3600
 tools = ["fetchloom", "curl-sha256"]
-vars = { ref = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1", expect = "bench/expect/live/dropbox-s1.sha256", url = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1" }
+vars = { ref = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1", expect = "{repo}/bench/expect/live/dropbox-s1.sha256", url = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1" }
 
 [[workload]]
 id = "dropbox-szip"
@@ -24,7 +24,7 @@ expect = "bench/expect/live/dropbox-szip.sha256"
 bytes = 8645770
 timeout = 3600
 tools = ["fetchloom", "curl-sha256"]
-vars = { ref = "https://www.dropbox.com/s/33fop57jjq0wwa9/POJ-104.tar.gz?dl=1", expect = "bench/expect/live/dropbox-szip.sha256", url = "https://www.dropbox.com/s/33fop57jjq0wwa9/POJ-104.tar.gz?dl=1" }
+vars = { ref = "https://www.dropbox.com/s/33fop57jjq0wwa9/POJ-104.tar.gz?dl=1", expect = "{repo}/bench/expect/live/dropbox-szip.sha256", url = "https://www.dropbox.com/s/33fop57jjq0wwa9/POJ-104.tar.gz?dl=1" }
 
 [[workload]]
 id = "dropbox-m1"
@@ -32,7 +32,7 @@ expect = "bench/expect/live/dropbox-m1.sha256"
 bytes = 187839752
 timeout = 3600
 tools = ["fetchloom", "curl-sha256"]
-vars = { ref = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1", expect = "bench/expect/live/dropbox-m1.sha256", url = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1" }
+vars = { ref = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1", expect = "{repo}/bench/expect/live/dropbox-m1.sha256", url = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

@@ -9,7 +9,7 @@ repetitions = 5
 [vars]
 lab = "https://localhost:8443"
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "many-1k"
@@ -19,17 +19,17 @@ timeout = 1800
 tools = ["fetchloom", "curl-parallel", "aria2c-j16"]
 
 [tool.fetchloom]
-first = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
-second = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
+first = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "{repo}/bench/expect/many-1k.sha256", "--size", "102400"]
+second = ["{py}", "{wrappers}/many_urls.py", "fetchloom", "{out}", "{home}", "{lab}", "{repo}/bench/expect/many-1k.sha256", "--size", "102400"]
 ignore = [".fetchloom/*", "data.toml", "data.lock"]
 version = ["fetchloom", "--version"]
 
 [tool.curl-parallel]
-first = ["{py}", "{wrappers}/many_urls.py", "curl", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400"]
+first = ["{py}", "{wrappers}/many_urls.py", "curl", "{out}", "{home}", "{lab}", "{repo}/bench/expect/many-1k.sha256", "--size", "102400"]
 ignore = ["urls.curl"]
 version = ["curl", "--version"]
 
 [tool.aria2c-j16]
-first = ["{py}", "{wrappers}/many_urls.py", "aria2c", "{out}", "{home}", "{lab}", "bench/expect/many-1k.sha256", "--size", "102400", "--", "-j", "16"]
+first = ["{py}", "{wrappers}/many_urls.py", "aria2c", "{out}", "{home}", "{lab}", "{repo}/bench/expect/many-1k.sha256", "--size", "102400", "--", "-j", "16"]
 ignore = ["urls.aria2"]
 version = ["aria2c", "--version"]

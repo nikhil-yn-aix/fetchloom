@@ -8,7 +8,7 @@ repetitions = 5
 [vars]
 lab = "https://localhost:8443"
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 ca = "/etc/ssl/certs/ca-certificates.crt"
 unpack = ""
 
@@ -19,7 +19,7 @@ floor = "curl-sha256"
 primary = true
 timeout = 1800
 tools = ["fetchloom", "curl-sha256", "aria2c", "aria2c-tuned", "pooch", "dvc", "datalad"]
-vars = { url = "{lab}/file-1g.bin", known = "bench/expect/file-1g.sha256" }
+vars = { url = "{lab}/file-1g.bin", known = "{repo}/bench/expect/file-1g.sha256" }
 
 [[workload]]
 id = "file-100m"
@@ -28,7 +28,7 @@ floor = "curl-sha256"
 primary = true
 timeout = 600
 tools = ["fetchloom", "curl-sha256", "aria2c", "aria2c-tuned", "pooch", "dvc", "datalad"]
-vars = { url = "{lab}/file-100m.bin", known = "bench/expect/file-100m.sha256" }
+vars = { url = "{lab}/file-100m.bin", known = "{repo}/bench/expect/file-100m.sha256" }
 
 [[workload]]
 id = "file-10m"
@@ -37,7 +37,7 @@ floor = "curl-sha256"
 primary = false
 timeout = 300
 tools = ["fetchloom", "curl-sha256", "aria2c", "aria2c-tuned", "pooch", "dvc", "datalad"]
-vars = { url = "{lab}/file-10m.bin", known = "bench/expect/file-10m.sha256" }
+vars = { url = "{lab}/file-10m.bin", known = "{repo}/bench/expect/file-10m.sha256" }
 
 [[workload]]
 id = "files-10k-zip"

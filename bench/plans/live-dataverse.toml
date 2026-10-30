@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "dataverse-szip"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/dataverse-szip.sha256"
 bytes = 303511
 timeout = 3600
 tools = ["fetchloom", "datahugger", "pooch"]
-vars = { ref = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP", expect = "bench/expect/live/dataverse-szip.sha256", doi = "10.7910/DVN/TJCLKP" }
+vars = { ref = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP", expect = "{repo}/bench/expect/live/dataverse-szip.sha256", doi = "10.7910/DVN/TJCLKP" }
 
 [[workload]]
 id = "dataverse-mzip"
@@ -24,7 +24,7 @@ expect = "bench/expect/live/dataverse-mzip.sha256"
 bytes = 124549762
 timeout = 3600
 tools = ["fetchloom", "datahugger", "pooch"]
-vars = { ref = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/Y3QFBP", expect = "bench/expect/live/dataverse-mzip.sha256", doi = "10.7910/DVN/Y3QFBP" }
+vars = { ref = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/Y3QFBP", expect = "{repo}/bench/expect/live/dataverse-mzip.sha256", doi = "10.7910/DVN/Y3QFBP" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

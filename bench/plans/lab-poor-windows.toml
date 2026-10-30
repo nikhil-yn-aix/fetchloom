@@ -8,7 +8,7 @@ repetitions = 5
 [vars]
 lab = "https://172.31.233.169:8443"
 py = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 ca = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/lab-ca.crt"
 unpack = ""
 
@@ -19,7 +19,7 @@ floor = "curl-sha256"
 primary = false
 timeout = 1800
 tools = ["fetchloom", "curl-sha256", "aria2c", "aria2c-tuned", "pooch", "dvc"]
-vars = { url = "{lab}/file-10m.bin", known = "bench/expect/file-10m.sha256" }
+vars = { url = "{lab}/file-10m.bin", known = "{repo}/bench/expect/file-10m.sha256" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{url}", "-o", "{out}", "--yes"]

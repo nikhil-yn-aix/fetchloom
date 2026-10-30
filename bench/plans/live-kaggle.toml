@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "kaggle-s1"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/kaggle-s1.sha256"
 bytes = 125204
 timeout = 3600
 tools = ["fetchloom", "kagglehub"]
-vars = { ref = "kaggle:uciml/breast-cancer-wisconsin-data@2", expect = "bench/expect/live/kaggle-s1.sha256", client = "uciml/breast-cancer-wisconsin-data@2" }
+vars = { ref = "kaggle:uciml/breast-cancer-wisconsin-data@2", expect = "{repo}/bench/expect/live/kaggle-s1.sha256", client = "uciml/breast-cancer-wisconsin-data@2" }
 
 [[workload]]
 id = "kaggle-m1000"
@@ -24,7 +24,7 @@ expect = "bench/expect/live/kaggle-m1000.sha256"
 bytes = 228459385
 timeout = 3600
 tools = ["fetchloom", "kagglehub"]
-vars = { ref = "kaggle:tongpython/cat-and-dog@1", expect = "bench/expect/live/kaggle-m1000.sha256", client = "tongpython/cat-and-dog@1" }
+vars = { ref = "kaggle:tongpython/cat-and-dog@1", expect = "{repo}/bench/expect/live/kaggle-m1000.sha256", client = "tongpython/cat-and-dog@1" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

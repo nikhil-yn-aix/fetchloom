@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "url-s1"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/url-s1.sha256"
 bytes = 3858
 timeout = 3600
 tools = ["fetchloom", "curl-sha256", "pooch"]
-vars = { ref = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv", expect = "bench/expect/live/url-s1.sha256", url = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv" }
+vars = { ref = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv", expect = "{repo}/bench/expect/live/url-s1.sha256", url = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv" }
 
 [[workload]]
 id = "url-mzip"
@@ -24,7 +24,7 @@ expect = "bench/expect/live/url-mzip.sha256"
 bytes = 170498071
 timeout = 3600
 tools = ["fetchloom", "curl-sha256", "pooch"]
-vars = { ref = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz", expect = "bench/expect/live/url-mzip.sha256", url = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz" }
+vars = { ref = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz", expect = "{repo}/bench/expect/live/url-mzip.sha256", url = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

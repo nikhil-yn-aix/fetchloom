@@ -1,0 +1,5 @@
+name,pair,side,exe,seconds,exit,started,requests,netem,profile
+adaptive-live-cifar,1,a,fetchloom-main-fbd7ae9.exe,25.604,0,23:25:05,1,,
+adaptive-live-cifar,1,b,fetchloom-adaptive-fafec0c.exe,40.831,0,23:25:35,6,,
+adaptive-live-cifar,2,b,fetchloom-adaptive-fafec0c.exe,36.891,0,23:26:21,3,,
+adaptive-live-cifar,2,a,fetchloom-main-fbd7ae9.exe,32.711,0,23:27:03,1,,

@@ -316,7 +316,8 @@ def main():
         writer = csv.DictWriter(file, fieldnames=COLUMNS)
         writer.writeheader()
         for workload in plan["workload"]:
-            names = {**plan.get("vars", {}), **workload.get("vars", {})}
+            # tools run in their own folders, so paths in the repository go through {repo}
+            names = {"repo": BENCH.parent.as_posix(), **plan.get("vars", {}), **workload.get("vars", {})}
             want = expected(BENCH.parent / workload["expect"])
             members = [t for t in workload["tools"] if only is None or t in only]
             for rep in range(reps):

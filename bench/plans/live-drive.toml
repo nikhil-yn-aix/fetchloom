@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "drive-file"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/drive-file.sha256"
 bytes = 0
 timeout = 3600
 tools = ["fetchloom", "gdown"]
-vars = { ref = "drive:15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--", expect = "bench/expect/live/drive-file.sha256", client = "15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--" }
+vars = { ref = "drive:15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--", expect = "{repo}/bench/expect/live/drive-file.sha256", client = "15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

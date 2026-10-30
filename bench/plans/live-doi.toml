@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "doi-s1"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/doi-s1.sha256"
 bytes = 4177
 timeout = 3600
 tools = ["fetchloom", "curl-sha256", "pooch"]
-vars = { ref = "doi:10.5281/zenodo.3608990", expect = "bench/expect/live/doi-s1.sha256", url = "https://zenodo.org/records/3608990/files/iris.csv?download=1", doi = "10.5281/zenodo.3608990" }
+vars = { ref = "doi:10.5281/zenodo.3608990", expect = "{repo}/bench/expect/live/doi-s1.sha256", url = "https://zenodo.org/records/3608990/files/iris.csv?download=1", doi = "10.5281/zenodo.3608990" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]

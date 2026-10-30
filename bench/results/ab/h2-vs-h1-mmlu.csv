@@ -1,0 +1,11 @@
+name,pair,side,exe,seconds,exit,started,requests,netem,profile
+h2-vs-h1-mmlu,1,a,fetchloom-exp-d769b09.exe,49.498,0,00:25:55,182,,
+h2-vs-h1-mmlu,1,b,fetchloom-exp-d769b09.exe,46.741,0,00:26:47,182,,
+h2-vs-h1-mmlu,2,b,fetchloom-exp-d769b09.exe,45.309,0,00:27:36,182,,
+h2-vs-h1-mmlu,2,a,fetchloom-exp-d769b09.exe,45.318,0,00:28:24,182,,
+h2-vs-h1-mmlu,3,a,fetchloom-exp-d769b09.exe,44.325,0,00:29:11,182,,
+h2-vs-h1-mmlu,3,b,fetchloom-exp-d769b09.exe,46.035,0,00:29:58,182,,
+h2-vs-h1-mmlu,4,b,fetchloom-exp-d769b09.exe,46.016,0,00:30:47,182,,
+h2-vs-h1-mmlu,4,a,fetchloom-exp-d769b09.exe,42.691,0,00:31:35,182,,
+h2-vs-h1-mmlu,5,a,fetchloom-exp-d769b09.exe,46.504,0,00:32:20,182,,
+h2-vs-h1-mmlu,5,b,fetchloom-exp-d769b09.exe,48.191,0,00:33:09,182,,

@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "bench/tools"
+wrappers = "{repo}/bench/tools"
 
 [[workload]]
 id = "figshare-s"
@@ -16,7 +16,7 @@ expect = "bench/expect/live/figshare-s.sha256"
 bytes = 321136
 timeout = 3600
 tools = ["fetchloom", "datahugger", "pooch"]
-vars = { ref = "figshare:34744689@1", expect = "bench/expect/live/figshare-s.sha256", doi = "10.6084/m9.figshare.34744689.v1" }
+vars = { ref = "figshare:34744689@1", expect = "{repo}/bench/expect/live/figshare-s.sha256", doi = "10.6084/m9.figshare.34744689.v1" }
 
 [[workload]]
 id = "figshare-m"
@@ -24,7 +24,7 @@ expect = "bench/expect/live/figshare-m.sha256"
 bytes = 171356647
 timeout = 3600
 tools = ["fetchloom", "datahugger", "pooch"]
-vars = { ref = "figshare:34862205@2", expect = "bench/expect/live/figshare-m.sha256", doi = "10.6084/m9.figshare.34862205.v2" }
+vars = { ref = "figshare:34862205@2", expect = "{repo}/bench/expect/live/figshare-m.sha256", doi = "10.6084/m9.figshare.34862205.v2" }
 
 [tool.fetchloom]
 first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
