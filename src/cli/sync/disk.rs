@@ -300,8 +300,7 @@ fn same_entry(root: &Path, path: &str, listed: &str, look: Look, listings: &mut 
     #[cfg(not(unix))]
     {
         // without a file id, two spellings that each appear in their folders are two files
-        let _ = listed;
-        spelled_otherwise(root, path, listings)
+        spelled_otherwise(root, path, listings) || spelled_otherwise(root, listed, listings)
     }
 }
 
@@ -374,7 +373,6 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -396,6 +394,10 @@ mod tests {
             let path = format!("data/{name}/a.txt");
             assert!(!spelled_otherwise(root, &path, &mut listings), "{name}");
         }
-        assert!(spelled_otherwise(root, "Data/caf\u{e9}/a.txt", &mut listings));
+        assert!(spelled_otherwise(
+            root,
+            "Data/caf\u{e9}/a.txt",
+            &mut listings
+        ));
     }
 }
