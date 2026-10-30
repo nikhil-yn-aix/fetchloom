@@ -456,7 +456,7 @@ impl PartialWriter {
             })
             .collect();
         let text = serde_json::to_vec(&self.record).map_err(io::Error::other)?;
-        self.cache.write_atomically(&self.record_path, &text)?;
+        self.cache.write_hint(&self.record_path, &text)?;
         self.saved = Instant::now();
         Ok(())
     }
