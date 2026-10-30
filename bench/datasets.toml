@@ -165,9 +165,9 @@ id = "drive-folder"
 source = "drive"
 cell = "S"
 reference = "drive:folders/1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL"
-files = 0
+files = 4
 total_bytes = 0
-notes = "gdown's deep_folder, nested folders of small files"
+notes = "gdown's deep_folder; on 2026-10-31 four empty file.txt files in nested folders"
 
 [[dataset]]
 id = "dropbox-s1"
