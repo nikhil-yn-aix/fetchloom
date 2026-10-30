@@ -14,7 +14,6 @@ use crate::source::{Listing, MOST_FILES, Reference, Remote};
 /// the most files kaggle sends in one page, whatever page size is asked for.
 const PAGE: usize = 200;
 
-/// what the view endpoint says about a dataset.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct View {
@@ -28,7 +27,6 @@ struct View {
     current_version_number: u32,
 }
 
-/// one page of the list endpoint.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page {

@@ -86,7 +86,6 @@ pub(crate) fn fixture_bytes(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
 }
 
-/// runs a future to its end, for tests of async code.
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
