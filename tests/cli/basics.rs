@@ -114,6 +114,25 @@ fn welcome() -> Result {
     Ok(())
 }
 
+/// the quick start in README.md shows the first run as it is.
+#[test]
+fn the_readme_quick_start_is_the_first_run() -> Result {
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
+    )?
+    .replace("\r\n", "\n");
+    let (_, start) = readme
+        .split_once("## quick start\n")
+        .ok_or("README.md has no quick start")?;
+    let (_, block) = start
+        .split_once("```text\n")
+        .ok_or("the quick start shows no first run")?;
+    let (shown, _) = block.split_once("```").ok_or("the first run never ends")?;
+    let welcome = text(&Sandbox::new()?.run(&[])?.stdout)?;
+    assert_eq!(shown, welcome);
+    Ok(())
+}
+
 #[test]
 fn help_opens_like_the_first_run() -> Result {
     let sandbox = Sandbox::new()?;
