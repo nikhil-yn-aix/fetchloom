@@ -202,7 +202,7 @@ objects hold read-only payloads. `tmp/` holds new archive members, atomic record
 | `validators.etag` | `ETag` string, or null |
 | `validators.last_modified` | `Last-Modified` string, or null |
 
-partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. progress is saved about once a second while writing. resumption truncates bytes past the checkpoint and rehashes the prefix.
+partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. a split download adds `ranges`, the pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; the field is absent when there are none. progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 
 the `.lock` file coordinates writers; its contents are unused. gc removes an abandoned download's `.part` and `.json` but keeps its `.lock`, since a run waiting for that download may already have it open. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 
@@ -256,6 +256,7 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
+| `FETCHLOOM_SPLIT` | exactly `0` downloads every file over one stream; otherwise files of at least 64 MiB may split |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |

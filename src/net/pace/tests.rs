@@ -272,6 +272,24 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
 }
 
 #[test]
+fn short_waits_just_after_a_reset_pass_quietly() {
+    let paces = Paces::default();
+    let start = Instant::now();
+    let wait = |at: Instant, reset: u64| {
+        let ticket = paces.admit("zenodo.org", at).unwrap();
+        Paces::heard(ticket, vec![limit(0, reset, None)], at);
+        paces.admit("zenodo.org", at).unwrap_err().announce
+    };
+    assert!(wait(start, 40));
+    let reset = start + Duration::from_secs(40);
+    assert!(
+        !wait(reset, 3),
+        "a 429 for a few seconds more right after the reset says nothing again"
+    );
+    assert!(wait(reset + Duration::from_secs(20), 40));
+}
+
+#[test]
 fn a_limit_that_resets_too_late_to_wait_for_is_left_to_the_host() {
     let paces = Paces::default();
     let start = Instant::now();

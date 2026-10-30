@@ -10,7 +10,7 @@ one rust crate builds `fetchloom` and `fl`. both call the same library entry poi
 | `cli/sync` | relocking, download selection, archive work and placement decisions |
 | `project` | manifest, lock and state types, project discovery, metadata writes and project locking |
 | `source` | reference parsing, DOI routing and source listings |
-| `net` | HTTP, retries, partial-download streaming, credentials and address checks |
+| `net` | HTTP, retries, rate limits, partial-download streaming, split downloads, credentials and address checks |
 | `cache` | objects, partials, indexes, project registrations, gc and verification |
 | `archive` | format readers, member checks, limits and staged member writes |
 | `plan` | destination expansion and collision checks |
@@ -37,7 +37,7 @@ planning produces target paths, not a serialized dry-run action plan. JSON conta
 
 ## concurrency
 
-the async command runtime uses up to four worker threads. file-download tasks are queued at up to twice `FETCHLOOM_JOBS`; network permits bound active metadata requests and downloads. each response streams through a 16-slot channel to a blocking writer that hashes and writes it. prefix hashing and final flushes also use blocking tasks.
+the async command runtime uses up to four worker threads. file-download tasks are queued at up to twice `FETCHLOOM_JOBS`; network permits bound active metadata requests and downloads. each response streams through a 16-slot channel to a blocking writer that hashes and writes it. the streams of a split download share one writer, which puts each piece at its offset and hashes the contiguous prefix as it grows; bytes that arrived past the prefix are read back and hashed once the prefix reaches them. prefix hashing and final flushes also use blocking tasks.
 
 archive extraction runs up to `min(4, ceil(logical CPUs / 4))` archives at once. each archive has up to eight writer threads. members up to 1 MiB travel to writers in memory; larger members spill to disk while being read. queues are bounded, but listings, plans and archive member records still grow with file count.
 
@@ -69,7 +69,7 @@ objects are read-only files named by SHA-256. an ordinary download writes to a p
 
 publication normally uses a hardlink that fails if the destination exists. the fallback is an existence check followed by rename, which has a race on systems where rename replaces an existing destination. it is not a universal no-clobber guarantee. a rename that fails because another writer published the object since the check counts the bytes as already cached. a file at the name that lookup would refuse, such as an object whose size an edit through a writable hardlink changed, is marked as changed and replaced by the new bytes; when it cannot be removed, the write fails.
 
-partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and are saved about once a second. resuming rehashes that prefix before appending.
+partials use OS file locks. a competing process waits for the owner; a filesystem that refuses locking gets private files under `tmp/` instead, losing cross-run resumption. checkpoints contain the received prefix's hash and, for a split download, each range finished past it with its own hash. they are saved about once a second. resuming rehashes that prefix before appending, keeps the ranges whose bytes still match and fetches the rest.
 
 cache lookup checks file type and known size, not content. `cache verify` rehashes objects. the [layout and records](formats.md#the-cache) separate objects from URL history, MD5 mappings, archive trees, change marks and project registrations.
 
@@ -114,9 +114,21 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 | metadata body limit | 64 MiB |
 | transient retry budget | 5 attempts including the first |
 | backoff | jittered exponential delay; `Retry-After` is a floor; above 60 s fails instead of waiting |
+| rate limit waits | until the host's limit resets, when that is within 120 s; at most 10 for one request before they count as attempts |
+| split downloads | files of at least 64 MiB, up to 8 streams within the host's free slots; `FETCHLOOM_SPLIT=0` turns them off |
 | download diversion pages | at most 3, each at most 4 MiB, when a source supplies a page handler |
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
+
+### rate limits
+
+every answer may state the limits of its host: `X-RateLimit-Limit`, `-Remaining` and `-Reset` as zenodo sends them, the same names without `X-`, or `RateLimit` with `RateLimit-Policy` as hugging face sends them, where each named policy is a limit of its own. a reset is read as seconds since 1970 against the answer's `Date`, or as seconds from the answer when it is small. each hop of every request, ranges included, first checks its host's limits: while one has no more requests left than the requests on their way to that host, no new request starts until it resets, and one line says why, such as `Waiting 40 s for zenodo.org, whose limit of 133 requests is used up`. a wait that ends within 10 s of the one a line told of passes without another line, such as the few seconds zenodo's 429s ask for just after its limit resets. requests already sent are not counted in the stated remainder, so a host loses at most that many requests a window. answers from one window keep their lowest count, and an answer from an earlier window changes nothing. a limit that resets more than 120 s away is left for the host to enforce.
+
+a 429 uses up the limits it names, or all it states, for at least its `Retry-After`. when that resets within 120 s, the next try waits for the reset and is not one of the request's five attempts; after 10 such waits for one request they count again. a 429 that resets later fails as `network.rate_limited` at once. `Retry-After` on any other answer, as zenodo sends it on every success, changes nothing.
+
+### split downloads
+
+a download of at least 64 MiB may run over several streams when the server answers ranges, by a `206` or `Accept-Ranges: bytes`, and something proves the pieces belong to one version: a pinned SHA-256, or a validator for `If-Range`. the first answer keeps streaming from where it started. every 250 ms the download checks its rate over 2 s windows, and adds a stream while each added stream raised the total by at least 15%, up to 8 and only when the host and the overall limit have a slot that nothing else waits for. added streams use HTTP/1.1 connections of their own, since streams of one HTTP/2 connection share its window, and each asks for its range with `If-Range`. a stream that finishes takes the upper half of the largest range left when that half is at least 8 MiB. a `200` answer to a range, or three failed streams, stop the splitting for that file, and the rest comes over one stream. a range answer from another version restarts the download. a split download whose hash does not match is restarted once as one stream before it fails, as a resumed one is.
 
 OSF file downloads retry a 403 XML answer only when it explicitly says an `X-Amz` storage request expired. the next attempt starts at the stable OSF URL to obtain a new storage link, within the same retry budget. other 403 answers remain access errors.
 

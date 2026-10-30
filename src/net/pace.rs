@@ -18,6 +18,9 @@ use super::failure::retry_after;
 pub(super) const LONGEST: Duration = Duration::from_secs(120);
 /// how far apart answers place the reset of one window, since a `Date` counts whole seconds.
 const SAME_WINDOW: Duration = Duration::from_millis(1500);
+/// after a notice, a wait that ends within this long of the one it told of passes without
+/// another, such as the short waits zenodo's 429s ask for just after its limit resets.
+const QUIET: Duration = Duration::from_secs(10);
 /// a reset this large is a time in seconds since 1970, and a smaller one seconds from now.
 const EPOCH_FROM: u64 = 1_000_000_000;
 
@@ -256,7 +259,7 @@ impl Paces {
         };
         let announce = pace
             .announced
-            .is_none_or(|announced| known.reset > announced + SAME_WINDOW);
+            .is_none_or(|announced| known.reset > announced + QUIET);
         if announce {
             pace.announced = Some(known.reset);
         }
