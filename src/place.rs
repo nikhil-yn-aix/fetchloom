@@ -160,11 +160,15 @@ impl Placer {
         self.put(object, destination, writable)
     }
 
-    /// places every order and says how each went, in order, with the metadata of each placed file
-    /// read right after it was placed, so a later edit is never taken for the placed file. the
-    /// first goes alone, so it learns which methods the filesystem allows before the rest go
-    /// several at once.
-    pub(crate) fn place_all(&mut self, orders: &[Order]) -> Vec<io::Result<(Method, Metadata)>> {
+    /// places every order and says how each went, in order, with what `seen` keeps of the metadata
+    /// of each placed file, read right after it was placed, so a later edit is never taken for the
+    /// placed file. the first goes alone, so it learns which methods the filesystem allows before
+    /// the rest go several at once.
+    pub(crate) fn place_all<T: Send>(
+        &mut self,
+        orders: &[Order],
+        seen: impl Fn(&Metadata) -> T + Sync,
+    ) -> Vec<io::Result<(Method, T)>> {
         let mut results = Vec::with_capacity(orders.len());
         let mut ready = Vec::with_capacity(orders.len());
         for (index, order) in orders.iter().enumerate() {
@@ -175,10 +179,11 @@ impl Placer {
         }
         let ready = spread(ready);
         let this = &*self;
+        // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |(index, order): &(usize, &Order)| {
             let placed = this
                 .put(order.object, order.destination, order.writable)
-                .and_then(|method| Ok((method, fs::symlink_metadata(order.destination)?)));
+                .and_then(|method| Ok((method, seen(&fs::symlink_metadata(order.destination)?))));
             (*index, placed)
         };
         if let Some((first, rest)) = ready.split_first() {
@@ -1221,7 +1226,7 @@ mod tests {
             },
         );
 
-        let results = placer.place_all(&orders);
+        let results = placer.place_all(&orders, |_| ());
 
         assert_eq!(results.len(), 301);
         for (index, result) in results.iter().enumerate() {

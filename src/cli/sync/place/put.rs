@@ -49,12 +49,12 @@ pub(super) fn put_all<'t>(
             writable: target.copy,
         })
         .collect();
-    let results = placer.place_all(&orders);
+    let results = placer.place_all(&orders, Look::of);
     let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
     let mut failure = None;
     for (index, result) in results.into_iter().enumerate() {
         let target = todo[index];
-        let (method, metadata) = match result {
+        let (method, look) = match result {
             Ok(done) => done,
             Err(err) => {
                 failure = failure
@@ -64,7 +64,6 @@ pub(super) fn put_all<'t>(
         };
         // the placer seals a reflink or copy writable exactly when the dataset asks for copies
         let writable = target.copy && method != Method::Hardlink;
-        let look = Look::of(&metadata);
         state.files.insert(
             target.path.clone(),
             placed(target, method, look, writable, checked),
