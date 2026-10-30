@@ -225,4 +225,44 @@ mod tests {
             assert!(add_all(names).is_err(), "{names:?}");
         }
     }
+
+    /// any names, in any order: every file taken is a safe path in NFC that reads back as itself,
+    /// and no two files, or a file and a folder, are one name on a disk that ignores case.
+    #[test]
+    fn fuzz_member_names() {
+        bolero::check!()
+            .with_type::<Vec<(Vec<u8>, bool)>>()
+            .for_each(|entries| {
+                let mut names = Names::default();
+                let mut files = HashMap::new();
+                let mut folders = std::collections::HashSet::new();
+                for (raw, is_folder) in entries {
+                    let raw = String::from_utf8_lossy(raw);
+                    let Ok(Named::File(path)) = names.add(&raw, *is_folder) else {
+                        continue;
+                    };
+                    assert_eq!(name::escapes(&path), None, "{raw:?} became {path:?}");
+                    assert_eq!(name::unstorable(&path), None, "{raw:?} became {path:?}");
+                    assert!(!path.contains(name::is_control), "{path:?}");
+                    assert_eq!(
+                        ComposingNormalizerBorrowed::new_nfc().normalize(&path),
+                        path
+                    );
+                    assert_eq!(
+                        Names::default()
+                            .add(&path, false)
+                            .map_err(|err| err.message),
+                        Ok(Named::File(path.clone()))
+                    );
+                    let key = name::fold(&path);
+                    assert!(!folders.contains(&key), "{path:?} is also a folder");
+                    assert_eq!(files.insert(key, path.clone()), None, "{path:?}");
+                    for (at, _) in path.match_indices('/') {
+                        let folder = name::fold(&path[..at]);
+                        assert!(!files.contains_key(&folder), "{path:?} is inside a file");
+                        folders.insert(folder);
+                    }
+                }
+            });
+    }
 }

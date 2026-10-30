@@ -259,4 +259,48 @@ mod tests {
         )])));
         assert!(!is_html(&headers(&[])));
     }
+
+    /// any header value: nothing panics, and a file name a response asks for, once made safe, is
+    /// one plain name that every disk can store.
+    #[test]
+    fn fuzz_response_headers() {
+        bolero::check!().for_each(|bytes| {
+            let Ok(value) = header::HeaderValue::from_bytes(bytes) else {
+                return;
+            };
+            let mut map = HeaderMap::new();
+            for name in [
+                header::CONTENT_DISPOSITION,
+                header::CONTENT_TYPE,
+                header::CONTENT_RANGE,
+                header::CONTENT_LENGTH,
+                header::ETAG,
+                header::LAST_MODIFIED,
+            ] {
+                map.insert(name, value.clone());
+            }
+            let _ = (is_xml(&map), is_html(&map), range_start(&map));
+            for status in [StatusCode::OK, StatusCode::PARTIAL_CONTENT] {
+                let _ = total_length(&map, status);
+            }
+            let stated = validators(&map);
+            let _ = if_range(&stated);
+            assert!(!changed(&stated, &stated));
+            let Some(asked) = file_name(&map) else {
+                return;
+            };
+            assert!(!asked.trim().is_empty(), "{asked:?}");
+            let Some(safe) = crate::name::sanitize(&asked) else {
+                return;
+            };
+            assert_eq!(
+                crate::name::escapes(&safe),
+                None,
+                "{asked:?} became {safe:?}"
+            );
+            assert_eq!(crate::name::unstorable(&safe), None, "{asked:?}");
+            assert!(!safe.contains(['/', '\\']), "{safe:?}");
+            assert!(!safe.ends_with(['.', ' ']), "{asked:?} became {safe:?}");
+        });
+    }
 }

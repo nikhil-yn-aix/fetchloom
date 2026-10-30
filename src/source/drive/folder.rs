@@ -209,3 +209,46 @@ fn unreadable(item: &Item, reason: &str) -> Error {
 fn link(id: &str) -> String {
     format!("https://drive.google.com/drive/folders/{id}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{is_id, page};
+    use super::*;
+
+    /// any page drive could send: nothing panics, undoing references never makes text longer,
+    /// every folder entry links a drive id, and a download page leads on only after a 200, and
+    /// only to an https link.
+    #[test]
+    fn fuzz_drive_pages() {
+        let asked = [
+            "https://drive.usercontent.google.com/download?id=1s52ek_4YTDRt_EOkx1FS53u-vJa0c4nu&export=download&confirm=t",
+            "https://accounts.google.com/v3/signin/identifier?continue=https://drive.usercontent.google.com/download?id%3D15J0eCL77fHbItA249epT3i2iOx4VwJGI",
+        ]
+        .map(|link| Url::parse(link).unwrap());
+        bolero::check!().for_each(|bytes| {
+            let text = String::from_utf8_lossy(bytes);
+            let plain = html::unescape(&text);
+            assert!(plain.len() <= text.len(), "{text:?}");
+            assert!(text.contains('&') || plain == text, "{text:?}");
+            assert!(html::text(&text).len() <= text.len(), "{text:?}");
+            if let Some(inside) = html::between(&text, "<p>", "</p>") {
+                assert!(text.contains(&format!("<p>{inside}</p>")), "{text:?}");
+            }
+            if let Some(page) = parse(&text) {
+                for entry in page.entries {
+                    if let Some((key, _)) = entry.link {
+                        assert!(is_id(&key.id), "{:?}", key.id);
+                    }
+                }
+            }
+            for asked in &asked {
+                for status in [200, 401, 403, 404, 410, 429, 500] {
+                    if let Ok(next) = page::divert(asked, status, &text) {
+                        assert_eq!(status, 200, "{text:?}");
+                        assert_eq!(next.scheme(), "https", "{next}");
+                    }
+                }
+            }
+        });
+    }
+}

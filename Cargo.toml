@@ -65,6 +65,9 @@ zstd = { version = "0.14", default-features = false }
 rustix = { version = "1.1", features = ["fs", "process"] }
 
 [dev-dependencies]
+# fuzz targets over the parsers, which stay private: plain tests under cargo test, and libfuzzer
+# targets under cargo bolero
+bolero = "0.13"
 insta = { version = "1.49", features = ["filters"] }
 
 [lints.rust]
@@ -89,6 +92,12 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# the profile cargo bolero builds fuzz targets with: optimized, keeping debug assertions and
+# overflow checks
+[profile.fuzz]
+inherits = "dev"
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

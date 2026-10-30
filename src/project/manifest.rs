@@ -562,4 +562,85 @@ mod tests {
             "# only\n"
         );
     }
+
+    /// what data.toml states: the data folder, and each dataset's values without their lines.
+    type Stated = (String, BTreeMap<String, Values>);
+    type Values = (String, Vec<String>, Vec<String>, bool, bool, Option<String>);
+
+    fn patterns(globs: &[Glob]) -> Vec<String> {
+        globs.iter().map(|glob| glob.as_str().to_owned()).collect()
+    }
+
+    fn stated(manifest: &Manifest) -> Stated {
+        let datasets = manifest.datasets.iter().map(|(dataset, entry)| {
+            let values = (
+                entry.reference.clone(),
+                patterns(&entry.select),
+                patterns(&entry.exclude),
+                entry.extract,
+                entry.copy,
+                entry.path.clone(),
+            );
+            (dataset.clone(), values)
+        });
+        (manifest.data_dir.clone(), datasets.collect())
+    }
+
+    /// any text: what reads is valid, and removing or adding a dataset changes only that
+    /// dataset. each dataset is added again under another name with its own values, so the
+    /// writer is given every string the reader takes.
+    #[test]
+    fn fuzz_manifest() {
+        bolero::check!().for_each(|bytes| {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return;
+            };
+            let Ok(manifest) = Manifest::parse(text) else {
+                return;
+            };
+            assert_eq!(name::escapes(&manifest.data_dir), None);
+            assert_eq!(name::metadata(&manifest.data_dir), None);
+            let before = stated(&manifest);
+            for (dataset, entry) in &manifest.datasets {
+                assert!(name::is_dataset_name(dataset), "{dataset:?}");
+                assert!(!entry.reference.is_empty(), "{dataset:?}");
+                assert_eq!(entry.reference.trim(), entry.reference);
+                if let Some(path) = &entry.path {
+                    assert_eq!(name::escapes(path), None, "{path:?}");
+                    assert_eq!(name::metadata(path), None, "{path:?}");
+                }
+
+                let removed = without_dataset(text, dataset).unwrap();
+                let mut expected = before.clone();
+                expected.1.remove(dataset);
+                let after = Manifest::parse(&removed).map(|manifest| stated(&manifest));
+                assert_eq!(after.ok(), Some(expected), "{removed:?}");
+
+                let copy = format!("{dataset}-2");
+                if !name::is_dataset_name(&copy) || manifest.datasets.contains_key(&copy) {
+                    continue;
+                }
+                let added = match with_dataset(
+                    text,
+                    &copy,
+                    &entry.reference,
+                    &patterns(&entry.select),
+                    &patterns(&entry.exclude),
+                    entry.extract,
+                ) {
+                    Ok(added) => added,
+                    Err(err) => {
+                        assert!(err.message.contains("inline"), "{}", err.message);
+                        continue;
+                    }
+                };
+                let mut expected = before.clone();
+                let (reference, select, exclude, extract, _, _) = before.1[dataset].clone();
+                let values = (reference, select, exclude, extract, false, None);
+                expected.1.insert(copy, values);
+                let after = Manifest::parse(&added).map(|manifest| stated(&manifest));
+                assert_eq!(after.ok(), Some(expected), "{added:?}");
+            }
+        });
+    }
 }
