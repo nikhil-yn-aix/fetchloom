@@ -1,0 +1,197 @@
+# the live datasets for the source matrix and the comparison report. every number was read from
+# the source's own api on 2026-10-30; the harness hashes each dataset itself before timing it.
+# cells: S under 50 MB, M 100 to 300 MB, L 1 to 2 GB; 1 one file, 100 or 1000 many files,
+# ZIP an archive fetchloom unpacks.
+
+[[dataset]]
+id = "url-s1"
+source = "url"
+cell = "S1"
+reference = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv"
+files = 1
+total_bytes = 3858
+notes = "served by fastly, which this network reaches over a broken ipv6 path"
+
+[[dataset]]
+id = "url-mzip"
+source = "url"
+cell = "MZIP"
+reference = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+files = 1
+total_bytes = 170498071
+notes = "cifar-10; redirects to cave.cs.toronto.edu, ranges and a strong etag"
+
+[[dataset]]
+id = "doi-s1"
+source = "doi"
+cell = "S1"
+reference = "doi:10.5281/zenodo.3608990"
+files = 1
+total_bytes = 4177
+notes = "iris.csv on zenodo, reached through doi.org"
+
+[[dataset]]
+id = "zenodo-s100"
+source = "zenodo"
+cell = "S100"
+reference = "zenodo:3684992"
+files = 800
+total_bytes = 20287660
+notes = "single electrode eeg; md5 per file"
+
+[[dataset]]
+id = "zenodo-m1"
+source = "zenodo"
+cell = "M1"
+reference = "zenodo:3054169"
+files = 1
+total_bytes = 219017216
+notes = "galaxy exome tutorial training data"
+
+[[dataset]]
+id = "zenodo-m1000"
+source = "zenodo"
+cell = "M1000"
+reference = "zenodo:8271123"
+files = 1004
+total_bytes = 294824249
+notes = "superdarn grid netcdf, 2017-08"
+
+[[dataset]]
+id = "zenodo-l1"
+source = "zenodo"
+cell = "L1"
+reference = "zenodo:21844811"
+files = 1
+total_bytes = 1340419512
+notes = "gene ontology data archive; the resume check"
+
+[[dataset]]
+id = "hf-s1"
+source = "hf"
+cell = "S1"
+reference = "hf:datasets/openai/openai_humaneval@7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544"
+files = 3
+total_bytes = 91617
+
+[[dataset]]
+id = "hf-szip"
+source = "hf"
+cell = "SZIP"
+reference = "hf:datasets/Matthijs/cmu-arctic-xvectors@5c1297a9eb6c91714ea77c0d4ac5aca9b6a952e5"
+files = 4
+total_bytes = 17948151
+notes = "spkrec-xvect.zip"
+
+[[dataset]]
+id = "hf-m1"
+source = "hf"
+cell = "M1"
+reference = "hf:datasets/TIGER-Lab/MathInstruct@b4fdc323a7be1379c9c7c0b67b1de72dfee2111a"
+files = 3
+total_bytes = 212493968
+
+[[dataset]]
+id = "hf-m100"
+source = "hf"
+cell = "M100"
+reference = "hf:datasets/cais/mmlu@c30699e8356da336a370243923dbaf21066bb9fe"
+files = 181
+total_bytes = 270035224
+notes = "parquet files and data.tar"
+
+[[dataset]]
+id = "kaggle-s1"
+source = "kaggle"
+cell = "S1"
+reference = "kaggle:uciml/breast-cancer-wisconsin-data@2"
+files = 1
+total_bytes = 125204
+
+[[dataset]]
+id = "kaggle-m1"
+source = "kaggle"
+cell = "M1"
+reference = "kaggle:kazanova/sentiment140@2"
+files = 1
+total_bytes = 238803811
+
+[[dataset]]
+id = "kaggle-m1000"
+source = "kaggle"
+cell = "M1000"
+reference = "kaggle:tongpython/cat-and-dog@1"
+files = 10032
+total_bytes = 228459385
+notes = "every file is its own request"
+
+[[dataset]]
+id = "kaggle-mzip"
+source = "kaggle"
+cell = "MZIP"
+reference = "kaggle:pankrzysiu/cifar10-python@1"
+files = 9
+total_bytes = 356712185
+notes = "cifar-10-python.tar.gz beside its unpacked batches"
+
+[[dataset]]
+id = "figshare-s"
+source = "figshare"
+cell = "S"
+reference = "figshare:34744689@1"
+files = 2
+total_bytes = 321136
+
+[[dataset]]
+id = "dataverse-szip"
+source = "dataverse"
+cell = "SZIP"
+reference = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP"
+files = 3
+total_bytes = 303511
+notes = "version 5; primary-data.zip"
+
+[[dataset]]
+id = "drive-file"
+source = "drive"
+cell = "S1"
+reference = "drive:15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--"
+files = 1
+total_bytes = 0
+notes = "a file in gdown's public test folder; size not given by any api"
+
+[[dataset]]
+id = "drive-folder"
+source = "drive"
+cell = "S"
+reference = "drive:folders/1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL"
+files = 0
+total_bytes = 0
+notes = "gdown's deep_folder, nested folders of small files"
+
+[[dataset]]
+id = "dropbox-s1"
+source = "dropbox"
+cell = "S1"
+reference = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1"
+files = 1
+total_bytes = 775543
+notes = "linked from xinghaochen/awesome-hand-pose-estimation"
+
+[[dataset]]
+id = "dropbox-szip"
+source = "dropbox"
+cell = "SZIP"
+reference = "https://www.dropbox.com/s/33fop57jjq0wwa9/POJ-104.tar.gz?dl=1"
+files = 1
+total_bytes = 8645770
+notes = "linked from facebookresearch/nbref"
+
+[[dataset]]
+id = "dropbox-m1"
+source = "dropbox"
+cell = "M1"
+reference = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1"
+files = 1
+total_bytes = 187839752
+notes = "linked from vladkryvoruchko/pspnet-keras-tensorflow"

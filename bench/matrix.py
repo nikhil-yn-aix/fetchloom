@@ -134,7 +134,7 @@ def killed_halfway(project, cache, size):
     return False
 
 
-def check(dataset, scratch, resume, writer):
+def check(dataset, scratch, resume, fresh, writer):
     """runs every check for one dataset and writes a row for each."""
     name = dataset["id"]
     size = int(dataset.get("total_bytes", 0))
@@ -152,7 +152,7 @@ def check(dataset, scratch, resume, writer):
         print(f"{name} {check_name}: {'ok' if ok else 'FAILED'} {wall:.1f} s {note}", flush=True)
         return ok
 
-    if ledger_total() + size * (3 if name in resume else 2) > BUDGET:
+    if ledger_total() + size * (3 if name in resume or name in fresh else 2) > BUDGET:
         print(f"{name}: skipped, it would pass the budget", flush=True)
         return
     wall, code, document = fetchloom(["-C", str(first), "add", dataset["reference"], "--as", name], first_cache)
@@ -180,13 +180,13 @@ def check(dataset, scratch, resume, writer):
         restored = code == 0 and placed[0].exists()
         record("offline", restored, wall, code, document, "" if restored or code else "not restored")
 
-    if dataset.get("cell", "").startswith("L") and name not in resume:
-        print(f"{name} fresh: skipped for a large dataset, to save budget", flush=True)
-    else:
+    if dataset.get("cell", "").startswith("S") or name in fresh:
         copy_project(first, third)
         wall, code, document = fetchloom(["-C", str(third), "sync"], other_cache)
         same = code == 0 and tree_hashes(first) == tree_hashes(third)
         record("fresh", same, wall, code, document, "" if same or code else "other bytes")
+    else:
+        print(f"{name} fresh: skipped to save budget; add already downloaded it once", flush=True)
 
     if name in resume:
         fourth = home / "fourth"
@@ -208,12 +208,15 @@ def main():
     parser.add_argument("datasets")
     parser.add_argument("--only", help="comma-separated dataset ids")
     parser.add_argument("--resume", default="", help="comma-separated dataset ids to kill and resume")
+    parser.add_argument("--fresh", default="",
+                        help="comma-separated ids that also sync on another empty cache; small cells always do")
     parser.add_argument("--results", type=Path, default=BENCH / "results")
     args = parser.parse_args()
     data = tomllib.loads(Path(args.datasets).read_text(encoding="utf-8-sig"))
     datasets = data.get("dataset") or [{"id": key, **value} for key, value in data.items() if isinstance(value, dict)]
     only = set(args.only.split(",")) if args.only else None
     resume = set(filter(None, args.resume.split(",")))
+    fresh = set(filter(None, args.fresh.split(",")))
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     out_dir = args.results / f"{stamp}-matrix-{sys.platform}"
     out_dir.mkdir(parents=True)
@@ -224,7 +227,7 @@ def main():
         for dataset in datasets:
             if only is None or dataset["id"] in only:
                 try:
-                    check(dataset, scratch, resume, writer)
+                    check(dataset, scratch, resume, fresh, writer)
                 finally:
                     file.flush()
                     remove_tree(scratch / dataset["id"])
