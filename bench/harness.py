@@ -160,7 +160,13 @@ def run(argv, env, cwd, timeout, stderr_path):
         accounting = Accounting(process)
         sampled = 0
         timed_out = False
-        while process.poll() is None:
+        while True:
+            # waiting rather than sleeping ends the clock at the exit, not at the next sample
+            try:
+                process.wait(timeout=SAMPLE_SECONDS)
+                break
+            except psutil.TimeoutExpired:
+                pass
             try:
                 tree = [process, *process.children(recursive=True)]
             except psutil.Error:
@@ -181,7 +187,6 @@ def run(argv, env, cwd, timeout, stderr_path):
                 timed_out = True
                 process.wait()
                 break
-            time.sleep(SAMPLE_SECONDS)
         wall = time.perf_counter() - started
         code = process.returncode
     cpu = accounting.cpu_seconds()
@@ -324,11 +329,13 @@ def run_tool(plan, workload, tool_name, names, want, rep, position, scratch, out
         work = scratch / f"{workload['id']}-{tool_name}-{rep}-{phase}"
         out = work / "out"
         out.mkdir(parents=True)
-        run_id = f"{plan['name']}-{workload['id']}-{tool_name}-{rep}-{phase}"
+        # one tag for both phases: a second project asks for the same url, and a tag that
+        # changed between them would make it a new link
+        run_id = f"{plan['name']}-{workload['id']}-{tool_name}-{rep}"
         local = {**names, "out": out, "home": home, "work": work, "run": run_id}
         argv = fill(tool[phase], local)
         env = {**os.environ, **fill(tool.get("env", {}), local)}
-        log = out_dir / f"{run_id}.stderr"
+        log = out_dir / f"{run_id}-{phase}.stderr"
         wall, cpu, peak, net, code, timed_out = run(argv, env, work, workload.get("timeout", 10800), log)
         got, count = produced([work], tool.get("ignore", []))
         ok = code == 0 and not timed_out and not (want - got)
