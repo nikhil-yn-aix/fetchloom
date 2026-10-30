@@ -54,4 +54,4 @@ one user's processes can share a cache. a cache writable by several people trust
 | controlled-data access approval | access is granted by the institution or data owner |
 | 7z and rar extraction | decoders are not included; the packed file remains usable elsewhere |
 
-`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the python module are not implemented. add them when a concrete project needs them. downloads run several files at once; one file splits into parallel range requests only with `FETCHLOOM_SPLIT=1`, as [architecture](architecture.md#split-downloads) describes.
+`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the python module are not implemented. add them when a concrete project needs them. downloads run several files at once; a file of at least 64 MiB splits into parallel range requests once its one stream moves less than 1 MB/s, as [architecture](architecture.md#split-downloads) describes.

@@ -123,7 +123,7 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 | transient retry budget | 5 attempts including the first |
 | backoff | jittered exponential delay; `Retry-After` is a floor; above 60 s fails instead of waiting |
 | rate limit waits | until the host's limit resets, when that is within 120 s; at most 10 for one request before they count as attempts |
-| split downloads | files of at least 64 MiB, once their one stream moved less than 1 MB/s over 2 s; then up to 8 streams within the host's free slots. `FETCHLOOM_SPLIT=0` never splits, and `FETCHLOOM_SPLIT=1` splits from the first answer |
+| split downloads | files of at least 64 MiB, once their one stream moved less than 1 MB/s over 2 s; then up to 8 streams within the host's free slots. `FETCHLOOM_SPLIT=0` never splits, and `FETCHLOOM_SPLIT=1` splits from the first answer. under `FETCHLOOM_RATE` a stream is never judged slow, since more streams would share the same cap |
 | download diversion pages | at most 3, each at most 4 MiB, when a source supplies a page handler |
 
 retryable statuses are 408, 425, 429, 500, 502, 503 and 504, along with transient connection and timeout failures. exhausted retries report `network.unreachable`. range restarts and redirects are separate from the retry budget. a requested retry delay above 60 s produces `network.rate_limited` while retries remain; it does not trigger a mirror search. proxy preflight DNS lookup happens before the send deadline.
