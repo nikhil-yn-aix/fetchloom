@@ -8,12 +8,12 @@ use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use super::guard::Guard;
 use super::not_written;
-use crate::cache::{Cache, Member, NewObject, Sealed};
+use crate::cache::{Cache, Member, NewObject, Sealed, Staging};
 use crate::error::{Error, Kind};
 
 /// members up to this size reach a writer as bytes in memory. a larger one is written by the
@@ -31,7 +31,7 @@ enum Job {
 
 /// where the reading thread hands each member.
 pub(super) struct Writers<'s> {
-    cache: &'s Cache,
+    staging: &'s Arc<Staging>,
     jobs: SyncSender<Job>,
     failed: &'s AtomicBool,
 }
@@ -49,7 +49,7 @@ impl Writers<'_> {
             return Err(stopped());
         }
         let mut spill = Spill {
-            cache: self.cache,
+            staging: self.staging,
             bytes: Vec::new(),
             object: None,
         };
@@ -69,6 +69,9 @@ pub(super) fn store_all(
     cache: &Cache,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, u64), Error> {
+    let staging = cache
+        .staging()
+        .map_err(|err| Error::io("could not stage the archive's files", &err))?;
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
@@ -96,7 +99,7 @@ pub(super) fn store_all(
                     if failed.load(Ordering::Relaxed) {
                         continue;
                     }
-                    match seal(cache, job, flush_each) {
+                    match seal(&staging, job, flush_each) {
                         Ok(done) => locked(&sealed).push(done),
                         Err(err) => {
                             failed.store(true, Ordering::Relaxed);
@@ -107,7 +110,7 @@ pub(super) fn store_all(
             });
         }
         let writers = Writers {
-            cache,
+            staging: &staging,
             jobs,
             failed: &failed,
         };
@@ -177,10 +180,10 @@ fn publish_all(
     }
 }
 
-fn seal(cache: &Cache, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
+fn seal(staging: &Arc<Staging>, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
     let (path, object) = match job {
         Job::Bytes(path, bytes) => {
-            let object = cache.new_object().and_then(|mut object| {
+            let object = staging.new_object().and_then(|mut object| {
                 object.write_all(&bytes)?;
                 Ok(object)
             });
@@ -206,7 +209,7 @@ fn stopped() -> Error {
 
 /// a member's bytes: in memory while small, in a new object once they outgrow that.
 struct Spill<'c> {
-    cache: &'c Cache,
+    staging: &'c Arc<Staging>,
     bytes: Vec<u8>,
     object: Option<NewObject>,
 }
@@ -220,7 +223,7 @@ impl Write for Spill<'_> {
             self.bytes.extend_from_slice(buffer);
             return Ok(buffer.len());
         }
-        let mut object = self.cache.new_object()?;
+        let mut object = self.staging.new_object()?;
         object.write_all(&std::mem::take(&mut self.bytes))?;
         let written = object.write(buffer)?;
         self.object = Some(object);
@@ -234,6 +237,10 @@ impl Write for Spill<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+
     use super::*;
     use crate::archive::samples::Scratch;
     use crate::archive::{Limits, guard::Meter};
@@ -251,6 +258,86 @@ mod tests {
             Ok(())
         })
         .map(|(members, _)| members)
+    }
+
+    fn staged(scratch: &Scratch) -> PathBuf {
+        let folder = scratch.cache.root().join("tmp").join("0123456789abcdef.stage");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("lock"), b"").unwrap();
+        let member = folder.join("member.new");
+        fs::write(&member, b"unfinished").unwrap();
+        crate::cache::tests::seal(&member);
+        folder
+    }
+
+    #[test]
+    fn the_next_unpack_removes_abandoned_staging() {
+        let scratch = Scratch::new();
+        let folder = staged(&scratch);
+        stored(&scratch, &[]).unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn the_next_unpack_leaves_locked_staging() {
+        let scratch = Scratch::new();
+        let folder = staged(&scratch);
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(folder.join("lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        stored(&scratch, &[]).unwrap();
+        let later = SystemTime::now() + Duration::from_hours(48);
+        scratch.cache.sweep(&crate::cache::Needed::default(), later);
+        assert_eq!(fs::read(folder.join("member.new")).unwrap(), b"unfinished");
+        drop(lock);
+        stored(&scratch, &[]).unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn an_unpack_keeps_its_staging_locked_until_cleanup() {
+        let scratch = Scratch::new();
+        let limits = Limits::default();
+        let meter = Meter::default();
+        let never = |_: u64| false;
+        let mut guard = Guard::new(&limits, &never, &meter);
+        let bytes = vec![7; SMALL + 1];
+        let (members, _) = store_all(&scratch.cache, |writers| {
+            writers.keep(
+                &mut guard,
+                "large.bin".to_owned(),
+                &mut &bytes[..],
+                &mut [0; 1024],
+            )?;
+            let folder = fs::read_dir(scratch.cache.root().join("tmp"))
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|extension| extension == "stage"))
+                .unwrap();
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(folder.join("lock"))
+                .unwrap();
+            assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
+            let later = SystemTime::now() + Duration::from_hours(48);
+            assert_eq!(
+                scratch.cache.sweep(&crate::cache::Needed::default(), later).leftovers,
+                0
+            );
+            assert!(folder.is_dir());
+            Ok(())
+        })
+        .unwrap();
+        scratch.assert_stored(&members[0], &bytes);
+        assert_eq!(
+            fs::read_dir(scratch.cache.root().join("tmp")).unwrap().count(),
+            0
+        );
     }
 
     #[test]

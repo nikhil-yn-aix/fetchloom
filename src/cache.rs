@@ -3,6 +3,7 @@
 mod changed;
 mod object;
 mod partial;
+mod staging;
 mod unpacked;
 mod upkeep;
 
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) use changed::Doubt;
 pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
 
@@ -119,12 +121,20 @@ impl Cache {
         self.root.join("objects").join(&hex[..2]).join(&hex[2..])
     }
 
-    /// the object's path, when the cache holds it. a known size must match, which catches a file
-    /// cut short by a crash.
+    /// the object's path, when the cache holds it. a known size must match, and writable or
+    /// marked objects must still hash to their names.
     pub(crate) fn find(&self, digest: &Sha256, size: Option<u64>) -> Option<PathBuf> {
         let path = self.object_path(digest);
         let metadata = fs::metadata(&path).ok()?;
-        (metadata.is_file() && size.is_none_or(|size| metadata.len() == size)).then_some(path)
+        if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
+            return None;
+        }
+        if changed::doubted(&metadata, self.changed_at(digest))
+            && Sha256::of_file(&path).ok()? != *digest
+        {
+            return None;
+        }
+        Some(path)
     }
 
     /// removes an object the cache no longer needs to hold, such as an archive whose files are
@@ -136,17 +146,15 @@ impl Cache {
         }
     }
 
-    /// hashes an object again. an object whose bytes changed, such as through a hardlink someone
-    /// edited, is removed so the next run downloads it again, and marked as changed so other
-    /// projects whose links to it still look as placed put their copies back. says whether it was
-    /// intact. a read error leaves the object and its change mark untouched.
+    /// hashes an object again. changed bytes are marked for replacement and kept until a good
+    /// copy arrives. the mark also tells projects to check their placed hardlinks. a read error
+    /// leaves the object and its change mark untouched.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match Sha256::of_file(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
-                self.remember_changed(digest);
-                self.volume.remove(&path)?;
+                self.mark_changed(digest)?;
                 Ok(false)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -154,13 +162,6 @@ impl Cache {
         }
     }
 
-    /// marks an object as changed. without the mark, another project sees the change only where
-    /// its own listing shows it, which on windows it may not.
-    fn remember_changed(&self, digest: &Sha256) {
-        if let Err(err) = self.mark_changed(digest) {
-            tracing::debug!(%err, "could not remember a changed object");
-        }
-    }
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
         let text = fs::read(self.url_record_path(url)).ok()?;
@@ -289,11 +290,20 @@ impl Cache {
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
                     if found.is_ok() {
-                        self.remember_changed(digest);
+                        self.mark_changed(digest)?;
                     }
-                    match volume.remove(path) {
-                        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-                        _ => return self.link_new(source, path, digest, size),
+                    match volume.replace(source, path) {
+                        Ok(()) => return Ok(true),
+                        // another repair may have replaced the read-only destination while ours
+                        // was being opened to clear its flag
+                        Err(_) if source.exists()
+                            && Sha256::of_file(path).is_ok_and(|actual| actual == *digest) => {}
+                        Err(err) => {
+                            return Err(io::Error::new(
+                                err.kind(),
+                                format!("could not replace {}: {err}", path.display()),
+                            ));
+                        }
                     }
                 }
             }
@@ -597,6 +607,72 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_doubted_object_keeps_its_name_until_repaired() {
+        for (_dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            rewrite(&object, b"evil");
+            seal(&object);
+            cache.mark_changed(&stored.digest).unwrap();
+            let other = Cache::open(cache.root().to_path_buf()).unwrap();
+            for run in [&cache, &other] {
+                assert!(
+                    run.trusted(&stored.digest, Some(4), &run.changed())
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(fs::read(&object).unwrap(), b"evil");
+                assert!(run.find(&stored.digest, Some(4)).is_none());
+            }
+            store(&cache, b"good");
+            // the other repair has not published yet, but placement can use the first copy
+            let placed = cache.root().join("placed");
+            fs::copy(&object, &placed).unwrap();
+            assert_eq!(fs::read(&placed).unwrap(), b"good");
+            assert!(!store(&other, b"good").new);
+            assert_eq!(fs::read(&object).unwrap(), b"good");
+        }
+    }
+
+    #[test]
+    fn verification_keeps_a_copy_published_by_another_repair() {
+        for (_dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            rewrite(&object, b"evil");
+            seal(&object);
+            let checked = cache.verify_all(1, &|_| {
+                // verification has read the damaged bytes, then another repair publishes
+                assert!(store(&cache, b"good").new);
+            });
+            assert_eq!(checked.changed, [stored.digest]);
+            assert_eq!(fs::read(&object).unwrap(), b"good");
+            assert!(cache.find(&stored.digest, Some(4)).is_some());
+            assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        }
+    }
+
+    #[test]
+    fn repairing_a_read_only_object_preserves_placed_links() {
+        let (dir, cache) = cache();
+        if !hardlinks(dir.path()) {
+            return;
+        }
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let placed = dir.path().join("placed");
+        fs::hard_link(&object, &placed).unwrap();
+        rewrite(&object, b"evil");
+        seal(&object);
+        assert!(store(&cache, b"good").new);
+        assert_eq!(fs::read(&object).unwrap(), b"good");
+        assert_eq!(fs::read(&placed).unwrap(), b"evil");
+        for path in [&object, &placed] {
+            assert!(fs::metadata(path).unwrap().permissions().readonly());
+        }
+    }
+
+    #[test]
     fn an_object_found_in_place_is_kept_only_while_it_holds_these_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("object");
@@ -648,14 +724,16 @@ pub(crate) mod tests {
         let (_dir, cache) = cache();
         let object = cache.object_path(&store(&cache, b"abc").digest);
         rewrite(&object, b"abcX");
+        seal(&object);
         let held = hold(&object);
         let mut again = cache.new_object().unwrap();
         again.write_all(b"abc").unwrap();
         let published = again.seal(true).unwrap().publish(&cache);
         drop(held);
-        // root on unix removes the changed object anyway
+        // root on unix can replace the changed object despite its folder's permissions
         let holds = fs::read(&object).unwrap() == b"abc";
         assert_eq!(published.is_ok(), holds, "{published:?}");
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
     }
 
     #[test]

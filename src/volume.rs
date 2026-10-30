@@ -39,6 +39,26 @@ impl Volume {
         (self.rename)(from, to)
     }
 
+    /// renames a verified replacement over an old file without leaving its name empty. windows
+    /// may require clearing the old file's read-only flag; restoring it through the same handle
+    /// also restores any placed hardlinks, without changing the new file at the name.
+    pub(crate) fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let refused = match self.rename(from, to) {
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => err,
+            renamed => return renamed,
+        };
+        let file = open_attributes(to)?;
+        let metadata = file.metadata()?;
+        let before = metadata.permissions();
+        if !is_plain(&metadata) || !before.readonly() {
+            return Err(refused);
+        }
+        file.set_permissions(writable(before.clone()))?;
+        let renamed = self.rename(from, to);
+        let restored = file.set_permissions(before);
+        renamed.and(restored)
+    }
+
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
     /// a read-only file on a volume that cannot hardlink, as they cannot, has no other name, so
     /// it is made writable for a second try. on a volume that can hardlink the refusal stands:
@@ -235,7 +255,12 @@ impl Volume {
         Volume {
             scratch,
             hard_link,
-            rename: |from, to| fs::rename(from, to),
+            rename: |from, to| {
+                if fs::symlink_metadata(to).is_ok_and(|metadata| metadata.permissions().readonly()) {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                fs::rename(from, to)
+            },
             remove_file: |path| {
                 if fs::symlink_metadata(path)?.permissions().readonly() {
                     return Err(io::ErrorKind::PermissionDenied.into());

@@ -1,7 +1,6 @@
-//! objects found changed, remembered after they leave the cache, so a project holding a hardlink
-//! to the changed bytes learns it from one listing instead of reading every file it placed. an
-//! object still in the cache that a mark is newer than is hashed before anything is placed from
-//! it.
+//! objects found changed, remembered after replacement so projects can check their old hardlinks.
+//! marked objects stay at their names until a verified copy replaces them. lookup hashes objects
+//! no newer than their marks, including equal timestamps on filesystems with coarse clocks.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -13,21 +12,20 @@ use super::Cache;
 use crate::digest::Sha256;
 use crate::place::{FolderUse, real_folder};
 
-/// an object in doubt that could not be hashed or sealed, or that held other bytes and could
-/// not be removed.
+/// an object in doubt that could not be hashed, sealed or marked for repair.
 #[derive(Debug)]
 pub(crate) struct Doubt {
     pub(crate) object: PathBuf,
-    /// whether hashing found other bytes, so the object stays only because removing it failed.
+    /// whether hashing found other bytes but writing the change mark failed.
     pub(crate) changed: bool,
     pub(crate) error: io::Error,
 }
 
 impl Cache {
     /// the object for `digest` when the cache holds it, with `size` when one is known, and its
-    /// bytes can be trusted. a mark in `marks` newer than the object puts it in doubt, so it is
-    /// hashed first, as is a writable object. intact writable objects are sealed again; changed
-    /// ones are marked and removed, so they are fetched again.
+    /// bytes can be trusted. a mark in `marks` at least as new as the object puts it in doubt,
+    /// as does a writable flag. intact writable objects are sealed again; changed ones are
+    /// marked and left at their names until a fetched copy replaces them.
     pub(crate) fn trusted(
         &self,
         digest: &Sha256,
@@ -43,8 +41,7 @@ impl Cache {
         }
         let mut permissions = metadata.permissions();
         let writable = !permissions.readonly();
-        let written = metadata.modified().map_or(0, nanos);
-        if !writable && marks.get(digest).is_none_or(|marked| *marked <= written) {
+        if !doubted(&metadata, marks.get(digest).copied()) {
             return Ok(Some(path));
         }
         match Sha256::of_file(&path) {
@@ -60,17 +57,12 @@ impl Cache {
                 Ok(Some(path))
             }
             Ok(_) => {
-                if let Err(err) = self.mark_changed(digest) {
-                    tracing::debug!(%err, "could not remember a changed object");
-                }
-                match self.drop_object(digest) {
-                    Ok(()) => Ok(None),
-                    Err(error) => Err(Doubt {
-                        object: path,
-                        changed: true,
-                        error,
-                    }),
-                }
+                self.mark_changed(digest).map_err(|error| Doubt {
+                    object: path,
+                    changed: true,
+                    error,
+                })?;
+                Ok(None)
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(Doubt {
@@ -113,11 +105,12 @@ impl Cache {
             .collect()
     }
 
-    /// forgets changed objects that no project needs, since no project can hold a link to them
-    /// that it would still put back.
+    /// forgets marks only after both the object and its projects no longer need them. a retained
+    /// damaged object still needs its mark so lookup refuses it.
     pub(crate) fn forget_changed(&self, needed: &HashSet<Sha256>) {
         for digest in self.changed().into_keys() {
             if !needed.contains(&digest)
+                && !self.object_path(&digest).exists()
                 && real_folder(&self.changed_folder(), FolderUse::Cache).is_ok()
             {
                 let _ = fs::remove_file(self.changed_folder().join(digest.hex()));
@@ -125,9 +118,22 @@ impl Cache {
         }
     }
 
+    pub(super) fn changed_at(&self, digest: &Sha256) -> Option<u64> {
+        fs::metadata(self.changed_folder().join(digest.hex()))
+            .ok()?
+            .modified()
+            .ok()
+            .map(nanos)
+    }
+
     fn changed_folder(&self) -> PathBuf {
         self.root.join("changed")
     }
+}
+
+pub(super) fn doubted(metadata: &fs::Metadata, marked: Option<u64>) -> bool {
+    !metadata.permissions().readonly()
+        || marked.is_some_and(|marked| marked >= metadata.modified().map_or(0, nanos))
 }
 
 /// `time` in nanoseconds since 1970, as projects record the times of their files.
@@ -184,7 +190,7 @@ mod tests {
 
             if damaged {
                 assert!(found.is_none());
-                assert!(!object.exists());
+                assert_eq!(fs::read(&object).unwrap(), b"evil");
                 assert!(cache.changed().contains_key(&stored.digest));
             } else {
                 assert_eq!(found.as_deref(), Some(object.as_path()));
@@ -210,6 +216,9 @@ mod tests {
         let changed = cache.changed();
         assert_eq!(changed.len(), 2);
         assert!(changed.values().all(|found| *found > 0));
+        cache.forget_changed(&HashSet::from([kept]));
+        assert_eq!(cache.changed().len(), 2, "objects still need their marks");
+        cache.drop_object(&dropped).unwrap();
         cache.forget_changed(&HashSet::from([kept]));
         assert_eq!(cache.changed().into_keys().collect::<Vec<_>>(), [kept]);
     }

@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::{Cache, Stored};
+use super::{Cache, Staging, Stored};
 use crate::digest::{Hasher, Sha256};
 use crate::volume::Volume;
 
@@ -33,6 +33,8 @@ struct Temporary {
     path: PathBuf,
     volume: Arc<Volume>,
     published: bool,
+    // a member may outlive the caller's staging handle while a writer finishes sealing it
+    _staging: Option<Arc<Staging>>,
 }
 
 impl Drop for Temporary {
@@ -58,12 +60,18 @@ impl Cache {
         Ok(Some(Batch(File::open(self.root.join("tmp"))?)))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
+        self.new_object_in(&self.root.join("tmp"), None)
+    }
+
+    pub(super) fn new_object_in(
+        &self,
+        folder: &Path,
+        staging: Option<Arc<Staging>>,
+    ) -> io::Result<NewObject> {
         loop {
-            let path = self
-                .root
-                .join("tmp")
-                .join(format!("{:016x}.new", fastrand::u64(..)));
+            let path = folder.join(format!("{:016x}.new", fastrand::u64(..)));
             match create_sealed(&path) {
                 Ok(file) => {
                     return Ok(NewObject {
@@ -72,6 +80,7 @@ impl Cache {
                             path,
                             volume: Arc::clone(&self.volume),
                             published: false,
+                            _staging: staging,
                         },
                         hasher: Hasher::default(),
                         written: 0,

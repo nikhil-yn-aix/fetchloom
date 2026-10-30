@@ -188,8 +188,8 @@ impl Loop<'_> {
 
     /// unpacks archives the lock pins whose files this machine lacks, downloading those the
     /// cache does not hold, and checks that each unpacks to what the lock says. one that does not
-    /// is hashed first: bytes that changed in the cache are dropped and downloaded again, and only
-    /// an intact archive that unpacks to other files is an error.
+    /// is hashed first: changed bytes stay at their name but no longer count as a cache hit, so
+    /// a download replaces them. only an intact archive that unpacks to other files is an error.
     pub(super) async fn unpack_locked(
         &self,
         lock: &Lock,
