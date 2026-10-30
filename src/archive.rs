@@ -174,7 +174,6 @@ pub(crate) fn unpack_cached(
 
 const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";
 
-/// an archive fetchloom will not unpack, for the reason given.
 fn refused(message: impl Into<String>) -> Error {
     Error::new(Kind::SourceInvalid, message).help(REFUSED_HELP)
 }

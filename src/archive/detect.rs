@@ -6,7 +6,6 @@ use std::path::Path;
 
 use super::tar;
 
-/// an archive format fetchloom unpacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Format {
     Zip,
@@ -17,7 +16,6 @@ pub(crate) enum Format {
     TarBz2,
 }
 
-/// what a file turned out to be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Detected {
     Archive(Format),
