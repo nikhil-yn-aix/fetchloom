@@ -30,7 +30,6 @@ enum Token {
 }
 
 impl Glob {
-    /// reads a pattern, or says what is wrong with it.
     pub(crate) fn new(text: &str) -> Result<Glob, String> {
         if text.is_empty() {
             return Err("a pattern cannot be empty".to_owned());
