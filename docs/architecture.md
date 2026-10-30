@@ -172,7 +172,9 @@ unpacking records a sorted member tree under the archive hash, unless data.lock 
 
 ## project coordination and observability
 
-commands that modify the project acquire `.fetchloom/lock`. `status` and a ready `path` read without it. `path` rereads after waiting to sync. `lock --check` reads without it, since it changes nothing. on a filesystem without working file locks, serialize modifying commands yourself.
+commands that modify the project acquire the OS lock on `.fetchloom/lock`, then claim `.fetchloom/owner`. windows and WSL honor the same owner record even though their OS locks do not see each other. waiting commands poll every 200 ms, report the holder once and accept ctrl-c. the guard removes the owner before releasing the OS lock, including on error. [formats](formats.md#the-fetchloom-folder) defines the owner record and recovery rules.
+
+`status`, a ready `path` and `lock --check` read without either lock, since they change nothing. `path` rereads after waiting to sync.
 
 human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 

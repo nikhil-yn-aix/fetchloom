@@ -217,17 +217,31 @@ archive bytes may be deleted after successful unpacking when no registered proje
 
 ## the .fetchloom folder
 
-`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, state or ignore file.
+`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, owner, state or ignore file.
 
 | path | contents |
 |---|---|
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
 | `.fetchloom/lock` | OS project lock; file contents are unused |
+| `.fetchloom/owner` | JSON identifying the modifying command, shared by windows and WSL |
 | `.fetchloom/state` | compact JSON describing tracked placements |
 | `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
 inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
+
+owner fields:
+
+| field | value |
+|---|---|
+| `os` | operating system name, such as `windows` or `linux` for WSL |
+| `pid` | process id on that operating system |
+| `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
+| `command` | subcommand name, without arguments or credentials |
+
+fetchloom takes the OS lock, then reserves `owner` with an exclusive file creation. the reservation is empty until a complete JSON record replaces it through a temporary file and rename. dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
+
+an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale. any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
 
 state fields:
 
