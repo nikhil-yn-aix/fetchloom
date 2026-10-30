@@ -37,12 +37,16 @@ class Error(Exception):
         help: str | None = None,
         code: int | None = None,
     ) -> None:
-        super().__init__(message if kind is None else f"{kind}: {message}")
+        # every field goes to args, so the error survives pickling between processes
+        super().__init__(kind, message, details, help, code)
         self.kind = kind
         self.message = message
         self.details = details or []
         self.help = help
         self.code = code
+
+    def __str__(self) -> str:
+        return self.message if self.kind is None else f"{self.kind}: {self.message}"
 
 
 def path(name: str, project: str | os.PathLike[str] = ".") -> Path:
