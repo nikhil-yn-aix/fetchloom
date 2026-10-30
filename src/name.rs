@@ -256,10 +256,10 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
     None
 }
 
-/// a path as a case-insensitive disk compares it, so two paths with the same fold are one file
-/// on windows. it is composed first, so two unicode spellings of one name count as one. the
-/// round trip through uppercase matches what ntfs does with letters like the two greek sigmas,
-/// which lowercase alone keeps apart.
+/// a key for portable collision checks and possible filesystem aliases. unicode names are
+/// composed first; the round trip through uppercase joins letters like the two greek sigmas,
+/// which lowercase alone keeps apart. equal keys still need a filesystem check before two
+/// paths can be treated as the same file.
 pub(crate) fn fold(path: &str) -> String {
     if path.is_ascii() {
         return path.to_ascii_lowercase();

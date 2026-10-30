@@ -89,10 +89,11 @@ impl<'a> Placing<'a> {
         lock: &'a Lock,
         cache: &Cache,
         force: bool,
-        survey: Survey,
+        mut survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
         let data_dir = project.data_dir(manifest)?;
+        survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();
         let actions = plan
             .targets
@@ -463,7 +464,7 @@ fn remove_unwanted(
         match survey.disk.get(&path) {
             None => {}
             Some(look) if *look == before.look && !survey.edited.contains(&path) => {
-                let file = project.root.join(&path);
+                let file = project.root.join(survey.listed.get(&path).unwrap_or(&path));
                 match now(&file) {
                     Some(current) if current == *look => {
                         placer

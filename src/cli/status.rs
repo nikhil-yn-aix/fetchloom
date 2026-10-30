@@ -96,6 +96,7 @@ fn check(project: &Project) -> Result<Status, Error> {
         .collect();
     let targets = planned.targets;
     let mut survey = Survey::read(project, &manifest.data_dir);
+    survey.retarget(&project.root, &targets);
     survey.check_doubted(&project.root, &cache)?;
     for target in &targets {
         let seen = survey.disk.get(&target.path);

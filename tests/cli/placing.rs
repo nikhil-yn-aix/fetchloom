@@ -64,9 +64,8 @@ fn case_alias() -> Result {
 
     clean_alias(&sandbox, &server)?;
     assert_eq!(fs::read(folder.join("Iris.csv"))?, V1);
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(
-        sandbox.work().join(".fetchloom").join("state"),
-    )?)?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
     assert!(state["files"]["data/iris/iris.csv"].is_object());
     Ok(())
 }
@@ -126,9 +125,8 @@ fn data_dir_alias() -> Result {
     )?;
 
     clean_alias(&sandbox, &server)?;
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(
-        sandbox.work().join(".fetchloom").join("state"),
-    )?)?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
     assert!(state["files"]["Data/iris/iris.csv"].is_object());
     assert!(state["files"]["data/iris/iris.csv"].is_null());
     Ok(())
@@ -149,9 +147,8 @@ fn locked_alias() -> Result {
     )?;
 
     clean_alias(&sandbox, &server)?;
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(
-        sandbox.work().join(".fetchloom").join("state"),
-    )?)?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
     assert!(state["files"]["data/iris/Iris.csv"].is_object());
     assert!(state["files"]["data/iris/iris.csv"].is_null());
     Ok(())
@@ -579,6 +576,7 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     );
     let events = fs::read_to_string(&trace)?;
     assert!(!events.contains("\"name\":\"hash_racy\""), "{events}");
+    assert!(!events.contains("\"name\":\"aliases\""), "{events}");
     Ok(())
 }
 
