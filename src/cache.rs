@@ -25,9 +25,9 @@ pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
 
 use crate::digest::{self, Md5, Sha256};
+use crate::place::{FolderUse, real_folder};
 use crate::volume::Volume;
 
-const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 8] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
@@ -96,18 +96,16 @@ impl Cache {
         let _span = tracing::debug_span!("open_cache").entered();
         fs::create_dir_all(&root)?;
         for folder in FOLDERS {
-            real_folder(&root.join(folder))?;
+            real_folder(&root.join(folder), FolderUse::Cache)?;
         }
         let cache = Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
         };
-        for (name, text) in [("layout", LAYOUT), ("CACHEDIR.TAG", TAG)] {
-            let path = cache.root.join(name);
-            if !path.exists() {
-                cache.write_atomically(&path, text.as_bytes())?;
-            }
+        let tag = cache.root.join("CACHEDIR.TAG");
+        if !tag.exists() {
+            cache.write_atomically(&tag, TAG.as_bytes())?;
         }
         Ok(cache)
     }
@@ -185,9 +183,9 @@ impl Cache {
 
     pub(crate) fn save_stated_md5(&self, md5: &Md5, digest: &Sha256, size: u64) -> io::Result<()> {
         let path = self.stated_path(md5);
-        real_folder(&self.root.join("stated").join("md5"))?;
+        real_folder(&self.root.join("stated").join("md5"), FolderUse::Cache)?;
         if let Some(parent) = path.parent() {
-            real_folder(parent)?;
+            real_folder(parent, FolderUse::Cache)?;
         }
         self.write_atomically(&path, format!("{digest} {size}\n").as_bytes())
     }
@@ -244,7 +242,7 @@ impl Cache {
         let first = usize::from(digest.bytes()[0]);
         if !self.checked[first].load(Ordering::Relaxed) {
             if let Some(folder) = path.parent() {
-                real_folder(folder)?;
+                real_folder(folder, FolderUse::Cache)?;
             }
             self.checked[first].store(true, Ordering::Relaxed);
         }
@@ -270,7 +268,7 @@ impl Cache {
             // something removed the object's folder since this run checked it
             Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
                 if let Some(parent) = path.parent() {
-                    real_folder(parent)?;
+                    real_folder(parent, FolderUse::Cache)?;
                 }
                 return self.link_new(source, path, digest, size);
             }
@@ -345,32 +343,6 @@ fn fill_and_rename(mut file: File, bytes: &[u8], temporary: &Path, path: &Path) 
     fs::rename(temporary, path)
 }
 
-/// makes `folder` when it is missing, and checks that it is a real folder rather than a link, so
-/// that nothing the cache writes there can land outside it.
-fn real_folder(folder: &Path) -> io::Result<()> {
-    if let Err(err) = fs::create_dir(folder)
-        && err.kind() != io::ErrorKind::AlreadyExists
-    {
-        return Err(err);
-    }
-    let found = fs::symlink_metadata(folder)?.file_type();
-    if found.is_dir() {
-        return Ok(());
-    }
-    let what = if found.is_symlink() {
-        "a link"
-    } else {
-        "a file"
-    };
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!(
-            "{} is {what}, and the cache keeps only real folders",
-            folder.display()
-        ),
-    ))
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -441,14 +413,51 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_new_cache_marks_itself_for_backup_tools_and_records_its_layout() {
+    fn a_new_cache_marks_itself_for_backup_tools_without_a_layout_marker() {
         let (_dir, cache) = cache();
         let tag = fs::read_to_string(cache.root.join("CACHEDIR.TAG")).unwrap();
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
-        assert_eq!(
-            fs::read_to_string(cache.root.join("layout")).unwrap(),
-            "1\n"
-        );
+        assert!(!cache.root.join("layout").exists());
+    }
+
+    #[test]
+    fn old_layout_markers_and_unknown_files_do_not_affect_upkeep() {
+        let (_dir, cache) = cache();
+        for name in ["layout", "unknown"] {
+            fs::write(cache.root.join(name), b"leave this alone").unwrap();
+        }
+        let cache = Cache::open(cache.root.clone()).unwrap();
+        store(&cache, b"abc");
+
+        let checked = cache.verify_all(1, &|_| {});
+        assert_eq!(checked.objects, 1);
+        assert_eq!(checked.bytes, 3);
+        assert!(checked.changed.is_empty());
+        assert!(checked.stuck.is_empty());
+        assert!(checked.unreadable.is_empty());
+        assert!(cache.projects().is_empty());
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);
+        let freed = cache.sweep(&Needed::default(), later);
+        assert_eq!(freed.objects, 1);
+        assert_eq!(freed.bytes, 3);
+        assert_eq!(freed.leftovers, 0);
+        for name in ["layout", "unknown"] {
+            assert_eq!(fs::read(cache.root.join(name)).unwrap(), b"leave this alone");
+        }
+    }
+
+    #[test]
+    fn cache_folders_cannot_be_files() {
+        for name in FOLDERS {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(name), b"keep these bytes").unwrap();
+
+            let error = Cache::open(dir.path().to_path_buf()).unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert_eq!(fs::read(dir.path().join(name)).unwrap(), b"keep these bytes");
+        }
     }
 
     #[test]

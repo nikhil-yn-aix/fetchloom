@@ -1,18 +1,11 @@
 //! the project loop: add, sync, lock, status, path and remove, against servers on this machine.
 
 use std::fs;
-use std::process::Output;
 
-use serde_json::Value;
-
-use crate::support::{Result, Sandbox, Server, delete, file, reply, text};
+use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
-
-fn json(output: &Output) -> Result<Value> {
-    Ok(serde_json::from_slice(&output.stdout)?)
-}
 
 /// a project with iris added from `server`, whose first response serves it.
 fn added(sandbox: &Sandbox, server: &Server) -> Result {
@@ -228,16 +221,9 @@ fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
-    let mut permissions = fs::metadata(&placed)?.permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the test makes the edit a careless user would"
-    )]
-    permissions.set_readonly(false);
-    fs::set_permissions(&placed, permissions)?;
     let mut edited = IRIS.to_vec();
     edited[0] = b'S';
-    fs::write(&placed, &edited)?;
+    edit(&placed, &edited)?;
     let output = sandbox.run(&["sync", "--force"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(fs::read(&placed)?, IRIS, "the locked bytes are back");
@@ -652,14 +638,7 @@ fn a_changed_object_fails_verify_and_leaves_the_cache() -> Result {
         .next()
         .ok_or("no fan-out folder")??;
     let object = fs::read_dir(fan.path())?.next().ok_or("no object")??.path();
-    let mut permissions = fs::metadata(&object)?.permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the test damages an object on purpose"
-    )]
-    permissions.set_readonly(false);
-    fs::set_permissions(&object, permissions)?;
-    fs::write(&object, "damaged on disk")?;
+    edit(&object, b"damaged on disk")?;
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(30));
     let stderr = text(&verify.stderr)?;

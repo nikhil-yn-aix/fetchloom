@@ -5,9 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use serde_json::Value;
-
-use crate::support::{Result, Sandbox, Server, delete, file, reply, text};
+use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
 
 const PATH: &str = "/files/dataset.zip";
 /// the tree python computed over the files in tests/fixtures/archives/python.zip.
@@ -29,10 +27,6 @@ fn fixture(name: &str) -> Result<Vec<u8>> {
         .join("tests/fixtures/archives")
         .join(name);
     Ok(fs::read(path)?)
-}
-
-fn json(output: &Output) -> Result<Value> {
-    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 fn ok(output: &Output) -> Result {
@@ -468,7 +462,7 @@ fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
     let pinned = fs::read_to_string(&record)?;
     let mut damaged = tar.clone();
     damaged[1536] = b'X';
-    overwrite(&object(V7_SHA256), &damaged)?;
+    edit(&object(V7_SHA256), &damaged)?;
     // as gc would once README.md's object is a day old, so the tar must be unpacked again
     let readme = pinned
         .lines()
@@ -500,16 +494,4 @@ fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
         "{lock}"
     );
     Ok(())
-}
-
-/// writes `bytes` over the file at `path`, clearing its read-only flag first.
-fn overwrite(path: &Path, bytes: &[u8]) -> Result {
-    let mut permissions = fs::metadata(path)?.permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the test damages a cached archive on purpose"
-    )]
-    permissions.set_readonly(false);
-    fs::set_permissions(path, permissions)?;
-    Ok(fs::write(path, bytes)?)
 }

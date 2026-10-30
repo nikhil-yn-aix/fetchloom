@@ -172,7 +172,6 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 ```text
 <cache>/
   CACHEDIR.TAG
-  layout
   objects/<first 2 sha256 digits>/<remaining 62 digits>
   partial/<sha256 of URL>.part
   partial/<sha256 of URL>.json
@@ -185,7 +184,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   tmp/
 ```
 
-`layout` is created with `1\n`. an existing value is not validated or migrated. `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache.
+`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. existing `layout` files are left untouched. opening, verifying and collecting the cache ignore unknown top-level files.
 
 objects hold read-only payloads. `tmp/` holds new archive members, atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 

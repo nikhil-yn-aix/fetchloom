@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::Cache;
 use crate::digest::Sha256;
+use crate::place::{FolderUse, real_folder};
 
 /// an object in doubt that could not be hashed or sealed, or that held other bytes and could
 /// not be removed.
@@ -83,7 +84,7 @@ impl Cache {
     /// remembers that the object for `digest` no longer held its bytes, as of now.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
         let folder = self.changed_folder();
-        super::real_folder(&folder)?;
+        real_folder(&folder, FolderUse::Cache)?;
         self.write_atomically(&folder.join(digest.hex()), b"")
     }
 
@@ -116,7 +117,9 @@ impl Cache {
     /// that it would still put back.
     pub(crate) fn forget_changed(&self, needed: &HashSet<Sha256>) {
         for digest in self.changed().into_keys() {
-            if !needed.contains(&digest) && super::real_folder(&self.changed_folder()).is_ok() {
+            if !needed.contains(&digest)
+                && real_folder(&self.changed_folder(), FolderUse::Cache).is_ok()
+            {
                 let _ = fs::remove_file(self.changed_folder().join(digest.hex()));
             }
         }

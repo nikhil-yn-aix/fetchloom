@@ -155,7 +155,7 @@ FETCHLOOM_DOWNLOAD_URL=http://127.0.0.1:8000 sh install.sh
 
 on windows, set `$env:FETCHLOOM_DOWNLOAD_URL` and run `.\install.ps1`. to keep your own install apart, set `HOME` on linux or `LOCALAPPDATA` on windows to a scratch folder; the windows installer still adds that folder to your user PATH.
 
-`data.lock` and JSON each use format version 1. the cache writes a layout marker of 1 but does not validate it on open. format readers and recovery behavior are in [formats](formats.md); a version field alone is not a migration system.
+`data.lock` and JSON each use format version 1. format readers and recovery behavior are in [formats](formats.md); a version field alone is not a migration system.
 
 ## license
 

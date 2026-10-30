@@ -216,7 +216,7 @@ impl Placer {
                 fs::create_dir_all(&self.root)?;
             }
             if self.checks_root {
-                real_folder(&self.root, false)?;
+                real_folder(&self.root, FolderUse::Place { make: false })?;
             }
             self.folders.insert(self.root.clone());
         }
@@ -228,7 +228,7 @@ impl Placer {
         {
             folder.push(part);
             if !self.folders.contains(&folder) {
-                real_folder(&folder, make)?;
+                real_folder(&folder, FolderUse::Place { make })?;
                 self.folders.insert(folder.clone());
             }
         }
@@ -249,7 +249,7 @@ impl Placer {
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
         if self.checks_root {
-            real_folder(&folder, false)?;
+            real_folder(&folder, FolderUse::Place { make: false })?;
         }
         for part in parent
             .strip_prefix(&self.root)
@@ -257,7 +257,7 @@ impl Placer {
             .components()
         {
             folder.push(part);
-            real_folder(&folder, false)?;
+            real_folder(&folder, FolderUse::Place { make: false })?;
         }
         if placed == Some(Method::Hardlink) {
             self.volume.remove_hardlink(&path)?;
@@ -374,33 +374,60 @@ fn spread<'o, 'p>(orders: Vec<(usize, &'o Order<'p>)>) -> Vec<(usize, &'o Order<
     ranked.into_iter().map(|(_, item)| item).collect()
 }
 
-/// checks that `folder` is a real folder, not a link to one, and makes it when `make` asks and it
-/// is missing.
-fn real_folder(folder: &Path, make: bool) -> io::Result<()> {
-    match fs::symlink_metadata(folder) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+/// how a caller creates missing folders and reports invalid ones.
+#[derive(Clone, Copy)]
+pub(crate) enum FolderUse {
+    Cache,
+    Place { make: bool },
+}
+
+/// refuses links and files where a caller needs a real folder.
+pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
+    let found = match usage {
+        FolderUse::Cache => None,
+        FolderUse::Place { make } => match fs::symlink_metadata(folder) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound && make => None,
+            found => Some(found?),
+        },
+    };
+    let metadata = if let Some(found) = found {
+        found
+    } else {
+        if let Err(err) = fs::create_dir(folder)
+            && err.kind() != io::ErrorKind::AlreadyExists
+        {
+            return Err(err);
+        }
+        fs::symlink_metadata(folder)?
+    };
+    let is_link = metadata.file_type().is_symlink();
+    if metadata.is_dir() && !is_link {
+        return Ok(());
+    }
+    let (kind, message) = match usage {
+        FolderUse::Cache => {
+            let what = if is_link { "a link" } else { "a file" };
+            (
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} is {what}, and the cache keeps only real folders",
+                    folder.display()
+                ),
+            )
+        }
+        FolderUse::Place { .. } if is_link => (
             io::ErrorKind::InvalidInput,
             format!(
                 "{} is a link, and fetchloom only places files in real folders",
                 folder.display()
             ),
-        )),
-        Ok(metadata) if metadata.is_dir() => Ok(()),
-        Ok(_) => Err(io::Error::new(
+        ),
+        FolderUse::Place { .. } => (
             io::ErrorKind::NotADirectory,
             format!("{} is a file where a folder should be", folder.display()),
-        )),
-        Err(err) if err.kind() == io::ErrorKind::NotFound && make => {
-            match fs::create_dir(folder) {
-                // another process made it first
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                    real_folder(folder, false)
-                }
-                created => created,
-            }
-        }
-        Err(err) => Err(err),
-    }
+        ),
+    };
+    Err(io::Error::new(kind, message))
 }
 
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
@@ -665,6 +692,33 @@ mod tests {
 
         assert_eq!(method, Method::Copy);
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+    }
+
+    #[test]
+    fn checking_missing_parents_does_not_create_them() {
+        let folder = TempDir::new().unwrap();
+        let parent = folder.path().join("missing");
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
+
+        let error = placer.check_folders(&parent.join("file"), false).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(!parent.exists());
+    }
+
+    #[test]
+    fn a_file_in_place_of_a_parent_folder_is_rejected() {
+        let folder = TempDir::new().unwrap();
+        let parent = folder.path().join("file");
+        fs::write(&parent, b"keep these bytes").unwrap();
+        for make in [false, true] {
+            let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None);
+
+            let error = placer.check_folders(&parent.join("child"), make).unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+            assert_eq!(fs::read(&parent).unwrap(), b"keep these bytes");
+        }
     }
 
     #[test]
