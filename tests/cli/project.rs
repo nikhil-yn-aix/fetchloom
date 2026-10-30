@@ -616,7 +616,7 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     assert_eq!(verify.status.code(), Some(0));
     assert_eq!(
         text(&verify.stderr)?,
-        "✓ verified 1 object · 32 B. every one is intact\n"
+        "✓ verified 1 file · 32 B. every one is intact\n"
     );
     fs::remove_file(sandbox.work().join("data.toml"))?;
     let forgotten = json(&sandbox.run(&["--json", "cache"])?)?;
@@ -643,7 +643,7 @@ fn a_changed_object_fails_verify_and_waits_for_replacement() -> Result {
     assert_eq!(verify.status.code(), Some(30));
     let stderr = text(&verify.stderr)?;
     assert!(
-        stderr.contains("had changed and awaits replacement"),
+        stderr.contains("changed and was marked for replacement"),
         "{stderr}"
     );
     assert_eq!(fs::read(&object)?, b"damaged on disk");
