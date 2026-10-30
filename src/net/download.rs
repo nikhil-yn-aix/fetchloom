@@ -693,7 +693,7 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
     } = body;
     let partial = partial.clone();
     let opened =
-        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5))
+        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5, false))
             .await
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
     match opened {
