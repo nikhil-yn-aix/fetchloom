@@ -54,7 +54,10 @@ fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     };
     assert!(reason.contains("sent nothing for 30 s"), "{reason}");
     assert!(elapsed >= IDLE, "{elapsed:?}");
-    assert!(elapsed < IDLE + std::time::Duration::from_secs(5), "{elapsed:?}");
+    assert!(
+        elapsed < IDLE + std::time::Duration::from_secs(5),
+        "{elapsed:?}"
+    );
     assert_eq!(net.work.counts().bytes_down, 3072);
     assert_eq!(partial.resumable().unwrap().0, 3072);
 }
@@ -287,6 +290,24 @@ fn a_resume_answered_from_another_version_starts_over() {
         let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
         assert_eq!(String::from_utf8(stored).unwrap(), "BBBBBBBB", "{}", old.0);
     }
+}
+
+/// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,
+/// which proves the joined bytes as a pinned SHA-256 does.
+#[test]
+fn a_stated_md5_lets_a_download_without_validators_resume() {
+    let cut = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\n\r\naaaa";
+    let (url, _) = serve(vec![
+        cut.as_bytes().to_vec(),
+        reply("206 Partial Content", &[("Content-Range", "bytes 4-7/8")], "bbbb"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut fetch = Fetch::new(url.clone());
+    fetch.expect.md5 = Md5::from_hex("c622054d9e6f17b43814ad5d61cab239");
+    let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
+    assert_eq!(stored, b"aaaabbbb");
 }
 
 #[test]
