@@ -192,6 +192,23 @@ pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
 }
 
+pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+/// writes over a file as a user would, clearing its read-only flag first.
+pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test edits a read-only file as a user would"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
 /// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
 /// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
 /// alone, since a placed hardlink shares it with the cached object.

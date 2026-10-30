@@ -5,23 +5,10 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, delete, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
-
-/// writes over a placed file as a user would, clearing its read-only flag first.
-fn edit(path: &Path, bytes: &[u8]) -> Result {
-    let mut permissions = fs::metadata(path)?.permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the test edits a placed file as a user would"
-    )]
-    permissions.set_readonly(false);
-    fs::set_permissions(path, permissions)?;
-    fs::write(path, bytes)?;
-    Ok(())
-}
 
 /// waits until `server` has seen `count` requests.
 fn requested(server: &Server, count: usize) -> Result {
@@ -756,7 +743,7 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
 }
 
 #[test]
-fn zero_byte_copies_are_reported_as_copies() -> Result {
+fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/empty.csv", vec![file(b"", "\"empty\"")])?;
     fs::write(

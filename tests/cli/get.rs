@@ -1,20 +1,14 @@
 //! `fetchloom get`: one link into one folder, through the cache.
 
 use std::fs;
-use std::process::{Child, Output, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
-
-use crate::support::{Part, Result, Sandbox, Server, file, link_folder, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, file, json, link_folder, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
 const PATH: &str = "/records/3608990/files/iris.csv";
-
-fn json(output: &Output) -> Result<Value> {
-    Ok(serde_json::from_slice(&output.stdout)?)
-}
 
 #[test]
 fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
@@ -521,7 +515,7 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
 }
 
 #[test]
-fn zero_byte_copies_are_reported_as_copies() -> Result {
+fn get_reports_zero_byte_copies_in_a_synced_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/empty.csv", vec![file(b"", "\"empty\"")])?;
     let output = sandbox
