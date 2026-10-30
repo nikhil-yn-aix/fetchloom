@@ -18,15 +18,15 @@ pub(crate) struct Staging {
 }
 
 impl Cache {
-    /// starts an archive's staging folder after reclaiming abandoned ones. the folder becomes
-    /// visible to immediate cleanup only after its lock is held or marked unavailable.
+    /// starts an archive's staging folder after reclaiming abandoned ones. its lock gets its name
+    /// only once held, so a sweep never takes the lock of a writer that is still opening it.
     pub(crate) fn staging(&self) -> io::Result<Arc<Staging>> {
         self.sweep_staging(SystemTime::now());
         let mut staging = loop {
             let folder = self
                 .root
                 .join("tmp")
-                .join(format!("{:016x}.starting", fastrand::u64(..)));
+                .join(format!("{:016x}.stage", fastrand::u64(..)));
             match fs::create_dir(&folder) {
                 Ok(()) => {
                     break Staging {
@@ -39,24 +39,24 @@ impl Cache {
                 Err(err) => return Err(err),
             }
         };
-        let path = staging.folder.join("lock");
-        let lock = open_unfollowed(&path, true)?;
+        let opening = staging.folder.join("lock.new");
+        let lock = open_unfollowed(&opening, true)?;
         match lock.try_lock() {
-            Ok(()) => staging.lock = Some(lock),
+            Ok(()) => {
+                fs::rename(&opening, staging.folder.join("lock"))?;
+                staging.lock = Some(lock);
+            }
             Err(TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
             Err(TryLockError::Error(_)) => {
                 drop(lock);
-                fs::rename(&path, staging.folder.join("unlocked"))?;
+                fs::rename(&opening, staging.folder.join("unlocked"))?;
             }
         }
-        let ready = staging.folder.with_extension("stage");
-        fs::rename(&staging.folder, &ready)?;
-        staging.folder = ready;
         Ok(Arc::new(staging))
     }
 
-    /// reclaims unlocked staging at once. missing or unsupported locks, including folders a
-    /// writer never finished opening, use the age rule. a held lock wins over age.
+    /// reclaims unlocked staging at once. a folder without a lock, one a writer is still opening
+    /// or one on a filesystem without locks, waits for the age rule. a held lock wins over age.
     pub(super) fn sweep_staging(&self, now: SystemTime) -> u64 {
         let mut removed = 0;
         for entry in fs::read_dir(self.root.join("tmp"))
@@ -71,16 +71,10 @@ impl Cache {
                 continue;
             }
             let folder = entry.path();
-            let ready = folder
+            if folder
                 .extension()
-                .is_some_and(|extension| extension == "stage");
-            let starting = folder
-                .extension()
-                .is_some_and(|extension| extension == "starting");
-            if !ready && !starting {
-                continue;
-            }
-            if !ready && !old_staging(&folder, now) {
+                .is_none_or(|extension| extension != "stage")
+            {
                 continue;
             }
             let lock = match open_unfollowed(&folder.join("lock"), false) {
@@ -148,7 +142,8 @@ fn old_staging(folder: &Path, now: SystemTime) -> bool {
 
 impl Staging {
     pub(crate) fn new_object(self: &Arc<Self>) -> io::Result<NewObject> {
-        self.cache.new_object_in(&self.folder, Some(Arc::clone(self)))
+        self.cache
+            .new_object_in(&self.folder, Some(Arc::clone(self)))
     }
 }
 
