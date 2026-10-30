@@ -111,7 +111,6 @@ fn get_has_its_own_help() -> Result {
     Ok(())
 }
 
-/// docs/scope.md names options of `add` and `get`, and each one is in that command's help.
 #[test]
 fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     let scope = std::fs::read_to_string(
@@ -181,7 +180,6 @@ fn welcome() -> Result {
     Ok(())
 }
 
-/// the quick start in README.md shows the first run as it is.
 #[test]
 fn the_readme_quick_start_is_the_first_run() -> Result {
     let readme = std::fs::read_to_string(
