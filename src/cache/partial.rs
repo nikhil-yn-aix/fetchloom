@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::{Cache, Stored, Validators, real_folder};
+use super::{Cache, Stored, Validators};
 use crate::digest::{self, Hasher, Sha256};
+use crate::place::{FolderUse, real_folder};
 use crate::volume::is_plain;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
@@ -68,7 +69,7 @@ impl Cache {
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
         let key = digest::sha256(url.as_bytes()).hex();
         let partial = self.root.join("partial");
-        real_folder(&partial)?;
+        real_folder(&partial, FolderUse::Cache)?;
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
         let lock = open_unfollowed(&partial.join(format!("{key}.lock")), true)?;
