@@ -122,7 +122,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     unpacking::drop_archives(&cache, &unpacked, None);
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     context.output.answer(&folder.display().to_string());
-    tell_next(context, &args.link);
+    tell_next(context, &args);
     let origins: HashMap<&str, Origin> = locked
         .iter()
         .zip(&fetched)
@@ -293,14 +293,33 @@ fn planned<'a>(cache: &Cache, files: &'a [LockedFile]) -> Result<Plan<'a>, Error
 }
 
 /// the step after a download for a person at a terminal: pinning the same link in a project.
-fn tell_next(context: &Context, link: &str) {
-    // a link holding a secret is one `add` refuses, and no message may repeat it
-    if let Cow::Borrowed(link) = net::mask_query(link.trim()) {
+fn tell_next(context: &Context, args: &Get) {
+    if let Some(command) = pin_command(args) {
         context.output.next(&format!(
-            "to pin it in a project instead, run `fetchloom add {}` there",
-            super::shell_word(link)
+            "to pin this dataset in a project, run `{command}` there"
         ));
     }
+}
+
+fn pin_command(args: &Get) -> Option<String> {
+    // add refuses links holding secrets, and no hint may repeat them.
+    let Cow::Borrowed(link) = net::mask_query(args.link.trim()) else {
+        return None;
+    };
+    let mut parts = vec!["fetchloom add".to_owned(), super::shell_word(link).into_owned()];
+    for (flag, patterns) in [
+        ("--select", &args.filter.select),
+        ("--exclude", &args.filter.exclude),
+    ] {
+        for pattern in patterns {
+            parts.push(flag.to_owned());
+            parts.push(super::shell_word(pattern).into_owned());
+        }
+    }
+    if args.no_extract {
+        parts.push("--no-extract".to_owned());
+    }
+    Some(parts.join(" "))
 }
 
 /// the files `--select` and `--exclude` keep, or the one file a pasted link names.
@@ -430,3 +449,28 @@ fn tell_fetched(
 
 #[cfg(test)]
 mod drive_docs_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::args::Filter;
+
+    #[test]
+    fn the_pin_hint_keeps_filters_and_extraction_settings() {
+        let mut args = Get {
+            link: "https://example.org/data.zip".to_owned(),
+            output: Some(PathBuf::from("chosen")),
+            filter: Filter {
+                select: vec!["*.zip".to_owned(), "*.csv".to_owned()],
+                exclude: vec!["old/*".to_owned()],
+            },
+            no_extract: true,
+        };
+        assert_eq!(
+            pin_command(&args).as_deref(),
+            Some("fetchloom add https://example.org/data.zip --select \"*.zip\" --select \"*.csv\" --exclude \"old/*\" --no-extract")
+        );
+        args.link = "https://example.org/data.zip?token=secret".to_owned();
+        assert_eq!(pin_command(&args), None);
+    }
+}
