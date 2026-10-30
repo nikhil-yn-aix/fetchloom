@@ -236,6 +236,9 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
             "added {name}. its archives contain no regular files"
         ));
     }
+    work.context
+        .output
+        .next("commit data.toml and data.lock; anyone who clones runs `fetchloom sync`");
     Ok(())
 }
 
@@ -269,6 +272,9 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     )?
     .remove_only(&context.output)?;
     context.output.done(&format!("removed {}", args.name));
+    context.output.next(
+        "commit data.toml and data.lock; other clones drop its files at their next `fetchloom sync`",
+    );
     Ok(Report {
         project: project.root,
         datasets: vec![args.name],
@@ -309,6 +315,17 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         context
             .output
             .done(&format!("synced {datasets} into {}", manifest.data_dir));
+        if lock_changed {
+            context
+                .output
+                .next("commit data.lock, so every clone gets these exact files");
+        } else if let Some(name) = manifest.datasets.keys().next()
+            && placement.placed + placement.replaced > 0
+        {
+            context.output.next(&format!(
+                "`fetchloom path {name}` tells your scripts where {name} is"
+            ));
+        }
     }
     Ok(Report {
         project: project.root,
@@ -359,6 +376,9 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         context
             .output
             .done("data.lock is up to date with data.toml");
+        context
+            .output
+            .next("run `fetchloom sync` to update data/, then commit data.lock");
     } else {
         context
             .output

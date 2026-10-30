@@ -331,6 +331,7 @@ mod tests {
             color: false,
             unicode: true,
             interactive: false,
+            watched: false,
         };
         let output = Output::new(style, Level::Quiet, false, false);
         let job = Job {
@@ -392,6 +393,7 @@ mod tests {
                 color: false,
                 unicode: false,
                 interactive: false,
+                watched: false,
             },
             Level::Quiet,
             false,
@@ -436,6 +438,7 @@ mod tests {
                 color: false,
                 unicode: false,
                 interactive: false,
+                watched: false,
             },
             Level::Quiet,
             false,

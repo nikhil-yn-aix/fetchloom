@@ -145,6 +145,34 @@ impl Sandbox {
         Ok(self.command(args).output()?)
     }
 
+    /// what a person at a terminal sees from the command: stdout and stderr both on a new pseudo
+    /// terminal that `script` opens, read back as text. none when `script` is not installed.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn on_a_terminal(&self, args: &[&str]) -> Result<Option<String>> {
+        let inner = self.command(args);
+        let line: Vec<String> = std::iter::once(inner.get_program())
+            .chain(inner.get_args())
+            .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+            .collect();
+        let mut script = Command::new("script");
+        script
+            .args(["-qec", &line.join(" "), "/dev/null"])
+            .current_dir(self.work());
+        for (name, value) in inner.get_envs() {
+            match value {
+                Some(value) => script.env(name, value),
+                None => script.env_remove(name),
+            };
+        }
+        match script.output() {
+            Ok(output) => Ok(Some(
+                String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+            )),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// snapshot settings that hide what changes from run to run: this sandbox's path, ports and
     /// timings. a rate shows only once a download takes a second, which a busy machine or a
     /// retry wait can cause, so rates are dropped whole. backslashes become slashes so windows

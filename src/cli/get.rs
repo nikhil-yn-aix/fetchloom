@@ -4,6 +4,7 @@
 
 mod folder;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,6 +122,13 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     unpacking::drop_archives(&cache, &unpacked, None);
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     context.output.answer(&folder.display().to_string());
+    // a link holding a secret is one `add` refuses, and no message may repeat it
+    if let Cow::Borrowed(link) = net::mask_query(args.link.trim()) {
+        context.output.next(&format!(
+            "to pin it in a project instead, run `fetchloom add {}` there",
+            super::shell_word(link)
+        ));
+    }
     let origins: HashMap<&str, Origin> = locked
         .iter()
         .zip(&fetched)

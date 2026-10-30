@@ -59,6 +59,47 @@ fn add_pins_downloads_and_places_a_link() -> Result {
     Ok(())
 }
 
+/// after a change, a person at a terminal is told the usual next step. a pipe, `-q` and `--json`
+/// never are, so what scripts read stays the same.
+#[test]
+fn the_next_step_is_told_only_at_a_terminal() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    for args in [
+        &["add", server.url.as_str()][..],
+        &["lock"],
+        &["sync"],
+        &["remove", "iris"],
+        &["get", server.url.as_str()],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("next:"), "{args:?}: {stderr}");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+        if let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? {
+            assert!(
+                screen.contains(
+                    "\n  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`\n"
+                ),
+                "{screen}"
+            );
+            for args in [
+                &["-q", "remove", "iris"][..],
+                &["--json", "add", &server.url],
+            ] {
+                let screen = sandbox.on_a_terminal(args)?.unwrap_or_default();
+                assert!(!screen.contains("next:"), "{args:?}: {screen}");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn adding_the_same_dataset_again_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;

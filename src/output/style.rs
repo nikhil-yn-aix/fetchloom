@@ -19,6 +19,9 @@ pub(crate) struct Style {
     pub(crate) unicode: bool,
     /// a person watches stderr: it is a terminal, outside CI, and not a dumb one.
     pub(crate) interactive: bool,
+    /// stdout and stderr are both terminals, so a person reads the answer and the story, and no
+    /// script does.
+    pub(crate) watched: bool,
 }
 
 impl Style {
@@ -29,6 +32,7 @@ impl Style {
             color: wants_color(choice, terminal, &var),
             unicode: wants_unicode(terminal, &var),
             interactive: is_interactive(terminal, &var),
+            watched: terminal && std::io::stdout().is_terminal(),
         }
     }
 

@@ -10,6 +10,7 @@ mod status;
 mod sync;
 mod usage;
 
+use std::borrow::Cow;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
@@ -339,5 +340,35 @@ fn level(quiet: bool, verbose: u8) -> Level {
         (false, 0) => Level::Normal,
         (false, 1) => Level::Verbose,
         (false, _) => Level::Debug,
+    }
+}
+
+/// `word` as a shell reads it back whole: in double quotes when it holds more than letters,
+/// digits and the marks links use, such as `?` or `&`.
+fn shell_word(word: &str) -> Cow<'_, str> {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,~".contains(c))
+    {
+        Cow::Borrowed(word)
+    } else {
+        Cow::Owned(format!("\"{word}\""))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_word;
+
+    #[test]
+    fn a_word_a_shell_would_split_or_expand_is_quoted() {
+        assert_eq!(shell_word("zenodo:3608990"), "zenodo:3608990");
+        assert_eq!(
+            shell_word("https://example.org/a.csv?download=1&v=2"),
+            "\"https://example.org/a.csv?download=1&v=2\""
+        );
+        assert_eq!(shell_word("*.csv"), "\"*.csv\"");
+        assert_eq!(shell_word("my data"), "\"my data\"");
     }
 }

@@ -192,6 +192,8 @@ command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeate
 
 stdout carries paths, version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` needs no closing summary; successful `lock --check` is silent unless verbose or JSON output was requested.
 
+when stdout and stderr are both terminals, `add`, `remove`, `get`, a `lock` that changed data.lock and a `sync` that placed files or changed data.lock end with a dim `next:` line naming the usual next step, such as committing data.toml and data.lock. `-q`, `--json` and a redirected stdout leave it out.
+
 resolved lines omit unavailable metadata, show total size only when every listed size is known, and shorten titles to 50 characters plus an ellipsis. plain URLs have no resolved line. licenses containing `-NC` or `-ND`, ignoring case, get a warning; other restrictions are not interpreted.
 
 on an interactive terminal, resolution waits show spinners and active downloads show bars. several downloads get an overall bar. elapsed time appears after two seconds. after three seconds, a positive rate is shown; remaining time also needs a known total. finished bars clear and the command prints its summaries. debug logging disables bars.

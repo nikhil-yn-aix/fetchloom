@@ -140,6 +140,20 @@ impl Output {
         }
     }
 
+    /// the step a person usually takes after a run that worked, such as committing data.lock.
+    pub(crate) fn next(&self, text: &str) {
+        if self.shows_next() {
+            let dim = Paint::new().dimmed();
+            self.line(&format!("  {dim}next: {}{dim:#}", plain(text)));
+        }
+    }
+
+    /// whether [`Output::next`] prints: only to a person at a terminal, never with `-q` or
+    /// `--json`, or when stdout goes to a pipe or a file.
+    fn shows_next(&self) -> bool {
+        self.style.watched && self.tells(Level::Normal)
+    }
+
     /// free text from a source, such as a title, cut to fit one line of the story.
     pub(crate) fn clip(&self, text: &str, most: usize) -> String {
         units::clip(text, most, self.style.more())
@@ -356,12 +370,33 @@ fn plain(text: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::plain;
+    use super::{Level, Output, Style, plain};
 
     #[test]
     fn server_text_cannot_steer_the_terminal() {
         assert_eq!(plain("iris.csv · 4.1 KiB"), "iris.csv · 4.1 KiB");
         assert_eq!(plain("\u{1b}[2Jgone"), "\\u{1b}[2Jgone");
         assert_eq!(plain("two\nlines"), "two\\nlines");
+    }
+
+    #[test]
+    fn the_next_step_is_only_for_a_person_at_a_terminal() {
+        let shows = |watched, level, json| {
+            let style = Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched,
+            };
+            Output::new(style, level, json, false).shows_next()
+        };
+        assert!(shows(true, Level::Normal, false));
+        assert!(shows(true, Level::Verbose, false));
+        assert!(!shows(true, Level::Quiet, false), "-q");
+        assert!(!shows(true, Level::Normal, true), "--json");
+        assert!(
+            !shows(false, Level::Normal, false),
+            "stdout or stderr is not a terminal"
+        );
     }
 }
