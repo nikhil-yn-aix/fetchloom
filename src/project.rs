@@ -46,6 +46,17 @@ struct Owner {
 }
 
 impl Held {
+    fn publish_owner(&mut self, path: &Path, record: &[u8]) -> io::Result<()> {
+        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        self.owner = Some(path.to_path_buf());
+        drop(file);
+        #[cfg(test)]
+        tests::owner_published(path);
+        // reserve the name across OS lock domains, then publish the whole record.
+        // a killed writer leaves either an empty reservation or a complete record.
+        write_atomically(path, record)
+    }
+
     fn claim(mut self, path: &Path, command: &str, now: SystemTime) -> io::Result<Hold> {
         let owner = Owner {
             os: std::env::consts::OS.to_owned(),
@@ -55,15 +66,8 @@ impl Held {
         };
         let record = serde_json::to_vec(&owner).map_err(io::Error::other)?;
         loop {
-            match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(file) => {
-                    self.owner = Some(path.to_path_buf());
-                    drop(file);
-                    // reserve the name across OS lock domains, then publish the whole record.
-                    // a killed writer leaves either an empty reservation or a complete record.
-                    write_atomically(path, &record)?;
-                    return Ok(Hold::Held(self));
-                }
+            match self.publish_owner(path, &record) {
+                Ok(()) => return Ok(Hold::Held(self)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(err),
             }
@@ -83,11 +87,7 @@ impl Held {
                         .is_some_and(|owner| owner.os == std::env::consts::OS)
             };
             if stale {
-                match fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err),
-                }
+                remove_stale_owner(path, &bytes, modified)?;
                 continue;
             }
             let who = owner.map_or_else(
@@ -116,6 +116,14 @@ impl Drop for Held {
         {
             tracing::debug!(%err, "could not remove the project owner");
         }
+    }
+}
+
+fn remove_stale_owner(path: &Path, _bytes: &[u8], _modified: SystemTime) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -403,6 +411,18 @@ fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    thread_local! {
+        static OWNER_PUBLISHED: std::cell::Cell<Option<fn(&Path)>> = const {
+            std::cell::Cell::new(None)
+        };
+    }
+
+    pub(super) fn owner_published(path: &Path) {
+        if let Some(observe) = OWNER_PUBLISHED.take() {
+            observe(path);
+        }
+    }
+
     fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
         for (name, text) in files {
@@ -447,6 +467,70 @@ mod tests {
             "command": "sync",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn claiming_publishes_a_complete_owner_without_temporary_files() {
+        let (_dir, project) = project(&[]);
+        if !crate::cache::tests::hardlinks(&project.root) {
+            return;
+        }
+        OWNER_PUBLISHED.set(Some(|path| {
+            let bytes = fs::read(path).unwrap();
+            assert!(!bytes.is_empty(), "an owner must be complete when it appears");
+            let owner: Owner = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(owner.os, std::env::consts::OS);
+            assert_eq!(owner.pid, std::process::id());
+            assert_eq!(owner.command, "sync");
+        }));
+        let Hold::Held(held) = project.hold("sync").unwrap() else {
+            panic!("free")
+        };
+        assert!(OWNER_PUBLISHED.get().is_none(), "publication was not observed");
+        let path = project.own_folder().join("owner");
+        let record = read_owner(&path).unwrap();
+        let competing = Held {
+            lock: None,
+            owner: None,
+        };
+        assert!(matches!(
+            competing.claim(&path, "remove", SystemTime::now()).unwrap(),
+            Hold::Owner(_)
+        ));
+        assert_eq!(read_owner(&path).unwrap(), record);
+        let mut files: Vec<_> = fs::read_dir(project.own_folder())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        files.sort();
+        assert_eq!(files, [".gitignore", "lock", "owner"]);
+        drop(held);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_stale_owner_replaced_before_removal_is_kept() {
+        let os = if cfg!(windows) { "linux" } else { "windows" };
+        for (replacement, elapsed) in [
+            (owner_record(os), Duration::ZERO),
+            (Vec::new(), Duration::from_secs(20)),
+        ] {
+            let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+            let path = project.own_folder().join("owner");
+            let (bytes, modified) = read_owner(&path).unwrap();
+            write_atomically(&path, &replacement).unwrap();
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified + elapsed)
+                .unwrap();
+            let fresh = read_owner(&path).unwrap();
+
+            remove_stale_owner(&path, &bytes, modified).unwrap();
+
+            assert_eq!(read_owner(&path).unwrap(), fresh);
+        }
     }
 
     #[test]
