@@ -40,6 +40,7 @@ struct Context {
     offline: net::Offline,
     yes: bool,
     jobs: usize,
+    rate: Option<Arc<net::Rate>>,
     /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
     /// for.
     split: bool,
@@ -55,6 +56,7 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
+            rate: None,
             split: false,
             work: Arc::default(),
             stop: Arc::default(),
@@ -87,6 +89,7 @@ impl Context {
             split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
+            .with_rate(self.rate.clone())
     }
 }
 
@@ -221,6 +224,10 @@ pub(crate) fn run() -> ExitCode {
     };
     match jobs(&var) {
         Ok(jobs) => context.jobs = jobs,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    match net::Rate::read(&var) {
+        Ok(rate) => context.rate = rate,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     dispatch(&context, command, started)

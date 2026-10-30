@@ -124,6 +124,7 @@ impl Net {
                 }
                 Ok(Ok(None)) => break,
                 Ok(Ok(Some(chunk))) => {
+                    self.throttle(url, chunk.len()).await?;
                     Work::add(&self.work.bytes_down, chunk.len() as u64);
                     if body.len() + chunk.len() > LARGEST {
                         return Err(Failure::Final(Error::new(

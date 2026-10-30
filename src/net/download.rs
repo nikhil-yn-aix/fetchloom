@@ -486,6 +486,9 @@ impl Net {
                 }
                 Ok(Ok(None)) => break Ok(()),
                 Ok(Ok(Some(chunk))) => {
+                    if let Err(err) = self.throttle(url, chunk.len()).await {
+                        break Err(err);
+                    }
                     let length = chunk.len() as u64;
                     Work::add(&self.work.bytes_down, length);
                     if let Err(err) = on(Event::Bytes(length)) {
@@ -557,6 +560,7 @@ impl Net {
                 }
                 Ok(Ok(None)) => return Ok(String::from_utf8_lossy(&page).into_owned()),
                 Ok(Ok(Some(chunk))) => {
+                    self.throttle(url, chunk.len()).await?;
                     Work::add(&self.work.bytes_down, chunk.len() as u64);
                     page.extend_from_slice(&chunk);
                     if page.len() > LARGEST_PAGE {
