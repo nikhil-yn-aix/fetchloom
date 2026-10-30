@@ -647,9 +647,16 @@ fn a_changed_object_fails_verify_and_waits_for_replacement() -> Result {
         "{stderr}"
     );
     assert_eq!(fs::read(&object)?, b"damaged on disk");
+    // a reflink or copy in the project still holds the locked bytes, so only a placement that
+    // needs the object again brings the replacement
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    if fs::read(&placed)? == IRIS {
+        delete(&placed)?;
+    }
     let synced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert_eq!(fs::read(&object)?, IRIS);
+    assert_eq!(fs::read(&placed)?, IRIS);
     Ok(())
 }
 
