@@ -186,7 +186,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   tmp/
 ```
 
-`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. existing `layout` files are left untouched. opening, verifying and collecting the cache ignore unknown top-level files.
+`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. the cache writes no `layout` marker. existing `layout` files are left untouched. opening, verifying and collecting the cache ignore unknown top-level files.
 
 objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup. the next unpack or gc removes a staging folder as soon as it can take that lock. where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule. random names use 16 hexadecimal digits. older loose `.new` files still use the age rule.
 
@@ -274,9 +274,9 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
-| `FETCHLOOM_RATE` | positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`; for example `500K` or `2.5M`; unset or empty means no cap |
-| `FETCHLOOM_THREADS` | integer from 1 to 256; unset or empty keeps the default worker counts; surrounding whitespace is accepted |
-| `FETCHLOOM_SPLIT` | `0` keeps every file to one stream. `1` splits a file of at least 64 MiB across streams from its first answer, to measure the split path. unset or anything else splits such a file once its one stream moved less than 1 MB/s over 2 s |
+| `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
+| `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](architecture.md#concurrency), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
+| `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](architecture.md#split-downloads). a `FETCHLOOM_RATE` cap prevents splitting, including forced splitting |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |
