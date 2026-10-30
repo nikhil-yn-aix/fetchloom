@@ -151,7 +151,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
   help: add --yes to download anyway
 ```
 
-during asynchronous commands, the first ctrl-c asks the work to stop and keep resumable bytes. a second exits immediately with code 130.
+at a download question, the first ctrl-c stops the command with the interrupted error and exit code 130. during other asynchronous work, the first ctrl-c asks it to stop and keep resumable bytes. a second exits immediately with code 130.
 
 ## cache
 
@@ -186,6 +186,8 @@ a missing manifest removes a project's registration. an unreadable lock stops in
 
 `-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. `fetchloom help concepts` explains data.toml, data.lock, the cache and sync; `fetchloom help <command>` prints the same text as `fetchloom <command> --help`. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
 
+help follows the same color settings as other output, including `--color` before or after a subcommand or help flag. `--color always` enables color and `--color never` disables it. with `--color auto`, a non-empty `NO_COLOR` disables color even when `CLICOLOR_FORCE` is set.
+
 command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeated `--select <glob>` and `--exclude <glob>` on both, `--no-extract` on both, `sync --force`, and `lock --upgrade [name ...]` or `--check`. defaults come from [settings](formats.md#settings).
 
 ## output and errors
@@ -196,7 +198,7 @@ when stdout and stderr are both terminals, `add`, `remove`, `get`, a `lock` that
 
 resolved lines omit unavailable metadata, show total size only when every listed size is known, and shorten titles to 50 characters plus an ellipsis. plain URLs have no resolved line. licenses containing `-NC` or `-ND`, ignoring case, get a warning; other restrictions are not interpreted.
 
-on an interactive terminal, resolution waits show spinners and active downloads show bars. several downloads get an overall bar. elapsed time appears after two seconds. after three seconds, a positive rate is shown; remaining time also needs a known total. finished bars clear and the command prints its summaries. debug logging disables bars.
+on an interactive terminal, resolution waits show spinners and active downloads show bars. several downloads get an overall bar. elapsed time appears after two seconds. after three seconds, a positive rate is shown; remaining time also needs a known total. on narrow terminals, counters and the bar disappear before the file name is shortened. a name that still does not fit keeps its beginning and end with `~` in the middle; the line stays within the terminal width. finished bars clear and the command prints its summaries. debug logging disables bars.
 
 without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings): color is off for pipes and files, with `NO_COLOR` and with `--color never`.
 

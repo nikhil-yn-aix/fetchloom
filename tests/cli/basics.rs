@@ -37,6 +37,73 @@ fn help_is_lowercase() -> Result {
 }
 
 #[test]
+fn help_follows_color_flags_anywhere() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (arguments, colored) in [
+        (&["--color", "always", "--help"][..], true),
+        (&["--help", "--color", "always"], true),
+        (&["--color", "always", "get", "-h"], true),
+        (&["get", "--color=always", "--help"], true),
+        (&["cache", "gc", "-h", "--color=always"], true),
+        (&["--color", "always", "help", "get"], true),
+        (&["help", "cache", "gc", "--color", "always"], true),
+        (&["--color", "never", "--help"], false),
+        (&["get", "-h", "--color=never"], false),
+        (&["help", "get", "--color", "never"], false),
+        (&["--help", "--", "--color", "always"], false),
+        (&["--help", "--color", "invalid"], false),
+    ] {
+        let output = sandbox
+            .command(arguments)
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR_FORCE", "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            text(&output.stderr)?
+        );
+        let stdout = text(&output.stdout)?;
+        assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
+        assert!(stdout.contains("usage: "), "{arguments:?}: {stdout}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn help_follows_color_environment() -> Result {
+    let sandbox = Sandbox::new()?;
+    for arguments in [
+        &["--help"][..],
+        &["get", "-h"],
+        &["help", "get"],
+        &["cache", "gc", "--help"],
+        &["help", "cache", "gc"],
+    ] {
+        for (no_color, force, colored) in [("1", "1", false), ("", "1", true), ("", "0", false)] {
+            let output = sandbox
+                .command(arguments)
+                .env("NO_COLOR", no_color)
+                .env("CLICOLOR_FORCE", force)
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{arguments:?}: {}",
+                text(&output.stderr)?
+            );
+            let stdout = text(&output.stdout)?;
+            assert_eq!(
+                stdout.contains("\x1b["),
+                colored,
+                "{arguments:?}, NO_COLOR={no_color}, CLICOLOR_FORCE={force}: {stdout}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn get_has_its_own_help() -> Result {
     let output = Sandbox::new()?.run(&["get", "--help"])?;
     assert!(output.status.success());

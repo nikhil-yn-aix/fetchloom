@@ -258,22 +258,32 @@ impl Output {
     }
 
     /// asks a yes or no question on the terminal. none when nobody can answer, as in CI or a pipe.
-    pub(crate) fn confirm(&self, question: &str) -> Option<bool> {
+    pub(crate) fn confirm(&self, question: &str) -> Result<Option<bool>, Error> {
         if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
-            return None;
+            return Ok(None);
         }
-        // a failed read, such as ctrl-c at the prompt, counts as no
         let ask = || {
-            dialoguer::Confirm::new()
-                .with_prompt(question)
-                .default(false)
-                .interact()
-                .unwrap_or(false)
+            let terminal = console::Term::stderr();
+            let _ = terminal.write_str(&format!("{question} [y/N] "));
+            // read ctrl-c as a key on both platforms instead of leaving a blocking read
+            // waiting after the signal handler asks network tasks to stop.
+            let answer = loop {
+                match confirmation_key(terminal.read_key_raw()) {
+                    Ok(None) => {}
+                    answer => break answer,
+                }
+            };
+            let _ = terminal.clear_line();
+            if let Ok(Some(yes)) = &answer {
+                let selected = if *yes { "yes" } else { "no" };
+                let _ = terminal.write_line(&format!("{question} {selected}"));
+            }
+            answer
         };
-        Some(match &self.bars {
+        match &self.bars {
             Some(bars) => bars.suspend(ask),
             None => ask(),
-        })
+        }
     }
 
     /// the counters at the end of a run, for `-v`.
@@ -403,6 +413,20 @@ fn write_line(color: bool, text: &str) {
     let _ = writeln!(err, "{text}");
 }
 
+fn confirmation_key(key: std::io::Result<console::Key>) -> Result<Option<bool>, Error> {
+    let key = match key {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => console::Key::CtrlC,
+        Err(_) => return Ok(Some(false)),
+    };
+    match key {
+        console::Key::CtrlC => Err(Error::new(crate::error::Kind::Interrupted, "stopped")),
+        console::Key::Char('y' | 'Y') => Ok(Some(true)),
+        console::Key::Char('n' | 'N') | console::Key::Enter => Ok(Some(false)),
+        _ => Ok(None),
+    }
+}
+
 /// `text` with control characters written out as escapes, so text from a server cannot move the
 /// cursor or recolor the terminal.
 fn plain(text: &str) -> Cow<'_, str> {
@@ -425,6 +449,37 @@ mod tests {
     use anstyle::Style as Paint;
 
     use super::{Level, Output, Style, accented, plain, subject};
+
+    #[test]
+    fn the_first_ctrl_c_at_a_question_is_interrupted() {
+        for key in [
+            Ok(console::Key::CtrlC),
+            Err(std::io::ErrorKind::Interrupted.into()),
+        ] {
+            let error = super::confirmation_key(key).unwrap_err();
+            assert_eq!(error.kind, crate::error::Kind::Interrupted);
+            assert_eq!(error.kind.exit_code(), 130);
+            assert_eq!(error.message, "stopped");
+        }
+    }
+
+    #[test]
+    fn a_question_keeps_yes_no_and_default_answers() {
+        for (key, answer) in [
+            (console::Key::Char('y'), Some(true)),
+            (console::Key::Char('Y'), Some(true)),
+            (console::Key::Char('n'), Some(false)),
+            (console::Key::Char('N'), Some(false)),
+            (console::Key::Enter, Some(false)),
+            (console::Key::Unknown, None),
+        ] {
+            assert_eq!(super::confirmation_key(Ok(key)).unwrap(), answer);
+        }
+        assert_eq!(
+            super::confirmation_key(Err(std::io::ErrorKind::UnexpectedEof.into())).unwrap(),
+            Some(false)
+        );
+    }
 
     #[test]
     fn commands_in_backticks_take_the_accent_and_keep_their_backticks() {

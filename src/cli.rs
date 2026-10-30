@@ -16,7 +16,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
 use serde::Serialize;
 
 use crate::cache::Cache;
@@ -184,7 +183,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
 
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
-    let args = match args::Args::try_parse() {
+    let args = match args::read() {
         Ok(args) => args,
         Err(err) => return usage::answer(&err, started),
     };
@@ -322,7 +321,7 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
     if yes {
         return Ok(());
     }
-    match output.confirm(&format!("download {what} ({size})?")) {
+    match output.confirm(&format!("download {what} ({size})?"))? {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(
             Kind::Unconfirmed,
