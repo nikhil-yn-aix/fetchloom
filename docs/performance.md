@@ -40,7 +40,7 @@ measured on release builds. a budget is a number with a unit, or a comparison wi
 what the measurements showed:
 
 - a 1 GiB download from a server on the same machine runs at about 180 MB/s on windows and 460 MB/s on linux, since each byte is also hashed and the object is flushed before it is placed. that keeps up with links up to about 1.5 Gbit/s on windows; above that the disk and the hash set the pace. the best windows run matched curl, and the spread between runs came from the antivirus.
-- placing hardlinks on ntfs with defender on costs about 130 us a link when neighbours go to different folders on 8 threads, and 400 to 1,100 us when threads fill one folder at a time. 10,000 bare links spread that way take 1.3 s, so the 2 s budget leaves room; placing adds the folders, a look at each file and the state, and that overhead is the miss.
+- placing hardlinks on ntfs with defender on costs about 130 us a link when neighbours go to different folders on 8 threads, and 400 to 1,100 us when threads fill one folder at a time. 10,000 bare links spread that way take 1.3 s, so the 2 s budget leaves room. the rest of the miss is checking each object in the cache before placing, about 0.5 s for 10,000, and the links themselves, whose cost moves with the machine's load; reading each placed file back and checking its folders cost little, as the next section shows.
 - two budgets changed with these measurements. unpacking was "within 15% of the decompressor alone", but every member is also hashed and flushed, and on windows every new file is scanned: bsdtar decompresses the 10,000 small files in 0.18 s and writes them in 8.4 s. small members are now measured against a program that does nothing but create, write, flush and link the same bytes. on linux one flush per file cost 0.7 ms on ext4; flushing the batch at once took unpacking from 8.5 to 10.2 s down to half a second (commit 26a3dbc, three runs each). the batch holds the filesystem open from before its first write, since linux reports a failed write-back only to descriptors opened before it; kernels before 5.8 report none to syncfs, so there each file is flushed on its own.
 - on windows defender scans each new file as it is closed, and for small files that scan sets the pace. the machine's load moved the cost of one file between 0.7 and 7 ms from minute to minute, so each comparison below interleaves its runs.
   - signing does not matter. microsoft's tar and a copy whose signature an appended byte broke wrote the same 10,000 files in 19.6 and 19.4 s.
@@ -50,6 +50,44 @@ what the measurements showed:
   - the rest belongs to the machine's owner: a dev drive, on which defender scans after the file operation returns, or an exclusion for the cache folder, as pnpm suggests for its store. both need an administrator and were not measured here.
 - `lock --check` reads and checks 10,000 locked files in about 26 ms on windows; starting any program there takes 12 ms.
 - hashing in memory on this cpu, best of three over 1 GiB: sha2's SHA-256 1.70 to 1.83 GB/s, ring's 1.63 to 1.69, MD5 0.68, and SHA-256 with MD5 in one pass 0.48. so sha2 stays, and a download computes an MD5 only when no SHA-256 is pinned: bytes that match the pin match the MD5 recorded beside it.
+
+### placing from a warm cache on windows
+
+live use found placing slow on windows: a second project of hf:datasets/Matthijs/cmu-arctic-xvectors, a zip of about 8,000 files in one folder, took 30.5 s against 3.8 s on linux, and a tar.gz of about 52,000 small files took 87 s, both on a debug build under load. two fixtures stand for them: 10,000 files of 4 KiB in 100 folders from the lab server, and 8,000 files of 2 KiB in one folder from a local server. each run copies data.toml and data.lock into an empty folder and syncs it from a cache that holds every file. these runs, on 2026-10-30, shared the laptop with other builds that kept it at full load, so every comparison interleaves ten runs of the old release binary (fd64035) and the new one (2ecb70a) and gives the median and the range. besides the time from start to exit, each run's `FETCHLOOM_TRACE` gives the time inside the command, since starting any program took 1 to 3 s at that load.
+
+where the time went, from traces of one run each:
+
+| phase | 10,000 files in 100 folders | 8,000 files in one folder |
+|---|---|---|
+| whole command | 3.85 s | 12.1 s |
+| checking each object in the cache | 0.47 s | 0.29 s |
+| placing | 3.19 s | 11.7 s |
+| planning, the state and the rest | 0.19 s | 0.12 s |
+
+what a benchmark of bare links outside fetchloom showed, and what one build of fetchloom tried:
+
+- one folder is the cost. 8,000 links into one folder took 10.2 to 12.3 s, and the same objects spread over 100 folders 1.7 s; 10,000 links took 10.3 to 12.7 s into one folder and 2.2 s over 100. on one thread a link into one folder took 0.6 to 3.7 ms, with no trend as the folder filled.
+- fewer threads are slower, not faster. 8,000 links into one folder, interleaved: one thread 17 to 149 s, two 10 to 49 s, four 8.5 to 20 s and eight 10 to 19 s. placement keeps 8 threads.
+- reading each file back costs little. 10,000 links spread on 8 threads took 2.48 s without reading any file back and 2.44 s reading each. a build that took each hardlink's size and time from its object's check instead, reading nothing back, won nothing on either fixture, as the table below shows, so that change was reverted.
+- checking folders per file costs 5 to 10 us a file, 54 to 97 ms for 10,000, about 2% of placing, below the 10% a change must win, so it stays as it was.
+
+| placing into a new project, ten interleaved runs | before | reading no hardlink back |
+|---|---|---|
+| 10,000 files in 100 folders, start to exit | 11.4 s (8.0 to 27.1) | 12.3 s (8.4 to 28.4) |
+| 10,000 files, inside the command | 10.1 s (7.0 to 25.6) | 10.8 s (7.2 to 27.1) |
+| 8,000 files in one folder, start to exit | 20.0 s (14.6 to 27.9) | 16.8 s (13.3 to 29.3) |
+| 8,000 files, inside the command | 17.9 s (13.2 to 26.4) | 15.2 s (11.9 to 27.8) |
+
+the build was faster in 3 of 10 interleaved pairs for 10,000 files and in 6 of 10 for 8,000, with single pairs apart by up to 2 times either way, so neither median is outside the spread. placing in this load took 2 to 3 times as long as in the earlier quiet window, and the slow live runs are mostly the cost of making links on windows under load, not work fetchloom adds.
+
+a sync with nothing to do now skips reading archive member records, relocking and planning when data.toml and data.lock are as the last complete sync left them, as [the project loop](architecture.md#the-project-loop) describes. the scan of the data folder still runs.
+
+| sync with nothing to do | before | after |
+|---|---|---|
+| 10,000 files in 100 folders, inside the command | 200 ms (153 to 708) | 131 ms (91 to 174) |
+| 8,000 files in one folder, inside the command | 303 ms (174 to 480) | 158 ms (102 to 371) |
+| 10,000 files, start to exit | 1.27 s (1.11 to 3.18) | 1.21 s (1.07 to 1.61) |
+| 8,000 files, start to exit | 1.53 s (1.41 to 5.48) | 1.82 s (1.23 to 12.8) |
 
 ## counters
 
