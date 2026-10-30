@@ -13,7 +13,7 @@ use super::*;
 use crate::cache::{Cache, Validators};
 use crate::digest::sha256;
 use crate::net::download::{Expect, Fetch, Fetched};
-use crate::net::{Offline, Options, PER_HOST, Split, Splitting};
+use crate::net::{Offline, Options, PER_HOST, Rate, Split, Splitting};
 use crate::source::recorded::block_on;
 
 const KIB: u64 = 1024;
@@ -506,6 +506,58 @@ fn a_resume_fetches_only_the_ranges_not_kept() {
         assert!(first.contains("if-range: \"v1\""), "{first}");
         let counts = net.work.counts();
         assert_eq!(counts.resumes, 1, "{when:?}");
+        assert!(
+            counts.bytes_down < 3 * MIB,
+            "the kept megabyte at the end came again, {when:?}: {} bytes",
+            counts.bytes_down
+        );
+    }
+}
+
+#[test]
+fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
+    for when in [Splitting::Always, Splitting::WhenSlow] {
+        let body = body(4 * MIB);
+        let server = serve(body.clone(), SERVING);
+        let rate = Rate::read(&|_| Some("1M".into())).unwrap();
+        let mut net = net(&server.url, 8).with_rate(rate);
+        net.split.when = when;
+        let (_folder, cache) = cache();
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            last_modified: None,
+        };
+        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
+            panic!("nothing else holds the download");
+        };
+        let mut writer = partial
+            .writer(0, Some(4 * MIB), validators, false, true)
+            .unwrap();
+        let mib = usize::try_from(MIB).unwrap();
+        writer.write_at(0, &body[..mib]).unwrap();
+        writer.write_at(3 * MIB, &body[3 * mib..]).unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        drop(partial);
+        let fetch = Fetch::new(server.url.clone());
+        let fetched = block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                net.download(&fetch, &cache, &|_| Ok(())),
+            )
+            .await
+            .unwrap()
+        })
+        .unwrap();
+        assert_eq!(fetched.size, 4 * MIB, "{when:?}");
+        assert_eq!(fetched.digest, sha256(&body), "{when:?}");
+        assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), *body);
+        let first = &server.heads()[0];
+        assert!(first.contains(&format!("range: bytes={MIB}-")), "{first}");
+        assert!(first.contains("if-range: \"v1\""), "{first}");
+        let counts = net.work.counts();
+        assert_eq!(counts.resumes, 1, "{when:?}");
+        assert_eq!(counts.retries, 0, "{when:?}");
         assert!(
             counts.bytes_down < 3 * MIB,
             "the kept megabyte at the end came again, {when:?}: {} bytes",
