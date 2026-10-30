@@ -28,7 +28,6 @@ use crate::digest::{self, Md5, Sha256};
 use crate::place::{FolderUse, real_folder};
 use crate::volume::Volume;
 
-const LAYOUT: &str = "1\n";
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 8] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
@@ -104,11 +103,9 @@ impl Cache {
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
         };
-        for (name, text) in [("layout", LAYOUT), ("CACHEDIR.TAG", TAG)] {
-            let path = cache.root.join(name);
-            if !path.exists() {
-                cache.write_atomically(&path, text.as_bytes())?;
-            }
+        let tag = cache.root.join("CACHEDIR.TAG");
+        if !tag.exists() {
+            cache.write_atomically(&tag, TAG.as_bytes())?;
         }
         Ok(cache)
     }
@@ -416,14 +413,38 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_new_cache_marks_itself_for_backup_tools_and_records_its_layout() {
+    fn a_new_cache_marks_itself_for_backup_tools_without_a_layout_marker() {
         let (_dir, cache) = cache();
         let tag = fs::read_to_string(cache.root.join("CACHEDIR.TAG")).unwrap();
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
-        assert_eq!(
-            fs::read_to_string(cache.root.join("layout")).unwrap(),
-            "1\n"
-        );
+        assert!(!cache.root.join("layout").exists());
+    }
+
+    #[test]
+    fn old_layout_markers_and_unknown_files_do_not_affect_upkeep() {
+        let (_dir, cache) = cache();
+        for name in ["layout", "unknown"] {
+            fs::write(cache.root.join(name), b"leave this alone").unwrap();
+        }
+        let cache = Cache::open(cache.root.clone()).unwrap();
+        store(&cache, b"abc");
+
+        let checked = cache.verify_all(1, &|_| {});
+        assert_eq!(checked.objects, 1);
+        assert_eq!(checked.bytes, 3);
+        assert!(checked.changed.is_empty());
+        assert!(checked.stuck.is_empty());
+        assert!(checked.unreadable.is_empty());
+        assert!(cache.projects().is_empty());
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);
+        let freed = cache.sweep(&Needed::default(), later);
+        assert_eq!(freed.objects, 1);
+        assert_eq!(freed.bytes, 3);
+        assert_eq!(freed.leftovers, 0);
+        for name in ["layout", "unknown"] {
+            assert_eq!(fs::read(cache.root.join(name)).unwrap(), b"leave this alone");
+        }
     }
 
     #[test]
