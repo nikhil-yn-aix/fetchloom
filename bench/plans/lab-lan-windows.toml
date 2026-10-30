@@ -8,7 +8,7 @@ repetitions = 5
 [vars]
 lab = "https://172.31.233.169:8443"
 py = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe"
-wrappers = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+wrappers = "bench/tools"
 ca = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/lab-ca.crt"
 unpack = ""
 

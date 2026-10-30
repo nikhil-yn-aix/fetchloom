@@ -9,7 +9,7 @@ repetitions = 5
 [vars]
 lab = "https://localhost:8443"
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+wrappers = "bench/tools"
 
 [[workload]]
 id = "many-1k"

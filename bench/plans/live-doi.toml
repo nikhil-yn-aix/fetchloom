@@ -8,7 +8,7 @@ repetitions = 3
 
 [vars]
 py = "/home/fl/bench-venv/bin/python"
-wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+wrappers = "bench/tools"
 
 [[workload]]
 id = "doi-s1"
