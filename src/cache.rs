@@ -640,6 +640,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn repairing_an_object_again_refreshes_its_change_mark() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        for (dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            let repair = |written| {
+                rewrite(&object, b"evil");
+                seal(&object);
+                let source = dir.path().join("repair");
+                fs::write(&source, b"good").unwrap();
+                File::options()
+                    .write(true)
+                    .open(&source)
+                    .unwrap()
+                    .set_modified(written)
+                    .unwrap();
+                seal(&source);
+                assert!(cache.link_object(&source, stored.digest, 4, None).unwrap().new);
+                assert_eq!(fs::read(&object).unwrap(), b"good");
+                let marked = UNIX_EPOCH + Duration::from_nanos(cache.changed()[&stored.digest]);
+                assert!(marked < fs::metadata(&object).unwrap().modified().unwrap());
+                marked
+            };
+            // fixed write times keep the two repairs distinct even on coarse clocks.
+            let first = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+            let second = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_010));
+            assert!(second > first, "another corruption needs a fresh mark");
+        }
+    }
+
+    #[test]
     fn verification_keeps_a_copy_published_by_another_repair() {
         for (_dir, cache) in [cache(), fat()] {
             let stored = store(&cache, b"good");
