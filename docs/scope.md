@@ -11,7 +11,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 - zip and tar archives unpack into cached members with a pinned tree hash. single compressed files stay intact. 7z and rar stay packed with a warning, rather than failing the download.
 - transfers have retry and resume support. locked 404 or 410 downloads can ask their source for a replacement URL while retaining the original hash.
 - offline sync uses local placements, cache objects and unpack records. resolving a changed entry still needs an online run.
-- stdout answers and versioned JSON support scripts. python and R wrappers are not implemented.
+- stdout answers and versioned JSON support scripts. the python module's `fetchloom.path()` and `fetchloom.sync()` run the installed command with `--json`; there is no R wrapper.
 
 these are not guarantees that a host keeps a file forever, that every resume can continue, or that cached objects are rehashed on every use. [architecture](architecture.md) defines the limits and trust assumptions.
 
@@ -54,4 +54,4 @@ one user's processes can share a cache. a cache writable by several people trust
 | controlled-data access approval | access is granted by the institution or data owner |
 | 7z and rar extraction | decoders are not included; the packed file remains usable elsewhere |
 
-`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the planned python package are not implemented. add them when a concrete project needs them. parallel range requests for one file are also absent; current concurrency is across requests and files.
+`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the python module are not implemented. add them when a concrete project needs them. downloads run several files at once; one file splits into parallel range requests only with `FETCHLOOM_SPLIT=1`, as [architecture](architecture.md#split-downloads) describes.
