@@ -58,7 +58,11 @@ fn help_follows_color_flags_anywhere() -> Result {
             .env("NO_COLOR", "1")
             .env("CLICOLOR_FORCE", "1")
             .output()?;
-        assert!(output.status.success(), "{arguments:?}: {}", text(&output.stderr)?);
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            text(&output.stderr)?
+        );
         let stdout = text(&output.stdout)?;
         assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
         assert!(stdout.contains("usage: "), "{arguments:?}: {stdout}");
@@ -83,7 +87,11 @@ fn help_follows_color_environment() -> Result {
                 .env("NO_COLOR", no_color)
                 .env("CLICOLOR_FORCE", force)
                 .output()?;
-            assert!(output.status.success(), "{arguments:?}: {}", text(&output.stderr)?);
+            assert!(
+                output.status.success(),
+                "{arguments:?}: {}",
+                text(&output.stderr)?
+            );
             let stdout = text(&output.stdout)?;
             assert_eq!(
                 stdout.contains("\x1b["),

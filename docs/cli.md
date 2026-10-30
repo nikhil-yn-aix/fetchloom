@@ -186,6 +186,8 @@ a missing manifest removes a project's registration. an unreadable lock stops in
 
 `-q` conflicts with verbosity. `lock --check` conflicts with `--upgrade`. `fetchloom help concepts` explains data.toml, data.lock, the cache and sync; `fetchloom help <command>` prints the same text as `fetchloom <command> --help`. `fl` runs the same implementation; powershell's `fl` alias means `Format-List`, so use `fetchloom` there.
 
+help follows the same color settings as other output, including `--color` before or after a subcommand or help flag. `--color always` enables color and `--color never` disables it. with `--color auto`, a non-empty `NO_COLOR` disables color even when `CLICOLOR_FORCE` is set.
+
 command-specific options are `add --as <name>`, `get -o/--output <dir>`, repeated `--select <glob>` and `--exclude <glob>` on both, `--no-extract` on both, `sync --force`, and `lock --upgrade [name ...]` or `--check`. defaults come from [settings](formats.md#settings).
 
 ## output and errors

@@ -50,7 +50,7 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
     let line = std::iter::once("fetchloom")
         .chain(topic.iter().map(String::as_str))
         .chain(std::iter::once("--help"));
-    match args::Args::command().try_get_matches_from(line) {
+    match args::command().try_get_matches_from(line) {
         Err(help) if help.kind() == ErrorKind::DisplayHelp => {
             let _ = help.print();
             ExitCode::SUCCESS

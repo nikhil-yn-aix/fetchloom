@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
-use crate::output::ColorChoice;
+use crate::output::{ColorChoice, Style};
 
 const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 
@@ -132,6 +132,33 @@ pub(crate) struct Args {
     /// print the version
     #[arg(short = 'V', long, help_heading = "options")]
     pub(crate) version: bool,
+}
+
+pub(super) fn read() -> Result<Args, clap::Error> {
+    let mut command = command();
+    let mut matches = command.try_get_matches_from_mut(std::env::args_os())?;
+    Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
+}
+
+/// clap can print help before it parses --color, including flags after --help.
+pub(super) fn command() -> clap::Command {
+    let mut choice = ColorChoice::Auto;
+    let mut arguments = std::env::args_os().skip(1).take_while(|arg| arg != "--");
+    while let Some(argument) = arguments.next() {
+        let value = match argument.to_str() {
+            Some("--color") => arguments.next().and_then(|value| value.into_string().ok()),
+            Some(argument) => argument.strip_prefix("--color=").map(str::to_owned),
+            None => None,
+        };
+        if let Some(value) = value.and_then(|value| ColorChoice::from_str(&value, false).ok()) {
+            choice = value;
+        }
+    }
+    Args::command().color(if Style::detect(choice).color {
+        clap::ColorChoice::Always
+    } else {
+        clap::ColorChoice::Never
+    })
 }
 
 /// options every command takes.
