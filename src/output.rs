@@ -120,8 +120,7 @@ impl Output {
         if self.tells(Level::Normal) {
             let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
             self.line(&format!(
-                "{yellow}{}{yellow:#} {}",
-                self.style.warned(),
+                "{yellow}warning:{yellow:#} {}",
                 accented(&plain(text), Paint::new())
             ));
         }

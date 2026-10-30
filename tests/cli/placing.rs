@@ -1052,7 +1052,7 @@ fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     if sandbox.links()?.reflink {
-        assert!(stderr.contains("linked, no extra disk"), "{stderr}");
+        assert!(stderr.contains("linked from the cache"), "{stderr}");
     } else {
         assert!(stderr.contains("1 file copied, 0 B"), "{stderr}");
         assert!(stderr.contains("1 copy"), "{stderr}");

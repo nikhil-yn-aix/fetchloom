@@ -610,7 +610,7 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let gc = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&gc.stderr)?,
-        "✓ nothing to free. every object is needed by a project or newer than a day\n"
+        "✓ no cached data files or download leftovers were removed\n"
     );
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(0));

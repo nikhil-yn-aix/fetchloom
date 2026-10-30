@@ -161,11 +161,11 @@ fetchloom cache gc
 fetchloom cache verify
 ```
 
-`cache` prints its root on stdout and reports object bytes and registered projects on stderr. byte totals exclude indexes and partial downloads.
+`cache` prints its root on stdout and reports cached file sizes and registered projects on stderr. byte totals exclude indexes and partial downloads.
 
 `cache gc` keeps what registered project locks need, including unpacked members. unneeded objects and unpack records become eligible after 24 hours by modification time, not last use. abandoned partials and temporary files are cleaned too. `get` and standalone `lock` do not register projects for retention.
 
-a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact.
+a missing manifest removes a project's registration. an unreadable lock stops inspection or gc rather than guessing what it needs. removing a cache object leaves placed hardlinks, reflinks and copies intact. the removal summary counts bytes removed from the cache, not disk space freed.
 
 `cache verify` rehashes objects, marks those whose bytes differ, and exits 30 if it found any. marked damage stays at its name until a download replaces it, and does not count as a cache hit. failures to write change marks are reported too. unreadable objects get their own warning and stay in the cache without a new change mark; when none changed, an unreadable object makes the command exit 50. close any program using the object or check its permissions, then verify again. it does not verify independent copies under `data/`.
 
@@ -202,7 +202,7 @@ on an interactive terminal, resolution waits show spinners and active downloads 
 
 without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings): color is off for pipes and files, with `NO_COLOR` and with `--color never`.
 
-with color on, success is green with ✓, warnings yellow with !, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
+with color on, success is green with ✓, warnings yellow with `warning:`, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
 
 ```text
 $ fetchloom get

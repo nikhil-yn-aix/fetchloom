@@ -20,7 +20,7 @@ pub(super) fn tell(
 ) {
     for (dataset, tally) in tallies {
         let how = match (tally.links, tally.files - tally.links) {
-            (_, 0) => "linked, no extra disk".to_owned(),
+            (_, 0) => "linked from the cache".to_owned(),
             (0, _) => format!("copied, {}", units::size(tally.copied)),
             (_, _) => format!("partly copied, {}", units::size(tally.copied)),
         };

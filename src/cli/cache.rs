@@ -41,14 +41,19 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
             "{} · {} in {}",
             cache.root().display(),
             units::size(bytes),
-            units::count(objects.len() as u64, "object", "objects")
+            units::count(objects.len() as u64, "file", "files")
         ),
     );
     for project in &projects {
         output.step("Used by", &project.display().to_string());
     }
-    if bytes == kept {
-        output.done("every object is needed by a project");
+    if objects.is_empty() {
+        output.done("the cache has no data files");
+    } else if objects
+        .iter()
+        .all(|object| needed.objects.contains(&object.digest))
+    {
+        output.done("every cached file is needed by a project");
     } else {
         output.done(&format!(
             "{} of it is needed by a project",
@@ -72,27 +77,27 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
     let freed = cache.sweep(&needed, SystemTime::now());
     let output = &context.output;
     if freed.objects == 0 && freed.leftovers == 0 {
-        output.done("nothing to free. every object is needed by a project or newer than a day");
+        output.done("no cached data files or download leftovers were removed");
         return Ok(freed);
     }
     if freed.objects > 0 {
         output.step(
-            "Freed",
+            "Removed",
             &format!(
-                "{} · {}",
+                "{} · {} from the cache",
                 units::size(freed.bytes),
-                units::count(freed.objects, "object", "objects")
+                units::count(freed.objects, "file", "files")
             ),
         );
     }
     if freed.leftovers > 0 {
         output.step(
             "Removed",
-            &units::count(freed.leftovers, "abandoned download", "abandoned downloads"),
+            &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
     }
     output.done(&format!(
-        "the cache keeps what {} need",
+        "kept cached files needed by {}",
         units::count(projects.len() as u64, "project", "projects")
     ));
     Ok(freed)
@@ -101,7 +106,7 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
     let total: u64 = cache.objects().iter().map(|object| object.size).sum();
-    let what = "every file in the cache";
+    let what = "cached data files";
     let bar = context.output.bar(format!("checking {what}"));
     bar.start(Some(total), 0);
     let ticker = context
@@ -116,12 +121,13 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let output = &context.output;
     let what = format!(
         "{} · {}",
-        units::count(checked.objects, "object", "objects"),
+        units::count(checked.objects, "file", "files"),
         units::size(checked.bytes)
     );
     for digest in &checked.unreadable {
         output.warn(&format!(
-            "object {digest} is unreadable and was left in the cache"
+            "{} is unreadable and was left in the cache",
+            cache.object_path(digest).display()
         ));
     }
     if checked.changed.is_empty() {
@@ -133,15 +139,16 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
             Kind::LocalIo,
             format!(
                 "checked {what}. {} could not be read",
-                units::count(checked.unreadable.len() as u64, "object", "objects")
+                units::count(checked.unreadable.len() as u64, "file", "files")
             ),
         )
-        .help("close any program using these objects or check their permissions, then run `fetchloom cache verify` again"));
+        .help("close any program using these cached files or check their permissions, then run `fetchloom cache verify` again"));
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
             output.warn(&format!(
-                "object {digest} had changed and awaits replacement"
+                "{} changed and was marked for replacement",
+                cache.object_path(digest).display()
             ));
         }
     }
@@ -154,13 +161,15 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         Kind::IntegrityMismatch,
         format!(
             "{verb} {what}. {} had changed",
-            units::count(checked.changed.len() as u64, "object", "objects")
+            units::count(checked.changed.len() as u64, "file", "files")
         ),
     );
     if checked.stuck.is_empty() {
-        return Err(
-            error.help("run `fetchloom sync` in each project to download what it still needs")
-        );
+        return Err(error.help(if checked.unreadable.is_empty() {
+            "run `fetchloom sync` in each project to restore the files it needs"
+        } else {
+            "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again and `fetchloom sync` in each project"
+        }));
     }
     error = error.detail(format!(
         "{} could not be marked for repair:",
@@ -169,9 +178,10 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     for digest in checked.stuck.iter().take(5) {
         error = error.detail(cache.object_path(digest).display().to_string());
     }
-    Err(error.help(
-        "check permissions on the cache's changed folder, then run `fetchloom cache verify` again",
-    ))
+    Err(error.help(format!(
+        "check permissions on {}, then run `fetchloom cache verify` again",
+        cache.root().join("changed").display()
+    )))
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to

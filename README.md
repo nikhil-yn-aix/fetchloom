@@ -93,7 +93,7 @@ the story goes to stderr. the time and the placement method depend on your machi
    Resolved zenodo:3608990 · DatasetIris · 1 file · 4.1 KiB · cc-by-4.0
  Downloaded 1 file · 4.1 KiB in 354 ms
      Locked iris · 1 file in data.lock
-     Placed data/iris · 1 file linked, no extra disk
+     Placed data/iris · 1 file linked from the cache
 ✓ added iris. its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
