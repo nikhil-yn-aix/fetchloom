@@ -322,7 +322,7 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
     if yes {
         return Ok(());
     }
-    match output.confirm(&format!("download {what} ({size})?")) {
+    match output.confirm(&format!("download {what} ({size})?"))? {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(
             Kind::Unconfirmed,

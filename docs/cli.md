@@ -151,7 +151,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
   help: add --yes to download anyway
 ```
 
-during asynchronous commands, the first ctrl-c asks the work to stop and keep resumable bytes. a second exits immediately with code 130.
+at a download question, the first ctrl-c stops the command with the interrupted error and exit code 130. during other asynchronous work, the first ctrl-c asks it to stop and keep resumable bytes. a second exits immediately with code 130.
 
 ## cache
 
