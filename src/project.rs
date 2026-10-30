@@ -8,6 +8,9 @@ pub(crate) mod state;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
@@ -22,13 +25,106 @@ pub(crate) struct Project {
 
 /// the project lock, held while a command changes the project. dropping it lets others in.
 pub(crate) struct Held {
-    _lock: Option<File>,
+    lock: Option<File>,
+    owner: Option<PathBuf>,
 }
 
 pub(crate) enum Hold {
     Held(Held),
     /// another fetchloom is changing this project right now.
     Busy,
+    /// the owner record blocks this command; tell the user who holds it and how to recover.
+    Owner(String),
+}
+
+#[derive(Deserialize, Serialize)]
+struct Owner {
+    os: String,
+    pid: u32,
+    started: String,
+    command: String,
+}
+
+impl Held {
+    fn claim(mut self, path: &Path, command: &str, now: SystemTime) -> io::Result<Hold> {
+        let owner = Owner {
+            os: std::env::consts::OS.to_owned(),
+            pid: std::process::id(),
+            started: lock::timestamp(now),
+            command: command.to_owned(),
+        };
+        let record = serde_json::to_vec(&owner).map_err(io::Error::other)?;
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(file) => {
+                    self.owner = Some(path.to_path_buf());
+                    drop(file);
+                    // reserve the name across OS lock domains, then publish the whole record.
+                    // a killed writer leaves either an empty reservation or a complete record.
+                    write_atomically(path, &record)?;
+                    return Ok(Hold::Held(self));
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+            let (bytes, modified) = match read_owner(path) {
+                Ok(read) => read,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            let owner = serde_json::from_slice::<Owner>(&bytes).ok();
+            let stale = if bytes.is_empty() {
+                now.duration_since(modified)
+                    .is_ok_and(|age| age > Duration::from_secs(10))
+            } else {
+                self.lock.is_some()
+                    && owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.os == std::env::consts::OS)
+            };
+            if stale {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
+                continue;
+            }
+            let who = owner.map_or_else(
+                || "another fetchloom".to_owned(),
+                |owner| {
+                    format!(
+                        "`fetchloom {}` ({}, pid {}, started {})",
+                        owner.command, owner.os, owner.pid, owner.started
+                    )
+                },
+            );
+            return Ok(Hold::Owner(format!(
+                "for {who} working in this project; if that process is gone, delete {}",
+                path.display()
+            )));
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // remove the owner before the OS lock is released with the guard's fields.
+        if let Some(path) = &self.owner
+            && let Err(err) = fs::remove_file(path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            tracing::debug!(%err, "could not remove the project owner");
+        }
+    }
+}
+
+fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
+    let mut file = File::open(path)?;
+    let modified = file.metadata()?.modified()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok((bytes, modified))
 }
 
 impl Project {
@@ -121,8 +217,12 @@ impl Project {
             .map_err(|err| Error::io("could not record what was placed", &err))
     }
 
-    /// takes the project lock, unless another fetchloom holds it.
-    pub(crate) fn hold(&self) -> Result<Hold, Error> {
+    /// takes the project lock and owner record for `command`, unless another fetchloom holds it.
+    pub(crate) fn hold(&self, command: &str) -> Result<Hold, Error> {
+        self.hold_at(command, SystemTime::now())
+    }
+
+    fn hold_at(&self, command: &str, now: SystemTime) -> Result<Hold, Error> {
         let folder = self.inner()?;
         let file = OpenOptions::new()
             .create(true)
@@ -130,15 +230,17 @@ impl Project {
             .write(true)
             .open(folder.join("lock"))
             .map_err(|err| Error::io("could not open the project lock", &err))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Hold::Held(Held { _lock: Some(file) })),
-            Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
-            // a filesystem without locks still works, one fetchloom at a time
+        let lock = match file.try_lock() {
+            Ok(()) => Some(file),
+            Err(TryLockError::WouldBlock) => return Ok(Hold::Busy),
             Err(TryLockError::Error(err)) => {
                 tracing::debug!(%err, "this filesystem has no file locks");
-                Ok(Hold::Held(Held { _lock: None }))
+                None
             }
-        }
+        };
+        Held { lock, owner: None }
+            .claim(&folder.join("owner"), command, now)
+            .map_err(|err| Error::io("could not claim the project owner", &err))
     }
 
     /// the data folder, made sure to be a real folder inside the project with no link on the way,
@@ -325,16 +427,155 @@ mod tests {
     #[test]
     fn one_command_changes_the_project_at_a_time() {
         let (_dir, project) = project(&[("data.toml", "")]);
-        let Hold::Held(held) = project.hold().unwrap() else {
+        let Hold::Held(held) = project.hold("sync").unwrap() else {
             panic!("free")
         };
-        assert!(matches!(project.hold().unwrap(), Hold::Busy));
+        assert!(matches!(project.hold("sync").unwrap(), Hold::Busy));
         drop(held);
-        assert!(matches!(project.hold().unwrap(), Hold::Held(_)));
+        assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
         assert_eq!(
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
         );
+    }
+
+    fn owner_record(os: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "os": os,
+            "pid": 42,
+            "started": "2026-10-30T12:00:00Z",
+            "command": "sync",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn another_os_owner_waits() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        let os = if cfg!(windows) { "linux" } else { "windows" };
+        let record = owner_record(os);
+        fs::write(&path, &record).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let now = modified + Duration::from_secs(86_400);
+        let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
+            panic!("another os owns the project")
+        };
+        assert_eq!(
+            message,
+            format!(
+                "for `fetchloom sync` ({os}, pid 42, started 2026-10-30T12:00:00Z) working in this project; if that process is gone, delete {}",
+                path.display()
+            )
+        );
+        assert_eq!(fs::read(&path).unwrap(), record);
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(project.hold("remove").unwrap(), Hold::Held(_)));
+    }
+
+    #[test]
+    fn same_os_owner_is_taken_over_under_the_os_lock() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        fs::write(&path, owner_record(std::env::consts::OS)).unwrap();
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234);
+        let Hold::Held(held) = project.hold_at("remove", now).unwrap() else {
+            panic!("the os lock proves this owner is stale")
+        };
+        assert!(held.lock.is_some());
+        let owner: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(owner["os"], std::env::consts::OS);
+        assert_eq!(owner["pid"], std::process::id());
+        assert_eq!(owner["started"], lock::timestamp(now));
+        assert_eq!(owner["command"], "remove");
+    }
+
+    #[test]
+    fn same_os_owner_without_an_os_lock_waits() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        let record = owner_record(std::env::consts::OS);
+        fs::write(&path, &record).unwrap();
+        let held = Held {
+            lock: None,
+            owner: None,
+        };
+        assert!(matches!(
+            held.claim(&path, "remove", std::time::SystemTime::now())
+                .unwrap(),
+            Hold::Owner(_)
+        ));
+        assert_eq!(fs::read(path).unwrap(), record);
+    }
+
+    #[test]
+    fn an_empty_owner_older_than_ten_seconds_is_stale() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let now = modified + std::time::Duration::from_secs(11);
+        let Hold::Held(_held) = project.hold_at("sync", now).unwrap() else {
+            panic!("an old empty owner is stale")
+        };
+        let owner: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(owner["command"], "sync");
+    }
+
+    #[test]
+    fn a_fresh_empty_owner_waits() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        for now in [
+            modified - std::time::Duration::from_secs(1),
+            modified,
+            modified + std::time::Duration::from_secs(10),
+        ] {
+            assert!(matches!(project.hold_at("sync", now).unwrap(), Hold::Owner(_)));
+            assert!(fs::read(&path).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_nonempty_invalid_owner_waits() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "{")]);
+        let path = project.own_folder().join("owner");
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let now = modified + std::time::Duration::from_secs(60);
+        let Hold::Owner(message) = project.hold_at("sync", now).unwrap() else {
+            panic!("an invalid nonempty owner needs manual recovery")
+        };
+        assert!(message.contains(&path.display().to_string()));
+        assert_eq!(fs::read(path).unwrap(), b"{");
+    }
+
+    #[test]
+    fn releasing_the_hold_removes_its_owner() {
+        let (_dir, project) = project(&[]);
+        let path = project.own_folder().join("owner");
+        let Hold::Held(held) = project.hold("sync").unwrap() else {
+            panic!("free")
+        };
+        assert!(path.is_file());
+        drop(held);
+        assert!(!path.exists());
+        assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn an_error_releases_the_owner() {
+        let (_dir, project) = project(&[]);
+        let result = (|| -> Result<(), Error> {
+            let Hold::Held(_held) = project.hold("sync")? else {
+                panic!("free")
+            };
+            assert!(project.own_folder().join("owner").is_file());
+            Err(Error::new(Kind::ProjectInvalid, "invalid project"))
+        })();
+        assert_eq!(result.unwrap_err().kind, Kind::ProjectInvalid);
+        assert!(!project.own_folder().join("owner").exists());
+        assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
     }
 
     #[cfg(windows)]
@@ -359,7 +600,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let held = project.hold();
+        let held = project.hold("sync");
         let written = project.write_state(&State::default());
         assert!(held.is_err(), "linked .fetchloom accepted a project lock");
         assert!(written.is_err(), "linked .fetchloom accepted project state");
@@ -491,7 +732,7 @@ mod tests {
         }
         fs::create_dir_all(&root).unwrap();
         let project = Project { root };
-        let Hold::Held(_held) = project.hold().unwrap() else {
+        let Hold::Held(_held) = project.hold("sync").unwrap() else {
             panic!("free")
         };
         project.write("data.lock", b"first").unwrap();

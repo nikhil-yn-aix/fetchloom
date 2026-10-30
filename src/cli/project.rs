@@ -40,7 +40,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
-    let _held = hold(context, &project).await?;
+    let _held = hold(context, &project, "add").await?;
     let existed = project.manifest_path().is_file();
     let text = if existed {
         project.manifest()?.0
@@ -255,7 +255,7 @@ fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, E
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
     let project = find()?;
-    let _held = hold(context, &project).await?;
+    let _held = hold(context, &project, "remove").await?;
     let (text, manifest) = project.manifest()?;
     known(&manifest, &args.name, "remove")?;
     let updated = manifest::without_dataset(&text, &args.name)?;
@@ -288,7 +288,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
 
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let project = find()?;
-    let _held = hold(context, &project).await?;
+    let _held = hold(context, &project, "sync").await?;
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
     let seen = Seen {
@@ -353,7 +353,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let _held = if args.check {
         None
     } else {
-        Some(hold(context, &project).await?)
+        Some(hold(context, &project, "lock").await?)
     };
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
@@ -447,7 +447,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     };
     known(&manifest, name, "path")?;
     if !ready(&project, &manifest, name)? {
-        let _held = hold(context, &project).await?;
+        let _held = hold(context, &project, "path").await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
         manifest = project.manifest()?.1;
@@ -639,10 +639,17 @@ pub(super) fn find() -> Result<Project, Error> {
 }
 
 /// takes the project lock, waiting while another fetchloom changes the project.
-async fn hold(context: &Context, project: &Project) -> Result<Held, Error> {
+async fn hold(context: &Context, project: &Project, command: &str) -> Result<Held, Error> {
     let mut told = false;
+    let mut told_owner = false;
     loop {
-        match project.hold()? {
+        if context.stop.is_asked() {
+            return Err(Error::new(
+                Kind::Interrupted,
+                "stopped while waiting for another fetchloom",
+            ));
+        }
+        match project.hold(command)? {
             Hold::Held(held) => return Ok(held),
             Hold::Busy if !told => {
                 context
@@ -650,7 +657,12 @@ async fn hold(context: &Context, project: &Project) -> Result<Held, Error> {
                     .step("Waiting", "for another fetchloom working in this project");
                 told = true;
             }
-            Hold::Busy => {}
+            Hold::Owner(message) if !told_owner => {
+                context.output.step("Waiting", &message);
+                told = true;
+                told_owner = true;
+            }
+            Hold::Busy | Hold::Owner(_) => {}
         }
         tokio::select! {
             () = tokio::time::sleep(Duration::from_millis(200)) => {}
@@ -823,4 +835,94 @@ fn net(context: &Context, manifest: &Manifest) -> Net {
             .written_host()
     }));
     net
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{Level, Output, Style};
+    use crate::source::recorded::block_on;
+
+    fn waiting_project() -> (tempfile::TempDir, Project, Context) {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        std::fs::create_dir(project.own_folder()).unwrap();
+        let os = if cfg!(windows) { "linux" } else { "windows" };
+        let owner = serde_json::json!({
+            "os": os,
+            "pid": 42,
+            "started": "2026-10-30T12:00:00Z",
+            "command": "sync",
+        });
+        std::fs::write(
+            project.own_folder().join("owner"),
+            serde_json::to_vec(&owner).unwrap(),
+        )
+        .unwrap();
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+        };
+        let context = Context::new(Output::new(style, Level::Quiet, false, false));
+        (dir, project, context)
+    }
+
+    #[test]
+    fn an_owner_wait_stops_on_ctrl_c() {
+        let (_dir, project, context) = waiting_project();
+        let path = project.own_folder().join("owner");
+        let before = std::fs::read(&path).unwrap();
+        block_on(async {
+            let mut waiting = Box::pin(hold(&context, &project, "remove"));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                    .await
+                    .is_err()
+            );
+            context.stop.ask();
+            let Err(error) = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
+                .await
+                .unwrap()
+            else {
+                panic!("a stopped wait must not acquire the project")
+            };
+            assert_eq!(error.kind, Kind::Interrupted);
+            assert_eq!(error.message, "stopped while waiting for another fetchloom");
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(&path).unwrap();
+        let Err(error) = block_on(hold(&context, &project, "remove")) else {
+            panic!("a pending stop must not claim a free project")
+        };
+        assert_eq!(error.kind, Kind::Interrupted);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn an_owner_wait_resumes_when_the_record_is_removed() {
+        let (_dir, project, context) = waiting_project();
+        let path = project.own_folder().join("owner");
+        block_on(async {
+            let mut waiting = Box::pin(hold(&context, &project, "remove"));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                    .await
+                    .is_err()
+            );
+            std::fs::remove_file(&path).unwrap();
+            let held = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
+                .await
+                .unwrap()
+                .unwrap();
+            let owner: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(owner["command"], "remove");
+            drop(held);
+        });
+        assert!(!path.exists());
+    }
 }
