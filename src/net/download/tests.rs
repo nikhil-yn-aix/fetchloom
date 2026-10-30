@@ -7,6 +7,59 @@ use crate::net::Options;
 use crate::source::recorded::block_on;
 
 #[test]
+fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let (release, stalled) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+            head.push(byte[0]);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nAccept-Ranges: bytes\r\nETag: \"v1\"\r\n\r\n",
+            )
+            .unwrap();
+        stream.write_all(&[b'x'; 3072]).unwrap();
+        // keep the body open so only the client's idle deadline can end the attempt.
+        let _ = stalled.recv();
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let mut net = net(&url);
+    net.split.above = 4096;
+    net.split.piece = 1024;
+    let fetch = Fetch::new(url.clone());
+    let mut split = true;
+    let started = std::time::Instant::now();
+    // the remaining 1024 bytes cannot split, but every rate window still wakes the stream.
+    let result = block_on(async {
+        tokio::time::timeout(
+            IDLE + std::time::Duration::from_secs(5),
+            net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split),
+        )
+        .await
+    });
+    let elapsed = started.elapsed();
+    drop(release);
+    server.join().unwrap();
+    let Ok(Err(Failure::Transient { reason, .. })) = result else {
+        panic!("the stalled body did not reach its idle timeout");
+    };
+    assert!(reason.contains("sent nothing for 30 s"), "{reason}");
+    assert!(elapsed >= IDLE, "{elapsed:?}");
+    assert!(elapsed < IDLE + std::time::Duration::from_secs(5), "{elapsed:?}");
+    assert_eq!(net.work.counts().bytes_down, 3072);
+    assert_eq!(partial.resumable().unwrap().0, 3072);
+}
+
+#[test]
 fn a_pinned_sha256_leaves_no_md5_to_compute() {
     let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc");
     let sha256 = Some(crate::digest::sha256(b"data"));

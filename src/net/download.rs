@@ -419,12 +419,20 @@ impl Net {
         }
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;
-        // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
-        let watch = total.filter(|_| splits && self.rate.is_none());
+        let watch = total.filter(|_| splits);
         let (writer, response, total, slow) = match watch {
             Some(total) if at_once => (writer, response, total, None),
             _ => match self
-                .stream(from, writer, response, total, on, watch)
+                .stream(
+                    from,
+                    writer,
+                    response,
+                    total,
+                    on,
+                    // a stream held back by FETCHLOOM_RATE looks slow, and more streams
+                    // share the same cap
+                    watch.filter(|_| self.rate.is_none()),
+                )
                 .await?
             {
                 Run::Whole(writer) => {
@@ -524,9 +532,10 @@ impl Net {
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
+        let mut idle = tokio::time::Instant::now() + IDLE;
         let body = loop {
             let next = tokio::select! {
-                next = tokio::time::timeout(IDLE, response.chunk()) => next,
+                next = tokio::time::timeout_at(idle, response.chunk()) => next,
                 () = &mut lap, if watch.is_some() => {
                     let now = std::time::Instant::now();
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
@@ -562,6 +571,7 @@ impl Net {
                 }
                 Ok(Ok(None)) => break Ok(None),
                 Ok(Ok(Some(chunk))) => {
+                    idle = tokio::time::Instant::now() + IDLE;
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }
