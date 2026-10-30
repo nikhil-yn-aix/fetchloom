@@ -82,17 +82,51 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     Ok(())
 }
 
+/// the analogy a beginner meets on the first run, in the top of `--help` and in `help concepts`.
+pub(crate) const ANALOGY: [&str; 4] = [
+    "data.toml, the shopping list: which datasets you want",
+    "data.lock, the receipt: the exact files and their fingerprints",
+    "the cache, the pantry: shared by every project on this machine",
+    "sync, restocking: data/ ends up matching the receipt",
+];
+
 #[test]
 fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
-    assert_eq!(
-        stdout.lines().last(),
-        Some("  fetchloom add zenodo:3608990"),
-        "the welcome ends with a command to copy"
+    assert!(stdout.lines().count() <= 16, "{stdout}");
+    for line in ANALOGY {
+        assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
+    }
+    assert!(
+        stdout.contains("\n  fetchloom add zenodo:3608990 "),
+        "the welcome has a first command to copy"
+    );
+    assert!(
+        stdout
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("`fetchloom help concepts`")),
+        "the welcome ends with where to learn more"
     );
     insta::assert_snapshot!(stdout);
+    Ok(())
+}
+
+#[test]
+fn help_opens_like_the_first_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let welcome = text(&sandbox.run(&[])?.stdout)?;
+    let (version, intro) = welcome
+        .split_once("\n\n")
+        .ok_or("the welcome has no version line")?;
+    assert_eq!(version, format!("fetchloom {}", env!("CARGO_PKG_VERSION")));
+    let help = text(&sandbox.run(&["--help"])?.stdout)?;
+    assert!(
+        help.starts_with(&format!("{}\n\nusage: ", intro.trim_end())),
+        "{help}"
+    );
     Ok(())
 }
 

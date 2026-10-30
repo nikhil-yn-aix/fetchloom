@@ -253,7 +253,7 @@ fn alone(context: &Context, started: Instant) -> ExitCode {
         }
         Err(_) => about(
             context,
-            &format!("fetchloom {}\n\n{WELCOME}", env!("CARGO_PKG_VERSION")),
+            &format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO),
             started,
         ),
     }
@@ -331,20 +331,6 @@ fn finish<T: Serialize>(
         Err(error) => ExitCode::from(error.kind.exit_code()),
     }
 }
-
-/// what `fetchloom` alone prints outside a project, below the version. it ends with a command to
-/// copy.
-const WELCOME: &str = "  fetchloom add <link>    add a dataset, pin it and download it into data/
-  fetchloom sync          make data/ match data.lock on this machine
-  fetchloom status        see what changed
-  fetchloom path <name>   print where a dataset is, for scripts
-  fetchloom get <link>    fetch something once, without a project
-
-<link> can be a DOI, a zenodo, figshare, dataverse, osf, hugging face or kaggle id, or any link you would paste in a browser.
-
-get a first dataset into this folder:
-
-  fetchloom add zenodo:3608990";
 
 /// how much of the story `-q` and `-v` ask for.
 fn level(quiet: bool, verbose: u8) -> Level {

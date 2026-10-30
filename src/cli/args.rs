@@ -8,10 +8,30 @@ use crate::output::ColorChoice;
 
 const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}";
 
+/// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
+/// fetchloom does, the analogy, commands to copy and where to learn more.
+pub(crate) const INTRO: &str =
+    "fetchloom puts the exact research data a project needs into its data/ folder.
+
+  data.toml, the shopping list: which datasets you want
+  data.lock, the receipt: the exact files and their fingerprints
+  the cache, the pantry: shared by every project on this machine
+  sync, restocking: data/ ends up matching the receipt
+
+try it with zenodo:3608990, a 4 KB iris.csv:
+
+  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
+  fetchloom sync                 restock data/ in a project you cloned
+  fetchloom get zenodo:3608990   fetch it once, without a project
+
+learn more with `fetchloom help concepts` and `fetchloom <command> --help`";
+
 /// put the exact data a project needs onto any machine with one command
 #[derive(Debug, Parser)]
 #[command(
     name = "fetchloom",
+    about = INTRO,
+    long_about = None,
     version,
     disable_help_flag = true,
     disable_version_flag = true,
