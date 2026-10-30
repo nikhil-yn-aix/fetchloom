@@ -254,6 +254,12 @@ impl Net {
                     from = next;
                 }
                 Err(Failure::Final(err)) => return Err(progress_kept(err, partial)),
+                Err(Failure::Limited { reason }) => {
+                    retry
+                        .limited(reason, known.is_some())
+                        .await
+                        .map_err(|err| progress_kept(err, partial))?;
+                }
                 Err(Failure::Transient {
                     reason,
                     retry_after,

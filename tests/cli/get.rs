@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::process::{Child, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -218,6 +218,49 @@ fn a_busy_server_is_tried_again() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     let name = sandbox.placed_story("a_busy_server_is_tried_again")?;
+    sandbox
+        .filters()
+        .bind(|| insta::assert_snapshot!(name, stderr));
+    Ok(())
+}
+
+/// zenodo's answer once its limit is used up: a 429 that says when the limit resets.
+fn rate_limited(date: &str, reset: u64, retry_after: u64) -> Vec<Part> {
+    reply(
+        "429 Too Many Requests",
+        &[
+            ("Content-Length", "0"),
+            ("Date", date),
+            ("X-RateLimit-Limit", "133"),
+            ("X-RateLimit-Remaining", "0"),
+            ("X-RateLimit-Reset", &reset.to_string()),
+            ("Retry-After", &retry_after.to_string()),
+        ],
+        b"",
+    )
+}
+
+#[test]
+fn a_rate_limit_is_waited_out_without_spending_tries() -> Result {
+    let sandbox = Sandbox::new()?;
+    let now = SystemTime::now();
+    let date = httpdate::fmt_http_date(now);
+    let second = now.duration_since(UNIX_EPOCH)?.as_secs();
+    // more refusals than a request has tries, all but the first with a limit that resets at once
+    let mut responses = vec![rate_limited(&date, second + 1, 1)];
+    responses.extend((0..5).map(|_| rate_limited(&date, second, 0)));
+    responses.push(file(IRIS, "\"v1\""));
+    let server = Server::start(PATH, responses)?;
+    let started = Instant::now();
+    let output = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(server.requests().len(), 7);
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "the first refusal asked for a second"
+    );
+    let name = sandbox.placed_story("a_rate_limit_is_waited_out_without_spending_tries")?;
     sandbox
         .filters()
         .bind(|| insta::assert_snapshot!(name, stderr));

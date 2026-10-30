@@ -6,11 +6,12 @@ mod api;
 mod download;
 mod failure;
 mod headers;
+mod pace;
 mod shown;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::StatusCode;
 use reqwest::header::{self, HeaderName, HeaderValue};
@@ -47,6 +48,14 @@ pub(crate) enum Notice {
         reason: String,
         wait: Duration,
         next: u32,
+    },
+    /// requests to `host` wait for its rate limit to reset. `quota` and `window` are the limit,
+    /// when the host stated them.
+    Waiting {
+        host: String,
+        quota: Option<u64>,
+        window: Option<Duration>,
+        wait: Duration,
     },
 }
 
@@ -115,6 +124,7 @@ pub(crate) struct Net {
     credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
+    paces: pace::Paces,
     split: Split,
     work: Arc<Work>,
     stop: Arc<Stop>,
@@ -204,6 +214,7 @@ impl Net {
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
+            paces: pace::Paces::default(),
             split: Split {
                 enabled: options.split,
                 above: download::SPLIT_ABOVE,
@@ -243,8 +254,9 @@ impl Net {
     }
 
     /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
-    /// hop is checked the way its connection will be made before it is sent. a credential goes
-    /// only to its own host, and never once a redirect has left the first one.
+    /// hop is checked the way its connection will be made before it is sent, and waits while its
+    /// host's rate limit is used up. a credential goes only to its own host, and never once a
+    /// redirect has left the first one.
     async fn send(
         &self,
         url: &Url,
@@ -281,6 +293,7 @@ impl Net {
                 .await
                 .map_err(|reason| refused(&hop, reason))?;
             first_origin &= hop.origin() == url.origin();
+            let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = shape(self.request(client, &hop, first_origin));
             let response = tokio::select! {
                 sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
@@ -290,6 +303,8 @@ impl Net {
                 },
                 () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(&hop))),
             };
+            let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
+            pace::Paces::heard(ticket, limits, Instant::now());
             let Some(next) = redirect_target(&hop, &response) else {
                 return Ok(response);
             };
@@ -327,6 +342,33 @@ impl Net {
             }
         }
         request
+    }
+
+    /// waits while a rate limit of the URL's host is used up, telling the person watching once
+    /// for each reset, then counts the request as on its way.
+    async fn pace(&self, url: &Url) -> Result<pace::Ticket, Error> {
+        let name = host(url).to_ascii_lowercase();
+        loop {
+            let now = Instant::now();
+            let hold = match self.paces.admit(&name, now) {
+                Ok(ticket) => return Ok(ticket),
+                Err(hold) => hold,
+            };
+            let wait = hold.until.saturating_duration_since(now);
+            tracing::debug!(host = name, ?wait, "waiting for a rate limit to reset");
+            if hold.announce && wait >= Duration::from_millis(500) {
+                (self.notify)(Notice::Waiting {
+                    host: host(url).to_owned(),
+                    quota: hold.quota,
+                    window: hold.window,
+                    wait,
+                });
+            }
+            tokio::select! {
+                () = tokio::time::sleep_until(hold.until.into()) => {}
+                () = self.stop.asked() => return Err(failure::interrupted(url)),
+            }
+        }
     }
 
     /// waits for a free slot for this host, then for one overall.

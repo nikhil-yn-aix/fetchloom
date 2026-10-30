@@ -12,7 +12,7 @@ mod usage;
 
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use serde::Serialize;
@@ -72,6 +72,12 @@ impl Context {
                     net::ATTEMPTS
                 ));
             }
+            Notice::Waiting {
+                host,
+                quota,
+                window,
+                wait,
+            } => output.step("Waiting", &rate_wait(&host, quota, window, wait)),
         });
         let options = net::Options {
             offline: self.offline,
@@ -81,6 +87,30 @@ impl Context {
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
     }
+}
+
+/// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
+fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Duration) -> String {
+    let wait = units::seconds(Duration::from_secs(
+        wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
+    ));
+    let Some(quota) = quota else {
+        return format!("{wait} for {host}, which asked for a pause");
+    };
+    let every = window.map_or_else(String::new, |window| {
+        let seconds = window.as_secs();
+        match seconds {
+            60 => " every minute".to_owned(),
+            3600 => " every hour".to_owned(),
+            86_400 => " every day".to_owned(),
+            _ if seconds % 60 == 0 => format!(" every {} minutes", seconds / 60),
+            _ => format!(" every {seconds} s"),
+        }
+    });
+    format!(
+        "{wait} for {host}, whose limit of {}{every} is used up",
+        units::count(quota, "request", "requests")
+    )
 }
 
 /// `FETCHLOOM_JOBS`, or the default.
