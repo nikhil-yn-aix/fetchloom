@@ -195,3 +195,30 @@ reference = "https://www.dropbox.com/s/0uxn14y26jcui4v/pspnet50_ade20k.h5?dl=1"
 files = 1
 total_bytes = 187839752
 notes = "linked from vladkryvoruchko/pspnet-keras-tensorflow"
+
+[[dataset]]
+id = "figshare-m"
+source = "figshare"
+cell = "M"
+reference = "figshare:34862205@2"
+files = 36
+total_bytes = 171356647
+notes = "e. coli assemblies in fasta; md5 per file"
+
+[[dataset]]
+id = "dataverse-mzip"
+source = "dataverse"
+cell = "MZIP"
+reference = "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/Y3QFBP"
+files = 1
+total_bytes = 124549762
+notes = "eu legislative networks, one zip; md5"
+
+[[dataset]]
+id = "osf-s"
+source = "osf"
+cell = "S"
+reference = "osf:3eunr"
+files = 5
+total_bytes = 42288309
+notes = "distractor set size; sha256 and md5 per file"

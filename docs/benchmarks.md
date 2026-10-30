@@ -45,22 +45,22 @@ when a tool cannot do a workload, its cell is empty and the table says why. a ti
 
 ## workloads
 
-the lab: a local https server (http/1.1 and http/2, byte ranges) in WSL, pinned to two cpu threads, its traffic shaped in both directions by `bench/lab/net.sh`. only the client differs between runs. workloads:
+the lab: a local https server (http/1.1 and http/2, byte ranges) in WSL, pinned to two cpu threads, its outgoing traffic shaped by `bench/lab/net.sh`, for clients in WSL and on windows alike. only the client differs between runs. workloads:
 
 - one 1 GiB file and one 100 MiB file
 - 1,000 files of 100 KiB, each its own url. fetchloom gets them as a project of 1,000 url datasets, which is how it asks for many separate urls
 - a zip and a tar.zst of 10,000 files of 4 KiB, fetched and unpacked
 - a zip of 4 members of 128 MiB, fetched and unpacked
 
-each profile is checked before use: the achieved bandwidth, round trip, loss and http version are measured and recorded.
+each profile is checked before use: the achieved bandwidth, round trip, loss and http version are measured and recorded. the delay sits on the server's side, so it adds the whole round trip there, and loss hits the data the server sends.
 
-| profile | bandwidth | round trip | loss |
+| profile | bandwidth | round trip added | loss |
 |---|---|---|---|
-| lan | not shaped | none added | none |
-| fast | 1 gbit | 10 ms | none |
-| home | 100 mbit | 40 ms | none |
-| far | 20 mbit | 200 ms | 1% |
-| poor | 5 mbit | 500 ms, 40 ms jitter | 2% |
+| lan | not shaped | none | none |
+| fast | 1 gbit | 5 ms | none |
+| home | 100 mbit | 20 ms | none |
+| far | 20 mbit | 100 ms | 1% |
+| poor | 5 mbit | 250 ms, 20 ms jitter | 2% |
 
 live: real datasets from every source fetchloom supports, in `bench/datasets.toml`, each at a fixed version: a zenodo record version, a figshare version, a hugging face commit, a kaggle version. before the first block, each dataset is downloaded once and hashed by the harness itself, which gives the expected sha256 of every file; a run is correct only when its files match. a dataset whose files change between blocks invalidates the blocks around the change. sizes run from under 10 MB to 2 GB, in three shapes: one file, 1,000 or more files, and an archive.
 
@@ -101,4 +101,4 @@ one laptop: an 11th gen intel i7-1185G7, 4 cores and 8 threads, 32 GB, nvme. win
 
 ## changes
 
-- before any run, an independent review asked for: fixed repetitions instead of extra runs after a wide spread, paired lab comparisons and live timings as description only, a verified floor for pinned downloads, a many-request workload, separate tests for cut connections and changed bytes, a randomized order, the operating system's own cpu and memory accounting, both-way shaping with checked profiles, frozen expected hashes for live data, a budget fixed in advance, and failures reported instead of dropped. all were taken. peak disk on windows was not, since it needs an administrator.
+- before any run, an independent review asked for: fixed repetitions instead of extra runs after a wide spread, paired lab comparisons and live timings as description only, a verified floor for pinned downloads, a many-request workload, separate tests for cut connections and changed bytes, a randomized order, the operating system's own cpu and memory accounting, checked network profiles, frozen expected hashes for live data, a budget fixed in advance, and failures reported instead of dropped. all were taken except two. peak disk on windows needs an administrator, so only linux measures it. shaping sits on the server's side only: its delay adds the stated round trip and its loss hits the data, which is what decides a download's speed, while a second shaper for the other direction added a moving part without changing what is measured.
