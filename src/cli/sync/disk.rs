@@ -84,6 +84,17 @@ impl Survey {
         }
     }
 
+    /// gives each file hashing found edited a recorded size no file has. a state written now is
+    /// newer than the edit and would vouch for the size and time it shares with the placed file.
+    /// git smudges its racily clean index entries the same way.
+    pub(crate) fn smudge_edited(&mut self) {
+        for path in &self.edited {
+            if let Some(placed) = self.state.files.get_mut(path) {
+                placed.look.size = u64::MAX;
+            }
+        }
+    }
+
     /// files placed as hardlinks whose object the cache marked as changed after fetchloom last
     /// knew them to hold their bytes, while their listing still shows them as placed. on windows a
     /// folder's listing keeps the old size and time of a hardlink changed through another name, so

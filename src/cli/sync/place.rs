@@ -201,6 +201,7 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         )?;
+        survey.smudge_edited();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let state = &mut survey.state;
@@ -242,6 +243,7 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
+        survey.smudge_edited();
         let forgot = survey.state.synced.take().is_some();
         if removed || forgot || survey.needs_writing {
             project.write_state(&survey.state)?;
