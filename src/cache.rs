@@ -588,6 +588,72 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_doubted_object_keeps_its_name_until_repaired() {
+        for (_dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            rewrite(&object, b"evil");
+            seal(&object);
+            cache.mark_changed(&stored.digest).unwrap();
+            let other = Cache::open(cache.root().to_path_buf()).unwrap();
+            for run in [&cache, &other] {
+                assert!(
+                    run.trusted(&stored.digest, Some(4), &run.changed())
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(fs::read(&object).unwrap(), b"evil");
+                assert!(run.find(&stored.digest, Some(4)).is_none());
+            }
+            store(&cache, b"good");
+            // the other repair has not published yet, but placement can use the first copy
+            let placed = cache.root().join("placed");
+            fs::copy(&object, &placed).unwrap();
+            assert_eq!(fs::read(&placed).unwrap(), b"good");
+            assert!(!store(&other, b"good").new);
+            assert_eq!(fs::read(&object).unwrap(), b"good");
+        }
+    }
+
+    #[test]
+    fn verification_keeps_a_copy_published_by_another_repair() {
+        for (_dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            rewrite(&object, b"evil");
+            seal(&object);
+            let checked = cache.verify_all(1, &|_| {
+                // verification has read the damaged bytes, then another repair publishes
+                assert!(store(&cache, b"good").new);
+            });
+            assert_eq!(checked.changed, [stored.digest]);
+            assert_eq!(fs::read(&object).unwrap(), b"good");
+            assert!(cache.find(&stored.digest, Some(4)).is_some());
+            assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        }
+    }
+
+    #[test]
+    fn repairing_a_read_only_object_preserves_placed_links() {
+        let (dir, cache) = cache();
+        if !hardlinks(dir.path()) {
+            return;
+        }
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let placed = dir.path().join("placed");
+        fs::hard_link(&object, &placed).unwrap();
+        rewrite(&object, b"evil");
+        seal(&object);
+        assert!(store(&cache, b"good").new);
+        assert_eq!(fs::read(&object).unwrap(), b"good");
+        assert_eq!(fs::read(&placed).unwrap(), b"evil");
+        for path in [&object, &placed] {
+            assert!(fs::metadata(path).unwrap().permissions().readonly());
+        }
+    }
+
+    #[test]
     fn an_object_found_in_place_is_kept_only_while_it_holds_these_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("object");
