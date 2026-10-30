@@ -14,14 +14,14 @@ case ${1:-} in
 esac
 
 wan=$(ip route show default | awk '{print $5; exit}')
+# netem drops a segmentation offload batch whole, so loss needs offload off to hit single
+# packets. without loss it stays on, since the vm's eth0 then carries 1 gbit to windows.
+offload=on
+[[ $netem == *loss* ]] && offload=off
 for dev in lo "$wan"; do
   tc qdisc del dev "$dev" root 2>/dev/null || true
-  if [[ -z $netem ]]; then
-    ethtool -K "$dev" tso on gso on >/dev/null
-    continue
-  fi
-  # one wire sized packet per skb, so loss and rate act on packets as a real link would
-  ethtool -K "$dev" tso off gso off >/dev/null
+  ethtool -K "$dev" tso $offload gso $offload >/dev/null
+  [[ -z $netem ]] && continue
   tc qdisc add dev "$dev" root handle 1: prio bands 2 priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
   tc qdisc add dev "$dev" parent 1:2 netem $netem
   for proto in ip ipv6; do
@@ -29,6 +29,7 @@ for dev in lo "$wan"; do
   done
 done
 
+# loopback's 64 KiB packets would let tcp grow far faster than over a real path
 if [[ -n $netem ]]; then
   ip link set lo mtu 1500
   sysctl -qw net.ipv4.tcp_no_metrics_save=1
