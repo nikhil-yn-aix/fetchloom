@@ -21,7 +21,7 @@ a first run took 3.5 to 8 minutes here, depending on what else ran; later runs k
 
 | fixture | content |
 |---|---|
-| `file-1m.bin`, `file-100m.bin`, `file-1g.bin` | 1 MiB, 100 MiB and 1 GiB |
+| `file-1m.bin`, `file-10m.bin`, `file-100m.bin`, `file-1g.bin` | 1 MiB, 10 MiB, 100 MiB and 1 GiB |
 | `files-10k/` | 10,000 files of 4 KiB, in 100 folders of 100 |
 | `many-1k/` | 1,000 files of 100 KiB |
 | `files-10k.zip` | `files-10k/`, members stored |
@@ -33,6 +33,7 @@ the hashes it prints on ubuntu 24.04, where a folder's line is the sha256 of `sh
 
 ```
 cfaf41392d47f3be7910061b255d8ac99cc5e29f928b3f17bc308867464e82c0  file-1m.bin
+1979e644a83ab15cc1adc5375ae9e54b7a0cb2bd19a058ebb4c14cf3ebd45a94  file-10m.bin
 9ca298c636580e067e9bab3d088ef222730d2f7005f82a98c6d58144a26de684  file-100m.bin
 a7309af845dd72ffa8534fc48ddaf4335f483c10cfef669e080a45b7619a409e  file-1g.bin
 1b59fd102a6ac655ce47e368edfd3ee0b2443e8be5e858d880064b374907f2ee  files-10k.zip
