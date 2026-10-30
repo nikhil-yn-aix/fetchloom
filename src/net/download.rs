@@ -51,6 +51,12 @@ impl Expect {
     pub(crate) fn needs_md5(&self) -> bool {
         self.md5.is_some() && self.sha256.is_none()
     }
+
+    /// whether these hashes prove a file's bytes, so saved bytes may be continued, or pieces from
+    /// several answers joined, without a validator. zenodo states an MD5 and sends no validators.
+    pub(crate) fn proves(&self) -> bool {
+        self.sha256.is_some() || self.md5.is_some()
+    }
 }
 
 pub(crate) struct Fetch {
@@ -357,8 +363,7 @@ impl Net {
         on: Listener<'_>,
         split: &mut bool,
     ) -> Result<Answer, Failure> {
-        // a pinned hash proves the result, so even a server without validators may continue
-        let pinned = fetch.expect.sha256.is_some();
+        let pinned = fetch.expect.proves();
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| pinned || if_range(validators).is_some());
@@ -391,13 +396,8 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = server_name(&head)?;
-        // ranges from several answers may be joined only when the server serves ranges and
-        // something proves they belong to one version: a pinned hash, or a validator for If-Range
-        let splits = *split
-            && self.split.when != Splitting::Never
-            && total.is_some_and(|total| total >= self.split.above)
-            && (status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(&head))
-            && (pinned || if_range(&validators).is_some());
+        let proven = pinned || if_range(&validators).is_some();
+        let splits = *split && self.may_split(total, status, &head, proven);
         let body = Body {
             offset,
             total,
@@ -420,19 +420,12 @@ impl Net {
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;
         let watch = total.filter(|_| splits);
+        // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
+        let monitor = watch.filter(|_| self.rate.is_none());
         let (writer, response, total, slow) = match watch {
             Some(total) if at_once => (writer, response, total, None),
             _ => match self
-                .stream(
-                    from,
-                    writer,
-                    response,
-                    total,
-                    on,
-                    // a stream held back by FETCHLOOM_RATE looks slow, and more streams
-                    // share the same cap
-                    watch.filter(|_| self.rate.is_none()),
-                )
+                .stream(from, writer, response, total, on, monitor)
                 .await?
             {
                 Run::Whole(writer) => {
@@ -469,6 +462,21 @@ impl Net {
             name,
             resumed: offset + kept > 0 || pieced,
         })
+    }
+
+    /// whether a file of `total` bytes may come in ranges from several answers: large enough, from
+    /// a server that serves ranges, with proof the pieces belong to one version.
+    fn may_split(
+        &self,
+        total: Option<u64>,
+        status: StatusCode,
+        head: &reqwest::header::HeaderMap,
+        proven: bool,
+    ) -> bool {
+        self.split.when != Splitting::Never
+            && total.is_some_and(|total| total >= self.split.above)
+            && (status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(head))
+            && proven
     }
 
     /// the answer itself when it brings the file. otherwise what it means instead: the URL a
