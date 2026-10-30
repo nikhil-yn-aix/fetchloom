@@ -27,7 +27,9 @@ fn a_file_another_program_holds_says_to_close_it() -> Result {
     let stderr = text(&output.stderr)?;
     assert!(stderr.contains("(os error 32)"), "{stderr}");
     assert!(
-        stderr.ends_with("help: close the program using the file, then run the command again\n"),
+        stderr.ends_with(
+            "help: close the program using the file, then run `fetchloom status` again\n"
+        ),
         "{stderr}"
     );
     let held = fs::OpenOptions::new()
@@ -40,7 +42,7 @@ fn a_file_another_program_holds_says_to_close_it() -> Result {
     let stderr = text(&output.stderr)?;
     assert!(stderr.contains("(os error 5)"), "{stderr}");
     assert!(
-        stderr.ends_with("help: close any program that has it open and check its permissions, then run the command again\n"),
+        stderr.ends_with("help: close any program that has it open and check its permissions, then run `fetchloom remove iris` again\n"),
         "{stderr}"
     );
     Ok(())
@@ -96,7 +98,7 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     let stderr = text(&broken.stderr)?;
     assert!(stderr.contains("data.toml:1   [datasets.iris"), "{stderr}");
     assert!(
-        stderr.ends_with("help: fix that line, then run the command again\n"),
+        stderr.ends_with("help: fix that line, then run `fetchloom status` again\n"),
         "{stderr}"
     );
     // notepad's "unicode" is UTF-16, which no TOML reader takes
@@ -110,7 +112,7 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     let stderr = text(&wide.stderr)?;
     assert_eq!(
         stderr,
-        "✗ data.toml is not UTF-8 text\n  help: save it as UTF-8, then run the command again\n"
+        "✗ data.toml is not UTF-8 text\n  help: save it as UTF-8, then run `fetchloom status` again\n"
     );
     Ok(())
 }
@@ -174,15 +176,15 @@ fn offline_hints_name_the_settings_that_enabled_it() -> Result {
         (
             false,
             Some("1"),
-            "unset FETCHLOOM_OFFLINE, then run the same command",
+            "unset FETCHLOOM_OFFLINE, then run `fetchloom ",
         ),
-        (true, None, "run the same command without --offline"),
+        (true, None, "run it again without --offline"),
         (
             true,
             Some("1"),
-            "remove --offline and unset FETCHLOOM_OFFLINE, then run the same command",
+            "unset FETCHLOOM_OFFLINE, then run it again without --offline",
         ),
-        (true, Some("0"), "run the same command without --offline"),
+        (true, Some("0"), "run it again without --offline"),
     ] {
         for (args, folder, message) in &cases {
             let mut command = sandbox.command_in(folder, args);

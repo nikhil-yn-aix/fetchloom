@@ -7,7 +7,10 @@ use serde_json::Value;
 
 use crate::support::{Result, Sandbox, Server, file, text};
 
-const NEWER: &str = "update fetchloom to read this newer format";
+/// the advice for a lock from a newer fetchloom, after `fetchloom --json <command>`.
+fn newer(command: &str) -> String {
+    format!("install a newer fetchloom, then run `fetchloom --json {command}` again")
+}
 const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
 
 /// the help of the error a `--json` run ended with.
@@ -23,14 +26,15 @@ fn a_lock_from_a_newer_fetchloom_or_a_broken_one_gets_advice_that_works() -> Res
     fs::write(sandbox.work().join("data.toml"), "[datasets]\n")?;
     let path = sandbox.work().join("data.lock");
     for (contents, advice) in [
-        (&b"version = 2\n"[..], NEWER),
-        (b"version = [", BROKEN),
-        (b"version = 1\n\xff\xfe\n", BROKEN),
+        (&b"version = 2\n"[..], None),
+        (b"version = [", Some(BROKEN)),
+        (b"version = 1\n\xff\xfe\n", Some(BROKEN)),
     ] {
         fs::write(&path, contents)?;
         for command in ["sync", "lock"] {
             let output = sandbox.run(&["--json", command])?;
             assert_eq!(output.status.code(), Some(50), "{command}");
+            let advice = advice.map_or_else(|| newer(command), str::to_owned);
             assert_eq!(help(&output)?, advice, "{command}");
         }
     }
@@ -47,7 +51,7 @@ fn gc_says_where_another_projects_lock_is_fixed() -> Result {
     assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
     let elsewhere = sandbox.folder("elsewhere")?;
     for (contents, advice) in [
-        ("version = 2\n", NEWER.to_owned()),
+        ("version = 2\n", newer("cache gc")),
         ("version = [", format!("in that project, {BROKEN}")),
     ] {
         fs::write(sandbox.work().join("data.lock"), contents)?;

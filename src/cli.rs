@@ -97,7 +97,9 @@ fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error
                     value.display()
                 ),
             )
-            .help(format!("unset it to use the default of {JOBS}"))
+            .help(format!(
+                "unset FETCHLOOM_JOBS to use the default of {JOBS}, or set it to a number from 1 to 256"
+            ))
         })
 }
 
@@ -136,7 +138,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
             path.display()
         ),
     )
-    .help("move the project to a folder with a shorter path")
+    .help("move the project to a folder with a shorter path, then run the same command there")
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -325,6 +327,10 @@ fn finish<T: Serialize>(
 ) -> ExitCode {
     let elapsed = started.elapsed();
     let counts = context.work.counts();
+    let outcome = outcome.map_err(|error| match command_line(std::env::args_os().skip(1)) {
+        Some(line) => error.naming(&line),
+        None => error,
+    });
     context
         .output
         .document(command, outcome.as_ref(), counts, elapsed);
@@ -362,9 +368,44 @@ fn shell_word(word: &str) -> Cow<'_, str> {
     }
 }
 
+/// the command line as typed, ready to copy, for help that says to run it again. none when an
+/// argument holds a secret no message may repeat, such as a token in a link, or is not unicode.
+fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
+    let mut line = String::from("fetchloom");
+    for arg in args {
+        let arg = arg.into_string().ok()?;
+        let login = url::Url::parse(&arg)
+            .is_ok_and(|url| !url.username().is_empty() || url.password().is_some());
+        if login || matches!(net::mask_query(&arg), Cow::Owned(_)) {
+            return None;
+        }
+        line.push(' ');
+        line.push_str(&shell_word(&arg));
+    }
+    Some(line)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::shell_word;
+    use super::{command_line, shell_word};
+
+    #[test]
+    fn the_command_line_is_named_as_typed_unless_it_holds_a_secret() {
+        let line = |args: &[&str]| command_line(args.iter().map(std::ffi::OsString::from));
+        assert_eq!(
+            line(&["add", "zenodo:3608990", "--select", "*.csv"]).as_deref(),
+            Some("fetchloom add zenodo:3608990 --select \"*.csv\"")
+        );
+        assert_eq!(
+            line(&["-C", "my project", "sync"]).as_deref(),
+            Some("fetchloom -C \"my project\" sync")
+        );
+        assert_eq!(line(&["get", "https://example.org/a.csv?token=abc"]), None);
+        assert_eq!(
+            line(&["get", "https://user:secret@example.org/a.csv"]),
+            None
+        );
+    }
 
     #[test]
     fn a_word_a_shell_would_split_or_expand_is_quoted() {

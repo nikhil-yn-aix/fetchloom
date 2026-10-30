@@ -439,7 +439,9 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
             "patterns match the whole path. try \"{}\"",
             deeper.as_str()
         )),
-        None => error.help("compare the pattern with the paths above"),
+        None => error.help(
+            "compare the pattern with the paths above, then fix --select or select in data.toml",
+        ),
     }
 }
 

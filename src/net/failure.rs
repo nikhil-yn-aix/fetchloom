@@ -101,12 +101,12 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             Kind::ReferenceUnresolved,
             format!("{} has nothing at {} ({code})", host(url), Shown(url)),
         )
-        .help("check the link in a browser. it may have moved or been removed"),
+        .help("check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml"),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Error::new(
             Kind::AuthRequired,
             format!("{} refused access to {} ({code})", host(url), Shown(url)),
         )
-        .help("if the link needs a login, check that it opens in a browser while signed in"),
+        .help("check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"),
         _ => Error::new(
             Kind::NetworkStatus,
             format!("{} answered {code} for {}", host(url), Shown(url)),
@@ -162,7 +162,7 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     )
-    .help("only hosts written on the command line or in data.toml may reach this machine or its local network")
+    .help("if you trust that host, give its link to fetchloom yourself, on the command line or as ref in data.toml")
 }
 
 pub(super) fn interrupted(url: &Url) -> Error {

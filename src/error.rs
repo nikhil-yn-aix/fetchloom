@@ -87,7 +87,7 @@ impl Error {
             message: message.into(),
             details: Vec::new(),
             help: (kind == Kind::NetworkStatus).then(|| {
-                "check the link in a browser, or ask its owner for a direct download link"
+                "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
                     .to_owned()
             }),
         }
@@ -120,6 +120,18 @@ impl Error {
         } else {
             self.help(help)
         }
+    }
+
+    /// the help with `command` in place of "the command" or "the same command" it says to run,
+    /// so a person or a script knows exactly what to run.
+    pub(crate) fn naming(mut self, command: &str) -> Error {
+        if let Some(help) = &mut self.help {
+            let named = format!("run `{command}`");
+            *help = help
+                .replace("run the same command", &named)
+                .replace("run the command", &named);
+        }
+        self
     }
 }
 
@@ -183,6 +195,32 @@ mod tests {
         assert_eq!(
             full.or_help("fallback").help.as_deref(),
             Some("free some space on that disk, then run the command again")
+        );
+    }
+
+    #[test]
+    fn help_to_run_the_command_again_names_it() {
+        let named = |help: &str| {
+            Error::new(Kind::LocalIo, "x")
+                .help(help)
+                .naming("fetchloom sync")
+                .help
+        };
+        assert_eq!(
+            named("close the program using the file, then run the command again").as_deref(),
+            Some("close the program using the file, then run `fetchloom sync` again")
+        );
+        assert_eq!(
+            named("run the same command again later").as_deref(),
+            Some("run `fetchloom sync` again later")
+        );
+        assert_eq!(
+            named("run it again without --offline").as_deref(),
+            Some("run it again without --offline")
+        );
+        assert_eq!(
+            Error::new(Kind::LocalIo, "x").naming("fetchloom sync").help,
+            None
         );
     }
 

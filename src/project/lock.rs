@@ -231,7 +231,7 @@ fn other_version(version: u32) -> Error {
     );
     // no fetchloom ever wrote an older format, so one is a broken file
     if version > VERSION {
-        error.help("update fetchloom to read this newer format")
+        error.help("install a newer fetchloom, then run the same command again")
     } else {
         error.help(BROKEN)
     }
@@ -353,7 +353,7 @@ mod tests {
         assert!(newer.message.contains("format 2"), "{}", newer.message);
         assert_eq!(
             newer.help.as_deref(),
-            Some("update fetchloom to read this newer format")
+            Some("install a newer fetchloom, then run the same command again")
         );
         for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
             let broken = Lock::parse(text).unwrap_err();

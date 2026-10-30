@@ -254,7 +254,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let project = find()?;
     let _held = hold(context, &project).await?;
     let (text, manifest) = project.manifest()?;
-    known(&manifest, &args.name)?;
+    known(&manifest, &args.name, "remove")?;
     let updated = manifest::without_dataset(&text, &args.name)?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
@@ -354,7 +354,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         Some(names) if names.is_empty() => Upgrade::All,
         Some(names) => {
             for name in &names {
-                known(&manifest, name)?;
+                known(&manifest, name, "lock --upgrade")?;
             }
             Upgrade::Only(names.into_iter().collect::<BTreeSet<_>>())
         }
@@ -434,13 +434,13 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
     };
-    known(&manifest, name)?;
+    known(&manifest, name, "path")?;
     if !ready(&project, &manifest, name)? {
         let _held = hold(context, &project).await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
         manifest = project.manifest()?.1;
-        known(&manifest, name)?;
+        known(&manifest, name, "path")?;
         if !ready(&project, &manifest, name)? {
             let work = Loop::new(
                 context,
@@ -621,8 +621,9 @@ async fn hold(context: &Context, project: &Project) -> Result<Held, Error> {
     }
 }
 
-/// refuses a dataset name data.toml does not have, suggesting the closest one.
-fn known(manifest: &Manifest, name: &str) -> Result<(), Error> {
+/// refuses a dataset name data.toml does not have, suggesting the closest one as the `command`
+/// that names it, such as `path` in `fetchloom path iris`.
+fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Ok(());
     }
@@ -632,18 +633,19 @@ fn known(manifest: &Manifest, name: &str) -> Result<(), Error> {
     );
     Err(
         match name::closest(name, manifest.datasets.keys().map(String::as_str)) {
-            Some(best) => error.help(format!("did you mean {best}?")),
+            Some(best) => error.help(format!("did you mean `fetchloom {command} {best}`?")),
             None if manifest.datasets.is_empty() => {
                 error.help("data.toml has no datasets yet. add one with `fetchloom add <link>`")
             }
             None => error.help(format!(
-                "the datasets are {}",
+                "name one of {}, as in `fetchloom {command} {}`",
                 manifest
                     .datasets
                     .keys()
                     .cloned()
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                manifest.datasets.keys().next().map_or("", String::as_str)
             )),
         },
     )
@@ -715,7 +717,7 @@ fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
             Some(suggested) => error.help(format!(
                 "use lowercase letters, digits, - and _, such as --as {suggested}"
             )),
-            None => error.help("use lowercase letters, digits, - and _"),
+            None => error.help("pass --as a name of lowercase letters, digits, - and _"),
         });
     }
     unused(asked, manifest)

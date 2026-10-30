@@ -106,5 +106,5 @@ fetchloom --json path irsi
 ```
 
 ```json
-{"schema":1,"command":"path","status":"error","result":null,"warnings":[],"errors":[{"kind":"usage","message":"data.toml has no dataset called irsi","details":[],"help":"did you mean iris?"}],"work":{…}}
+{"schema":1,"command":"path","status":"error","result":null,"warnings":[],"errors":[{"kind":"usage","message":"data.toml has no dataset called irsi","details":[],"help":"did you mean `fetchloom path iris`?"}],"work":{…}}
 ```

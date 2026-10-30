@@ -292,7 +292,7 @@ fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error>
         error = error.detail(format!("and {} more", failed.len() - NAMED));
     }
     Some(error.help(shared_help.unwrap_or_else(|| {
-        "the files that arrived are kept, so the same command again downloads only the rest"
+        "the files that arrived are kept, so if you run the same command again, it downloads only the rest"
             .to_owned()
     })))
 }

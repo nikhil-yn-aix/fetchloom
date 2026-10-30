@@ -465,13 +465,13 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
     let typo = sandbox.run(&["path", "irs"])?;
     assert_eq!(typo.status.code(), Some(2));
     assert!(
-        text(&typo.stderr)?.contains("did you mean iris?"),
+        text(&typo.stderr)?.contains("did you mean `fetchloom path iris`?"),
         "{}",
         text(&typo.stderr)?
     );
     let swapped = sandbox.run(&["path", "irsi"])?;
     assert!(
-        text(&swapped.stderr)?.contains("did you mean iris?"),
+        text(&swapped.stderr)?.contains("did you mean `fetchloom path iris`?"),
         "{}",
         text(&swapped.stderr)?
     );

@@ -215,4 +215,4 @@ when a download no longer matches its lock:
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```
 
-a separate help line is optional when the error itself says what to change or do next. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).
+a separate help line is optional when the error itself says what to change or do next. help that says to run a command again names it as typed, such as ``run `fetchloom sync` again``, unless an argument holds a secret. likely spelling mistakes get suggestions; other unknown dataset names list the available names. binary sizes use one decimal place (`4.1 KiB`), durations below a second use milliseconds, and counts group thousands (`1,204 files`). error kinds, exit codes and machine-readable results are in [formats](formats.md#the-json-document).

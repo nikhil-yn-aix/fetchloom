@@ -265,14 +265,14 @@ fn link(text: &str) -> Result<Parsed, Error> {
             Kind::ReferenceInvalid,
             format!("\"{}\" is not a valid link: {err}", net::mask_query(text)),
         )
-        .help("copy the link again from the browser's address bar")
+        .help("copy the whole link again from the browser's address bar, and keep it in double quotes on the command line")
     })?;
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::new(
             Kind::ReferenceInvalid,
             "this link carries a user name or password, which would end up in files and logs",
         )
-        .help("remove the login part from the link"));
+        .help("remove the user name and password from the link. for a private dataset, set its source's token, such as HF_TOKEN"));
     }
     if url.host_str().is_none_or(str::is_empty) {
         return Err(Error::new(
@@ -313,7 +313,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
                     net::Shown(&url)
                 ),
             )
-            .help("paste the link of the dataset's own page, or its id, such as zenodo:3608990"));
+            .help("paste the link of the dataset's own page, or its id, as in `fetchloom add zenodo:3608990`"));
         }
         return Ok(Parsed {
             reference: Reference::Url(url),
@@ -364,7 +364,7 @@ fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
     let count = listing.files.len() + listing.unavailable.len();
     if count > MOST_FILES {
         return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {count} entries, more than the {MOST_FILES} fetchloom handles in one dataset"))
-            .help("ask the dataset's authors to pack its files into archives, or fetch the files you need by their own links"));
+            .help("ask the dataset's authors to pack its files into archives, or pass the link of each file you need to `fetchloom add`"));
     }
     let mut seen = HashSet::with_capacity(count);
     for path in listing.paths() {
@@ -398,17 +398,30 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
     match response.status {
         200..=299 => response.json(),
         404 | 410 => Err(Error::new(Kind::ReferenceUnresolved, format!("{reference} does not exist, or is not public"))
-            .help("check the id in a browser. a dataset that was removed cannot be fetched")),
+            .help("check the id in a browser, then fix it on the command line or as ref in data.toml. a dataset that was removed cannot be fetched")),
         401 | 403 => Err(Error::new(Kind::AuthRequired, format!("{} refused access to {reference}", net::host(&response.url)))
-            .help("if the dataset is private or restricted, set the token for this source, as fetchloom's docs describe")),
+            .help(format!("if the dataset is private or restricted, {}, then run the same command again", token_for(net::host(&response.url))))),
         status => Err(Error::new(Kind::NetworkStatus, format!("{} answered {status} for {reference}", net::host(&response.url)))),
+    }
+}
+
+/// how to give a token to the source at `host`, in the variable fetchloom reads for it.
+fn token_for(host: &str) -> &'static str {
+    let host = host.trim_start_matches("www.").trim_start_matches("api.");
+    match host {
+        "zenodo.org" => "set ZENODO_TOKEN",
+        "figshare.com" => "set FIGSHARE_TOKEN",
+        "osf.io" => "set OSF_TOKEN",
+        "huggingface.co" | "hf.co" => "set HF_TOKEN",
+        "kaggle.com" => "set KAGGLE_API_TOKEN",
+        _ => "set its source's token, such as HF_TOKEN or ZENODO_TOKEN",
     }
 }
 
 fn unknown(text: &str) -> Error {
     let text = net::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
-        .help("use a link, a DOI, or an id such as zenodo:3608990, hf:datasets/org/name or kaggle:owner/name")
+        .help("use a link, a DOI, or an id such as hf:datasets/org/name or kaggle:owner/name, as in `fetchloom add zenodo:3608990`")
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
@@ -424,6 +437,16 @@ fn malformed(text: &str, expected: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_names_the_token_its_source_reads() {
+        assert_eq!(token_for("zenodo.org"), "set ZENODO_TOKEN");
+        assert_eq!(token_for("api.figshare.com"), "set FIGSHARE_TOKEN");
+        assert_eq!(token_for("api.osf.io"), "set OSF_TOKEN");
+        assert_eq!(token_for("huggingface.co"), "set HF_TOKEN");
+        assert_eq!(token_for("www.kaggle.com"), "set KAGGLE_API_TOKEN");
+        assert!(token_for("example.org").contains("such as HF_TOKEN"));
+    }
 
     fn parse(text: &str) -> Parsed {
         Reference::parse(text).unwrap()

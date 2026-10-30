@@ -88,9 +88,9 @@ impl Reader<'_> {
             let error = self.error(key_span, format!("\"{name}\" is not a valid dataset name"));
             return Err(match name::dataset_name(name) {
                 Some(suggested) => error.help(format!(
-                    "use lowercase letters, digits, - and _, such as \"{suggested}\""
+                    "rename it to \"{suggested}\" in data.toml, then run the same command again"
                 )),
-                None => error.help("use lowercase letters, digits, - and _"),
+                None => error.help("rename it in data.toml with lowercase letters, digits, - and _, then run the same command again"),
             });
         }
         let table = item.as_table_like().ok_or_else(|| {
