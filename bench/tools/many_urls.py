@@ -23,7 +23,7 @@ import wrapping
 
 
 def fetchloom(entries, out, home, extra):
-    data_dir = Path(os.path.relpath(out, Path.cwd())).as_posix()
+    data_dir = Path(os.path.relpath(out, Path.cwd().resolve())).as_posix()
     manifest = [f'[project]\ndata_dir = "{data_dir}"\n']
     lock = ["version = 1\n"]
     for name, url, digest, size in sorted(entries):
