@@ -97,7 +97,7 @@ pub(crate) struct Unpacked {
 type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), Error> + 'k;
 
 /// unpacks every file in `archive` into the cache. an archive refused part way leaves no object
-/// behind.
+/// behind. writers caps its writer threads; zero keeps storage on the reading thread.
 ///
 /// # Errors
 ///
@@ -110,10 +110,11 @@ pub(crate) fn unpack(
     limits: &Limits,
     cache: &Cache,
     watch: &dyn Fn(u64) -> bool,
+    writers: Option<usize>,
 ) -> Result<Unpacked, Error> {
     let meter = Meter::default();
     let mut guard = Guard::new(limits, watch, &meter);
-    let (mut members, written) = store::store_all(cache, |writers| {
+    let (mut members, written) = store::store_all(cache, writers, |writers| {
         let mut buffer = vec![0; BUFFER];
         let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {
             writers.keep(guard, path, from, &mut buffer)
@@ -149,6 +150,7 @@ pub(crate) fn unpack_cached(
     size: u64,
     tree: Option<&Sha256>,
     watch: &dyn Fn(u64) -> bool,
+    writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
     let object = cache.find(archive, Some(size)).ok_or_else(|| {
         Error::new(
@@ -161,7 +163,7 @@ pub(crate) fn unpack_cached(
         Detected::Archive(format) => format,
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
-    let unpacked = unpack(&object, format, &Limits::default(), cache, watch)?;
+    let unpacked = unpack(&object, format, &Limits::default(), cache, watch, writers)?;
     if tree.is_none_or(|tree| *tree == unpacked.tree) {
         cache
             .record_unpacked(archive, &unpacked.members)

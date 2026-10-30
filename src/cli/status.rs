@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
 use crate::project::{Project, lock};
+use crate::threads::Threads;
 use crate::units;
 
 /// the most paths printed for each kind of difference. `--json` lists them all.
@@ -42,7 +43,7 @@ pub(super) struct Status {
 }
 
 pub(super) fn run(context: &Context) -> Result<Status, Error> {
-    let status = check(&super::project::find()?)?;
+    let status = check(&super::project::find()?, context.threads)?;
     let output = &context.output;
     list(output, &status);
     if sum_up(output, &status) {
@@ -59,7 +60,7 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let status = check(project)?;
+    let status = check(project, context.threads)?;
     let output = &context.output;
     if sum_up(output, &status) {
         output.hint(if status.needs_sync() {
@@ -72,7 +73,7 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 }
 
 /// compares the data folder with data.lock, reading only what the disk says about each file.
-fn check(project: &Project) -> Result<Status, Error> {
+fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
     let (_, manifest) = project.manifest()?;
     let lock = project.lock()?.unwrap_or_default();
     let mut status = Status {
@@ -95,7 +96,7 @@ fn check(project: &Project) -> Result<Status, Error> {
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     let targets = planned.targets;
-    let mut survey = Survey::read(project, &manifest.data_dir);
+    let mut survey = Survey::read(project, &manifest.data_dir, threads);
     survey.retarget(&project.root, &targets);
     survey.check_doubted(&project.root, &cache)?;
     for target in &targets {

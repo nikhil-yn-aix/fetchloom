@@ -32,7 +32,9 @@ enum Job {
 /// where the reading thread hands each member.
 pub(super) struct Writers<'s> {
     staging: &'s Arc<Staging>,
-    jobs: SyncSender<Job>,
+    jobs: Option<SyncSender<Job>>,
+    sealed: &'s Mutex<Vec<(String, Sealed)>>,
+    flush_each: bool,
     failed: &'s AtomicBool,
 }
 
@@ -58,7 +60,13 @@ impl Writers<'_> {
             Some(object) => Job::Written(path, Box::new(object)),
             None => Job::Bytes(path, spill.bytes),
         };
-        self.jobs.send(job).map_err(|_| stopped())
+        match &self.jobs {
+            Some(jobs) => jobs.send(job).map_err(|_| stopped()),
+            None => {
+                locked(self.sealed).push(seal(self.staging, job, self.flush_each)?);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -67,6 +75,7 @@ impl Writers<'_> {
 /// sealed is removed and nothing is put in place.
 pub(super) fn store_all(
     cache: &Cache,
+    cap: Option<usize>,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, u64), Error> {
     let staging = cache
@@ -75,6 +84,7 @@ pub(super) fn store_all(
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
+    let threads = cap.map_or(threads, |cap| threads.min(cap));
     #[cfg(target_os = "linux")]
     let batch = cache
         .batch()
@@ -111,7 +121,9 @@ pub(super) fn store_all(
         }
         let writers = Writers {
             staging: &staging,
-            jobs,
+            jobs: (threads > 0).then_some(jobs),
+            sealed: &sealed,
+            flush_each,
             failed: &failed,
         };
         read(&writers)
@@ -144,33 +156,38 @@ fn publish_all(
     let members = Mutex::new(Vec::with_capacity(count));
     let new = AtomicU64::new(0);
     let trouble = Mutex::new(None);
-    thread::scope(|scope| {
-        for _ in 0..threads.min(count) {
-            scope.spawn(|| {
-                loop {
-                    let Some((path, sealed)) = locked(&queue).next() else {
-                        return;
-                    };
-                    match sealed.publish(cache) {
-                        Ok(stored) => {
-                            if stored.new {
-                                new.fetch_add(1, Ordering::Relaxed);
-                            }
-                            locked(&members).push(Member {
-                                path,
-                                size: stored.size,
-                                sha256: stored.digest,
-                            });
-                        }
-                        Err(err) => {
-                            locked(&trouble).get_or_insert(not_written(&path, &err));
-                            return;
-                        }
+    let publish = || {
+        loop {
+            let Some((path, sealed)) = locked(&queue).next() else {
+                return;
+            };
+            match sealed.publish(cache) {
+                Ok(stored) => {
+                    if stored.new {
+                        new.fetch_add(1, Ordering::Relaxed);
                     }
+                    locked(&members).push(Member {
+                        path,
+                        size: stored.size,
+                        sha256: stored.digest,
+                    });
                 }
-            });
+                Err(err) => {
+                    locked(&trouble).get_or_insert(not_written(&path, &err));
+                    return;
+                }
+            }
         }
-    });
+    };
+    if threads == 0 {
+        publish();
+    } else {
+        thread::scope(|scope| {
+            for _ in 0..threads.min(count) {
+                scope.spawn(&publish);
+            }
+        });
+    }
     match trouble.into_inner().unwrap_or_else(PoisonError::into_inner) {
         Some(err) => Err(err),
         None => Ok((
@@ -250,7 +267,7 @@ mod tests {
         let meter = Meter::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        store_all(&scratch.cache, |writers| {
+        store_all(&scratch.cache, None, |writers| {
             let mut buffer = vec![0; 64 << 10];
             for (path, bytes) in members {
                 writers.keep(&mut guard, (*path).to_owned(), &mut &bytes[..], &mut buffer)?;
@@ -258,6 +275,51 @@ mod tests {
             Ok(())
         })
         .map(|(members, _)| members)
+    }
+
+    #[test]
+    fn no_writer_threads_still_store_every_member() {
+        let scratch = Scratch::new();
+        let limits = Limits::default();
+        let meter = Meter::default();
+        let never = |_: u64| false;
+        let mut guard = Guard::new(&limits, &never, &meter);
+        let bytes = vec![7; SMALL + 1];
+        let (mut members, written) = store_all(&scratch.cache, Some(0), |writers| {
+            assert!(writers.jobs.is_none());
+            for (name, mut bytes) in
+                [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())]
+            {
+                writers.keep(&mut guard, name.to_owned(), &mut bytes, &mut [0; 1024])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(written, 2);
+        members.sort_by(|a, b| a.path.cmp(&b.path));
+        scratch.assert_stored(&members[0], &bytes);
+        scratch.assert_stored(&members[1], b"1,2\n");
+    }
+
+    #[test]
+    fn a_failed_inline_read_publishes_nothing() {
+        let scratch = Scratch::new();
+        let limits = Limits::default();
+        let meter = Meter::default();
+        let never = |_: u64| false;
+        let mut guard = Guard::new(&limits, &never, &meter);
+        let error = store_all(&scratch.cache, Some(0), |writers| {
+            writers.keep(
+                &mut guard,
+                "small".to_owned(),
+                &mut &b"1,2\n"[..],
+                &mut [0; 1024],
+            )?;
+            Err(Error::new(Kind::SourceInvalid, "refused at the end"))
+        })
+        .unwrap_err();
+        assert_eq!(error.message, "refused at the end");
+        scratch.assert_empty();
     }
 
     fn staged(scratch: &Scratch) -> PathBuf {
@@ -309,7 +371,7 @@ mod tests {
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         let bytes = vec![7; SMALL + 1];
-        let (members, _) = store_all(&scratch.cache, |writers| {
+        let (members, _) = store_all(&scratch.cache, None, |writers| {
             writers.keep(
                 &mut guard,
                 "large.bin".to_owned(),
@@ -383,7 +445,7 @@ mod tests {
         let meter = Meter::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        let err = store_all(&scratch.cache, |writers| {
+        let err = store_all(&scratch.cache, None, |writers| {
             let mut buffer = vec![0; 1024];
             for index in 0..50 {
                 writers.keep(

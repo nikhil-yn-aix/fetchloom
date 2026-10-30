@@ -46,3 +46,55 @@ fn a_bad_rate_is_a_settings_error() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn a_bad_thread_cap_is_a_settings_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_THREADS", "257")
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["message"],
+        "FETCHLOOM_THREADS is \"257\", which is not a number from 1 to 256"
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256"
+    );
+    Ok(())
+}
+
+#[test]
+fn one_thread_unpacks_places_and_verifies_a_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("archives")
+            .join("python.zip"),
+    )?;
+    let server = Server::start("/dataset.zip", vec![file(&zip, "\"v1\"")])?;
+    for args in [
+        vec!["--json", "add", &server.url],
+        vec!["--json", "sync"],
+        vec!["--json", "status"],
+        vec!["--json", "cache", "verify"],
+    ] {
+        let output = sandbox
+            .command(&args)
+            .env("FETCHLOOM_THREADS", "1")
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stdout)?);
+    }
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data").join("dataset").join("README.md"))?,
+        b"# sample dataset\n"
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

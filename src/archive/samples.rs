@@ -42,7 +42,7 @@ impl Scratch {
         watch: &dyn Fn(u64) -> bool,
     ) -> Result<Unpacked, Error> {
         let path = self.file("archive", bytes);
-        unpack(&path, format, limits, &self.cache, watch)
+        unpack(&path, format, limits, &self.cache, watch, None)
     }
 
     /// unpacks an archive the guard must refuse, and checks it left nothing behind.

@@ -144,7 +144,7 @@ impl<'a> Placing<'a> {
             .collect();
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
         let marks = cache.changed();
-        let found = place::run_all(&objects, |(digest, size)| {
+        let found = place::run_all(&objects, self.survey.threads, |(digest, size)| {
             cache.trusted(digest, Some(*size), &marks)
         });
         let mut present = HashSet::new();
@@ -183,7 +183,8 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder());
+        let mut placer =
+            Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
@@ -235,7 +236,8 @@ impl<'a> Placing<'a> {
         } = self;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder());
+        let mut placer =
+            Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
             &mut placer,
@@ -612,7 +614,7 @@ mod tests {
         }
         project.write_state(&state).unwrap();
         let before = nanos(SystemTime::now());
-        let survey = Survey::read(&project, "data");
+        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
         let surveyed = nanos(SystemTime::now());
         let started = survey.started;
         assert!((before..=surveyed).contains(&started));

@@ -45,6 +45,7 @@ pub(in crate::cli) async fn unpack_all(
         .map_or(1, NonZero::get)
         .div_ceil(4)
         .min(4);
+    let (at_once, writers) = context.threads.archives(at_once);
     let failed = Arc::new(AtomicBool::new(false));
     let what = match archives.as_slice() {
         [only] => only.label.clone(),
@@ -82,6 +83,7 @@ pub(in crate::cli) async fn unpack_all(
                     unpack.size,
                     unpack.tree.as_ref(),
                     &watch,
+                    writers,
                 );
                 drop(bar);
                 (index, unpack, started.elapsed(), unpacked)

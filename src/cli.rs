@@ -24,6 +24,7 @@ use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
 use crate::source;
 use crate::stop::Stop;
+use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
 
@@ -41,6 +42,7 @@ struct Context {
     yes: bool,
     jobs: usize,
     rate: Option<Arc<net::Rate>>,
+    threads: Threads,
     /// whether a large download may be split across streams, which `FETCHLOOM_SPLIT=1` asks
     /// for.
     split: bool,
@@ -57,6 +59,7 @@ impl Context {
             yes: false,
             jobs: JOBS,
             rate: None,
+            threads: Threads::default(),
             split: false,
             work: Arc::default(),
             stop: Arc::default(),
@@ -219,6 +222,10 @@ pub(crate) fn run() -> ExitCode {
     {
         return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
     }
+    match Threads::read(&var) {
+        Ok(threads) => context.threads = threads,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
     let Some(command) = args.command else {
         return alone(&context, started);
     };
@@ -349,7 +356,7 @@ fn block_on<T>(
 ) -> Result<T, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
+        .worker_threads(context.threads.limit(workers))
         .enable_all()
         .build()
         .map_err(|err| Error::io("could not start", &err))?;

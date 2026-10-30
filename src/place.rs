@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::threads::Threads;
 use crate::volume::{Volume, crosses_volumes, refuses_links};
 
 /// the most threads that place files or look up objects at once. creating a link or opening a
@@ -39,6 +40,7 @@ pub(crate) enum Method {
 
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
+    threads: Threads,
     root: PathBuf,
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
     /// someone named for `get` may be a link to one.
@@ -118,6 +120,7 @@ impl Placer {
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
             volume: Volume::new(root.clone()),
+            threads: Threads::default(),
             root,
             checks_root: true,
             folders: HashSet::new(),
@@ -126,6 +129,11 @@ impl Placer {
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
+        self.threads = threads;
+        self
     }
 
     /// why files were copied rather than linked, as far as the filesystem told.
@@ -175,7 +183,7 @@ impl Placer {
         };
         if let Some((first, rest)) = ready.split_first() {
             results.push(put(first));
-            results.extend(run_all(rest, put));
+            results.extend(run_all(rest, self.threads, put));
         }
         results.sort_unstable_by_key(|(index, _)| *index);
         results.into_iter().map(|(_, result)| result).collect()
@@ -199,7 +207,7 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
-        copy(object, destination, writable)?;
+        copy(object, destination, writable, self.threads)?;
         Ok(Method::Copy)
     }
 
@@ -320,9 +328,13 @@ impl Placer {
 
 /// runs `job` on every item, on a few threads when there are many, and returns the results in
 /// the order of `items`.
-pub(crate) fn run_all<T: Sync, R: Send>(items: &[T], job: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn run_all<T: Sync, R: Send>(
+    items: &[T],
+    cap: Threads,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
     let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
-    let threads = threads.min(THREADS).min(items.len() / PER_THREAD);
+    let threads = cap.limit(threads.min(THREADS).min(items.len() / PER_THREAD));
     if threads < 2 {
         return items.iter().map(job).collect();
     }
@@ -432,7 +444,12 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
 
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
-fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
+fn copy(
+    object: &Path,
+    destination: &Path,
+    writable: bool,
+    threads: Threads,
+) -> io::Result<()> {
     let destination = std::path::absolute(destination)?;
     let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
     let destination = parent.join(destination.file_name().unwrap_or_default());
@@ -450,7 +467,7 @@ fn copy(object: &Path, destination: &Path, writable: bool) -> io::Result<()> {
     let staged_writable = true;
     #[cfg(not(windows))]
     let staged_writable = writable;
-    fill(object, &claimed, staged_writable)?;
+    fill(object, &claimed, staged_writable, threads)?;
     temporary
         .persist_noclobber(&destination)
         .map_err(|error| error.error)?;
@@ -470,8 +487,14 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
 
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
-fn fill(object: &Path, output: &File, writable: bool) -> io::Result<()> {
-    transfer(File::open(object)?, output)?;
+fn fill(object: &Path, mut output: &File, writable: bool, threads: Threads) -> io::Result<()> {
+    let mut input = File::open(object)?;
+    if threads.is_limited() {
+        // a reader per copy would multiply the placement worker cap.
+        io::copy(&mut input, &mut output)?;
+    } else {
+        transfer(input, output)?;
+    }
     set_file_writable(output, writable)
 }
 
@@ -823,7 +846,7 @@ mod tests {
         fs::rename(&destination, folder.path().join("claimed.csv")).unwrap();
         fs::hard_link(&outside, &destination).unwrap();
 
-        fill(&object, &claimed, false).unwrap();
+        fill(&object, &claimed, false, Threads::default()).unwrap();
 
         assert_eq!(fs::read_to_string(&outside).unwrap(), "someone else's file");
         assert!(!is_read_only(&outside));
@@ -848,7 +871,7 @@ mod tests {
             .open(&destination)
             .unwrap();
 
-        let result = fill(&object, &output, true);
+        let result = fill(&object, &output, true, Threads::default());
 
         assert!(
             result.is_ok(),
@@ -856,7 +879,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(!is_read_only(&destination));
-        let readonly = undo_on_error(fill(&object, &output, false), &destination);
+        let readonly = undo_on_error(fill(&object, &output, false, Threads::default()), &destination);
         assert!(
             readonly.is_err(),
             "a real permission change must still fail"
@@ -883,13 +906,13 @@ mod tests {
         fs::remove_file(&probe).unwrap();
         let destination = destination_folder.path().join("placed.csv");
 
-        copy(&object, &destination, true).unwrap();
+        copy(&object, &destination, true, Threads::default()).unwrap();
 
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(!is_read_only(&destination));
         assert!(is_read_only(&object));
         let readonly = destination_folder.path().join("readonly.csv");
-        assert!(copy(&object, &readonly, false).is_err());
+        assert!(copy(&object, &readonly, false, Threads::default()).is_err());
         assert!(!readonly.exists());
     }
 
@@ -901,7 +924,13 @@ mod tests {
         const CHILD: &str = "FETCHLOOM_TEST_COPY_CHILD";
         if let Some(root) = std::env::var_os(CHILD) {
             let root = PathBuf::from(root);
-            copy(&root.join("object"), &root.join("placed.bin"), false).unwrap();
+            copy(
+                &root.join("object"),
+                &root.join("placed.bin"),
+                false,
+                Threads::default(),
+            )
+            .unwrap();
             return;
         }
         let folder = TempDir::new().unwrap();
@@ -963,7 +992,7 @@ mod tests {
         fs::create_dir_all(&parent).unwrap();
         let destination = parent.join("placed.csv");
 
-        copy(&object, &destination, false).unwrap();
+        copy(&object, &destination, false, Threads::default()).unwrap();
 
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(is_read_only(&destination));
@@ -976,7 +1005,7 @@ mod tests {
         let missing = folder.path().join("missing");
         let destination = folder.path().join("placed.csv");
 
-        assert!(copy(&missing, &destination, false).is_err());
+        assert!(copy(&missing, &destination, false, Threads::default()).is_err());
 
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
     }
@@ -991,7 +1020,7 @@ mod tests {
         fs::write(&object, &bytes).unwrap();
         let destination = folder.path().join("placed.bin");
 
-        copy(&object, &destination, false).unwrap();
+        copy(&object, &destination, false, Threads::default()).unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), bytes);
         assert!(is_read_only(&destination));
@@ -1237,12 +1266,47 @@ mod tests {
     #[test]
     fn work_spread_over_threads_comes_back_in_order() {
         let items: Vec<u64> = (0..1000).collect();
-        let doubled = run_all(&items, |item| item * 2);
+        let doubled = run_all(&items, Threads::default(), |item| item * 2);
         assert_eq!(
             doubled,
             items.iter().map(|item| item * 2).collect::<Vec<_>>()
         );
-        assert_eq!(run_all(&Vec::<u64>::new(), |item| *item), Vec::<u64>::new());
+        assert_eq!(
+            run_all(&Vec::<u64>::new(), Threads::default(), |item| *item),
+            Vec::<u64>::new()
+        );
+    }
+
+    #[test]
+    fn one_worker_runs_local_jobs_on_the_calling_thread() {
+        let threads = Threads::read(&|_| Some("1".into())).unwrap();
+        let calling = std::thread::current().id();
+        let items: Vec<u64> = (0..1000).collect();
+        let doubled = run_all(&items, threads, |item| {
+            assert_eq!(std::thread::current().id(), calling);
+            item * 2
+        });
+        assert_eq!(
+            doubled,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_capped_large_copy_keeps_every_byte() {
+        let folder = TempDir::new().unwrap();
+        let object = folder.path().join("object");
+        let destination = folder.path().join("placed.bin");
+        let bytes = vec![0x5a; 3 * 1024 * 1024];
+        fs::write(&object, &bytes).unwrap();
+        let threads = Threads::read(&|_| Some("1".into())).unwrap();
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None)
+            .with_threads(threads);
+        assert_eq!(
+            placer.place(&object, &destination, true).unwrap(),
+            Method::Copy
+        );
+        assert_eq!(fs::read(destination).unwrap(), bytes);
     }
 
     fn is_read_only(path: &Path) -> bool {
