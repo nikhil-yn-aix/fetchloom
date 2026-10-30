@@ -190,7 +190,8 @@ impl Reference {
             Reference::Doi(doi) => Err(Error::new(
                 Kind::ReferenceUnresolved,
                 format!("{doi} leads to another DOI, which fetchloom does not follow"),
-            )),
+            )
+            .help("open the DOI in a browser and use the dataset page or a direct file link")),
             Reference::Zenodo(record) => record.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
@@ -278,7 +279,8 @@ fn link(text: &str) -> Result<Parsed, Error> {
         return Err(Error::new(
             Kind::ReferenceInvalid,
             format!("\"{}\" names no host", net::mask_query(text)),
-        ));
+        )
+        .help("copy the complete link from your browser, including https:// and the website name"));
     }
     let routed = doi::Doi::from_link(&url)
         .map(|doi| (Reference::Doi(doi), None))
@@ -375,13 +377,15 @@ fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
                 format!(
                     "{reference} lists a file at \"{path}\", which fetchloom refuses because {reason}"
                 ),
-            ));
+            )
+            .help("ask the dataset's owner to rename that file, then run the same command again"));
         }
         if !seen.insert(path) {
             return Err(Error::new(
                 Kind::SourceInvalid,
                 format!("{reference} lists \"{path}\" twice"),
-            ));
+            )
+            .help("ask the dataset's owner to give the files distinct names, then run the same command again"));
         }
     }
     Ok(listing)

@@ -57,7 +57,8 @@ impl Repo {
                     "huggingface.co answered {self} with an id or commit fetchloom cannot read"
                 ),
             )
-            .detail(format!("id \"{}\", commit \"{}\"", info.id, info.sha)));
+            .detail(format!("id \"{}\", commit \"{}\"", info.id, info.sha))
+            .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues"));
         }
         if let Some(requested) = &self.revision
             && is_commit(requested)
@@ -83,10 +84,10 @@ impl Repo {
             401 | 403 => {
                 let error = Error::new(
                     Kind::AuthRequired,
-                    format!("{self} is gated: its files download only after its terms are accepted"),
+                    format!("{self} requires permission to download its files"),
                 )
                 .help(format!(
-                    "accept them at {} while signed in, then set HF_TOKEN to a token from https://huggingface.co/settings/tokens",
+                    "request access and accept the terms at {} while signed in, then set HF_TOKEN to a token from https://huggingface.co/settings/tokens",
                     self.page()
                 ));
                 Err(match response.json::<Refusal>() {

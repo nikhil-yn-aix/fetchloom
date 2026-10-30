@@ -261,7 +261,8 @@ impl Project {
                             "{} is a file where the data folder should be",
                             folder.display()
                         ),
-                    ));
+                    )
+                    .help("move that file to keep it, or set data_dir in [project] in data.toml to another folder"));
                 }
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {

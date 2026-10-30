@@ -99,7 +99,10 @@ impl Dataset {
                         self.owner, self.slug
                     ),
                 )
-                .help(format!("its newest version is {newest}")));
+                .help(format!(
+                    "check the versions at {} and update the reference on the command line or in data.toml. the newest version is {newest}",
+                    self.page()
+                )));
             }
             let page: Page = crate::source::json(self, &response)?;
             if !page.error_message.is_empty() {
@@ -204,7 +207,7 @@ impl Dataset {
             Kind::SourceInvalid,
             format!("kaggle sent a listing of {self} that fetchloom cannot use: {reason}"),
         )
-        .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+        .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
     }
 }
 
@@ -385,7 +388,10 @@ mod tests {
         let err = block_on(dataset("uciml/iris@9").resolve(&recorded)).unwrap_err();
         assert_eq!(err.kind, Kind::ReferenceUnresolved);
         assert_eq!(err.message, "kaggle:uciml/iris has no version 9");
-        assert_eq!(err.help.as_deref(), Some("its newest version is 2"));
+        assert_eq!(
+            err.help.as_deref(),
+            Some("check the versions at https://www.kaggle.com/datasets/uciml/iris and update the reference on the command line or in data.toml. the newest version is 2")
+        );
     }
 
     #[test]
