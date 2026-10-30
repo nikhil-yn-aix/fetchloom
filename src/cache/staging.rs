@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use super::partial::open_unfollowed;
 use super::upkeep::GRACE;
 use super::{Cache, NewObject};
+use crate::place::{FolderUse, real_folder};
 
 pub(crate) struct Staging {
     cache: Cache,
@@ -93,6 +94,10 @@ impl Cache {
     }
 
     fn clear_staging(&self, folder: &Path, lock: Option<File>) -> u64 {
+        // someone able to rename inside tmp could swap a link in for the folder while it was used
+        if real_folder(folder, FolderUse::Cache).is_err() {
+            return 0;
+        }
         let Ok(entries) = fs::read_dir(folder) else {
             return 0;
         };
@@ -150,5 +155,25 @@ impl Staging {
 impl Drop for Staging {
     fn drop(&mut self) {
         self.cache.clear_staging(&self.folder, self.lock.take());
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+
+    use super::super::tests::cache;
+
+    #[test]
+    fn clearing_never_follows_a_link_swapped_in_for_the_folder() {
+        let (dir, cache) = cache();
+        let victim = dir.path().join("victim");
+        fs::create_dir(&victim).unwrap();
+        fs::write(victim.join("keep"), b"mine").unwrap();
+        let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
+        std::os::unix::fs::symlink(&victim, &folder).unwrap();
+        assert_eq!(cache.clear_staging(&folder, None), 0);
+        assert_eq!(fs::read(victim.join("keep")).unwrap(), b"mine");
     }
 }
