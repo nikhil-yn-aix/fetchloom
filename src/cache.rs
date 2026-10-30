@@ -44,7 +44,6 @@ pub(crate) struct Cache {
     volume: Arc<Volume>,
 }
 
-/// an object as it sits in the cache after a write.
 #[derive(Debug)]
 pub(crate) struct Stored {
     pub(crate) digest: Sha256,
