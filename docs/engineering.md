@@ -85,13 +85,75 @@ cargo bolero builds with the `fuzz` profile in `Cargo.toml`. without the two fol
 
 ## automation
 
-[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
+[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks. [release.yml](../.github/workflows/release.yml) builds a release from a version tag, as [releases](#releases) describes.
 
 nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. fuzzing uses bolero, described above. `bench/` holds the benchmark harness and the live source matrix; [benchmarks](benchmarks.md) is their method. add tooling with the job it will run; do not document it as an existing gate first.
 
-## release work
+## releases
 
-`Cargo.toml` is the version source and has `publish = false`. no python package, wheel configuration, standalone installer or publishing pipeline is tracked. source builds are the available install path. [plan](plan.md#next) lists the remaining release milestones.
+`Cargo.toml` holds the version, and `pyproject.toml` takes it from there. `publish = false` keeps the crate off crates.io.
+
+[release.yml](../.github/workflows/release.yml) runs when a tag such as `v0.1.0` is pushed. each job has only the permissions it needs:
+
+| job | permissions | work |
+|---|---|---|
+| `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-musl` | read the repository | check that the tag matches `Cargo.toml`; build both executables with `--locked` and the release profile, on windows with a static C runtime and on linux static against musl, with musl-gcc for the C dependencies; check that each prints its version, that `ldd` calls the linux ones static and that the windows ones load no C runtime DLL; pack them with LICENSE, NOTICE and README.md; wrap the same binaries in a wheel with maturin, install it, and run both commands and the python module |
+| `attest` | read the repository, request an OIDC token, write attestations | write `SHA256SUMS` over the archives, wheels and installers, and attest their build provenance |
+| `release` | write contents | create a draft GitHub release holding every file |
+
+a release holds:
+
+| file | contents |
+|---|---|
+| `fetchloom-<version>-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, `fl.exe`, LICENSE, NOTICE and README.md, in a folder named like the archive |
+| `fetchloom-<version>-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, `fl` and the same three files |
+| `fetchloom-<version>-py3-none-win_amd64.whl` | both executables and the `fetchloom` python module |
+| `fetchloom-<version>-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | the same for linux. the binaries are static, so the wheel carries the glibc and musl tags |
+| `install.sh`, `install.ps1` | the installers the [README](../README.md#install) runs |
+| `SHA256SUMS` | the SHA-256 of every other file, which the installers check |
+
+maturin packs every `[[bin]]` target, so each wheel holds `fl` as well as `fetchloom`.
+
+to make a release:
+
+1. set `version` in `Cargo.toml`, run `cargo build` so `Cargo.lock` follows, and commit on main. wait for CI to pass on that commit.
+2. tag the commit and push the tag:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. watch the run with `gh run watch`. a failed run creates no release. fix the cause, delete the tag with `git tag -d v0.1.0` and `git push origin :refs/tags/v0.1.0`, and tag again.
+4. open the draft release on GitHub and check that it holds the seven files above. check the provenance of a download:
+
+   ```sh
+   gh release download v0.1.0 --pattern '*.tar.gz' --dir check
+   gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
+   ```
+
+5. edit the notes and publish the draft. the installers' `latest` links serve it from then on.
+6. upload the wheels to PyPI by hand, with an API token scoped to the `fetchloom` project:
+
+   ```sh
+   gh release download v0.1.0 --pattern '*.whl' --dir wheels
+   python -m pip install twine
+   python -m twine check wheels/*
+   python -m twine upload wheels/*
+   ```
+
+   then, in a new virtual environment, run `pip install fetchloom==0.1.0` and `fetchloom --version`. PyPI trusted publishing is not set up, so this upload stays manual; [plan](plan.md#next) tracks it.
+
+to try the build jobs without a tag, add `branches: [release-check]` under `push` in release.yml and push that branch. `attest` and `release` run only for tags. delete the branch after the run.
+
+to try the installers against local files, serve a folder that holds a release's files in one terminal, and point `FETCHLOOM_DOWNLOAD_URL` at it from another:
+
+```sh
+python -m http.server 8000 --directory release
+FETCHLOOM_DOWNLOAD_URL=http://127.0.0.1:8000 sh install.sh
+```
+
+on windows, set `$env:FETCHLOOM_DOWNLOAD_URL` and run `.\install.ps1`. to keep your own install apart, set `HOME` on linux or `LOCALAPPDATA` on windows to a scratch folder; the windows installer still adds that folder to your user PATH.
 
 `data.lock` and JSON each use format version 1. the cache writes a layout marker of 1 but does not validate it on open. format readers and recovery behavior are in [formats](formats.md); a version field alone is not a migration system.
 

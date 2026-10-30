@@ -94,7 +94,7 @@ CLI tests assert requests, bytes and placements for selected scenarios. these ca
 
 ## 23. keep distribution work explicit
 
-source installation builds both executables with cargo. dist for standalone binaries and maturin for wheels are proposed release tools, not configured pipelines. installers, wheel tests, publishing and attestations remain [release work](plan.md#next).
+release.yml builds both executables with cargo, as a source install does, and maturin's bin bindings wrap the same binaries in wheels, so `pip install` needs no rust toolchain. the installers are two short scripts that check `SHA256SUMS`; dist is not used. PyPI uploads stay manual until trusted publishing is set up. [releases](engineering.md#releases) lists the steps.
 
 ## 24. no telemetry
 

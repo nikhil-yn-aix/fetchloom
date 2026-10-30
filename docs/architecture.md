@@ -18,7 +18,7 @@ one rust crate builds `fetchloom` and `fl`. both call the same library entry poi
 | `output` | human rendering, progress, warnings and the JSON envelope |
 | `digest`, `name`, `glob`, `units`, `stop`, `work` | hashes, paths, patterns, formatting, cancellation and counters |
 
-there is no separate model crate or python wrapper. core types live with their owners. `net` writes through `cache`; `cli/sync/place` combines the plan, state and filesystem. dependencies such as `url::Url` cross module boundaries.
+there is no separate model crate. the python module in `python/fetchloom` has no bindings: it runs the installed `fetchloom` with `--json`. core types live with their owners. `net` writes through `cache`; `cli/sync/place` combines the plan, state and filesystem. dependencies such as `url::Url` cross module boundaries.
 
 ## the project loop
 
