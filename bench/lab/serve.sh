@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# serves $LAB_DATA (default /home/fl/lab-data) over https on port 8443 with http/1.1, http/2,
-# byte ranges and sendfile. run as root. the first run makes a local ca in $LAB_DATA/.lab and
-# trusts it in this system's store. the ca's revocation list is served over http on port 8442.
-# given a path, windows or linux style, it copies the ca certificate there for windows.
+# serves $LAB_DATA (default /home/fl/lab-data) over HTTPS on port 8443 with HTTP/1.1, HTTP/2,
+# byte ranges and sendfile. run as root. the first run makes a local CA in $LAB_DATA/.lab and
+# trusts it in this system's store. the CA's revocation list is served over HTTP on port 8442.
+# given a path, windows or linux style, it copies the CA certificate there for windows.
 # `serve.sh stop` stops the server.
 set -euo pipefail
 
@@ -22,7 +22,7 @@ touch "$lab/index.txt"
 wan=$(ip route show default | awk '{print $5; exit}')
 ip4=$(ip -4 -br addr show dev "$wan" | awk '{print $3}' | cut -d/ -f1)
 
-# the ca may only vouch for loopback and private addresses, which limits harm if its key leaks
+# the CA may only vouch for loopback and private addresses, which limits harm if its key leaks
 cat > "$lab/openssl.cnf" <<EOF
 [req]
 distinguished_name = dn
@@ -58,7 +58,7 @@ if [[ ! -e $lab/ca.crt ]]; then
     -subj "/CN=fetchloom lab ca" -config "$lab/openssl.cnf" -extensions lab_ca \
     -keyout "$lab/ca.key" -out "$lab/ca.crt" 2>/dev/null
 fi
-# a new server certificate every start, since the address of eth0 changes when wsl restarts
+# a new server certificate every start, since the address of eth0 changes when WSL restarts
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -noenc -days 365 \
   -subj "/CN=fetchloom lab" -config "$lab/openssl.cnf" -extensions lab_server \
   -CA "$lab/ca.crt" -CAkey "$lab/ca.key" -keyout "$lab/server.key" -out "$lab/server.crt" 2>/dev/null
@@ -96,7 +96,7 @@ http {
   ssl_certificate $lab/server.crt;
   ssl_certificate_key $lab/server.key;
   ssl_session_cache shared:lab:10m;
-  # kernel tls lets sendfile work under tls
+  # kernel TLS lets sendfile work under TLS
   ssl_conf_command Options KTLS;
   server {
     listen 8443 ssl http2;

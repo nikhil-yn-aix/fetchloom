@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shapes what the lab server sends, tcp from port 8443, on loopback for wsl clients and on the
+# shapes what the lab server sends, TCP from port 8443, on loopback for WSL clients and on the
 # interface windows reaches. the delay is one way, on the server's packets only, so it adds
 # exactly that much to each round trip. run as root: net.sh lan|fast|home|far|poor|clear
 set -euo pipefail
@@ -15,7 +15,7 @@ esac
 
 wan=$(ip route show default | awk '{print $5; exit}')
 # netem drops a segmentation offload batch whole, so loss needs offload off to hit single
-# packets. without loss it stays on, since the vm's eth0 then carries 1 gbit to windows.
+# packets. without loss it stays on, since the VM's eth0 then carries 1 Gbit/s to windows.
 offload=on
 [[ $netem == *loss* ]] && offload=off
 for dev in lo "$wan"; do
@@ -29,7 +29,8 @@ for dev in lo "$wan"; do
   done
 done
 
-# loopback's 64 KiB packets would let tcp grow far faster than over a real path
+# TCP counts its window in packets, so loopback's 64 KiB packets would outrun a real path.
+# saved metrics would start a connection from what an earlier profile taught TCP.
 if [[ -n $netem ]]; then
   ip link set lo mtu 1500
   sysctl -qw net.ipv4.tcp_no_metrics_save=1
@@ -37,6 +38,5 @@ else
   ip link set lo mtu 65536
   sysctl -qw net.ipv4.tcp_no_metrics_save=0
 fi
-# a connection would otherwise start from what an earlier profile taught tcp
 ip tcp_metrics flush all 2>/dev/null || true
 echo "$1 on lo and $wan${netem:+: $netem}"

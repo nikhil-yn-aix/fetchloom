@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # builds the lab fixtures in $LAB_DATA (default /home/fl/lab-data) and prints their sha256.
-# every byte is aes-128-ctr keystream keyed by the seed and the fixture name, so any machine
+# every byte is AES-128-CTR keystream keyed by the seed and the fixture name, so any machine
 # builds the same files. fixtures that exist are kept, so running it again only prints.
 set -euo pipefail
 
