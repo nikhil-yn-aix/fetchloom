@@ -257,7 +257,7 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
-| `FETCHLOOM_SPLIT` | `0` keeps every file to one stream. `1` splits a file of at least 64 MiB across streams from its first answer, to measure the split path. unset or anything else splits such a file once its one stream moved less than 8 MB/s over 2 s |
+| `FETCHLOOM_SPLIT` | `0` keeps every file to one stream. `1` splits a file of at least 64 MiB across streams from its first answer, to measure the split path. unset or anything else splits such a file once its one stream moved less than 1 MB/s over 2 s |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |

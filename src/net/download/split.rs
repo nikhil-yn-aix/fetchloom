@@ -33,7 +33,9 @@ pub(crate) const SMALLEST_PIECE: u64 = 8 * 1024 * 1024;
 /// how long a rate is measured before and after a stream is added.
 pub(crate) const WINDOW: Duration = Duration::from_secs(2);
 /// bytes a second below which one stream, over a window, hands its download over to be split.
-pub(crate) const SLOW: u64 = 8_000_000;
+/// a live server that gave one stream 5.6 MB/s finished a third later when split, while a lossy
+/// link at 0.25 MB/s finished in half the time.
+pub(crate) const SLOW: u64 = 1_000_000;
 /// how much faster the whole download must get with each added stream before another is added.
 const GAIN: f64 = 1.15;
 /// failed streams after which a download asks for no more ranges.

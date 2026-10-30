@@ -11,8 +11,8 @@ use crate::support::{Ranged, Result, Sandbox, text};
 
 /// the smallest file that may split, 64 MiB.
 const LARGE: u64 = 64 * 1024 * 1024;
-/// what each connection gets from a slow server: below the 8 MB/s under which one stream splits.
-const SLOW: u64 = 4 * 1024 * 1024;
+/// what each connection gets from a slow server: below the 1 MB/s under which one stream splits.
+const SLOW: u64 = 768 * 1024;
 
 /// a file of [`LARGE`] bytes whose every 4 bytes count up, so a byte in the wrong place changes
 /// its hash.
