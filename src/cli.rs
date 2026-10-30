@@ -39,6 +39,9 @@ struct Context {
     offline: net::Offline,
     yes: bool,
     jobs: usize,
+    /// whether a large download may be split across streams. `FETCHLOOM_SPLIT=0` turns it off,
+    /// for comparisons.
+    split: bool,
     work: Arc<Work>,
     stop: Arc<Stop>,
 }
@@ -51,6 +54,7 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
+            split: true,
             work: Arc::default(),
             stop: Arc::default(),
         }
@@ -73,6 +77,7 @@ impl Context {
             offline: self.offline,
             jobs: self.jobs,
             credentials: source::credentials(&|name| std::env::var_os(name)),
+            split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
     }
@@ -154,6 +159,7 @@ pub(crate) fn run() -> ExitCode {
         var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
     );
     context.yes = global.yes;
+    context.split = var("FETCHLOOM_SPLIT").is_none_or(|value| value != "0");
     if args.version {
         return about(
             &context,

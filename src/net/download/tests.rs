@@ -100,6 +100,7 @@ fn net(url: &Url) -> Net {
         offline: crate::net::Offline::No,
         jobs: 1,
         credentials: Vec::new(),
+        split: true,
     };
     let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
     net.typed(url);

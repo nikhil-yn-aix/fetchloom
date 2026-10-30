@@ -32,7 +32,9 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     assert_eq!(received, 3);
     assert_eq!(seen, validators);
 
-    let mut resumed = partial.writer(received, Some(6), seen, true, false).unwrap();
+    let mut resumed = partial
+        .writer(received, Some(6), seen, true, false)
+        .unwrap();
     assert_eq!(resumed.written(), 3);
     resumed.write_all(b"def").unwrap();
     let stored = resumed.finish().unwrap();
@@ -198,10 +200,18 @@ fn bytes_written_out_of_order_hash_as_the_whole_file() {
     let mut writer = split_writer(&partial);
     writer.write_at(8, b"ijkl").unwrap();
     writer.write_at(4, b"efgh").unwrap();
-    assert_eq!(writer.written(), 0, "nothing is hashed before the first byte");
+    assert_eq!(
+        writer.written(),
+        0,
+        "nothing is hashed before the first byte"
+    );
     writer.write_at(0, b"abcd").unwrap();
     assert_eq!(writer.written(), 12);
-    assert_eq!(writer.read_back(), 8, "the prefix reads back what other streams wrote");
+    assert_eq!(
+        writer.read_back(),
+        8,
+        "the prefix reads back what other streams wrote"
+    );
     let stored = writer.finish().unwrap();
     assert_eq!(stored.digest, crate::digest::sha256(b"abcdefghijkl"));
     assert_eq!(
@@ -259,7 +269,9 @@ fn a_resume_keeps_the_ranges_other_streams_finished() {
     two_parts(&partial);
     let (received, seen) = partial.resumable().unwrap();
     assert_eq!(received, 3, "the prefix is what a plain resume continues");
-    let mut resumed = partial.writer(received, Some(12), seen, true, true).unwrap();
+    let mut resumed = partial
+        .writer(received, Some(12), seen, true, true)
+        .unwrap();
     assert_eq!(resumed.gaps(12), [(3, 6), (9, 12)]);
     assert_eq!(resumed.kept(), 3);
     resumed.write_at(9, b"jkl").unwrap();
@@ -282,7 +294,9 @@ fn a_kept_range_whose_bytes_changed_is_fetched_again() {
     file.write_all(b"\0\0\0").unwrap();
     drop(file);
     let (received, seen) = partial.resumable().unwrap();
-    let resumed = partial.writer(received, Some(12), seen, true, true).unwrap();
+    let resumed = partial
+        .writer(received, Some(12), seen, true, true)
+        .unwrap();
     assert_eq!(resumed.gaps(12), [(3, 12)]);
 }
 
@@ -292,7 +306,9 @@ fn a_resume_that_does_not_split_forgets_kept_ranges() {
     let partial = owned(&cache, "https://example.org/single");
     two_parts(&partial);
     let (received, seen) = partial.resumable().unwrap();
-    let mut resumed = partial.writer(received, Some(12), seen, true, false).unwrap();
+    let mut resumed = partial
+        .writer(received, Some(12), seen, true, false)
+        .unwrap();
     assert_eq!(resumed.gaps(12), [(3, 12)]);
     assert_eq!(fs::metadata(&partial.bytes).unwrap().len(), 3);
     resumed.write_all(b"defghijkl").unwrap();

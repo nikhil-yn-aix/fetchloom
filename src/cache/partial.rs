@@ -339,11 +339,8 @@ impl PartialWriter {
     /// arrives in order reads nothing back.
     pub(crate) fn write_at(&mut self, at: u64, bytes: &[u8]) -> io::Result<()> {
         let end = at + bytes.len() as u64;
-        let overlaps = at < self.prefix
-            || self
-                .runs
-                .iter()
-                .any(|run| at < run.end && run.start < end);
+        let overlaps =
+            at < self.prefix || self.runs.iter().any(|run| at < run.end && run.start < end);
         if overlaps {
             return Err(io::Error::other(
                 "two streams of a download wrote the same bytes",
@@ -388,7 +385,11 @@ impl PartialWriter {
 
     /// moves the prefix over the runs it reached, hashing them from the file.
     fn absorb(&mut self) -> io::Result<()> {
-        while self.runs.first().is_some_and(|run| run.start == self.prefix) {
+        while self
+            .runs
+            .first()
+            .is_some_and(|run| run.start == self.prefix)
+        {
             self.flush_pending()?;
             let run = self.runs.remove(0);
             hash_range(&self.file, &mut self.hasher, run.start, run.end)?;
@@ -406,7 +407,6 @@ impl PartialWriter {
         }
         Ok(())
     }
-
 
     /// takes on the ranges an earlier run recorded past the prefix whose bytes still hash to
     /// what it recorded. the others are fetched again.
@@ -471,7 +471,10 @@ impl PartialWriter {
             ));
         }
         if self.read_back > 0 {
-            tracing::debug!(read_back = self.read_back, "hashed bytes other streams wrote");
+            tracing::debug!(
+                read_back = self.read_back,
+                "hashed bytes other streams wrote"
+            );
         }
         let PartialWriter {
             cache,

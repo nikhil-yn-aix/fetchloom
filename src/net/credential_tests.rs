@@ -31,6 +31,7 @@ fn net() -> Net {
             offline: crate::net::Offline::No,
             jobs: 1,
             credentials: crate::source::credentials(&var),
+            split: true,
         },
         Arc::default(),
         Arc::default(),

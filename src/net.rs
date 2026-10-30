@@ -90,6 +90,20 @@ pub(crate) struct Options {
     /// downloads running at once, across all hosts.
     pub(crate) jobs: usize,
     pub(crate) credentials: Vec<Credential>,
+    /// whether a large download may be split across streams.
+    pub(crate) split: bool,
+}
+
+/// how a large download is split across streams.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Split {
+    pub(crate) enabled: bool,
+    /// the smallest file split.
+    pub(crate) above: u64,
+    /// the smallest piece a stream takes from another.
+    pub(crate) piece: u64,
+    /// how long a rate is measured before and after a stream is added.
+    pub(crate) window: Duration,
 }
 
 pub(crate) struct Net {
@@ -101,38 +115,73 @@ pub(crate) struct Net {
     credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
+    split: Split,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
 }
 
-/// the HTTP client and the proxies its requests go through.
+/// the HTTP clients and the proxies their requests go through.
 struct Wire {
     client: reqwest::Client,
+    /// for the added streams of a split download: HTTP/1.1, so each request has a connection of
+    /// its own instead of sharing one with every other request to the host. made when first
+    /// needed.
+    apart: OnceLock<Result<reqwest::Client, Error>>,
+    typed: address::Typed,
+    offline: bool,
     proxies: address::Proxies,
+}
+
+/// which client sends a request.
+#[derive(Clone, Copy)]
+enum Lane {
+    Shared,
+    Apart,
 }
 
 impl Wire {
     fn new(typed: &address::Typed, offline: bool) -> Result<Wire, Error> {
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::builder()
+        Ok(Wire {
+            client: Wire::client(typed, offline, false)?,
+            apart: OnceLock::new(),
+            typed: typed.clone(),
+            offline,
+            proxies: address::Proxies::from_system(),
+        })
+    }
+
+    fn client(
+        typed: &address::Typed,
+        offline: bool,
+        apart: bool,
+    ) -> Result<reqwest::Client, Error> {
+        let builder = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT)
             .dns_resolver(Arc::new(address::Resolver::new(typed.clone(), offline)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|err| {
-                Error::new(
-                    Kind::NetworkUnreachable,
-                    format!("could not start the network client: {err}"),
-                )
-            })?;
-        Ok(Wire {
-            client,
-            proxies: address::Proxies::from_system(),
+            .redirect(reqwest::redirect::Policy::none());
+        let builder = if apart { builder.http1_only() } else { builder };
+        builder.build().map_err(|err| {
+            Error::new(
+                Kind::NetworkUnreachable,
+                format!("could not start the network client: {err}"),
+            )
         })
+    }
+
+    fn lane(&self, lane: Lane) -> Result<&reqwest::Client, Error> {
+        match lane {
+            Lane::Shared => Ok(&self.client),
+            Lane::Apart => self
+                .apart
+                .get_or_init(|| Wire::client(&self.typed, self.offline, true))
+                .as_ref()
+                .map_err(Clone::clone),
+        }
     }
 }
 
@@ -155,6 +204,12 @@ impl Net {
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
+            split: Split {
+                enabled: options.split,
+                above: download::SPLIT_ABOVE,
+                piece: download::SMALLEST_PIECE,
+                window: download::WINDOW,
+            },
             work,
             stop,
             notify,
@@ -195,8 +250,28 @@ impl Net {
         url: &Url,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
+        self.send_on(Lane::Shared, url, shape).await
+    }
+
+    /// [`Net::send`] on a connection of the request's own, for the added streams of a split
+    /// download.
+    async fn send_apart(
+        &self,
+        url: &Url,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        self.send_on(Lane::Apart, url, shape).await
+    }
+
+    async fn send_on(
+        &self,
+        lane: Lane,
+        url: &Url,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
         let wire = self.wire().map_err(Failure::Final)?;
+        let client = wire.lane(lane).map_err(Failure::Final)?;
         let mut hop = url.clone();
         let mut redirects = 0;
         let mut first_origin = true;
@@ -206,7 +281,7 @@ impl Net {
                 .await
                 .map_err(|reason| refused(&hop, reason))?;
             first_origin &= hop.origin() == url.origin();
-            let request = shape(self.request(&wire.client, &hop, first_origin));
+            let request = shape(self.request(client, &hop, first_origin));
             let response = tokio::select! {
                 sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
                     Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
@@ -259,13 +334,7 @@ impl Net {
         &self,
         url: &Url,
     ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), Error> {
-        let per_host = {
-            let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
-            hosts
-                .entry(host(url).to_ascii_lowercase())
-                .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
-                .clone()
-        };
+        let per_host = self.slots(url);
         let closed = |_| Error::new(Kind::Interrupted, "stopped");
         let wait = async {
             let host = per_host.acquire_owned().await.map_err(closed)?;
@@ -276,6 +345,22 @@ impl Net {
             permits = wait => permits,
             () = self.stop.asked() => Err(failure::interrupted(url)),
         }
+    }
+
+    /// a slot for this host and one overall, when both are free and nothing waits for them, so
+    /// an added stream never holds up another file.
+    fn try_permit(&self, url: &Url) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+        let host = self.slots(url).try_acquire_owned().ok()?;
+        let all = self.jobs.clone().try_acquire_owned().ok()?;
+        Some((host, all))
+    }
+
+    fn slots(&self, url: &Url) -> Arc<Semaphore> {
+        let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+        hosts
+            .entry(host(url).to_ascii_lowercase())
+            .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
+            .clone()
     }
 }
 
@@ -313,6 +398,7 @@ mod tests {
             offline: Offline::No,
             jobs: 1,
             credentials: Vec::new(),
+            split: true,
         };
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         assert!(net.wire.get().is_none());

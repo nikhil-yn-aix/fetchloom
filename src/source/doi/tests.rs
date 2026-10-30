@@ -212,6 +212,7 @@ fn live_doi() {
             offline: crate::net::Offline::No,
             jobs: 4,
             credentials: Vec::new(),
+            split: true,
         },
         work.clone(),
         Arc::default(),
