@@ -1,0 +1,34 @@
+# live: a DOI, fetchloom against curl-sha256, pooch, in WSL.
+# every tool keeps the files as the source serves them, so fetchloom runs with --no-extract.
+# unpacking is compared in the lab. bench/expect-live.py writes the expect files with a first
+# verified download before the first block.
+name = "live-doi"
+layer = "live"
+repetitions = 3
+
+[vars]
+py = "/home/fl/bench-venv/bin/python"
+wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+
+[[workload]]
+id = "doi-s1"
+expect = "bench/expect/live/doi-s1.sha256"
+bytes = 4177
+timeout = 3600
+tools = ["fetchloom", "curl-sha256", "pooch"]
+vars = { ref = "doi:10.5281/zenodo.3608990", expect = "bench/expect/live/doi-s1.sha256", url = "https://zenodo.org/records/3608990/files/iris.csv?download=1", doi = "10.5281/zenodo.3608990" }
+
+[tool.fetchloom]
+first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+second = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+env = { FETCHLOOM_CACHE = "{home}/cache" }
+version = ["fetchloom", "--version"]
+
+[tool.curl-sha256]
+first = ["{py}", "{wrappers}/curl_sha256.py", "{out}", "{url}", "{expect}"]
+version = ["curl", "--version"]
+
+[tool.pooch]
+first = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "doi:{doi}"]
+second = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "doi:{doi}"]
+version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('pooch', version('pooch'))"]

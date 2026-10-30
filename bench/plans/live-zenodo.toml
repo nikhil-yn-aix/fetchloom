@@ -1,0 +1,38 @@
+# live: zenodo records, fetchloom against zenodo_get, datahugger, pooch, in WSL.
+# every tool keeps the files as the source serves them, so fetchloom runs with --no-extract and datahugger with --no-unzip.
+# unpacking is compared in the lab. bench/expect-live.py writes the expect files with a first
+# verified download before the first block.
+name = "live-zenodo"
+layer = "live"
+repetitions = 3
+
+[vars]
+py = "/home/fl/bench-venv/bin/python"
+wrappers = "/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report/bench/tools"
+
+[[workload]]
+id = "zenodo-s100"
+expect = "bench/expect/live/zenodo-s100.sha256"
+bytes = 20287660
+timeout = 3600
+tools = ["fetchloom", "zenodo_get", "datahugger", "pooch"]
+vars = { ref = "zenodo:3684992", expect = "bench/expect/live/zenodo-s100.sha256", record = "3684992", doi = "10.5281/zenodo.3684992" }
+
+[tool.fetchloom]
+first = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+second = ["fetchloom", "get", "{ref}", "-o", "{out}", "--no-extract", "--yes"]
+env = { FETCHLOOM_CACHE = "{home}/cache" }
+version = ["fetchloom", "--version"]
+
+[tool.zenodo_get]
+first = ["{py}", "{wrappers}/zenodo_download.py", "{out}", "{home}", "{record}"]
+version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('zenodo_get', version('zenodo_get'))"]
+
+[tool.datahugger]
+first = ["{py}", "{wrappers}/datahugger_download.py", "{out}", "{home}", "{doi}", "--no-unzip"]
+version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('datahugger', version('datahugger'))"]
+
+[tool.pooch]
+first = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "doi:{doi}"]
+second = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "doi:{doi}"]
+version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('pooch', version('pooch'))"]
