@@ -61,6 +61,7 @@ files are read-only by default. `sync` preserves hand edits unless you use `--fo
 | [vision](docs/vision.md) | why pin published inputs |
 | [scope](docs/scope.md) | current sources and boundaries |
 | [cli](docs/cli.md) | commands and their output |
+| [agents](docs/agents.md) | driving fetchloom from scripts and agents |
 | [formats](docs/formats.md) | manifest, lock, cache records and JSON |
 | [architecture](docs/architecture.md) | module boundaries and data flow |
 | [decisions](docs/decisions.md) | reasons behind the design |
