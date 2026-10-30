@@ -29,6 +29,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked
 ```
 
+after a dependency change, also run `cargo deny check`, installed with `cargo install --locked cargo-deny`.
+
 run the smallest relevant selector while working, then the full suite when the change crosses command boundaries:
 
 ```sh
@@ -61,9 +63,9 @@ for a bug fix, first add a test that fails for the reported behavior. use the lo
 
 ## automation
 
-[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux, macos and windows. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
+[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux, macos and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
 
-nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-deny, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
+nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
 
 ## release work
 
