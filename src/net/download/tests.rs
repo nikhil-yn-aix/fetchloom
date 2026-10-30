@@ -299,7 +299,11 @@ fn a_stated_md5_lets_a_download_without_validators_resume() {
     let cut = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\n\r\naaaa";
     let (url, _) = serve(vec![
         cut.as_bytes().to_vec(),
-        reply("206 Partial Content", &[("Content-Range", "bytes 4-7/8")], "bbbb"),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8")],
+            "bbbb",
+        ),
     ]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();

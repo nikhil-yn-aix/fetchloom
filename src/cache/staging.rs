@@ -158,7 +158,6 @@ impl Drop for Staging {
     }
 }
 
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs;

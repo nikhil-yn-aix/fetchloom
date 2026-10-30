@@ -658,7 +658,12 @@ pub(crate) mod tests {
                     .set_modified(written)
                     .unwrap();
                 seal(&source);
-                assert!(cache.link_object(&source, stored.digest, 4, None).unwrap().new);
+                assert!(
+                    cache
+                        .link_object(&source, stored.digest, 4, None)
+                        .unwrap()
+                        .new
+                );
                 assert_eq!(fs::read(&object).unwrap(), b"good");
                 let marked = UNIX_EPOCH + Duration::from_nanos(cache.changed()[&stored.digest]);
                 assert!(marked < fs::metadata(&object).unwrap().modified().unwrap());

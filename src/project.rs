@@ -513,7 +513,10 @@ mod tests {
         }
         OWNER_PUBLISHED.set(Some(|path| {
             let bytes = fs::read(path).unwrap();
-            assert!(!bytes.is_empty(), "an owner must be complete when it appears");
+            assert!(
+                !bytes.is_empty(),
+                "an owner must be complete when it appears"
+            );
             let owner: Owner = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(owner.os, std::env::consts::OS);
             assert_eq!(owner.pid, std::process::id());
@@ -522,7 +525,10 @@ mod tests {
         let Hold::Held(held) = project.hold("sync").unwrap() else {
             panic!("free")
         };
-        assert!(OWNER_PUBLISHED.get().is_none(), "publication was not observed");
+        assert!(
+            OWNER_PUBLISHED.get().is_none(),
+            "publication was not observed"
+        );
         let path = project.own_folder().join("owner");
         let record = read_owner(&path).unwrap();
         let competing = Held {
