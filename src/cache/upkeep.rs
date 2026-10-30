@@ -318,6 +318,38 @@ mod tests {
     }
 
     #[test]
+    fn a_sweep_removes_unlocked_staging_without_waiting() {
+        for (_dir, cache) in [cache(), fat()] {
+            let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
+            fs::create_dir(&folder).unwrap();
+            fs::write(folder.join("lock"), b"").unwrap();
+            let member = folder.join("member.new");
+            fs::write(&member, b"unfinished").unwrap();
+            seal(&member);
+            let freed = cache.sweep(&Needed::default(), SystemTime::now());
+            assert_eq!(freed.leftovers, 1);
+            assert!(!folder.exists());
+        }
+    }
+
+    #[test]
+    fn staging_without_locking_keeps_the_age_rule() {
+        for (_dir, cache) in [cache(), fat()] {
+            let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
+            fs::create_dir(&folder).unwrap();
+            fs::write(folder.join("unlocked"), b"").unwrap();
+            let member = folder.join("member.new");
+            fs::write(&member, b"unfinished").unwrap();
+            seal(&member);
+            assert_eq!(cache.sweep(&Needed::default(), SystemTime::now()).leftovers, 0);
+            assert!(member.exists());
+            let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+            assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 1);
+            assert!(!folder.exists());
+        }
+    }
+
+    #[test]
     fn a_run_that_opened_a_lock_before_a_sweep_owns_the_download_alone() {
         let (_dir, cache) = cache();
         let url = "https://example.org/raced";

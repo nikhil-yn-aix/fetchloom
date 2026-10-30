@@ -234,6 +234,10 @@ impl Write for Spill<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+
     use super::*;
     use crate::archive::samples::Scratch;
     use crate::archive::{Limits, guard::Meter};
@@ -251,6 +255,86 @@ mod tests {
             Ok(())
         })
         .map(|(members, _)| members)
+    }
+
+    fn staged(scratch: &Scratch) -> PathBuf {
+        let folder = scratch.cache.root().join("tmp").join("0123456789abcdef.stage");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("lock"), b"").unwrap();
+        let member = folder.join("member.new");
+        fs::write(&member, b"unfinished").unwrap();
+        crate::cache::tests::seal(&member);
+        folder
+    }
+
+    #[test]
+    fn the_next_unpack_removes_abandoned_staging() {
+        let scratch = Scratch::new();
+        let folder = staged(&scratch);
+        stored(&scratch, &[]).unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn the_next_unpack_leaves_locked_staging() {
+        let scratch = Scratch::new();
+        let folder = staged(&scratch);
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(folder.join("lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        stored(&scratch, &[]).unwrap();
+        let later = SystemTime::now() + Duration::from_hours(48);
+        scratch.cache.sweep(&crate::cache::Needed::default(), later);
+        assert_eq!(fs::read(folder.join("member.new")).unwrap(), b"unfinished");
+        drop(lock);
+        stored(&scratch, &[]).unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn an_unpack_keeps_its_staging_locked_until_cleanup() {
+        let scratch = Scratch::new();
+        let limits = Limits::default();
+        let meter = Meter::default();
+        let never = |_: u64| false;
+        let mut guard = Guard::new(&limits, &never, &meter);
+        let bytes = vec![7; SMALL + 1];
+        let (members, _) = store_all(&scratch.cache, |writers| {
+            writers.keep(
+                &mut guard,
+                "large.bin".to_owned(),
+                &mut &bytes[..],
+                &mut [0; 1024],
+            )?;
+            let folder = fs::read_dir(scratch.cache.root().join("tmp"))
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|extension| extension == "stage"))
+                .unwrap();
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(folder.join("lock"))
+                .unwrap();
+            assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
+            let later = SystemTime::now() + Duration::from_hours(48);
+            assert_eq!(
+                scratch.cache.sweep(&crate::cache::Needed::default(), later).leftovers,
+                0
+            );
+            assert!(folder.is_dir());
+            Ok(())
+        })
+        .unwrap();
+        scratch.assert_stored(&members[0], &bytes);
+        assert_eq!(
+            fs::read_dir(scratch.cache.root().join("tmp")).unwrap().count(),
+            0
+        );
     }
 
     #[test]
