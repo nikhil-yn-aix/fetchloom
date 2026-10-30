@@ -198,7 +198,9 @@ resolved lines omit unavailable metadata, show total size only when every listed
 
 on an interactive terminal, resolution waits show spinners and active downloads show bars. several downloads get an overall bar. elapsed time appears after two seconds. after three seconds, a positive rate is shown; remaining time also needs a known total. finished bars clear and the command prints its summaries. debug logging disables bars.
 
-without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings).
+without bars, long resolution, download, unpack and verify batches print a line after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress these lines. color and unicode follow the [environment rules](formats.md#settings): color is off for pipes and files, with `NO_COLOR` and with `--color never`.
+
+with color on, success is green with ✓, warnings yellow with !, errors red with ✗, names and commands cyan, and details dim. each color comes with a symbol, a label, a verb or backticks, so nothing depends on color alone.
 
 ```text
 $ fetchloom get

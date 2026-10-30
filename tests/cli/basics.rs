@@ -205,6 +205,35 @@ fn a_usage_error_follows_verbose_and_color() -> Result {
 }
 
 #[test]
+fn color_marks_meaning_with_a_symbol_and_stays_off_when_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let colored = text(&sandbox.run(&["--color", "always", "sycn"])?.stderr)?;
+    assert!(
+        colored.contains("31m✗"),
+        "an error is red and marked: {colored}"
+    );
+    assert!(
+        colored.contains("\u{1b}[36m`fetchloom sync`\u{1b}[0m"),
+        "a command takes the accent: {colored}"
+    );
+    for (flag, variables) in [
+        (&["--color", "never"][..], &[("CLICOLOR_FORCE", "1")][..]),
+        (&[], &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]),
+        (&[], &[]),
+    ] {
+        let mut command = sandbox.command(&[flag, &["sycn"]].concat());
+        command.envs(variables.iter().copied());
+        let stderr = text(&command.output()?.stderr)?;
+        assert!(
+            !stderr.contains('\u{1b}'),
+            "{flag:?} {variables:?}: {stderr}"
+        );
+        assert!(stderr.starts_with('✗'), "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
 fn json_gets_one_document_whatever_the_command_line() -> Result {
     let sandbox = Sandbox::new()?;
     let version = env!("CARGO_PKG_VERSION");
