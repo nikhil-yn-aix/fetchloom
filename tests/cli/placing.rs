@@ -121,7 +121,10 @@ fn data_dir_alias() -> Result {
     let manifest = sandbox.work().join("data.toml");
     fs::write(
         &manifest,
-        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+        format!(
+            "[project]\ndata_dir = \"Data\"\n\n{}",
+            fs::read_to_string(&manifest)?
+        ),
     )?;
 
     clean_alias(&sandbox, &server)?;
@@ -167,7 +170,10 @@ fn alias_removal() -> Result {
     let manifest = sandbox.work().join("data.toml");
     fs::write(
         &manifest,
-        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+        format!(
+            "[project]\ndata_dir = \"Data\"\n\n{}",
+            fs::read_to_string(&manifest)?
+        ),
     )?;
 
     let output = sandbox.run(&["remove", "iris"])?;
@@ -245,7 +251,10 @@ fn distinct_inodes_do_not_alias() -> Result {
     let manifest = sandbox.work().join("data.toml");
     fs::write(
         &manifest,
-        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+        format!(
+            "[project]\ndata_dir = \"Data\"\n\n{}",
+            fs::read_to_string(&manifest)?
+        ),
     )?;
 
     let status = sandbox.run(&["--json", "status"])?;
@@ -275,7 +284,10 @@ fn ambiguous_aliases() -> Result {
     let manifest = sandbox.work().join("data.toml");
     fs::write(
         &manifest,
-        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+        format!(
+            "[project]\ndata_dir = \"Data\"\n\n{}",
+            fs::read_to_string(&manifest)?
+        ),
     )?;
 
     let status = sandbox.run(&["--json", "status"])?;
