@@ -62,9 +62,10 @@ def main():
     parser.add_argument("base")
     parser.add_argument("expect")
     parser.add_argument("--size", type=int, required=True, help="every file's size in bytes")
-    parser.add_argument("extra", nargs=argparse.REMAINDER, help="options for the tool, after --")
-    args = parser.parse_args()
-    extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
+    arguments = sys.argv[1:]
+    split = arguments.index("--") if "--" in arguments else len(arguments)
+    args = parser.parse_args(arguments[:split])
+    extra = arguments[split + 1:]
     entries = []
     for digest, path in wrapping.pins(args.expect):
         url = f"{args.base.rstrip('/')}/{path}"

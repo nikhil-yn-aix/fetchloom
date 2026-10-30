@@ -29,6 +29,10 @@ def main():
     wrapping.run([datalad, "create", str(args.out)], env)
     name = args.name or wrapping.url_name(args.url)
     wrapping.run([datalad, "download-url", "-d", str(args.out), "-O", str(args.out / name), args.url], env)
+    # git-annex makes its object folders read-only, which would stop the harness removing the run
+    for folder in (args.out / ".git" / "annex" / "objects").rglob("*"):
+        if folder.is_dir():
+            folder.chmod(0o755)
 
 
 if __name__ == "__main__":
