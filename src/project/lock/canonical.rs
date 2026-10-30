@@ -314,4 +314,27 @@ mod tests {
             assert_eq!(string(refused), None, "{refused}");
         }
     }
+
+    /// any text: the fast reader takes only what the TOML reader reads alike, and any lock read
+    /// is written and read back unchanged.
+    #[test]
+    fn fuzz_lock_reader() {
+        bolero::check!().for_each(|bytes| {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return;
+            };
+            if let Some(lock) = read(text) {
+                assert_eq!(
+                    Lock::parse(&format!("{text}# a comment\n")).ok().as_ref(),
+                    Some(&lock),
+                    "{text:?}"
+                );
+                assert_eq!(read(&lock.render()).as_ref(), Some(&lock), "{text:?}");
+            }
+            if let Ok(lock) = Lock::parse(text) {
+                let written = lock.render();
+                assert_eq!(Lock::parse(&written).ok(), Some(lock), "{written:?}");
+            }
+        });
+    }
 }

@@ -29,6 +29,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked
 ```
 
+after a dependency change, also run `cargo deny check`, installed with `cargo install --locked cargo-deny`.
+
 run the smallest relevant selector while working, then the full suite when the change crosses command boundaries:
 
 ```sh
@@ -59,11 +61,33 @@ snapshot filters replace sandbox paths, ports and durations, normalize path sepa
 
 for a bug fix, first add a test that fails for the reported behavior. use the lowest layer that demonstrates it. add a CLI case when exit codes, stdout, files left on disk or cross-command recovery are part of the bug. do not weaken an assertion to hide a failure.
 
+## fuzzing
+
+five parsers have fuzz targets, written as [bolero](https://github.com/camshaft/bolero) tests inside their modules so the parsers stay private. each asserts what must hold for any input: nothing panics, what a parser accepts keeps its own rules, and where a writer exists, what it writes reads back the same.
+
+| target | reads |
+|---|---|
+| `archive::names::tests::fuzz_member_names` | archive member names |
+| `project::lock::canonical::tests::fuzz_lock_reader` | `data.lock`, fast reader and TOML reader |
+| `project::manifest::tests::fuzz_manifest` | `data.toml`, with adding and removing datasets |
+| `source::drive::folder::tests::fuzz_drive_pages` | drive folder pages, download pages and their HTML |
+| `net::headers::tests::fuzz_response_headers` | response headers and the file name a server gives |
+
+`cargo test` runs each for one second of random input; `cargo test --locked --lib fuzz_` runs only them. to fuzz one with libfuzzer, on linux with a nightly toolchain:
+
+```sh
+rustup toolchain install nightly
+cargo install --locked cargo-bolero --no-default-features --features libfuzzer
+cargo bolero test --toolchain nightly -T 10min --corpus-dir ../fuzz/manifest --crashes-dir ../fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
+```
+
+cargo bolero builds with the `fuzz` profile in `Cargo.toml`. without the two folders it keeps its corpus in `__fuzz__` beside the source, which git ignores. a crash becomes a regression test in the module's tests before it is fixed.
+
 ## automation
 
-[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
+[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks or release workflows.
 
-nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-deny, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. there is no benchmark harness for instruction counts or allocation profiling. add tooling with the job it will run; do not document it as an existing gate first.
+nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. fuzzing uses bolero, described above. `bench/` holds the benchmark harness and the live source matrix; [benchmarks](benchmarks.md) is their method. add tooling with the job it will run; do not document it as an existing gate first.
 
 ## release work
 

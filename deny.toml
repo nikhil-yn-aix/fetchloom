@@ -1,0 +1,29 @@
+# what `cargo deny check` accepts: no crate with an open security advisory, only the licenses
+# below, and crates from crates.io alone. ci runs it on linux.
+
+[advisories]
+# each advisory that has no fixed release in range, with why it is accepted.
+ignore = []
+
+[licenses]
+# exactly the licenses the dependency tree needs. a crate that offers a choice is taken under one
+# of these.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+    "bzip2-1.0.6",
+]
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

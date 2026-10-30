@@ -86,7 +86,7 @@ zip 9.1.3, tar, flate2 with zlib-rs, liblzma, zstd and bzip2 supply readers. fet
 
 ## 21. test behavior without coverage quotas
 
-unit tests, CLI scenarios, snapshots and work counters check observable behavior. no coverage or mutation gate is configured. mutation and fuzz tooling remain work to add, rather than tests already running before releases.
+unit tests, CLI scenarios, snapshots and work counters check observable behavior. no coverage or mutation gate is configured, and mutation tooling remains work to add. five parsers have fuzz targets written as bolero tests inside their modules, so fuzzing needs no public API; `cargo test` runs them briefly, and [engineering](engineering.md#fuzzing) shows how to fuzz one with libfuzzer.
 
 ## 22. assert work counters
 

@@ -26,16 +26,18 @@ pub(crate) fn sanitize(raw: &str) -> Option<String> {
             }
         })
         .collect();
-    // windows drops trailing dots and spaces, so two different names could become one
+    // windows drops trailing dots and spaces, so two different names could become one. cutting a
+    // long name can leave new ones at its end, so they go again once it is short
     let trimmed = replaced.trim().trim_end_matches(['.', ' ']);
-    if trimmed.is_empty() {
+    let name = shorten(trimmed);
+    let name = name.trim_end_matches(['.', ' ']);
+    if name.is_empty() {
         return None;
     }
-    let name = shorten(trimmed);
-    Some(if is_reserved_on_windows(&name) {
+    Some(if is_reserved_on_windows(name) {
         format!("_{name}")
     } else {
-        name
+        name.to_owned()
     })
 }
 
@@ -368,6 +370,20 @@ mod tests {
         let short = sanitize(&long).unwrap();
         assert!(short.len() <= LONGEST);
         assert_eq!(Path::new(&short).extension(), Some("csv".as_ref()));
+    }
+
+    #[test]
+    fn a_shortened_name_never_ends_with_a_dot_or_a_space() {
+        for cut in [" ", ".", ". ", " ."] {
+            let long = format!("{}{cut}{}", "a".repeat(LONGEST - cut.len()), "b".repeat(30));
+            let short = sanitize(&long).unwrap();
+            assert!(short.len() <= LONGEST, "{short}");
+            assert!(!short.ends_with(['.', ' ']), "{short:?}");
+        }
+        assert_eq!(
+            sanitize(&format!("{} {}", ".".repeat(199), "b".repeat(30))),
+            None
+        );
     }
 
     #[test]
