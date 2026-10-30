@@ -117,7 +117,7 @@ impl Walk {
             }
             if self.files.len() + self.unavailable.len() > MOST_FILES {
                 return Err(Error::new(Kind::SourceInvalid, format!("{} holds more than {MOST_FILES} entries, more than fetchloom handles in one dataset", link(&item.id)))
-                    .help("get the subfolders you need by their own links"));
+                    .help("pass the link of each subfolder you need to `fetchloom add`"));
             }
         }
         Ok(())
@@ -147,7 +147,7 @@ async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page
             Kind::AuthRequired,
             format!("{what} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link. fetchloom does not sign in to google")),
+        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google")),
         404 | 410 => Err(Error::new(
             Kind::ReferenceUnresolved,
             format!("{what} does not exist"),

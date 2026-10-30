@@ -212,7 +212,7 @@ impl File {
                     self.name
                 ),
             )
-            .help("add the linked target as its own dataset instead"));
+            .help("pass the linked target to `fetchloom add` as its own dataset instead"));
         }
         let url = self.download(article)?;
         let md5 = self

@@ -69,7 +69,7 @@ impl Repo {
             )
             .detail(format!("expected {requested}, got {}", info.sha))
             .help(
-                "try again later. if it keeps happening, check the repository's commit history",
+                "run the same command again later. if it keeps happening, check the repository's commit history",
             ));
         }
         Ok(info)

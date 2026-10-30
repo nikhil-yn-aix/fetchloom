@@ -109,7 +109,7 @@ impl Dataset {
                 )
                 .detail(format!("kaggle says: {}", page.error_message))
                 .help(format!(
-                    "try again later. if it keeps happening, check the dataset at {}",
+                    "run the same command again later. if it keeps happening, check the dataset at {}",
                     self.page()
                 )));
             }
