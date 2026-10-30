@@ -80,17 +80,10 @@ impl Cache {
         self.write_atomically(&folder.join(digest.hex()), b"")
     }
 
-    /// marks a changed object that `source`, written earlier, is about to replace. a mark newer
-    /// than the bytes replacing it would put the good copy in doubt for good, so an older mark
-    /// stays, and a new one is dated just before `source` was written.
+    /// refreshes the mark so projects checked after an earlier repair see this corruption too.
+    /// dates it just before `source` was written so the replacement stays out of doubt.
     pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
         let written = fs::metadata(source)?.modified()?;
-        if self
-            .changed_at(digest)
-            .is_some_and(|marked| marked < nanos(written))
-        {
-            return Ok(());
-        }
         self.mark_changed(digest)?;
         let before = written
             .checked_sub(Duration::from_nanos(1))
