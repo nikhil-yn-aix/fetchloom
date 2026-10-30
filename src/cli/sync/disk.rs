@@ -10,7 +10,9 @@ use super::place::local;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::Error;
+use crate::name;
 use crate::place::{self, Method};
+use crate::plan::Target;
 use crate::project::Project;
 use crate::project::state::{Look, State, nanos};
 
@@ -21,6 +23,8 @@ pub(crate) struct Survey {
     pub(crate) state: State,
     /// every file under the data folder and how it looks, by its path in the project.
     pub(crate) disk: HashMap<String, Look>,
+    /// the listing's spelling of an alias, within the current data folder, for removals.
+    pub(crate) listed: HashMap<String, String>,
     /// hardlinks a mark put in doubt whose bytes hashing found changed: edited through another
     /// project's link. sync puts them back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
@@ -31,7 +35,7 @@ pub(crate) struct Survey {
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
-    /// them for later runs.
+    /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
 }
 
@@ -45,6 +49,7 @@ impl Survey {
             started,
             state,
             disk: scan(&project.root, data_dir),
+            listed: HashMap::new(),
             elsewhere: HashSet::new(),
             vouched: HashSet::new(),
             edited: HashSet::new(),
@@ -54,20 +59,38 @@ impl Survey {
         survey
     }
 
-    /// hashes each file that looks as recorded while its recorded time is not older than the
+    /// reconciles missing recorded names, then hashes files whose recorded time is not older than the
     /// state's own, `written`. a coarse clock, such as FAT's two seconds, gives a file edited in
     /// the tick it was placed the size and time recorded for it, and both times come from that
     /// clock. git treats its racily clean index entries the same way.
     fn hash_racy(&mut self, root: &Path, written: u64) {
-        let racy: Vec<(&String, &Sha256)> = self
-            .state
-            .files
-            .iter()
-            .filter(|(path, placed)| {
-                placed.look.modified >= written && self.disk.get(*path) == Some(&placed.look)
-            })
-            .map(|(path, placed)| (path, &placed.sha256))
-            .collect();
+        let mut racy = Vec::new();
+        let mut missing = Vec::new();
+        for (path, placed) in &self.state.files {
+            match self.disk.get(path) {
+                None => missing.push(path),
+                Some(seen) if placed.look.modified >= written && *seen == placed.look => {
+                    racy.push((path, &placed.sha256));
+                }
+                Some(_) => {}
+            }
+        }
+        for (path, listed) in aliases(root, &self.disk, &missing) {
+            if self.state.files.contains_key(&listed) {
+                continue;
+            }
+            let Some(look) = self.disk.remove(&listed) else {
+                continue;
+            };
+            self.disk.insert(path.clone(), look);
+            self.listed.insert(path.clone(), listed);
+            if let Some(placed) = self.state.files.get(path)
+                && placed.look.modified >= written
+                && look == placed.look
+            {
+                racy.push((path, &placed.sha256));
+            }
+        }
         if racy.is_empty() {
             return;
         }
@@ -81,6 +104,41 @@ impl Survey {
             } else {
                 self.edited.insert(path.clone());
             }
+        }
+    }
+
+    /// carries a placed record to a wanted alias before decisions or removals can treat the
+    /// two spellings as separate files. edits and doubts still belong to that same file.
+    pub(crate) fn retarget(&mut self, root: &Path, targets: &[Target]) {
+        if self.state.files.is_empty() {
+            return;
+        }
+        let missing: Vec<&String> = targets
+            .iter()
+            .filter(|target| !self.disk.contains_key(&target.path))
+            .map(|target| &target.path)
+            .collect();
+        for (path, previous) in aliases(root, &self.disk, &missing) {
+            if self.state.files.contains_key(path) {
+                continue;
+            }
+            let Some(record) = self.state.files.get(&previous).cloned() else {
+                continue;
+            };
+            let Some(look) = self.disk.remove(&previous) else {
+                continue;
+            };
+            self.disk.insert(path.clone(), look);
+            self.state.files.remove(&previous);
+            self.state.files.insert(path.clone(), record);
+            for paths in [&mut self.edited, &mut self.elsewhere, &mut self.vouched] {
+                if paths.remove(&previous) {
+                    paths.insert(path.clone());
+                }
+            }
+            let listed = self.listed.remove(&previous).unwrap_or(previous);
+            self.listed.insert(path.clone(), listed);
+            self.needs_writing = true;
         }
     }
 
@@ -181,6 +239,60 @@ impl Survey {
             }
         }
         Ok(())
+    }
+}
+
+/// finds only unambiguous aliases that resolve to the listed file. an ordinary scan never
+/// folds names or reads files again when every recorded spelling was listed.
+fn aliases<'a>(
+    root: &Path,
+    disk: &HashMap<String, Look>,
+    missing: &[&'a String],
+) -> Vec<(&'a String, String)> {
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let _span = tracing::debug_span!("aliases", files = missing.len()).entered();
+    let mut folded: HashMap<String, Option<&String>> = HashMap::new();
+    for path in disk.keys() {
+        folded
+            .entry(name::fold(path))
+            .and_modify(|listed| *listed = None)
+            .or_insert(Some(path));
+    }
+    missing
+        .iter()
+        .filter_map(|path| {
+            let listed = folded.get(&name::fold(path))?.as_ref()?;
+            let look = disk.get(*listed)?;
+            same_entry(root, path, listed, *look).then(|| (*path, (*listed).clone()))
+        })
+        .collect()
+}
+
+fn same_entry(root: &Path, path: &str, listed: &str, look: Look) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(root.join(path)) else {
+        return false;
+    };
+    if !metadata.is_file() || Look::of(&metadata) != look {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let Ok(other) = fs::symlink_metadata(root.join(listed)) else {
+            return false;
+        };
+        other.is_file()
+            && Look::of(&other) == look
+            && metadata.dev() == other.dev()
+            && metadata.ino() == other.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = listed;
+        true
     }
 }
 

@@ -10,6 +10,288 @@ use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, t
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
 
+fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
+    let probe = sandbox.folder(".names")?;
+    fs::write(probe.join(original), b"names")?;
+    let aliases = probe.join(other).try_exists()?;
+    fs::remove_dir_all(probe)?;
+    Ok(aliases)
+}
+
+fn copy_iris(sandbox: &Sandbox, server: &Server) -> Result {
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let output = sandbox.run(&["sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+fn clean_alias(sandbox: &Sandbox, server: &Server) -> Result {
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert_eq!(status.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("everything matches data.lock"), "{stderr}");
+    for args in [
+        &["--json", "sync", "--offline"][..],
+        &["--json", "sync", "--offline", "--force"][..],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let placement = &document["result"]["placement"];
+        assert_eq!(placement["unchanged"], 1, "{document}");
+        for count in ["placed", "replaced", "removed"] {
+            assert_eq!(placement[count], 0, "{document}");
+        }
+        assert_eq!(placement["kept"], serde_json::json!([]), "{document}");
+    }
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn case_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    fs::rename(folder.join("iris.csv"), folder.join("Iris.csv"))?;
+
+    clean_alias(&sandbox, &server)?;
+    assert_eq!(fs::read(folder.join("Iris.csv"))?, V1);
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    assert!(state["files"]["data/iris/iris.csv"].is_object());
+    Ok(())
+}
+
+#[test]
+fn force_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    let renamed = folder.join("Iris.csv");
+    fs::rename(folder.join("iris.csv"), &renamed)?;
+    fs::write(&renamed, V2)?;
+
+    let output = sandbox.run(&["sync", "--offline", "--force"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(&renamed)?, V1);
+    clean_alias(&sandbox, &server)
+}
+
+#[test]
+fn unicode_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    let original = "caf\u{e9}.csv";
+    let other = "cafe\u{301}.csv";
+    if !names_alias(&sandbox, original, other)? {
+        return Ok(());
+    }
+    let server = Server::start("/files/caf%C3%A9.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    fs::rename(folder.join(original), folder.join(other))?;
+
+    clean_alias(&sandbox, &server)?;
+    let lock = sandbox.work().join("data.lock");
+    fs::write(&lock, fs::read_to_string(&lock)?.replace(original, other))?;
+    clean_alias(&sandbox, &server)
+}
+
+#[test]
+fn data_dir_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !names_alias(&sandbox, "data", "Data")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    fs::rename(sandbox.work().join("data"), sandbox.work().join("Data"))?;
+    clean_alias(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+    )?;
+
+    clean_alias(&sandbox, &server)?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    assert!(state["files"]["Data/iris/iris.csv"].is_object());
+    assert!(state["files"]["data/iris/iris.csv"].is_null());
+    Ok(())
+}
+
+#[test]
+fn locked_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let lock = sandbox.work().join("data.lock");
+    fs::write(
+        &lock,
+        fs::read_to_string(&lock)?.replace("path = \"iris.csv\"", "path = \"Iris.csv\""),
+    )?;
+
+    clean_alias(&sandbox, &server)?;
+    let state_path = sandbox.work().join(".fetchloom").join("state");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    assert!(state["files"]["data/iris/Iris.csv"].is_object());
+    assert!(state["files"]["data/iris/iris.csv"].is_null());
+    Ok(())
+}
+
+#[test]
+fn alias_removal() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    fs::rename(folder.join("iris.csv"), folder.join("Iris.csv"))?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+    )?;
+
+    let output = sandbox.run(&["remove", "iris"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(!folder.join("Iris.csv").try_exists()?);
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn distinct_names() -> Result {
+    for (original, other, url) in [
+        ("iris.csv", "Iris.csv", "/files/iris.csv"),
+        ("caf\u{e9}.csv", "cafe\u{301}.csv", "/files/caf%C3%A9.csv"),
+    ] {
+        let sandbox = Sandbox::new()?;
+        if names_alias(&sandbox, original, other)? {
+            continue;
+        }
+        let server = Server::start(url, vec![file(V1, "\"v1\"")])?;
+        copy_iris(&sandbox, &server)?;
+        let folder = sandbox.work().join("data").join("iris");
+        fs::rename(folder.join(original), folder.join(other))?;
+
+        let status = sandbox.run(&["--json", "status"])?;
+        assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+        let document: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+        assert_eq!(
+            document["result"]["missing"],
+            serde_json::json!([format!("data/iris/{original}")])
+        );
+        assert_eq!(
+            document["result"]["extra"],
+            serde_json::json!([format!("data/iris/{other}")])
+        );
+        let output = sandbox.run(&["sync", "--offline", "--force"])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        assert_eq!(fs::read(folder.join(original))?, V1);
+        assert_eq!(fs::read(folder.join(other))?, V1);
+        let status: serde_json::Value =
+            serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
+        assert_eq!(status["result"]["missing"], serde_json::json!([]));
+        assert_eq!(
+            status["result"]["extra"],
+            serde_json::json!([format!("data/iris/{other}")])
+        );
+        assert_eq!(server.requests().len(), 1);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn distinct_inodes_do_not_alias() -> Result {
+    let sandbox = Sandbox::new()?;
+    if names_alias(&sandbox, "data", "Data")? {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let original = sandbox.work().join("data").join("iris").join("iris.csv");
+    let folder = sandbox.work().join("Data").join("iris");
+    fs::create_dir_all(&folder)?;
+    let other = folder.join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    fs::write(&other, edited)?;
+    let modified = fs::metadata(&original)?.modified()?;
+    set_time(&other, modified)?;
+    assert_eq!(fs::metadata(&other)?.modified()?, modified);
+    set_time(
+        &sandbox.work().join(".fetchloom").join("state"),
+        modified + Duration::from_secs(10),
+    )?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+    )?;
+
+    let status = sandbox.run(&["--json", "status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    let document: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        document["result"]["untracked"],
+        serde_json::json!(["Data/iris/iris.csv"])
+    );
+    assert_eq!(fs::read(original)?, V1);
+    Ok(())
+}
+
+#[test]
+fn ambiguous_aliases() -> Result {
+    let sandbox = Sandbox::new()?;
+    if names_alias(&sandbox, "data", "Data")? || !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let original = sandbox.work().join("data").join("iris").join("iris.csv");
+    let folder = sandbox.work().join("Data").join("iris");
+    fs::create_dir_all(&folder)?;
+    fs::hard_link(&original, folder.join("iris.csv"))?;
+    fs::write(folder.join("Iris.csv"), V2)?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("data_dir = \"Data\"\n{}", fs::read_to_string(&manifest)?),
+    )?;
+
+    let status = sandbox.run(&["--json", "status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    let document: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        document["result"]["untracked"],
+        serde_json::json!(["Data/iris/iris.csv"])
+    );
+    assert_eq!(
+        document["result"]["extra"],
+        serde_json::json!(["Data/iris/Iris.csv"])
+    );
+    Ok(())
+}
+
 /// waits until `server` has seen `count` requests.
 fn requested(server: &Server, count: usize) -> Result {
     let started = Instant::now();
@@ -281,6 +563,7 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     );
     let events = fs::read_to_string(&trace)?;
     assert!(!events.contains("\"name\":\"hash_racy\""), "{events}");
+    assert!(!events.contains("\"name\":\"aliases\""), "{events}");
     Ok(())
 }
 
