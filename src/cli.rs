@@ -239,7 +239,6 @@ pub(crate) fn run() -> ExitCode {
     dispatch(&context, command, started)
 }
 
-/// runs a command and turns how it ended into an exit code.
 fn dispatch(context: &Context, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     match command {

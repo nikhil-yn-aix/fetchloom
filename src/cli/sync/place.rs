@@ -26,7 +26,6 @@ use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, Synced};
 use crate::work::Work;
 
-/// what placing did.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Placement {
     pub(crate) placed: u64,
@@ -525,7 +524,6 @@ pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
     look.size == target.size && Sha256::of_file(path).is_ok_and(|digest| digest == target.sha256)
 }
 
-/// whether the file at `path` may be written to now.
 pub(crate) fn now_writable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }

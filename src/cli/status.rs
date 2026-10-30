@@ -146,7 +146,6 @@ impl Status {
         ]
     }
 
-    /// whether `sync` would change something.
     fn needs_sync(&self) -> bool {
         !self.unlocked.is_empty()
             || !self.missing.is_empty()

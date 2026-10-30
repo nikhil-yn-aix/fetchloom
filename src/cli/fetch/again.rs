@@ -23,7 +23,6 @@ pub(in crate::cli) struct Again {
     pub(in crate::cli) alone: bool,
 }
 
-/// a listing asked for again, or why asking failed.
 type Asked = Result<Arc<Listing>, String>;
 
 /// the listings asked for again in one run, so a dataset is resolved once however many of its
