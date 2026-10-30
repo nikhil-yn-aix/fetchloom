@@ -43,6 +43,10 @@ a 1 GiB download from a server on the same machine still takes about twice curl'
 
 hashing in memory on this CPU, best of three over 1 GiB: sha2's SHA-256 1.70 to 1.83 GB/s, ring's 1.63 to 1.69, MD5 0.68, and SHA-256 with MD5 in one pass 0.48. sha2 stays. a download computes MD5 only when no SHA-256 is pinned.
 
+### many small downloads
+
+1,000 URLs of 100 KiB each, one dataset per URL, `sync` into an empty cache from the lab server on the same machine (lan profile, linux): each file cost three flushes, its object, its resume checkpoint and its URL record, about 3.3 ms each on WSL's ext4 with four requests per host. a checkpoint or URL record lost in a power cut costs only a resume or a conditional request, and a torn one reads as absent, so those two and the MD5 index entries are now renamed into place without a flush. objects, change marks, unpack records and project registrations keep theirs. ten interleaved pairs at 0533392: 4.46 s (4.27 to 6.31) before, 2.18 s (2.09 to 3.87) after, 51% faster. results are in `bench/results/ab/noflush-index-m1k-linux.csv`.
+
 ### small files on windows
 
 defender's performance recorder, read with `Get-MpPerformanceReport`, traced unpacking `files-10k.tar.zst`: 10,000 files of 4 KiB random bytes. every staged member was scanned on close. it recorded 10,000 scans with a median of 21 ms and 228 s of scan time across eight writers; unpacking took 34 to 39 s. the scan times overlap, so their sum is not wall time.
@@ -157,6 +161,21 @@ on home, one stream already filled the link. on lan, it moved about 180 MiB/s an
 | HTTP/1.1 | 46.03 s (45.31 to 48.19) |
 
 the difference is within noise, so HTTP/2 stays. an earlier single HTTP/2 run took 92 s with eight retries; the paired runs did not reproduce it.
+
+## against other tools
+
+the method is [benchmarks](benchmarks.md). on 2026-10-31 a reduced run used 3 blocks instead of 5, on linux only, with release build 240f17a, which predates the flush change above. the windows lab did not fit: the harness alone needs about 12 minutes after each run that leaves 10,000 files on windows, as [the plans](../bench/plans/README.md) explain. the far and poor profiles and the live subset were not run in this pass. raw rows and summaries are in `bench/results/20261030-201504-lab-lan-linux`, `20261030-202035-lab-lan-linux-urls` and `20261030-202121-lab-home-linux-urls`. medians, wall time:
+
+| workload, profile | fetchloom | others |
+|---|---|---|
+| 1 GiB file, lan | 4.00 s, second project 0.01 s | aria2c 1.90 s, curl with sha256sum 3.36 s, datalad 5.51 s, dvc 6.13 s (second 2.56 s), pooch 8.83 s (second 0.91 s) |
+| 100 MiB file, lan | 0.35 s | aria2c 0.23 s, curl with sha256sum 0.41 s, pooch 1.13 s, datalad 1.71 s, dvc 2.10 s |
+| zip of 10,000 files, lan | 0.87 s, second project 0.20 s | curl with bsdtar 0.66 s, pooch 2.21 s |
+| tar.zst of 10,000 files, lan | 0.76 s | curl with bsdtar 0.59 s |
+| 1,000 URLs of 100 KiB, lan | 3.53 s; 2.18 s after the flush change | curl parallel 0.30 s, aria2c 8.44 s |
+| 1,000 URLs of 100 KiB, home | 9.46 s | aria2c 8.94 s, curl parallel 9.02 s |
+
+every run of every tool fetched the expected bytes. fetchloom also hashes, pins and flushes what it fetches, and links a second project from its cache; curl, aria2c and bsdtar do none of that. aria2c beats it on one large local file, and curl's parallel mode on many small local files, where flushing each object is most of fetchloom's time. on the home profile all three are within 6% of each other.
 
 ## regression checks
 
