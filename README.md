@@ -4,19 +4,17 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64.
 
 `data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry. `fetchloom sync` fills `data/` from that receipt by reflink, hardlink or copy.
 
-```sh
-fetchloom add zenodo:3608990
-```
-
-stderr excerpt when the filesystem supports links:
-
 ```text
+$ fetchloom add zenodo:3608990
+   Resolved zenodo:3608990 · DatasetIris · 1 file · 4.1 KiB · cc-by-4.0
+ Downloaded 1 file · 4.1 KiB in 251 ms
      Locked iris · 1 file in data.lock
      Placed data/iris · 1 file linked from the cache
       Added iris, its files are in data/iris
+  hint: scripts can find it with `fetchloom path iris`
 ```
 
-commit `data.toml` and `data.lock`, not `data/`. another clone can restore the pinned inputs with `fetchloom sync`.
+commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
 
 ## install
 

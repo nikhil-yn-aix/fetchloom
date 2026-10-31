@@ -25,7 +25,7 @@ fetchloom avoids repeated requests and byte copies while preserving checked iden
 
 use release builds and keep cache state, filesystem, machine load, run counts and network conditions with each result. interleave old and new builds when load or a live service can vary. keep a performance change only when it gains at least 10% on one workload or network profile without a regression elsewhere.
 
-elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. the repository has no benchmark suite; reproduce the named workload and record the conditions before treating an old timing as a baseline.
+elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. the repository has no benchmark suite yet; [benchmark design](benchmark-design.md) describes the planned one. reproduce the named workload and record the conditions before treating an old timing as a baseline.
 
 release uses fat LTO, one codegen unit, abort-on-panic and stripped symbols. the earlier version measured fat LTO as 7% smaller than thin at the same speed. the system allocator remains; an earlier mimalloc experiment was within noise.
 
@@ -36,6 +36,7 @@ release uses fat LTO, one codegen unit, abort-on-panic and stripped symbols. the
 | [budgets](budgets.md) | whole-command targets and the recorded baseline |
 | [measurements](measurements.md) | commits, conditions, counts, medians, ranges and rejected experiments |
 | [windows defender](windows-defender.md) | why random small-file writes can be expensive on windows |
+| [benchmark design](benchmark-design.md) | how fetchloom will be compared with other tools; designed, not built |
 | [profiling](../engineering/profiling.md) | timelines, CPU samples and allocation investigations |
 | [network](../architecture/network.md) | queues, hashing and adaptive splitting |
 | [placing](../architecture/placing.md) | copy flushing and per-file path construction |
