@@ -34,11 +34,11 @@ the palette gives each color one meaning:
 | subject | bold |
 | supporting facts | dim |
 
-step and completion verbs are bold and right-aligned in 11 columns without status glyphs. the subject before ` ? ` is bold and its following facts are dim; a single-word subject is also bold. completed verbs include `Added`, `Fetched`, `Synced` and `Ok`. numbered search choices use cyan.
+step and completion verbs are bold and right-aligned in 11 columns without status glyphs. the subject before ` · ` is bold and its following facts are dim; a single-word subject is also bold. completed verbs include `Added`, `Fetched`, `Synced` and `Ok`. numbered search choices use cyan.
 
 errors use bold red `error:`, indented dim details and optional bold cyan `help:`; warnings use bold yellow `warning:`. hints are dim, with backticked commands in bold cyan. backticks remain when color is off. welcome and help headings are bold, with commands and options cyan.
 
-interactive progress shows filename, bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. colored bars use `?` with a dim remainder; uncolored terminal bars use `#` and `-`. waits show elapsed time without a spinner. `MultiProgress` coordinates lines, bars and prompts so they do not overwrite each other.
+interactive progress shows filename, bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. colored bars use `━` with a dim remainder; uncolored terminal bars use `#` and `-`. waits show elapsed time without a spinner. `MultiProgress` coordinates lines, bars and prompts so they do not overwrite each other.
 
 non-terminal stderr has no bars. long batches report progress after two seconds, then at ten-second intervals from the start. a watched successful command can give a `next:` suggestion; quiet, JSON and redirected stdout omit it.
 
