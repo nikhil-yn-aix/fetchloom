@@ -484,7 +484,10 @@ fn finish<T: Serialize>(
     if let Err(error) = &outcome {
         context.output.error(error);
     }
-    context.output.summary(counts, elapsed);
+    // a run that did no work, such as `--version`, has no counters worth a line
+    if command.is_some() || counts != crate::work::Counts::default() {
+        context.output.summary(counts, elapsed);
+    }
     match outcome {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => ExitCode::from(error.kind.exit_code()),
