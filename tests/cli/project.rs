@@ -860,3 +860,54 @@ fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn remove_checks_cache_and_plan_before_changing_metadata() -> Result {
+    for blocked_cache in [true, false] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        added(&sandbox, &server)?;
+        let manifest = sandbox.work().join("data.toml");
+        let lock = sandbox.work().join("data.lock");
+        let blocker = sandbox.work().join("blocked");
+        fs::write(&blocker, b"not a directory")?;
+        if !blocked_cache {
+            let text = fs::read_to_string(&manifest)?;
+            fs::write(&manifest, format!("[project]\ndata_dir = \"blocked\"\n\n{text}"))?;
+        }
+        let before = (fs::read(&manifest)?, fs::read(&lock)?);
+        let mut command = sandbox.command(&["--json", "remove", "iris"]);
+        if blocked_cache {
+            command.env("FETCHLOOM_CACHE", &blocker);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        assert_eq!(fs::read(&manifest)?, before.0);
+        assert_eq!(fs::read(&lock)?, before.1);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn remove_explains_how_to_finish_after_placement_fails() -> Result {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let path = sandbox.work().join("data").join("iris").join("iris.csv");
+    let held = fs::OpenOptions::new().read(true).share_mode(3).open(&path)?;
+    let output = sandbox.run(&["--json", "remove", "iris"])?;
+    assert_eq!(output.status.code(), Some(50));
+    let error = json(&output)?;
+    let details = error["errors"][0]["details"].to_string();
+    assert!(details.contains("fetchloom sync"), "{details}");
+    assert!(details.contains("finishes the removal"), "{details}");
+    assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris"));
+    drop(held);
+    let synced = sandbox.run(&["sync"])?;
+    assert!(synced.status.success(), "{}", text(&synced.stderr)?);
+    assert!(!path.exists());
+    Ok(())
+}
