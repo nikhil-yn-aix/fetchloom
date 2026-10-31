@@ -11,7 +11,7 @@ these modules contain small value types and policies used by more than one compo
 | file | what it holds | types and functions |
 |---|---|---|
 | [digest.rs](../../../src/digest.rs) | typed digests and incremental hashing | `Sha256`, `Md5`, `Hasher`, `from_hex`, `of_reader`, `sha256` |
-| [name.rs](../../../src/name.rs) | suggested names, path checks and alias folding | `sanitize`, `dataset_name`, `escapes`, `metadata`, `unstorable`, `fold`, `closest` |
+| [name.rs](../../../src/name.rs) | suggested names, path checks and alias folding | `sanitize`, `dataset_name`, `title_name`, `reference_name`, `escapes`, `metadata`, `unstorable`, `fold`, `closest` |
 | [glob.rs](../../../src/glob.rs) | checked whole-path selection patterns | `Glob`, `new`, `matches`, `is_top_level_only` |
 | [units.rs](../../../src/units.rs) | human sizes, rates, durations and clipping | `size`, `rate`, `speed`, `duration`, `count`, `clip` |
 | [volume.rs](../../../src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
@@ -51,7 +51,7 @@ linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLO
 
 `Volume` learns hardlink support only when an operation needs the answer. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
 
-`Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. `Stop` combines an atomic flag with async notification so workers can poll and waiting tasks can wake.
+`Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. `Stop` shares a `tokio::sync::watch` channel carrying a boolean. `ask` uses `send_replace(true)`, `is_asked` reads the current value synchronously, and `asked` subscribes and waits asynchronously for it to become true.
 
 ## invariants and traps
 
