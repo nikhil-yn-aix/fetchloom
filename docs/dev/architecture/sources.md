@@ -1,4 +1,4 @@
-﻿# sources
+# sources
 
 `source` turns a typed reference or pasted link into a listing whose files can be checked and pinned.
 

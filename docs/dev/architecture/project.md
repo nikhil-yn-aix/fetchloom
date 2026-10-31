@@ -1,4 +1,4 @@
-﻿# project
+# project
 
 `project` owns discovery, project records and the lock that serializes changes to one project's files.
 
