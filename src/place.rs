@@ -1006,6 +1006,53 @@ mod tests {
         assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_never_reads_an_object_swapped_for_a_symlink() {
+        let (folder, object) = cache(true);
+        let outside = folder.path().join("outside");
+        fs::write(&outside, CONTENTS).unwrap();
+        fs::rename(&object, folder.path().join("original")).unwrap();
+        std::os::unix::fs::symlink(&outside, &object).unwrap();
+        let destination = folder.path().join("placed.csv");
+        let capped = Threads::read(&|_| Some("1".into())).unwrap();
+
+        for threads in [Threads::default(), capped] {
+            for writable in [false, true] {
+                let error = copy(&object, &destination, writable, threads).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                assert!(error.to_string().contains(&object.display().to_string()));
+                assert!(!destination.exists());
+                assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 3);
+            }
+        }
+        assert_eq!(fs::read_to_string(&outside).unwrap(), CONTENTS);
+        assert!(!is_read_only(&outside));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn placement_refuses_an_object_swapped_for_a_symlink() {
+        for first in [Method::Reflink, Method::Hardlink, Method::Copy] {
+            let (folder, object) = cache(true);
+            let outside = folder.path().join("outside");
+            fs::write(&outside, CONTENTS).unwrap();
+            fs::rename(&object, folder.path().join("original")).unwrap();
+            std::os::unix::fs::symlink(&outside, &object).unwrap();
+            let root = folder.path().join("data");
+            let destination = root.join("placed.csv");
+            let mut placer = Placer::starting_at(root, first, None);
+
+            let error = placer.place(&object, &destination, false).unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains(&object.display().to_string()));
+            assert!(fs::symlink_metadata(&destination).is_err());
+            assert_eq!(fs::read_to_string(&outside).unwrap(), CONTENTS);
+            assert!(!is_read_only(&outside));
+        }
+    }
+
     #[test]
     fn a_failed_copy_leaves_no_staging_file() {
         let folder = TempDir::new().unwrap();
