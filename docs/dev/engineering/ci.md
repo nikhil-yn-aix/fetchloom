@@ -1,4 +1,4 @@
-﻿# CI
+# CI
 
 CI checks the same crate across processor architectures and filesystems that expose different storage behavior.
 

@@ -1,4 +1,4 @@
-﻿# releasing
+# releasing
 
 releases package one executable for linux and windows on x86_64 and arm64, then attach checksums and provenance.
 
