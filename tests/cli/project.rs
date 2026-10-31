@@ -834,6 +834,39 @@ fn a_folder_too_long_to_work_in_is_named_with_its_length_before_anything_is_writ
         stderr.contains(&named) && stderr.contains("300 characters"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(
+            "move the project to a folder with a shorter path, then run `fetchloom sync` there"
+        ),
+        "{stderr}"
+    );
+    for (arguments, expected) in [
+        (
+            vec![format!("-C{named}"), "sync".to_owned()],
+            "fetchloom sync",
+        ),
+        (
+            vec![format!("-C={named}"), "sync".to_owned()],
+            "fetchloom sync",
+        ),
+        (
+            vec![
+                format!("-vC{named}"),
+                "sync".to_owned(),
+                "--offline".to_owned(),
+            ],
+            "fetchloom -v sync --offline",
+        ),
+    ] {
+        let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+        let output = sandbox.run(&arguments)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.contains(&format!("then run `{expected}` there")),
+            "{stderr}"
+        );
+    }
     assert!(!deep.join(".fetchloom").exists());
     assert!(!deep.join("data").exists());
     Ok(())

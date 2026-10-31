@@ -188,7 +188,15 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
             path.display()
         ),
     )
-    .help("move the project to a folder with a shorter path, then run the same command there")
+    .help(match moved_command(std::env::args_os().skip(1)) {
+        Some(command) => {
+            format!("move the project to a folder with a shorter path, then run `{command}` there")
+        }
+        None => {
+            "move the project to a folder with a shorter path, then run fetchloom from that folder"
+                .to_owned()
+        }
+    })
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -495,6 +503,39 @@ fn shell_word(word: &str) -> Cow<'_, str> {
     }
 }
 
+/// retry from the moved project, without the old working directory or its attached forms.
+fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
+    let command = <args::Args as clap::CommandFactory>::command();
+    let mut kept = Vec::new();
+    let mut positional = false;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            positional = true;
+        }
+        if !positional
+            && let Some(word) = arg.to_str()
+            && word.starts_with('-')
+            && !word.starts_with("--")
+            && let Some(at) = word.find('C')
+            && word[1..at].chars().all(|short| {
+                command
+                    .get_arguments()
+                    .any(|arg| arg.get_short() == Some(short) && !arg.get_action().takes_values())
+            })
+        {
+            if at > 1 {
+                kept.push(std::ffi::OsString::from(&word[..at]));
+            }
+            if at + 1 == word.len() {
+                args.next();
+            }
+        } else {
+            kept.push(arg);
+        }
+    }
+    command_line(kept.into_iter())
+}
+
 /// the command line as typed, ready to copy, for help that says to run it again. none when an
 /// argument holds a secret no message may repeat, such as a token in a link, or is not unicode.
 fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
@@ -515,6 +556,39 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moved_commands_keep_other_option_values_and_literal_arguments() {
+        let line = |args: &[&str]| moved_command(args.iter().map(std::ffi::OsString::from));
+        assert_eq!(
+            line(&[
+                "-C",
+                "old",
+                "get",
+                "https://example.org/data.csv",
+                "-oCaseStudy"
+            ])
+            .as_deref(),
+            Some("fetchloom get https://example.org/data.csv -oCaseStudy")
+        );
+        assert_eq!(
+            line(&["-qvCold", "sync", "--offline"]).as_deref(),
+            Some("fetchloom -qv sync --offline")
+        );
+        assert_eq!(
+            line(&["-C", "old", "get", "--", "-CaseStudy"]).as_deref(),
+            Some("fetchloom get -- -CaseStudy")
+        );
+        assert_eq!(
+            line(&[
+                "-C",
+                "old",
+                "get",
+                "https://example.org/data.csv?token=secret"
+            ]),
+            None
+        );
+    }
 
     #[test]
     fn the_command_line_is_named_as_typed_unless_it_holds_a_secret() {
