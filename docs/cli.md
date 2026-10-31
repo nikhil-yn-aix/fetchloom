@@ -166,7 +166,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
   help: add --yes to approve this download
 ```
 
-at a download question, ctrl-c stops with exit 130. during other asynchronous work, the first ctrl-c requests a stop while preserving resumable bytes; a second exits immediately with code 130.
+at a download question, ctrl-c stops with exit 130. during other work, including status and cache commands, the first ctrl-c requests a stop and exits 130 while preserving resumable bytes. cache scans check for cancellation between entries and verification checks between hash reads. a second ctrl-c exits immediately with code 130.
 
 ## cache
 
@@ -178,11 +178,13 @@ fetchloom cache verify
 
 `cache` prints its root on stdout and reports sizes and registered projects on stderr. byte totals cover cached payloads, excluding indexes and partial downloads. [cache locations](formats.md#the-cache) gives the defaults; `FETCHLOOM_CACHE` overrides them.
 
-`cache gc` keeps files needed by registered project locks, including unpacked members. unneeded objects and unpack records become eligible after 24 hours by modification time, not last use. it also cleans abandoned partial and temporary files. a successful project sync registers the project; `get` and standalone `lock` do not.
+`cache gc` keeps files needed by registered project locks, including unpacked members. unneeded objects and unpack records become eligible after 24 hours by modification time, not last use. it also cleans abandoned partial and temporary files. a successful project sync registers the project; `get` and standalone `lock` do not. if registration fails, sync still succeeds but warns that gc may not keep the project's files. check the cache folder's permissions and run the command again. the warning also appears in JSON `warnings`.
 
-a missing manifest removes a project's registration. an unreadable lock stops inspection or gc. removing a cached object leaves placed files intact, so bytes removed from the cache are not necessarily disk space freed.
+a missing manifest removes a project's registration. an unreadable registration, manifest or lock stops inspection or gc with an error naming its path. inaccessible paths do not count as missing. removing a cached object leaves placed files intact, so bytes removed from the cache are not necessarily disk space freed.
 
-`cache verify` rehashes cached objects. changed bytes are marked for replacement on a later download and cause exit 30. if no bytes changed but some objects could not be read, it exits 50. unreadable objects stay unmarked in the cache with warnings. close programs using them or check permissions, then verify again. failures to write change marks are also reported.
+`cache gc` warns about paths it could not remove and exits 50 (`local.io`), even if it removed other files. JSON keeps the successful counts and the failed paths in `result.not_removed`, alongside the error. close programs using those paths or check permissions, then run gc again.
+
+`cache verify` rehashes cached objects. changed bytes are marked for replacement on a later download and cause exit 30. if no bytes changed but some objects, metadata or directories could not be read, it exits 50. unreadable objects stay unmarked in the cache with warnings. close programs using them or check permissions, then verify again. failures to write change marks are also reported. JSON retains counts, changed hashes and unreadable paths in `result` alongside the error and failing exit code.
 
 verification does not check independent copies in `data/`. after repairing cache damage, sync each project that needs those files.
 

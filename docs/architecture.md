@@ -117,7 +117,7 @@ partials use OS file locks. a competing process waits for the owner; a filesyste
 
 cache lookup checks file type and known size. writable objects and objects no newer than their change marks are hashed too, so retained damaged bytes are cache misses. `cache verify` rehashes every object and marks damage without deleting it.
 
-successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable lock stops gc. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
+successful project sync registers its root. gc follows registered locks to the objects they need, including archive members. an unreadable registration, manifest or lock stops gc; only a missing manifest makes a project stale. unneeded objects become eligible after 24 hours by modification time. deleting a cache name does not remove a placed hardlink, reflink or copy.
 
 FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file there. when a removal is refused, the cache learns whether its volume can hardlink by trying once in `tmp/`. on a volume that cannot, the file has no other name, so the cache clears its read-only flag and removes it, and sets the flag again if the removal still fails. on a volume that can hardlink the flag stays: it belongs to every name of the file, including a hardlink a project placed.
 

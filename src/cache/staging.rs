@@ -11,6 +11,7 @@ use super::partial::open_unfollowed;
 use super::upkeep::GRACE;
 use super::{Cache, NewObject};
 use crate::place::{FolderUse, real_folder};
+use crate::stop::Stop;
 
 pub(crate) struct Staging {
     cache: Cache,
@@ -22,7 +23,7 @@ impl Cache {
     /// starts an archive's staging folder after reclaiming abandoned ones. its lock gets its name
     /// only once held, so a sweep never takes the lock of a writer that is still opening it.
     pub(crate) fn staging(&self) -> io::Result<Arc<Staging>> {
-        self.sweep_staging(SystemTime::now());
+        self.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
         let mut staging = loop {
             let folder = self
                 .root
@@ -58,13 +59,21 @@ impl Cache {
 
     /// reclaims unlocked staging at once. a folder without a lock, one a writer is still opening
     /// or one on a filesystem without locks, waits for the age rule. a held lock wins over age.
-    pub(super) fn sweep_staging(&self, now: SystemTime) -> u64 {
+    pub(super) fn sweep_staging(
+        &self,
+        now: SystemTime,
+        stop: &Stop,
+        not_removed: &mut Vec<PathBuf>,
+    ) -> u64 {
         let mut removed = 0;
-        for entry in fs::read_dir(self.root.join("tmp"))
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
+        let Ok(entries) = super::upkeep::scan_entries(&self.root.join("tmp"), not_removed, stop)
+        else {
+            return 0;
+        };
+        for entry in entries {
+            if stop.is_asked() {
+                break;
+            }
             if !entry
                 .file_type()
                 .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
@@ -86,25 +95,38 @@ impl Cache {
                 },
                 Err(_) => None,
             };
-            if lock.is_some() || old_staging(&folder, now) {
-                removed += self.clear_staging(&folder, lock);
+            if lock.is_some() || old_staging(&folder, now, stop) {
+                removed += self.clear_staging(&folder, lock, stop, not_removed);
             }
         }
         removed
     }
 
-    fn clear_staging(&self, folder: &Path, lock: Option<File>) -> u64 {
+    fn clear_staging(
+        &self,
+        folder: &Path,
+        lock: Option<File>,
+        stop: &Stop,
+        not_removed: &mut Vec<PathBuf>,
+    ) -> u64 {
         // someone able to rename inside tmp could swap a link in for the folder while it was used
         if real_folder(folder, FolderUse::Cache).is_err() {
+            not_removed.push(folder.to_path_buf());
             return 0;
         }
         let Ok(entries) = fs::read_dir(folder) else {
+            not_removed.push(folder.to_path_buf());
             return 0;
         };
         let mut removed = 0;
         let mut cleared = true;
         for entry in entries {
+            if stop.is_asked() {
+                cleared = false;
+                break;
+            }
             let Ok(entry) = entry else {
+                not_removed.push(folder.to_path_buf());
                 cleared = false;
                 continue;
             };
@@ -114,33 +136,39 @@ impl Cache {
             match self.volume.remove(&entry.path()) {
                 Ok(()) => removed += 1,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(_) => cleared = false,
+                Err(_) => {
+                    not_removed.push(entry.path());
+                    cleared = false;
+                }
             }
         }
         // no writer reuses a staging folder. closing its lock before deleting it lets windows
         // remove the folder too, without an open child waiting for deletion.
         drop(lock);
         if cleared {
-            let _ = self.volume.remove(&folder.join("lock"));
-            let _ = self.volume.remove(&folder.join("unlocked"));
-            let _ = fs::remove_dir(folder);
+            for name in ["lock", "unlocked"] {
+                let path = folder.join(name);
+                super::upkeep::removed(&path, self.volume.remove(&path), not_removed);
+            }
+            super::upkeep::removed(folder, fs::remove_dir(folder), not_removed);
         }
         removed
     }
 }
 
 /// a large member can keep growing without changing its folder's timestamp.
-fn old_staging(folder: &Path, now: SystemTime) -> bool {
+fn old_staging(folder: &Path, now: SystemTime, stop: &Stop) -> bool {
     let old = |modified| now.duration_since(modified).is_ok_and(|age| age > GRACE);
     fs::metadata(folder)
         .and_then(|metadata| metadata.modified())
         .is_ok_and(old)
         && fs::read_dir(folder).is_ok_and(|mut entries| {
             entries.all(|entry| {
-                entry
-                    .and_then(|entry| entry.metadata())
-                    .and_then(|metadata| metadata.modified())
-                    .is_ok_and(old)
+                !stop.is_asked()
+                    && entry
+                        .and_then(|entry| entry.metadata())
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(old)
             })
         })
 }
@@ -154,7 +182,12 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
-        self.cache.clear_staging(&self.folder, self.lock.take());
+        self.cache.clear_staging(
+            &self.folder,
+            self.lock.take(),
+            &Stop::default(),
+            &mut Vec::new(),
+        );
     }
 }
 
@@ -172,7 +205,15 @@ mod tests {
         fs::write(victim.join("keep"), b"mine").unwrap();
         let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
         std::os::unix::fs::symlink(&victim, &folder).unwrap();
-        assert_eq!(cache.clear_staging(&folder, None), 0);
+        assert_eq!(
+            cache.clear_staging(
+                &folder,
+                None,
+                &crate::stop::Stop::default(),
+                &mut Vec::new()
+            ),
+            0
+        );
         assert_eq!(fs::read(victim.join("keep")).unwrap(), b"mine");
     }
 }

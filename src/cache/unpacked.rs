@@ -75,6 +75,7 @@ impl Cache {
     }
 
     /// every archive with a record.
+    #[cfg(test)]
     pub(crate) fn unpacked_archives(&self) -> Vec<Sha256> {
         fs::read_dir(self.root.join("unpacked"))
             .into_iter()

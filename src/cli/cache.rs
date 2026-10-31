@@ -1,6 +1,8 @@
 //! `fetchloom cache`: where the cache is and what it holds. `cache gc` frees what no project needs,
 //! and `cache verify` hashes every object again.
 
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -11,6 +13,7 @@ use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
+use crate::stop::Stop;
 use crate::units;
 
 /// what `fetchloom cache` reports, as `--json` prints it.
@@ -26,8 +29,15 @@ pub(super) struct Info {
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed(&cache, None)?;
-    let objects = cache.objects();
+    let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
+    let scan = cache.scan_objects(&context.stop)?;
+    if let Some(path) = scan.unreadable.first() {
+        return Err(
+            Error::new(Kind::LocalIo, format!("cannot inspect {}", path.display()))
+                .help("check the cache folder's permissions, then run the command again"),
+        );
+    }
+    let objects = scan.objects;
     let bytes: u64 = objects.iter().map(|object| object.size).sum();
     let kept: u64 = objects
         .iter()
@@ -73,10 +83,13 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
 
 pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed(&cache, None)?;
-    let freed = cache.sweep(&needed, SystemTime::now());
+    let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
+    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), &context.stop)?;
     let output = &context.output;
-    if freed.objects == 0 && freed.leftovers == 0 {
+    for path in &freed.not_removed {
+        output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
+    }
+    if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
         output.done("no cached data files or download leftovers were removed");
         return Ok(freed);
     }
@@ -96,6 +109,17 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
             &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
     }
+    if !freed.not_removed.is_empty() {
+        let result = serde_json::to_value(&freed).map_err(|err| {
+            Error::new(
+                Kind::LocalIo,
+                format!("cannot format the cache result: {err}"),
+            )
+        })?;
+        return Err(Error::new(Kind::LocalIo, format!("{} could not be removed from the cache", units::count(freed.not_removed.len() as u64, "item", "items")))
+            .help("close programs using these paths or check their permissions, then run the command again")
+            .with_result(result));
+    }
     output.done(&format!(
         "kept cached files needed by {}",
         units::count(projects.len() as u64, "project", "projects")
@@ -105,7 +129,12 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
-    let total: u64 = cache.objects().iter().map(|object| object.size).sum();
+    let total: u64 = cache
+        .scan_objects(&context.stop)?
+        .objects
+        .iter()
+        .map(|object| object.size)
+        .sum();
     let what = "cached data files";
     let bar = context.output.bar(format!("checking {what}"));
     bar.start(Some(total), 0);
@@ -113,33 +142,50 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         .output
         .ticker("Checking", what.to_owned(), [Some(total)]);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let checked = cache.verify_all(context.threads.limit(threads), &|bytes| {
-        bar.advance(bytes);
-        ticker.advance(bytes);
-    });
+    let checked = cache.verify_with_stop(
+        context.threads.limit(threads),
+        &|bytes| {
+            bar.advance(bytes);
+            ticker.advance(bytes);
+        },
+        &context.stop,
+    )?;
     drop((bar, ticker));
+    if let Err(error) = report_checked(context, &cache, &checked) {
+        let result = serde_json::to_value(&checked).map_err(|err| {
+            Error::new(
+                Kind::LocalIo,
+                format!("cannot format the cache result: {err}"),
+            )
+        })?;
+        return Err(error.with_result(result));
+    }
+    Ok(checked)
+}
+
+fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result<(), Error> {
     let output = &context.output;
     let what = format!(
         "{} · {}",
         units::count(checked.objects, "file", "files"),
         units::size(checked.bytes)
     );
-    for digest in &checked.unreadable {
+    for path in &checked.unreadable {
         output.warn(&format!(
             "{} is unreadable and was left in the cache",
-            cache.object_path(digest).display()
+            path.display()
         ));
     }
     if checked.changed.is_empty() {
         if checked.unreadable.is_empty() {
             output.done(&format!("verified {what}. every one is intact"));
-            return Ok(checked);
+            return Ok(());
         }
         return Err(Error::new(
             Kind::LocalIo,
             format!(
                 "checked {what}. {} could not be read",
-                units::count(checked.unreadable.len() as u64, "file", "files")
+                units::count(checked.unreadable.len() as u64, "path", "paths")
             ),
         )
         .help("close any program using these cached files or check their permissions, then run `fetchloom cache verify` again"));
@@ -186,19 +232,37 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
 /// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is
-/// forgotten. a lock that cannot be read is an error, so nothing a project needs is ever deleted
-/// by mistake.
+/// forgotten. unreadable registrations, manifests and locks stop gc rather than lose protection.
 pub(super) fn needed(
     cache: &Cache,
     current: Option<&Lock>,
 ) -> Result<(Needed, Vec<PathBuf>), Error> {
+    needed_with_stop(cache, current, &Stop::default())
+}
+
+fn needed_with_stop(
+    cache: &Cache,
+    current: Option<&Lock>,
+    stop: &Stop,
+) -> Result<(Needed, Vec<PathBuf>), Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
-    for root in cache.projects() {
+    for root in cache.registered_projects(stop)? {
+        stop.check()?;
         let project = Project { root };
-        if !project.manifest_path().is_file() {
-            cache.forget(&project.root);
-            continue;
+        let manifest = project.manifest_path();
+        match fs::read(&manifest) {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                cache.forget(&project.root);
+                continue;
+            }
+            Err(err) => {
+                return Err(Error::io(
+                    format!("cannot read {}", manifest.display()),
+                    &err,
+                ));
+            }
         }
         let lock = project.lock().map_err(|err| {
             // a broken lock is fixed in its own project, which is not where gc runs
@@ -208,22 +272,22 @@ pub(super) fn needed(
                 None => "fix that project's data.lock, then try again".to_owned(),
             };
             Error::new(
-                Kind::ProjectInvalid,
+                err.kind,
                 format!(
-                    "data.lock of {} cannot be read, so the cache stays as it is",
-                    project.root.display()
+                    "{} cannot be read, so the cache stays as it is",
+                    project.root.join(lock::FILE).display()
                 ),
             )
             .detail(err.message)
             .help(help)
         })?;
         if let Some(lock) = &lock {
-            add(&mut needed, cache, lock);
+            add_with_stop(&mut needed, cache, lock, stop)?;
         }
         projects.push(project.root);
     }
     if let Some(lock) = current {
-        add(&mut needed, cache, lock);
+        add_with_stop(&mut needed, cache, lock, stop)?;
     }
     Ok((needed, projects))
 }
@@ -231,8 +295,14 @@ pub(super) fn needed(
 /// adds what one lock needs. an archive needs the files it unpacked to, and its own bytes too
 /// while this machine never unpacked it or lost a file it unpacked to, since unpacking again is
 /// the only way back.
-fn add(needed: &mut Needed, cache: &Cache, lock: &Lock) {
+fn add_with_stop(
+    needed: &mut Needed,
+    cache: &Cache,
+    lock: &Lock,
+    stop: &Stop,
+) -> Result<(), Error> {
     for file in lock.datasets.iter().flat_map(|dataset| &dataset.files) {
+        stop.check()?;
         let members = file
             .unpacks_to
             .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
@@ -243,13 +313,15 @@ fn add(needed: &mut Needed, cache: &Cache, lock: &Lock) {
         needed.unpacked.insert(file.sha256);
         let mut whole = true;
         for member in &members {
+            stop.check()?;
             needed.objects.insert(member.sha256);
-            whole &= cache.find(&member.sha256, Some(member.size)).is_some();
+            whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
         }
         if !whole {
             needed.objects.insert(file.sha256);
         }
     }
+    stop.check()
 }
 
 #[cfg(test)]
@@ -293,7 +365,7 @@ mod tests {
             }],
         };
         let mut whole = Needed::default();
-        add(&mut whole, &cache, &lock);
+        add_with_stop(&mut whole, &cache, &lock, &Stop::default()).unwrap();
         assert!(whole.objects.contains(&second.digest));
         assert!(
             !whole.objects.contains(&archive.digest),
@@ -302,7 +374,7 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut missing = Needed::default();
-        add(&mut missing, &cache, &lock);
+        add_with_stop(&mut missing, &cache, &lock, &Stop::default()).unwrap();
         assert!(
             missing.objects.contains(&archive.digest),
             "unpacking it again is the only way back to b.txt"

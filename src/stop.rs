@@ -2,6 +2,8 @@
 
 use tokio::sync::watch;
 
+use crate::error::{Error, Kind};
+
 pub(crate) struct Stop(watch::Sender<bool>);
 
 impl Default for Stop {
@@ -11,6 +13,14 @@ impl Default for Stop {
 }
 
 impl Stop {
+    pub(crate) fn check(&self) -> Result<(), Error> {
+        if self.is_asked() {
+            Err(Error::new(Kind::Interrupted, "stopped at your request"))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn ask(&self) {
         self.0.send_replace(true);
     }

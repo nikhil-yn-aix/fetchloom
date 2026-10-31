@@ -77,6 +77,7 @@ pub(crate) struct Error {
     pub(crate) message: String,
     pub(crate) details: Vec<String>,
     pub(crate) help: Option<String>,
+    pub(crate) result: Option<serde_json::Value>,
 }
 
 impl Error {
@@ -85,6 +86,7 @@ impl Error {
             kind,
             message: message.into(),
             details: Vec::new(),
+            result: None,
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
                     .to_owned()
@@ -100,6 +102,11 @@ impl Error {
             Some(help) => error.help(help),
             None => error,
         }
+    }
+
+    pub(crate) fn with_result(mut self, result: serde_json::Value) -> Error {
+        self.result = Some(result);
+        self
     }
 
     pub(crate) fn detail(mut self, line: impl Into<String>) -> Error {
