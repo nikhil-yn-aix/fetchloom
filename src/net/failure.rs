@@ -305,4 +305,156 @@ mod tests {
             "a date in the past means now"
         );
     }
+
+    #[test]
+    fn only_statuses_that_can_recover_are_retried() {
+        let url = Url::parse("https://example.org/list").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, "3".parse().unwrap());
+        for code in [408, 425, 500, 502, 503, 504] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert!(is_transient(status), "{code}");
+            let Failure::Transient {
+                reason,
+                retry_after,
+            } = refusal(&url, status, &headers)
+            else {
+                panic!("HTTP {code} must retry");
+            };
+            assert!(reason.contains(&code.to_string()));
+            assert_eq!(retry_after, Some(Duration::from_secs(3)));
+        }
+        for (code, kind) in [
+            (401, Kind::AuthRequired),
+            (403, Kind::AuthRequired),
+            (404, Kind::ReferenceUnresolved),
+            (410, Kind::ReferenceUnresolved),
+            (501, Kind::NetworkStatus),
+            (505, Kind::NetworkStatus),
+        ] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert!(!is_transient(status), "{code}");
+            let Failure::Final(error) = refusal(&url, status, &headers) else {
+                panic!("HTTP {code} must not retry");
+            };
+            assert_eq!(error.kind, kind);
+            assert!(error.message.contains(&code.to_string()));
+            assert!(error.help.is_some());
+        }
+    }
+
+    #[test]
+    fn a_429_uses_the_reset_budget_or_falls_back_to_retry_after() {
+        let url = Url::parse("https://example.org/list").unwrap();
+        assert!(is_transient(StatusCode::TOO_MANY_REQUESTS));
+        let mut headers = HeaderMap::new();
+        assert!(matches!(
+            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers),
+            Failure::Transient {
+                retry_after: None,
+                ..
+            }
+        ));
+        headers.insert(header::RETRY_AFTER, "120".parse().unwrap());
+        assert!(matches!(
+            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers),
+            Failure::Limited { .. }
+        ));
+        headers.insert(header::RETRY_AFTER, "121".parse().unwrap());
+        let Failure::Transient { retry_after, .. } =
+            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers)
+        else {
+            panic!("a reset beyond the rate limit budget must not wait");
+        };
+        assert_eq!(retry_after, Some(Duration::from_secs(121)));
+    }
+
+    #[test]
+    fn retry_after_ignores_invalid_values_and_reads_a_future_http_date() {
+        let mut headers = HeaderMap::new();
+        for value in ["nonsense", "-1", "1.5", "18446744073709551616", ""] {
+            headers.insert(header::RETRY_AFTER, value.parse().unwrap());
+            assert_eq!(retry_after(&headers), None, "{value}");
+        }
+        headers.insert(
+            header::RETRY_AFTER,
+            header::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        assert_eq!(retry_after(&headers), None);
+        headers.insert(header::RETRY_AFTER, "  60  ".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(Duration::from_secs(60)));
+        let before = SystemTime::now();
+        let seconds = before
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 120;
+        let deadline = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+        headers.insert(
+            header::RETRY_AFTER,
+            httpdate::fmt_http_date(deadline).parse().unwrap(),
+        );
+        let wait = retry_after(&headers).unwrap();
+        let after = SystemTime::now();
+        assert!(wait <= deadline.duration_since(before).unwrap());
+        assert!(wait >= deadline.duration_since(after).unwrap_or_default());
+    }
+
+    #[test]
+    fn backoff_accepts_sixty_seconds_but_never_exceeds_it() {
+        for attempt in [0, 1, 7, 100, u32::MAX] {
+            assert!(backoff(attempt, None).unwrap() <= Duration::from_secs(60));
+            assert_eq!(
+                backoff(attempt, Some(Duration::from_secs(60))),
+                Ok(Duration::from_secs(60))
+            );
+            assert_eq!(
+                backoff(attempt, Some(Duration::from_millis(60_001))),
+                Err(Duration::from_millis(60_001))
+            );
+        }
+    }
+
+    #[test]
+    fn exhausting_retries_only_suggests_offline_when_a_copy_exists() {
+        let url = Url::parse("https://example.org/list").unwrap();
+        for has_copy in [false, true] {
+            let error = gave_up(&url, "connection broke", has_copy);
+            assert_eq!(error.kind, Kind::NetworkUnreachable);
+            assert!(error.message.contains("5 tries"));
+            assert!(error.message.contains("connection broke"));
+            assert_eq!(error.help.unwrap().contains("--offline"), has_copy);
+        }
+    }
+
+    #[test]
+    fn retry_waits_can_be_interrupted_without_waiting_for_the_deadline() {
+        use crate::net::{Options, Splitting};
+        use crate::source::recorded::block_on;
+        use std::sync::Arc;
+
+        let url = Url::parse("https://example.org/list").unwrap();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(|_| {}),
+        );
+        net.stop.ask();
+        let mut retry = Retry::new(&net, &url);
+        let error = block_on(retry.wait("busy".to_owned(), Some(Duration::from_secs(60)), false))
+            .unwrap_err();
+        assert_eq!(error.kind, Kind::Interrupted);
+        assert_eq!(net.work.counts().retries, 1);
+        retry.attempt = ATTEMPTS;
+        let error = block_on(retry.wait("still busy".to_owned(), None, true)).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkUnreachable);
+        assert!(error.help.unwrap().contains("--offline"));
+        assert_eq!(net.work.counts().retries, 1);
+    }
 }
