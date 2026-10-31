@@ -39,27 +39,39 @@ fetchloom, pooch and dvc keep a cache, so each also runs a second project on tha
 
 ## run the lab
 
-start the lab server and trust its CA as in [the lab](../lab/README.md). the windows plans reach it at `https://172.31.233.169:8443`, the address WSL's eth0 had when they were written; `wsl -d Ubuntu-24.04 -- ip -4 -br addr show eth0` shows the current one, and a restart of WSL can change it, which needs `lab` in the windows plans' `[vars]` updated. the linux plans use `https://localhost:8443`.
+start the lab server and trust its CA as in [the lab](../lab/README.md). plans read `{env:NAME}` placeholders from the environment, including in `version` commands; an unset variable stops the harness with its name before a run starts. `{py}` and other plan variables also expand in version commands.
+
+set `FETCHLOOM_BENCH_PY` to the benchmark venv's python, `FETCHLOOM_LAB` to the lab base URL without a trailing slash, and `FETCHLOOM_LAB_CA` to the CA bundle for plans that use one. on windows, use the HTTPS URL serve.sh prints for WSL's eth0 address; `wsl -d Ubuntu-24.04 -- ip -4 -br addr show eth0` shows the current address. after WSL restarts, update the environment variable rather than the plans. WSL clients can use `https://localhost:8443`.
 
 one profile at a time, both systems, never both at once. from powershell in the repository:
 
 ```powershell
+$env:FETCHLOOM_BENCH_PY = "$env:LOCALAPPDATA\fetchloom-work\bench-venv\Scripts\python.exe"
+$env:FETCHLOOM_LAB = "https://<wsl-eth0-address>:8443"
+$env:FETCHLOOM_LAB_CA = "$env:LOCALAPPDATA\fetchloom-work\lab-ca.crt"
 wsl -d Ubuntu-24.04 -u root -e bash bench/lab/net.sh home
-uv run --no-config --no-index --find-links $env:LOCALAPPDATA\fetchloom-work\wheels --python 3.13 bench/harness.py bench/plans/lab-home-windows.toml
-uv run --no-config --no-index --find-links $env:LOCALAPPDATA\fetchloom-work\wheels --python 3.13 bench/harness.py bench/plans/lab-home-windows-urls.toml
+uv run --no-config --no-index --find-links "$env:LOCALAPPDATA\fetchloom-work\wheels" --python $env:FETCHLOOM_BENCH_PY bench/harness.py bench/plans/lab-home-windows.toml
+uv run --no-config --no-index --find-links "$env:LOCALAPPDATA\fetchloom-work\wheels" --python $env:FETCHLOOM_BENCH_PY bench/harness.py bench/plans/lab-home-windows-urls.toml
 ```
 
-then in WSL as `fl`, in the repository at `/mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/report`:
+then in WSL as your regular user, from your repository checkout:
 
 ```sh
-export PATH=$HOME/.local/bin:$PATH
-/home/fl/bench-venv/bin/python bench/harness.py bench/plans/lab-home-linux.toml
-/home/fl/bench-venv/bin/python bench/harness.py bench/plans/lab-home-linux-urls.toml
+export PATH="$HOME/.local/bin:$PATH"
+export FETCHLOOM_BENCH_PY="$HOME/bench-venv/bin/python"
+export FETCHLOOM_LAB="https://localhost:8443"
+export FETCHLOOM_LAB_CA="/etc/ssl/certs/ca-certificates.crt"
+"$FETCHLOOM_BENCH_PY" bench/harness.py bench/plans/lab-home-linux.toml
+"$FETCHLOOM_BENCH_PY" bench/harness.py bench/plans/lab-home-linux-urls.toml
 ```
 
 `$HOME/.local/bin` holds the linux fetchloom. each harness run writes one folder under `bench/results/` with every block of its plan.
 
-`run-lab.ps1` does all of it unattended: for each profile it shapes the lab, runs the windows plans, then the linux plans through WSL, and clears the shaping at the end. it stops first if WSL's eth0 has another address than the windows plans name. the lab is one server and one link, so nothing else may use it during a block, other people's runs included.
+`run-lab.ps1` does all of it unattended: for each profile it shapes the lab, runs the windows plans, then the linux plans through WSL, and clears the shaping at the end. pass `-User <wsl-user>`; `-Distro` defaults to `Ubuntu-24.04`, `-Wheels` to `$env:LOCALAPPDATA\fetchloom-work\wheels`, and `-Python` to `$env:FETCHLOOM_BENCH_PY`. `-LinuxPython` defaults to `bench-venv/bin/python` under that user's WSL home. it passes the linux python, loopback lab URL and system CA bundle to WSL as the three environment variables above. it stops first if `FETCHLOOM_LAB` names neither WSL's current eth0 address nor loopback. the lab is one server and one link, so nothing else may use it during a block, other people's runs included.
+
+```powershell
+.\bench\plans\run-lab.ps1 -User "<wsl-user>" -Distro Ubuntu-24.04 -Python $env:FETCHLOOM_BENCH_PY
+```
 
 ## estimated time
 
@@ -126,8 +138,9 @@ left out: zenodo-m1 (2.63 GB with 4 tools and 3 blocks), zenodo-m1000 (3.54 GB),
 before the first live block, write the expect files with a first verified download, which counts in the ledger too:
 
 ```sh
-/home/fl/bench-venv/bin/python bench/expect-live.py
-/home/fl/bench-venv/bin/python bench/harness.py bench/plans/live-zenodo.toml
+export FETCHLOOM_BENCH_PY="$HOME/bench-venv/bin/python"
+"$FETCHLOOM_BENCH_PY" bench/expect-live.py
+"$FETCHLOOM_BENCH_PY" bench/harness.py bench/plans/live-zenodo.toml
 ```
 
 `expect-live.py` downloads each dataset the live plans name once, with fetchloom, into a temporary folder with an empty cache, checks that every file hashes to what fetchloom recorded, and writes `bench/expect/live/<id>.sha256`. a dataset whose files change between blocks invalidates the blocks around the change: run `expect-live.py --force --only <id>` and compare.

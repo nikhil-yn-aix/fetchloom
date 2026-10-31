@@ -7,7 +7,7 @@ layer = "live"
 repetitions = 3
 
 [vars]
-py = "/home/fl/bench-venv/bin/python"
+py = "{env:FETCHLOOM_BENCH_PY}"
 wrappers = "{repo}/bench/tools"
 
 [[workload]]
@@ -43,4 +43,4 @@ version = ["fetchloom", "--version"]
 [tool.hf]
 first = ["{py}", "{wrappers}/hf_download.py", "{out}", "{home}", "{client}"]
 second = ["{py}", "{wrappers}/hf_download.py", "{out}", "{home}", "{client}"]
-version = ["/home/fl/bench-venv/bin/python", "-c", "from importlib.metadata import version; print('huggingface_hub', version('huggingface_hub'))"]
+version = ["{py}", "-c", "from importlib.metadata import version; print('huggingface_hub', version('huggingface_hub'))"]

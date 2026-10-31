@@ -2,3 +2,4 @@
 __fuzz__/
 __pycache__/
 /bench/results/
+/.cargo/config.toml

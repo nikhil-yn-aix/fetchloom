@@ -64,9 +64,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq musl-tools > /dev/null
       - run: cargo build --locked --release --target ${{ matrix.target }}
-      - name: check that the binaries run
+      - name: check that the binary runs
         run: |
-          for name in fetchloom fl; do
+          for name in fetchloom; do
             said=$("target/${{ matrix.target }}/release/$name${{ matrix.exe }}" --version)
             echo "$name --version: $said"
             if [ "$said" != "fetchloom $VERSION" ]; then
@@ -74,10 +74,10 @@ jobs:
               exit 1
             fi
           done
-      - name: check that the linux binaries are static
+      - name: check that the linux binary is static
         if: runner.os == 'Linux'
         run: |
-          for name in fetchloom fl; do
+          for name in fetchloom; do
             said=$(ldd "target/${{ matrix.target }}/release/$name" 2>&1 || true)
             echo "ldd $name: $said"
             case "$said" in
@@ -85,23 +85,23 @@ jobs:
               *) echo "::error::$name links shared libraries"; exit 1 ;;
             esac
           done
-      - name: check that the windows binaries carry their C runtime
+      - name: check that the windows binary carries its C runtime
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1 -ExpandProperty FullName
-          foreach ($name in 'fetchloom', 'fl') {
+          foreach ($name in 'fetchloom') {
             $dlls = & $dumpbin /nologo /dependents "target\${{ matrix.target }}\release\$name.exe"
             $dlls
             if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw "$name.exe loads the C runtime from a DLL" }
           }
-      - name: package the binaries
+      - name: package the binary
         run: |
           name="fetchloom-$VERSION-${{ matrix.target }}"
           mkdir -p ".release/$name" dist
           cp "target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }}" \
-            "target/${{ matrix.target }}/release/fl${{ matrix.exe }}" LICENSE NOTICE README.md ".release/$name/"
+            LICENSE NOTICE README.md ".release/$name/"
           cd .release
           if [ "$RUNNER_OS" = Windows ]; then
             7z a -tzip -bso0 "../dist/$name.zip" "$name"
@@ -119,7 +119,7 @@ jobs:
           EOF
           .release/maturin/${{ matrix.scripts }}/python -m pip install --quiet --disable-pip-version-check \
             --require-hashes --only-binary :all: -r .release/maturin.txt
-          # reuses the binaries built and checked above
+          # reuses the binary built and checked above
           .release/maturin/${{ matrix.scripts }}/maturin build --release --locked \
             --target ${{ matrix.target }} --out dist ${{ matrix.wheel-tags }}
       - name: check the wheel
@@ -127,7 +127,7 @@ jobs:
           "${{ matrix.python }}" -m venv .release/check
           check=.release/check/${{ matrix.scripts }}
           "$check/python" -m pip install --quiet --disable-pip-version-check --no-index dist/*.whl
-          for name in fetchloom fl; do
+          for name in fetchloom; do
             said=$("$check/$name" --version)
             echo "wheel $name --version: $said"
             if [ "$said" != "fetchloom $VERSION" ]; then
@@ -141,6 +141,7 @@ jobs:
           try:
               fetchloom.path("iris", project=".release/empty")
           except fetchloom.Error as error:
+              assert error.kind == "project.invalid", f"unexpected error kind: {error.kind}"
               print(f"fetchloom.path outside a project raised {error.kind}: {error.message}")
           else:
               raise SystemExit("fetchloom.path found a dataset outside a project")
@@ -150,8 +151,7 @@ jobs:
           {
             echo '| file | bytes |'
             echo '|---|---|'
-            for file in target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }} \
-              target/${{ matrix.target }}/release/fl${{ matrix.exe }} dist/*; do
+            for file in target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }} dist/*; do
               echo "| $(basename "$file") | $(wc -c < "$file") |"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"

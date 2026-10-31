@@ -14,10 +14,6 @@ default-run = "fetchloom"
 name = "fetchloom"
 path = "src/main.rs"
 
-[[bin]]
-name = "fl"
-path = "src/bin/fl.rs"
-
 [dependencies]
 anstream = "1.0"
 anstyle = "1.0"
@@ -25,7 +21,6 @@ bytes = "1.10"
 bzip2 = "0.6"
 clap = { version = "4.6", features = ["derive"] }
 console = { version = "0.16", default-features = false }
-dialoguer = { version = "0.12", default-features = false }
 fastrand = "2.5"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 # the type of link hyper-util's proxy matcher takes

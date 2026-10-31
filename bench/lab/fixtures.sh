@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# builds the lab fixtures in $LAB_DATA (default /home/fl/lab-data) and prints their sha256.
+# builds the lab fixtures in $LAB_DATA (default $HOME/lab-data) and prints their sha256.
 # every byte is AES-128-CTR keystream keyed by the seed and the fixture name, so any machine
 # builds the same files. fixtures that exist are kept, so running it again only prints.
 set -euo pipefail
 
-data=${LAB_DATA:-/home/fl/lab-data}
+data=${LAB_DATA:-$HOME/lab-data}
 seed=fetchloom-lab-1
 stamp=@1704067200
 export LC_ALL=C TZ=UTC
