@@ -38,7 +38,7 @@ pub(crate) struct Output {
     warnings: Mutex<Vec<String>>,
 }
 
-/// the document `--json` prints, described in docs/formats.md.
+/// the document `--json` prints, described in docs/user/reference/json-output.md.
 #[derive(Serialize)]
 struct Document<'a, T> {
     schema: u32,

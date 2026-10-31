@@ -2,7 +2,7 @@
 
 each function runs ``fetchloom --json`` and returns its answer, or raises :class:`Error`
 with the kind and message of the JSON error. the kinds and their exit codes are listed in
-https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/agents.md.
+https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
 """
 
 from __future__ import annotations
