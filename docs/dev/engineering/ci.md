@@ -4,7 +4,7 @@ CI checks the same crate across processor architectures and filesystems that exp
 
 ## triggers and permissions
 
-[ci.yml](../../../.github/workflows/ci.yml) runs on pushes to `main` and `rebuild`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result.
+[ci.yml](../../../.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. a last job named `ci` passes only when every platform passed; it is the one check `main`'s branch protection requires, so adding or renaming a platform never changes the protection rule.
 
 ## test job
 

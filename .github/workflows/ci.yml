@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, rebuild]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -17,6 +17,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # the one check branch protection requires, so it names no platform and passes only when
+  # every platform did
+  ci:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
