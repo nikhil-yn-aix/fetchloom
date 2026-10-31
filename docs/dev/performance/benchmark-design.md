@@ -19,7 +19,7 @@ how fetchloom is compared with the tools people use today, and the rules that ke
 5. same machine, same network. all tools run one at a time on the same idle machine, against the same local server, through the same shaped link.
 6. no ordering luck. each round runs the tools in a new random order (seed recorded), so a slow minute on the machine hits every tool alike. one untimed warmup round per case loads binaries and python bytecode first.
 7. whole command. the clock covers process start to exit, including interpreter startup, resolution and verification, because that is what a person waits for.
-8. pinned and recorded. each tool is installed on its own at a pinned version; versions, commands, kernel, filesystem and CPU are written into the results.
+8. pinned and recorded. clients have pinned versions; python clients share the requested virtual environment, with its full package list recorded. every run has a separate home and cache. versions, commands, kernel, filesystem and CPU are written into the results.
 
 ## scenarios
 
@@ -50,6 +50,8 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |
 | DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
 | datalad | `datalad clone`, then `datalad get -J 4` from URLs registered with git-annex | s1 to s3, s5 to s7 |
+
+cache locations and the system CA bundle are set explicitly. telemetry is disabled to keep unrelated services out of the measurement. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
 for s4 the downloaders run `unzip -q` after the check, in the same timed command. DVC and datalad track files rather than archives, so they sit s4 out. s6 uses each tool's own way to skip work: curl `-z` asks the server whether each file changed, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
 
