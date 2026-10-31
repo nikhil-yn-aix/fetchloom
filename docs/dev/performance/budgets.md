@@ -1,4 +1,4 @@
-﻿# budgets
+# budgets
 
 performance budgets set whole-command targets, with observed misses kept visible.
 

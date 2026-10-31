@@ -1,4 +1,4 @@
-﻿# performance
+# performance
 
 fetchloom avoids repeated requests and byte copies while preserving checked identities and recoverable disk state.
 
