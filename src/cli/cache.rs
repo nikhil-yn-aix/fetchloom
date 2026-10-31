@@ -81,17 +81,22 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     })
 }
 
-pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
+pub(super) fn gc(context: &Context, now: bool) -> Result<Freed, Error> {
     let cache = open_cache()?;
     let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
-    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), &context.stop)?;
+    let grace = if now {
+        std::time::Duration::ZERO
+    } else {
+        crate::cache::GRACE
+    };
+    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), grace, &context.stop)?;
     let output = &context.output;
     for path in &freed.not_removed {
         output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
     }
     let kept = (freed.kept_objects > 0).then(|| {
         format!(
-            "{} in {} no project needs, gc frees it once it is a day old",
+            "{} in {} no project needs, gc frees it once it is a day old, or now with --now",
             units::size(freed.kept_bytes),
             units::count(freed.kept_objects, "file", "files")
         )
@@ -231,7 +236,7 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     );
     if checked.stuck.is_empty() {
         return Err(error.help(if checked.unreadable.is_empty() {
-            "run `fetchloom sync` in each project to restore the files it needs"
+            "run `fetchloom sync` in each project. a project whose own linked file holds the changed bytes keeps it as an edit; there, save any change you need, then run `fetchloom sync --force`"
         } else {
             "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again and `fetchloom sync` in each project"
         }));

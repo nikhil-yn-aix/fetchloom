@@ -233,6 +233,37 @@ fn hand_edits_survive_sync_until_forced() -> Result {
 }
 
 #[test]
+fn an_edit_through_a_shared_link_says_every_project_sees_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    edit(&placed, b"changed in place\n")?;
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let kept = sandbox.run(&["--json", "sync"])?;
+    let reason = &json(&kept)?["result"]["placement"]["kept"][0]["reason"];
+    if added["work"]["hardlinks"] == 1 {
+        assert!(
+            status.contains("shared with the cache through a link"),
+            "{status}"
+        );
+        assert_eq!(reason, "shared");
+        let story = text(&sandbox.run(&["sync"])?.stderr)?;
+        assert!(
+            story.contains("if the change is not yours, `fetchloom sync --force` restores it"),
+            "{story}"
+        );
+    } else {
+        assert_eq!(
+            reason, "changed",
+            "a reflink or a copy is this project's own"
+        );
+    }
+    assert_eq!(fs::read(&placed)?, b"changed in place\n");
+    Ok(())
+}
+
+#[test]
 fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
@@ -381,6 +412,19 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
         "{}",
         text(&stale.stderr)?
     );
+    let lock_before = fs::read(sandbox.work().join("data.lock"))?;
+    let locked = sandbox.run(&["sync", "--locked"])?;
+    assert_eq!(locked.status.code(), Some(1));
+    assert!(
+        text(&locked.stderr)?.contains("or sync without --locked"),
+        "{}",
+        text(&locked.stderr)?
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("data.lock"))?,
+        lock_before,
+        "--locked writes nothing"
+    );
     let relocked = sandbox.run(&["lock"])?;
     assert_eq!(
         relocked.status.code(),
@@ -394,6 +438,7 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
         "a new filter on the same version downloads nothing"
     );
     assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    assert_eq!(sandbox.run(&["sync", "--locked"])?.status.code(), Some(0));
     Ok(())
 }
 
@@ -648,11 +693,14 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&young.stderr)?,
-        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old\n"
+        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old, or now with --now\n"
     );
     let document = json(&sandbox.run(&["--json", "cache", "gc"])?)?;
     assert_eq!(document["result"]["kept_objects"], 1);
     assert_eq!(document["result"]["kept_bytes"], IRIS.len());
+    let now = json(&sandbox.run(&["--json", "cache", "gc", "--now"])?)?;
+    assert_eq!(now["result"]["objects"], 1);
+    assert_eq!(now["result"]["kept_objects"], 0);
     Ok(())
 }
 

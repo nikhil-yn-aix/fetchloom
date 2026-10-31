@@ -27,9 +27,10 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
   fetchloom sync --offline
+  fetchloom sync --locked
   fetchloom sync --force
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed. reports files it cannot replace without --force";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock
@@ -60,9 +61,10 @@ on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache v
 
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
+  fetchloom cache gc --now
   fetchloom cache gc --json
 
-on disk: deletes cached files no project needs once they are a day old. data/ stays as it is";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify
@@ -263,7 +265,7 @@ impl Command {
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
-                action: Some(CacheAction::Gc),
+                action: Some(CacheAction::Gc(_)),
             }) => "cache gc",
             Command::Cache(Cache {
                 action: Some(CacheAction::Verify),
@@ -285,11 +287,20 @@ pub(crate) struct Cache {
 pub(crate) enum CacheAction {
     /// free what no project needs, once it is a day old
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
-    Gc,
+    Gc(Gc),
 
     /// check cached files and mark changed files for replacement
     #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
+}
+
+/// options of `cache gc`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct Gc {
+    /// also free files no project needs that are less than a day old, such as a `get` from
+    /// today. downloads still running keep their partial files
+    #[arg(long, help_heading = "options")]
+    pub(crate) now: bool,
 }
 
 /// which files of a dataset to keep, for `add` and `get`.
@@ -337,6 +348,10 @@ pub(crate) struct Sync {
     /// replace conflicting files at locked paths, including untracked files
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
+
+    /// fail instead of updating data.lock when it is out of date with data.toml, for CI
+    #[arg(long, help_heading = "options")]
+    pub(crate) locked: bool,
 }
 
 /// bring data.lock in line with data.toml

@@ -42,6 +42,9 @@ pub(super) struct Status {
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// edited files placed as hardlinks, whose change every project sharing the link sees.
+    #[serde(skip)]
+    shared: HashSet<String>,
 }
 
 pub(super) fn run(context: &Context) -> Result<Status, Error> {
@@ -127,7 +130,14 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
                 }
                 &mut status.outdated
             }
-            (Some(_), Some(_)) => &mut status.edited,
+            (Some(_), Some(record)) => {
+                if record.method == crate::place::Method::Hardlink
+                    && crate::place::has_other_names(&file)
+                {
+                    status.shared.insert(target.path.clone());
+                }
+                &mut status.edited
+            }
             (Some(_), None) => &mut status.untracked,
         };
         list.push(target.path.clone());
@@ -181,7 +191,14 @@ fn list(output: &Output, status: &Status) {
     }
     for (verb, paths) in status.lists() {
         for path in paths.iter().take(SHOWN) {
-            output.mark(verb, path);
+            if status.shared.contains(path) {
+                output.mark(
+                    verb,
+                    &format!("{path} · shared with the cache through a link, so other projects see it too"),
+                );
+            } else {
+                output.mark(verb, path);
+            }
         }
         if paths.len() > SHOWN {
             output.mark("", &format!("and {} more", paths.len() - SHOWN));

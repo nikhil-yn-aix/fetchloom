@@ -49,6 +49,9 @@ pub(crate) struct Kept {
 pub(crate) enum Reason {
     /// fetchloom placed it, and it changed since.
     Changed,
+    /// fetchloom placed it as a hardlink to the cache, and it changed since. the change is in
+    /// every project sharing that link, and fetchloom cannot tell which one made it.
+    Shared,
     /// fetchloom did not place it, and it holds other bytes than the lock pins.
     Foreign,
     /// no dataset needs it now, but it changed since fetchloom placed it.
@@ -418,8 +421,10 @@ fn decide(
                 Action::Replace
             })
         }
-        Some(_) => Ok(if force {
+        Some(placed) => Ok(if force {
             Action::Replace
+        } else if placed.method == Method::Hardlink && place::has_other_names(destination) {
+            Action::Leave(Reason::Shared)
         } else {
             Action::Leave(Reason::Changed)
         }),

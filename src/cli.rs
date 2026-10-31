@@ -293,9 +293,9 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
-            action: Some(args::CacheAction::Gc),
+            action: Some(args::CacheAction::Gc(gc)),
         }) => {
-            let outcome = cache::gc(context);
+            let outcome = cache::gc(context, gc.now);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

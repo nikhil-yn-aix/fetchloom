@@ -18,7 +18,7 @@ use crate::stop::Stop;
 
 /// how long an object no project needs stays, so a download a project has not locked yet, or a
 /// `get` from this morning, survives a gc.
-pub(super) const GRACE: Duration = Duration::from_hours(24);
+pub(crate) const GRACE: Duration = Duration::from_hours(24);
 
 pub(crate) struct Object {
     pub(crate) digest: Sha256,
@@ -164,14 +164,19 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes old, unneeded objects and abandoned downloads, recording each refused removal.
+    /// removes unneeded objects older than `grace` and abandoned downloads older than a day,
+    /// recording each refused removal. downloads keep the full day whatever `grace` is, so a
+    /// download running elsewhere keeps its partial file.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
         now: SystemTime,
+        grace: Duration,
         stop: &Stop,
     ) -> Result<Freed, Error> {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
+        let unused =
+            |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age >= grace);
         let scan = self.scan_objects(stop)?;
         if let Some(path) = scan.unreadable.first() {
             return Err(Error::new(
@@ -189,7 +194,7 @@ impl Cache {
             if needed.objects.contains(&object.digest) {
                 continue;
             }
-            if !old(object.modified) {
+            if !unused(object.modified) {
                 freed.kept_objects += 1;
                 freed.kept_bytes += object.size;
             } else if removed(
@@ -209,7 +214,7 @@ impl Cache {
             let path = entry.path();
             let stale = fs::metadata(&path)
                 .and_then(|metadata| metadata.modified())
-                .is_ok_and(old);
+                .is_ok_and(unused);
             if !needed.unpacked.contains(&archive) && stale {
                 removed(&path, self.volume.remove(&path), &mut freed.not_removed);
             }
@@ -423,7 +428,8 @@ mod tests {
         }
 
         pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
-            self.sweep_with_stop(needed, now, &Stop::default()).unwrap()
+            self.sweep_with_stop(needed, now, GRACE, &Stop::default())
+                .unwrap()
         }
 
         pub(crate) fn verify_all(
@@ -448,6 +454,7 @@ mod tests {
             .sweep_with_stop(
                 &Needed::default(),
                 SystemTime::now() + GRACE + Duration::from_secs(60),
+                GRACE,
                 &stop,
             )
             .unwrap_err();

@@ -39,3 +39,18 @@ class HelperOptions(unittest.TestCase):
             fetchloom.path("iris", ".", True)
         with self.assertRaises(TypeError):
             fetchloom.sync(".", True)
+
+    def test_strict_sync_raises_on_kept_files(self):
+        kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
+        warning = "data/iris/iris.csv has changed, so it stays"
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": [warning]}), ""
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertWarns(UserWarning):
+                    self.assertEqual(fetchloom.sync("p"), Path("p"))
+                with self.assertWarns(UserWarning), self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.sync("p", strict=True)
+        self.assertEqual(raised.exception.kind, "conflict.kept")
+        self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])

@@ -298,6 +298,11 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let project = find()?;
     let _held = hold(context, &project, "sync").await?;
     let (text, manifest) = project.manifest()?;
+    if args.locked {
+        check(&project, &manifest, project.lock()?.as_ref()).map_err(|error| {
+            error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
+        })?;
+    }
     let read = project.lock_and_text()?;
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),

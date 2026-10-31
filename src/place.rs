@@ -396,6 +396,22 @@ impl Placer {
     }
 }
 
+/// whether the file at `path` has another name, as a hardlink shared with the cache does. a
+/// file saved anew by an editor has only its own.
+pub(crate) fn has_other_names(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        fs::symlink_metadata(path).is_ok_and(|metadata| metadata.nlink() > 1)
+    }
+    #[cfg(windows)]
+    {
+        winapi_util::Handle::from_path_any(path)
+            .and_then(|handle| winapi_util::file::information(&handle))
+            .is_ok_and(|information| information.number_of_links() > 1)
+    }
+}
+
 /// runs `job` on every item, on a few threads when there are many, and returns the results in
 /// the order of `items`.
 pub(crate) fn run_all<T: Sync, R: Send>(

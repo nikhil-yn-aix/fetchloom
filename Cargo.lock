@@ -460,6 +460,7 @@ dependencies = [
  "tracing-chrome",
  "tracing-subscriber",
  "url",
+ "winapi-util",
  "zip",
  "zstd",
 ]
