@@ -21,7 +21,7 @@ there are no command-specific options. [global options](README.md#global-options
 2. compare file sizes and modification times, hashing where those records need checking.
 3. report changed manifest entries, missing or different files, extra paths and unavailable archive trees.
 
-status changes no project files. it is not a full integrity scan. [state records](../reference/cache-folder.md#the-fetchloom-folder) explains when metadata can be trusted.
+status changes no project files. it is not a full integrity scan. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
 
 stderr when `iris.csv` is missing and `notes.txt` is extra:
 
@@ -45,6 +45,8 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `edited_elsewhere` | a shared hardlink was marked changed and its bytes differ |
 | `extra` | a scanned path is outside known targets |
 | `not_unpacked` | an archive's member record is unavailable here |
+
+a visibly changed hardlink appears as edited, with a story explaining that it is shared with the cache through a link. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
 
 human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files previously placed from it can also appear as extra.
 
