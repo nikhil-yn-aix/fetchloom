@@ -139,7 +139,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     let scope = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs")
-            .join("scope.md"),
+            .join("user/commands/README.md"),
     )?;
     let options = scope
         .lines()
