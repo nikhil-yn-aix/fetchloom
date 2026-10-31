@@ -17,7 +17,11 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 | `10.5281/zenodo.3608990` | accept a bare DOI |
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
 
-for direct downloads, a safe `Content-Disposition` filename can replace the name guessed from the URL. selection patterns match the source path before that replacement. recognized archive names [unpack by default](../concepts.md#archives).
+github `/blob/` file links and gitlab `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
+
+for direct downloads, a safe `Content-Disposition` filename, including one received after redirects, can replace the name guessed from the URL. selection patterns match the source path before that replacement. recognized archive names [unpack by default](../concepts.md#archives).
+
+a response with HTML content type warns when its filename looks like data rather than HTML. check the saved file and use a download or raw link if the server returned a page.
 
 ## pins
 
@@ -37,4 +41,4 @@ local URL records keep raw links. do not share those records or commit them. the
 
 DOIs must route to a known source. a DOI alone does not provide a download permission or a permanent copy of the bytes.
 
-offline `get` of a direct URL needs its URL record and cached bytes. a changed project entry still needs online resolution, even when it names a plain URL. use a prepared locked project for [offline work](../concepts.md#offline).
+follow [offline preparation](../concepts.md#offline) for direct-URL reuse and locked projects.

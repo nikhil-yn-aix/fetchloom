@@ -7,7 +7,7 @@ fetchloom get zenodo:3608990
 fetchloom add zenodo:3608990 --select "*.csv"
 ```
 
-use `get` to inspect data once, or `add` to pin it in a project. each selected file gets a SHA-256 and size in `data.lock`. supported source checksums are checked while pinning downloads.
+use [search](../commands/search.md) when you have words rather than a reference. use `get` to inspect data once, or `add` to pin it in a project. each selected file gets a SHA-256 and size in `data.lock`. supported source checksums are checked while pinning downloads.
 
 | family | reference spellings | what gets pinned | credentials | limits |
 |---|---|---|---|---|
