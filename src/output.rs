@@ -319,6 +319,70 @@ impl Output {
     }
 }
 
+pub(crate) fn help(text: &str, choice: ColorChoice) {
+    let shown = help_text(text.trim_end_matches('\n'), Style::stdout_color(choice));
+    let _ = writeln!(std::io::stdout().lock(), "{shown}");
+}
+
+pub(crate) fn help_text(text: &str, color: bool) -> String {
+    if !color {
+        return text.to_owned();
+    }
+    let bold = Paint::new().bold();
+    let mut commands = false;
+    text.split('\n')
+        .map(|line| {
+            if !line.starts_with(' ') {
+                commands = line == "commands:";
+            }
+            for heading in [
+                "usage:", "commands:", "arguments:", "options:", "examples:", "on disk:",
+            ] {
+                if let Some(rest) = line.strip_prefix(heading) {
+                    let rest = if heading == "usage:" {
+                        format!(" {ACCENT}{}{ACCENT:#}", rest.trim_start())
+                    } else {
+                        accented(rest, Paint::new(), true)
+                    };
+                    return format!("{bold}{heading}{bold:#}{rest}");
+                }
+            }
+            if let Some(command) = line.strip_prefix("  ") {
+                if command.starts_with("fetchloom ") {
+                    let (command, description) =
+                        command.split_once("  ").unwrap_or((command, ""));
+                    let gap = if description.is_empty() { "" } else { "  " };
+                    return format!("  {ACCENT}{command}{ACCENT:#}{gap}{description}");
+                }
+                if commands {
+                    let end = command.find(' ').unwrap_or(command.len());
+                    return format!(
+                        "  {ACCENT}{}{ACCENT:#}{}",
+                        &command[..end],
+                        &command[end..]
+                    );
+                }
+                if let Some((name, analogy)) = command.split_once(", ")
+                    && matches!(name, "data.toml" | "data.lock" | "the cache" | "sync")
+                {
+                    let style = if name == "sync" { ACCENT } else { bold };
+                    return format!("  {style}{name}{style:#}, {analogy}");
+                }
+            }
+            for heading in ["fetchloom", "try it", "learn more"] {
+                if let Some(rest) = line.strip_prefix(heading) {
+                    return format!(
+                        "{bold}{heading}{bold:#}{}",
+                        accented(rest, Paint::new(), true)
+                    );
+                }
+            }
+            accented(line, Paint::new(), true)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn paint(color: bool, style: Paint) -> Paint {
     if color { style } else { Paint::new() }
 }
@@ -554,6 +618,22 @@ mod tests {
                 "`fetchloom path iris`\u{1b}[0m\u{1b}[2m next\u{1b}[0m",
             )
         );
+    }
+
+    #[test]
+    fn help_styles_headings_and_commands_without_changing_plain_text() {
+        let text = concat!(
+            "usage: fetchloom get [options] <link>\n\ncommands:\n",
+            "  get  fetch once\n\nexamples:\n  fetchloom get zenodo:1\n",
+            "\n  data.toml, the shopping list: which datasets you want\n",
+        );
+        assert_eq!(super::help_text(text, false), text);
+        let shown = super::help_text(text, true);
+        assert!(shown.contains("\u{1b}[1musage:\u{1b}[0m"));
+        assert!(shown.contains("\u{1b}[1mcommands:\u{1b}[0m"));
+        assert!(shown.contains("\u{1b}[36mfetchloom get zenodo:1\u{1b}[0m"));
+        assert!(shown.contains("  \u{1b}[36mget\u{1b}[0m  fetch once"));
+        assert!(shown.contains("data.toml\u{1b}[0m, the shopping list: which datasets you want"));
     }
 
     #[test]

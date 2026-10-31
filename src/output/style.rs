@@ -40,6 +40,12 @@ impl Style {
         }
     }
 
+    pub(crate) fn stdout_color(choice: ColorChoice) -> bool {
+        wants_color(choice, std::io::stdout().is_terminal(), &|name| {
+            std::env::var_os(name)
+        })
+    }
+
     /// what ends text that was cut short.
     pub(crate) fn more(self) -> &'static str {
         if self.unicode { "…" } else { "..." }

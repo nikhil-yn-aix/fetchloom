@@ -1,7 +1,6 @@
 //! `fetchloom help`: the ideas behind fetchloom, or the help of one command. like `--help`, it
 //! prints text for people, even with `--json`.
 
-use std::io::Write as _;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -45,7 +44,7 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
     if let [only] = topic
         && only == "concepts"
     {
-        let _ = writeln!(std::io::stdout().lock(), "{CONCEPTS}");
+        crate::output::help(CONCEPTS, args::color());
         return ExitCode::SUCCESS;
     }
     let line = std::iter::once("fetchloom")
@@ -53,7 +52,7 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
         .chain(std::iter::once("--help"));
     match args::command().try_get_matches_from(line) {
         Err(help) if help.kind() == ErrorKind::DisplayHelp => {
-            let _ = help.print();
+            crate::output::help(&help.render().to_string(), args::color());
             ExitCode::SUCCESS
         }
         _ => finish::<()>(context, None, Err(unknown(topic)), started),
