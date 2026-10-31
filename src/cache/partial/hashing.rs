@@ -34,6 +34,14 @@ pub(super) struct HashPipe {
     /// chunks not sent yet. every other message sends them first, so order holds.
     gathered: Vec<Bytes>,
     gathered_bytes: usize,
+    /// a small download's hash, kept on the writer's thread instead of a worker.
+    inline: Option<Inline>,
+}
+
+struct Inline {
+    file: File,
+    hasher: Hasher,
+    received: u64,
 }
 
 impl HashPipe {
@@ -47,10 +55,31 @@ impl HashPipe {
             worker: Some(worker),
             gathered: Vec::new(),
             gathered_bytes: 0,
+            inline: None,
         })
     }
 
+    /// hashes on the caller's thread, for downloads too small to be worth a worker.
+    pub(super) fn inline(hasher: Hasher, file: File, received: u64) -> Self {
+        Self {
+            sender: None,
+            worker: None,
+            gathered: Vec::new(),
+            gathered_bytes: 0,
+            inline: Some(Inline {
+                file,
+                hasher,
+                received,
+            }),
+        }
+    }
+
     pub(super) fn update(&mut self, bytes: Bytes) -> io::Result<()> {
+        if let Some(inline) = &mut self.inline {
+            inline.hasher.update(&bytes);
+            inline.received += bytes.len() as u64;
+            return Ok(());
+        }
         self.gathered_bytes += bytes.len();
         self.gathered.push(bytes);
         if self.gathered_bytes >= BATCH {
@@ -60,11 +89,21 @@ impl HashPipe {
     }
 
     pub(super) fn range(&mut self, start: u64, end: u64) -> io::Result<()> {
+        if let Some(inline) = &mut self.inline {
+            same_prefix(inline.received, start)?;
+            hash_range(&inline.file, &mut inline.hasher, start, end)?;
+            inline.received = end;
+            return Ok(());
+        }
         self.send_gathered()?;
         self.send(Message::Range { start, end })
     }
 
     pub(super) fn sha256_so_far(&mut self, received: u64) -> io::Result<Sha256> {
+        if let Some(inline) = &self.inline {
+            same_prefix(inline.received, received)?;
+            return Ok(inline.hasher.sha256_so_far());
+        }
         self.send_gathered()?;
         let (reply, result) = mpsc::sync_channel(1);
         self.send(Message::Checkpoint { received, reply })?;
@@ -107,6 +146,9 @@ impl HashPipe {
     }
 
     fn join(&mut self) -> io::Result<(Hasher, u64)> {
+        if let Some(inline) = self.inline.take() {
+            return Ok((inline.hasher, inline.received));
+        }
         // closing the queue lets the worker drain it before its file handle and claim go away.
         drop(self.sender.take());
         let worker = self.worker.take().ok_or_else(stopped)?;

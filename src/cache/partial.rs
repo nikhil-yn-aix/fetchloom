@@ -24,6 +24,8 @@ use hashing::HashPipe;
 /// how often a download records its progress, so a killed run loses about this much of it.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
 const BUFFER: usize = 1024 * 1024;
+/// the largest download hashed without a thread of its own.
+const SMALL: u64 = 1024 * 1024;
 
 pub(crate) enum Claim {
     Owned(Partial),
@@ -147,7 +149,13 @@ impl Partial {
                 "the bytes kept from an earlier download are not the ones it recorded",
             ));
         }
-        let hasher = HashPipe::new(hasher, file.try_clone()?, offset)?;
+        // a small download hashes faster than a thread starts, so it hashes on the writer's own
+        let small = length.is_some_and(|length| length <= SMALL);
+        let hasher = if small {
+            HashPipe::inline(hasher, file.try_clone()?, offset)
+        } else {
+            HashPipe::new(hasher, file.try_clone()?, offset)?
+        };
         let mut writer = PartialWriter {
             cache: self.cache.clone(),
             file,

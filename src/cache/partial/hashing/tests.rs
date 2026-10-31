@@ -17,6 +17,7 @@ fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
         worker: Some(worker),
         gathered: Vec::new(),
         gathered_bytes: 0,
+        inline: None,
     };
     release
 }
@@ -74,6 +75,7 @@ fn a_hash_worker_failure_preserves_its_io_error() {
                 worker: Some(worker),
                 gathered: Vec::new(),
                 gathered_bytes: 0,
+                inline: None,
             };
             let error = if checkpoint {
                 pipe.sha256_so_far(0).unwrap_err()
@@ -98,6 +100,7 @@ fn a_panicked_hash_worker_is_an_io_error() {
         worker: Some(worker),
         gathered: Vec::new(),
         gathered_bytes: 0,
+        inline: None,
     };
     assert_eq!(pipe.finish(0).unwrap_err().kind(), io::ErrorKind::Other);
 }
@@ -175,4 +178,35 @@ fn dropping_a_writer_joins_hashing_before_releasing_its_claim() {
     assert!(held);
     ended.recv().unwrap();
     assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+}
+
+#[test]
+fn a_small_download_hashes_on_the_writers_thread_with_the_same_result() {
+    let (_dir, cache) = crate::cache::tests::cache();
+    let Claim::Owned(partial) = cache.claim("https://example.org/small").unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let body = b"0123456789abcdef";
+    let mut writer = partial
+        .writer(
+            0,
+            Some(body.len() as u64),
+            Validators::default(),
+            false,
+            false,
+        )
+        .unwrap();
+    assert!(
+        writer.hasher.inline.is_some(),
+        "a known small length hashes inline"
+    );
+    // the end first, as a split stream may write it, then the start that reaches it
+    writer
+        .write_chunk(8, &Bytes::from_static(&body[8..]))
+        .unwrap();
+    writer
+        .write_chunk(0, &Bytes::from_static(&body[..8]))
+        .unwrap();
+    writer.save().unwrap();
+    assert_eq!(writer.finish().unwrap().digest, crate::digest::sha256(body));
 }
