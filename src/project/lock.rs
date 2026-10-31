@@ -84,6 +84,16 @@ impl Lock {
             Ok(stored) if stored.version == VERSION => {
                 let mut datasets = stored.dataset;
                 datasets.sort_by(|a, b| a.name.cmp(&b.name));
+                if let Some(pair) = datasets
+                    .windows(2)
+                    .find(|pair| pair[0].name == pair[1].name)
+                {
+                    return Err(Error::new(
+                        Kind::ProjectInvalid,
+                        format!("data.lock lists the dataset {} twice", pair[0].name),
+                    )
+                    .help(BROKEN));
+                }
                 for dataset in &mut datasets {
                     dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
                     check_paths(dataset)?;
@@ -313,6 +323,20 @@ mod tests {
                     ],
                 },
             ],
+        }
+    }
+
+    #[test]
+    fn duplicate_dataset_names_are_refused_with_lock_recovery_help() {
+        let mut lock = sample();
+        lock.datasets.push(lock.datasets[1].clone());
+        let canonical = lock.render();
+        let edited = format!("# edited lock\n{canonical}");
+        for text in [canonical, edited] {
+            let error = Lock::parse(&text).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(error.message, "data.lock lists the dataset iris twice");
+            assert_eq!(error.help.as_deref(), Some(BROKEN));
         }
     }
 
