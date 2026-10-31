@@ -5,12 +5,14 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | page | when to read it |
 |---|---|
 | [user guide](README.md) | choose a task or reference |
-| [getting started](getting-started.md) | install fetchloom, add a first dataset or restore a clone |
+| [getting started](getting-started.md) | install fetchloom, add a first dataset or restore a shared project |
 | [concepts](concepts.md) | understand pins, placement, archives and offline work |
 | [commands](commands/README.md) | choose a command and check global options |
 | [add](commands/add.md) | put a dataset in a project and download it |
 | [sync](commands/sync.md) | restore pinned inputs and handle local conflicts |
 | [lock](commands/lock.md) | check or update exact input versions |
+| [list](commands/list.md) | see dataset references, locked sizes and folders |
+| [search](commands/search.md) | find a dataset by words and choose a canonical reference |
 | [status](commands/status.md) | find missing, edited and extra files |
 | [path](commands/path.md) | locate a dataset, file or subfolder |
 | [remove](commands/remove.md) | remove an entry without discarding edited files |
@@ -31,7 +33,8 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [JSON output](reference/json-output.md) | parse result fields, warnings and work counters |
 | [exit codes](reference/exit-codes.md) | branch on failure kinds and choose a recovery step |
 | [environment](reference/environment.md) | set credentials, cache location, limits or terminal behavior |
-| [cache folder](reference/cache-folder.md) | inspect cache indexes and local project state |
+| [cache folder](reference/cache-folder.md) | inspect shared cache objects and indexes |
+| [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |
 | [troubleshooting](troubleshooting.md) | match a symptom to its cause and fix |
