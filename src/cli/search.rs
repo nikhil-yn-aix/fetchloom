@@ -15,12 +15,21 @@ pub(super) struct Report {
 }
 
 pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report, Error> {
-    let report = find(context, &context.net(), &args.words.join(" ")).await?;
-    for row in rows(&context.output, &report.candidates) {
-        context.output.step("Found", &row);
+    let words = args.words.join(" ");
+    let report = find(context, &context.net(), &words).await?;
+    let output = &context.output;
+    output.done(
+        "Found",
+        &format!(
+            "{} for \"{words}\"",
+            units::count(report.candidates.len() as u64, "dataset", "datasets")
+        ),
+    );
+    for (number, row) in rows(output, &report.candidates).iter().enumerate() {
+        output.step(&(number + 1).to_string(), row);
     }
     for candidate in &report.candidates {
-        context.output.answer(&candidate.reference.to_string());
+        output.answer(&candidate.reference.to_string());
     }
     Ok(report)
 }
@@ -49,6 +58,13 @@ pub(super) async fn pick(
 }
 
 async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, Error> {
+    if context.offline.enabled() {
+        return Err(Error::new(
+            Kind::OfflineMissing,
+            format!("searching for \"{words}\" needs the internet"),
+        )
+        .help("paste a link or an id instead, such as zenodo:3608990, or search again online"));
+    }
     context.output.step(
         "Searching",
         &format!("hugging face, kaggle and zenodo for \"{words}\""),
@@ -80,10 +96,13 @@ fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
         .iter()
         .zip(references)
         .map(|(candidate, reference)| {
-            let mut parts = vec![format!(
-                "{reference:width$}  {}",
+            // hugging face titles are the repository id the reference already shows
+            let title = if reference.ends_with(&candidate.title) {
+                String::new()
+            } else {
                 output.clip(&candidate.title, 52)
-            )];
+            };
+            let mut parts = vec![format!("{reference:width$}  {title}").trim_end().to_owned()];
             parts.extend(candidate.size.map(units::size));
             parts.extend(
                 candidate
