@@ -230,7 +230,7 @@ pub(crate) fn run() -> ExitCode {
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     let Some(command) = args.command else {
-        return alone(&context, started);
+        return execute(context, None, started);
     };
     match jobs(&var) {
         Ok(jobs) => context.jobs = jobs,
@@ -240,10 +240,28 @@ pub(crate) fn run() -> ExitCode {
         Ok(rate) => context.rate = rate,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
-    dispatch(&context, command, started)
+    execute(context, Some(command), started)
 }
 
-fn dispatch(context: &Context, command: args::Command, started: Instant) -> ExitCode {
+fn execute(context: Context, command: Option<args::Command>, started: Instant) -> ExitCode {
+    let name = command.as_ref().map(args::Command::name);
+    let runtime = match command_runtime(&context) {
+        Ok(runtime) => runtime,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    };
+    let entered = runtime.enter();
+    let context = Arc::new(context);
+    let outcome = match command {
+        Some(command) => dispatch(&context, command, started),
+        None => alone(&context, started),
+    };
+    drop(entered);
+    // status is read-only, so an interrupted scan need not delay process exit.
+    runtime.shutdown_background();
+    outcome
+}
+
+fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     match command {
         args::Command::Add(args) => {
@@ -263,7 +281,7 @@ fn dispatch(context: &Context, command: args::Command, started: Instant) -> Exit
             finish(context, name, outcome, started)
         }
         args::Command::Status => {
-            let outcome = status::run(context);
+            let outcome = blocking(context, status::run);
             finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {
@@ -313,10 +331,10 @@ fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
 }
 
 /// `fetchloom` alone: a short status inside a project, and the welcome outside one.
-fn alone(context: &Context, started: Instant) -> ExitCode {
+fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     match project::find() {
         Ok(project) => {
-            let outcome = status::brief(context, &project);
+            let outcome = blocking(context, move |context| status::brief(context, &project));
             finish(context, Some("status"), outcome, started)
         }
         Err(_) => about(
@@ -356,20 +374,30 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
     }
 }
 
-/// runs a command that needs the network, with ctrl-c asking it to stop cleanly.
-fn block_on<T>(
-    context: &Context,
-    command: impl Future<Output = Result<T, Error>>,
-) -> Result<T, Error> {
+/// installs interruption handling before either synchronous or asynchronous work starts.
+fn command_runtime(context: &Context) -> Result<tokio::runtime::Runtime, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(context.threads.limit(workers))
         .enable_all()
         .build()
         .map_err(|err| Error::io("could not start", &err))?;
+    let mut signal = Box::pin(tokio::signal::ctrl_c());
+    // polling once installs the OS listener before a synchronous scan can occupy this thread.
+    let already_stopped = runtime
+        .block_on(std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(match signal.as_mut().poll(cx) {
+                std::task::Poll::Pending => Ok(false),
+                std::task::Poll::Ready(result) => result.map(|()| true),
+            })
+        }))
+        .map_err(|err| Error::io("could not listen for ctrl-c", &err))?;
     let stop = context.stop.clone();
+    if already_stopped {
+        stop.ask();
+    }
     runtime.spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if already_stopped || signal.await.is_ok() {
             stop.ask();
             // a second ctrl-c means now
             if tokio::signal::ctrl_c().await.is_ok() {
@@ -377,7 +405,33 @@ fn block_on<T>(
             }
         }
     });
-    runtime.block_on(command)
+    Ok(runtime)
+}
+
+fn block_on<T>(
+    context: &Context,
+    command: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let runtime = tokio::runtime::Handle::try_current()
+        .map_err(|err| Error::new(Kind::LocalIo, format!("cannot run the command: {err}")))?;
+    let outcome = runtime.block_on(command);
+    context.stop.check()?;
+    outcome
+}
+
+fn blocking<T: Send + 'static>(
+    context: &Arc<Context>,
+    command: impl FnOnce(&Context) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    let owned = Arc::clone(context);
+    block_on(context, async {
+        let task = tokio::task::spawn_blocking(move || command(&owned));
+        tokio::select! {
+            biased;
+            () = context.stop.asked() => Err(Error::new(Kind::Interrupted, "stopped at your request")),
+            outcome = task => outcome.map_err(|err| Error::new(Kind::LocalIo, format!("could not finish the scan: {err}")))?,
+        }
+    })
 }
 
 /// prints how the run ended and turns it into an exit code.

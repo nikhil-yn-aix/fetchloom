@@ -308,7 +308,7 @@ credentials are read from where each source already keeps them: `HF_TOKEN` or `~
 | `schema` | integer `1` |
 | `command` | `add`, `remove`, `sync`, `lock`, `status`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
 | `status` | `ok` or `error` |
-| `result` | command result on success; null on failure |
+| `result` | command result on success; also retained for cache verification findings and gc removal failures; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
 | `errors` | empty on success; one error object on failure |
 | `errors[].kind` | one of the names in [exit codes](#exit-codes) |
@@ -330,8 +330,8 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; eight arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
-| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
-| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: hash array |
+| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
+| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: paths whose contents, metadata or directory entries could not be read |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
@@ -354,7 +354,11 @@ status arrays:
 
 status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
-`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object could not be read, it returns `local.io` and exit 50. either error has a null `result`. unreadable objects are named separately in `warnings` and are neither marked nor removed. successful `changed`, `stuck` and `unreadable` arrays are empty.
+`status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
+
+`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` paths; the array length is the failed-path count. human output and JSON `warnings` name those paths. a path already absent is not a failed removal.
+
+successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
 
 ### work counters
 
@@ -371,7 +375,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 
-a warm project can place cached files with zero cache hits. there are no phase timings or bytes-written counters. cache scans silently omit directory and metadata read failures, so their counts can cover fewer objects than the cache contains.
+a warm project can place cached files with zero cache hits. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.
 
 ### exit codes
 

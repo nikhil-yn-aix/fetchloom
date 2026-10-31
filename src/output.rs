@@ -45,10 +45,17 @@ struct Document<'a, T> {
     /// none when no command ran, as for `--version` or a command line that could not be read.
     command: Option<&'a str>,
     status: &'static str,
-    result: Option<&'a T>,
+    result: Option<DocumentResult<'a, T>>,
     warnings: Vec<String>,
     errors: Vec<Problem<'a>>,
     work: WorkDone,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum DocumentResult<'a, T> {
+    Complete(&'a T),
+    Partial(&'a serde_json::Value),
 }
 
 #[derive(Serialize)]
@@ -290,7 +297,10 @@ impl Output {
             schema: 1,
             command,
             status: if outcome.is_ok() { "ok" } else { "error" },
-            result: outcome.ok(),
+            result: match outcome {
+                Ok(result) => Some(DocumentResult::Complete(result)),
+                Err(error) => error.result.as_ref().map(DocumentResult::Partial),
+            },
             warnings: std::mem::take(
                 &mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner),
             ),

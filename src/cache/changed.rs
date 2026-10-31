@@ -122,15 +122,39 @@ impl Cache {
 
     /// forgets marks only after both the object and its projects no longer need them. a retained
     /// damaged object still needs its mark so lookup refuses it.
+    #[cfg(test)]
     pub(crate) fn forget_changed(&self, needed: &HashSet<Sha256>) {
-        for digest in self.changed().into_keys() {
+        self.forget_changed_reporting(needed, &crate::stop::Stop::default(), &mut Vec::new())
+            .unwrap();
+    }
+
+    pub(super) fn forget_changed_reporting(
+        &self,
+        needed: &HashSet<Sha256>,
+        stop: &crate::stop::Stop,
+        not_removed: &mut Vec<std::path::PathBuf>,
+    ) -> Result<(), crate::error::Error> {
+        let folder = self.changed_folder();
+        for entry in super::upkeep::scan_entries(&folder, not_removed, stop)? {
+            stop.check()?;
+            let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+                continue;
+            };
             if !needed.contains(&digest)
-                && !self.object_path(&digest).exists()
-                && real_folder(&self.changed_folder(), FolderUse::Cache).is_ok()
+                && self
+                    .object_path(&digest)
+                    .try_exists()
+                    .is_ok_and(|exists| !exists)
+                && real_folder(&folder, FolderUse::Cache).is_ok()
             {
-                let _ = fs::remove_file(self.changed_folder().join(digest.hex()));
+                super::upkeep::removed(
+                    &entry.path(),
+                    self.volume.remove(&entry.path()),
+                    not_removed,
+                );
             }
         }
+        Ok(())
     }
 
     pub(super) fn changed_at(&self, digest: &Sha256) -> Option<u64> {

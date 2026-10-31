@@ -643,7 +643,10 @@ async fn sync_all(
 /// here only risks a later download.
 fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
-        tracing::debug!(%err, "could not register the project with the cache");
+        work.context.output.warn(&format!(
+            "could not register this project with {}: {err}. gc may not keep this project's files; check the cache folder's permissions and run the command again",
+            work.cache.root().display()
+        ));
     }
 }
 
