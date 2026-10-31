@@ -1,4 +1,4 @@
-# the lab's 1,000 files of 100 KiB, each its own url, at the far profile, from WSL, over loopback.
+# the lab's 1,000 files of 100 KiB, each its own url, at the far profile, from WSL, using FETCHLOOM_LAB.
 # every tool gets its list from the same wrapper, which writes it into the run's folder.
 # shape first: wsl -d Ubuntu-24.04 -u root -e bash bench/lab/net.sh far
 name = "lab-far-linux-urls"
@@ -7,8 +7,8 @@ profile = "far"
 repetitions = 5
 
 [vars]
-lab = "https://localhost:8443"
-py = "/home/fl/bench-venv/bin/python"
+lab = "{env:FETCHLOOM_LAB}"
+py = "{env:FETCHLOOM_BENCH_PY}"
 wrappers = "{repo}/bench/tools"
 
 [[workload]]

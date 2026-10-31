@@ -1,6 +1,6 @@
 # network lab
 
-an HTTPS file server in WSL for fetchloom's benchmark. `tc` shapes what it sends to the profiles below, for clients in WSL and on windows. the scripts assume the distro `Ubuntu-24.04` with the data owned by user `fl`, and WSL's default NAT networking.
+an HTTPS file server in WSL for fetchloom's benchmark. `tc` shapes what it sends to the profiles below, for clients in WSL and on windows. the examples use the distro `Ubuntu-24.04`, data owned by your regular WSL user, and WSL's default NAT networking.
 
 ## set up once
 
@@ -11,7 +11,7 @@ apt-get install -y nginx zip zstd ethtool
 systemctl disable --now nginx
 ```
 
-then, as `fl`, build the fixtures in `/home/fl/lab-data` (`LAB_DATA` changes the folder):
+then, as your regular WSL user, build the fixtures in `$HOME/lab-data` (`LAB_DATA` changes the folder):
 
 ```sh
 bash bench/lab/fixtures.sh
@@ -49,24 +49,28 @@ ebe7ddac5fed3acb92c9827c84e12a477c43013e7029660d82b77d93bd631a47  files-10k/
 from powershell in the repository:
 
 ```powershell
-wsl -d Ubuntu-24.04 -u root -e bash bench/lab/serve.sh "$env:LOCALAPPDATA\fetchloom-work\lab-ca.crt"
-wsl -d Ubuntu-24.04 -u root -e bash bench/lab/serve.sh stop
+$labData = "/home/<wsl-user>/lab-data"
+$env:FETCHLOOM_LAB_CA = "$env:LOCALAPPDATA\fetchloom-work\lab-ca.crt"
+wsl -d Ubuntu-24.04 -u root -e env "LAB_DATA=$labData" bash bench/lab/serve.sh $env:FETCHLOOM_LAB_CA
+wsl -d Ubuntu-24.04 -u root -e env "LAB_DATA=$labData" bash bench/lab/serve.sh stop
 ```
 
-`-e` hands the windows path to the script as it is; without it, WSL runs the line through a shell that drops the backslashes. the path is optional.
+`-e` hands the windows path to the script as it is; without it, WSL runs the line through a shell that drops the backslashes. the CA output path is optional.
+
+serve.sh runs as root: set `LAB_DATA` explicitly when starting it directly as root, as above. when called with `sudo` from the data owner's account, it instead looks up `SUDO_USER`'s home and defaults to that home's `lab-data`; it never defaults to root's home. use the same setting to stop the server. for a custom folder under sudo, pass it explicitly with `sudo env LAB_DATA="$LAB_DATA" bash bench/lab/serve.sh`.
 
 serve.sh runs nginx with its master as root and its workers as the owner of the data:
 
-- port 8443 serves `/home/fl/lab-data` over HTTPS with HTTP/1.1 and HTTP/2, byte ranges, and sendfile through kernel TLS for HTTP/1.1.
+- port 8443 serves `$LAB_DATA` over HTTPS with HTTP/1.1 and HTTP/2, byte ranges, and sendfile through kernel TLS for HTTP/1.1.
 - port 8442 serves only the CA's revocation list, over HTTP. schannel, and so curl.exe, refuses a certificate whose revocation it cannot check.
-- `/home/fl/lab-data/.lab` holds the CA, the keys, the nginx config and its error log. paths starting with a dot return 404, and the keys are readable by root alone.
+- `$LAB_DATA/.lab` holds the CA, the keys, the nginx config and its error log. paths starting with a dot return 404, and the keys are readable by root alone.
 
 the first run makes a CA that can only vouch for `localhost`, loopback and private addresses, and adds it to WSL's store with update-ca-certificates. every run issues a new server certificate for `localhost`, `127.0.0.1`, `::1` and eth0's address, which changes when WSL restarts, and copies the CA certificate to the given path. run serve.sh again after WSL restarts; the shaping is gone by then too.
 
 trust the CA on windows once, for your user, without admin:
 
 ```powershell
-certutil -user -addstore Root "$env:LOCALAPPDATA\fetchloom-work\lab-ca.crt"
+certutil -user -addstore Root $env:FETCHLOOM_LAB_CA
 ```
 
 windows may ask you to confirm with a security warning. `certutil -user -delstore Root "fetchloom lab ca"` removes it.
@@ -74,7 +78,8 @@ windows may ask you to confirm with a security warning. `certutil -user -delstor
 check it from windows with certificate checking on, using the address serve.sh prints:
 
 ```powershell
-curl.exe https://172.31.233.169:8443/file-1m.bin -o NUL
+$env:FETCHLOOM_LAB = "https://<wsl-eth0-address>:8443"
+curl.exe "$env:FETCHLOOM_LAB/file-1m.bin" -o NUL
 curl.exe https://localhost:8443/file-1m.bin -o NUL
 ```
 

@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
-# serves $LAB_DATA (default /home/fl/lab-data) over HTTPS on port 8443 with HTTP/1.1, HTTP/2,
+# serves $LAB_DATA (or $SUDO_USER's ~/lab-data) over HTTPS on port 8443 with HTTP/1.1, HTTP/2,
 # byte ranges and sendfile. run as root. the first run makes a local CA in $LAB_DATA/.lab and
 # trusts it in this system's store. the CA's revocation list is served over HTTP on port 8442.
 # given a path, windows or linux style, it copies the CA certificate there for windows.
 # `serve.sh stop` stops the server.
 set -euo pipefail
 
-data=${LAB_DATA:-/home/fl/lab-data}
+if [[ -n ${LAB_DATA:-} ]]; then
+  data=$LAB_DATA
+elif [[ -n ${SUDO_USER:-} && $SUDO_USER != root ]]; then
+  owner_home=$(getent passwd "$SUDO_USER" | cut -d: -f6) || {
+    echo "cannot find the home for SUDO_USER=$SUDO_USER; set LAB_DATA" >&2
+    exit 1
+  }
+  [[ -n $owner_home ]] || { echo "SUDO_USER=$SUDO_USER has no home; set LAB_DATA" >&2; exit 1; }
+  data=$owner_home/lab-data
+else
+  echo "set LAB_DATA to the fixture folder, or run with sudo as the data's owner" >&2
+  exit 1
+fi
 lab=$data/.lab
 conf=$lab/nginx.conf
 

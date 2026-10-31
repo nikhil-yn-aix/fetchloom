@@ -18,6 +18,7 @@ import hashlib
 import os
 import platform
 import random
+import re
 import shutil
 import stat
 import statistics
@@ -55,12 +56,16 @@ def remove_tree(path):
 
 
 def fill(value, names):
-    """replaces {name} in strings, lists and tables, repeatedly, so names may refer to names."""
+    """expands {name} and {env:NAME} in strings, lists and tables, including nested names."""
     if isinstance(value, str):
         for _ in range(5):
             replaced = value
             for key, sub in names.items():
                 replaced = replaced.replace("{" + key + "}", str(sub))
+            for key in re.findall(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", replaced):
+                if key not in os.environ:
+                    sys.exit(f"environment variable {key} is not set")
+                replaced = replaced.replace("{env:" + key + "}", os.environ[key])
             if replaced == value:
                 return value
             value = replaced
@@ -271,10 +276,10 @@ def ledger_add(plan, workload, tool, phase, rep, received):
         writer.writerow([when, plan, workload, tool, phase, rep, received])
 
 
-def versions(tools):
+def versions(tools, names):
     found = {}
     for name, tool in tools.items():
-        command = tool.get("version")
+        command = fill(tool.get("version"), names)
         if not command:
             continue
         try:
@@ -294,7 +299,8 @@ def main():
     parser.add_argument("--results", type=Path, default=BENCH / "results",
                         help="where the block's folder goes; git ignores bench/results")
     args = parser.parse_args()
-    plan = tomllib.loads(Path(args.plan).read_text(encoding="utf-8-sig"))
+    plan = fill(tomllib.loads(Path(args.plan).read_text(encoding="utf-8-sig")), {})
+    plan_names = {"repo": BENCH.parent.as_posix(), **plan.get("vars", {})}
     reps = args.reps or plan.get("repetitions", 3)
     only = set(args.only.split(",")) if args.only else None
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -306,7 +312,7 @@ def main():
     environment = {
         "plan": plan["name"], "layer": plan["layer"], "profile": plan.get("profile", ""),
         "started": stamp, "seed": seed, "os": platform.platform(), "cpu": platform.processor(),
-        "python": sys.version.split()[0], "versions": versions(plan["tool"]),
+        "python": sys.version.split()[0], "versions": versions(plan["tool"], plan_names),
     }
     (out_dir / "environment.txt").write_text(
         "\n".join(f"{key}: {value}" for key, value in environment.items()) + "\n", encoding="utf-8"
@@ -317,7 +323,7 @@ def main():
         writer.writeheader()
         for workload in plan["workload"]:
             # tools run in their own folders, so paths in the repository go through {repo}
-            names = {"repo": BENCH.parent.as_posix(), **plan.get("vars", {}), **workload.get("vars", {})}
+            names = {**plan_names, **workload.get("vars", {})}
             want = expected(BENCH.parent / workload["expect"])
             members = [t for t in workload["tools"] if only is None or t in only]
             for rep in range(reps):

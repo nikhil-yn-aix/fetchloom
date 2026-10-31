@@ -20,7 +20,7 @@ the comparison tools and their versions, installed on 2026-10-30 for the method 
 | git-annex | | 10.20240129, apt |
 | git | | 2.43.0, apt |
 
-the python packages sit in one virtual environment per system: `%LOCALAPPDATA%\fetchloom-work\bench-venv` on windows and `/home/fl/bench-venv` in WSL. every package in them is pinned in [requirements-windows.txt](tools/requirements-windows.txt) and [requirements-linux.txt](tools/requirements-linux.txt). the two agree on every shared package except python-dateutil, which datalad's dependencies hold at 2.9.0.post0 on linux.
+the python packages sit in one virtual environment per system. set `FETCHLOOM_BENCH_PY` to its python executable; the examples below use `%LOCALAPPDATA%\fetchloom-work\bench-venv` on windows and `$HOME/bench-venv` in WSL. every package in them is pinned in [requirements-windows.txt](tools/requirements-windows.txt) and [requirements-linux.txt](tools/requirements-linux.txt). the two agree on every shared package except python-dateutil, which datalad's dependencies hold at 2.9.0.post0 on linux.
 
 the lab server is nginx 1.24.0 with OpenSSL 3.0.13 in ubuntu 24.04, WSL 2 kernel 6.18.54.1, on windows 11 build 26200.
 
@@ -32,13 +32,14 @@ in WSL, as root:
 apt-get install -y aria2 git-annex libarchive-tools python3-pip
 ```
 
-in WSL, as `fl`, with uv 0.13.6 in `~/.local/bin`:
+in WSL, as your regular user, with uv 0.13.6 in `~/.local/bin`:
 
 ```sh
 uv python install 3.13
-uv venv --seed --python 3.13 /home/fl/bench-venv
-uv pip install --python /home/fl/bench-venv/bin/python -r bench/tools/requirements-linux.txt
-ln -sf /home/fl/target/report-release/release/fetchloom ~/.local/bin/fetchloom
+uv venv --seed --python 3.13 "$HOME/bench-venv"
+export FETCHLOOM_BENCH_PY="$HOME/bench-venv/bin/python"
+uv pip install --python "$FETCHLOOM_BENCH_PY" -r bench/tools/requirements-linux.txt
+ln -sf "<release-build>/fetchloom" "$HOME/.local/bin/fetchloom"
 ```
 
 windows cannot reach files.pythonhosted.org on this network, so its wheels come through WSL. `uv pip compile` resolves the windows environment, since `pip download --platform` evaluates markers such as `sys_platform == 'win32'` for the machine it runs on and would leave out windows-only packages. antlr4-python3-runtime 4.9.3 and gitignorefile 1.1.2 publish no wheels, so pure python wheels are built from their sources in WSL:
@@ -47,7 +48,7 @@ windows cannot reach files.pythonhosted.org on this network, so its wheels come 
 uv pip compile --python-platform x86_64-pc-windows-msvc --python-version 3.13 requirements.in -o bench/tools/requirements-windows.txt
 python -m pip wheel --no-deps --no-binary=:all: -w ~/win-wheels antlr4-python3-runtime==4.9.3 gitignorefile==1.1.2
 python -m pip download --no-deps --platform win_amd64 --python-version 3.13 --only-binary=:all: --find-links ~/win-wheels -d ~/win-wheels -r bench/tools/requirements-windows.txt
-cp ~/win-wheels/*.whl /mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wheels/
+cp ~/win-wheels/*.whl "<windows-wheels-folder-in-WSL>/"
 ```
 
 `requirements.in` lists the tools: `pooch==1.9.0`, `huggingface_hub[hf_xet]==2.4.0`, `zenodo_get==3.1.0`, `kagglehub==1.0.3`, `gdown==6.5.1`, `datahugger==0.13`, `dvc==3.67.1` and `psutil==7.2.2`. pip downloads into a linux folder first, since it cannot set file modes on `/mnt/c`.
@@ -56,6 +57,7 @@ on windows:
 
 ```powershell
 winget install aria2.aria2 --version 1.37.0 --exact
-uv venv --python 3.13 $env:LOCALAPPDATA\fetchloom-work\bench-venv
-uv pip install --no-index --find-links $env:LOCALAPPDATA\fetchloom-work\wheels --python $env:LOCALAPPDATA\fetchloom-work\bench-venv\Scripts\python.exe -r bench\tools\requirements-windows.txt
+uv venv --python 3.13 "$env:LOCALAPPDATA\fetchloom-work\bench-venv"
+$env:FETCHLOOM_BENCH_PY = "$env:LOCALAPPDATA\fetchloom-work\bench-venv\Scripts\python.exe"
+uv pip install --no-index --find-links "$env:LOCALAPPDATA\fetchloom-work\wheels" --python $env:FETCHLOOM_BENCH_PY -r bench\tools\requirements-windows.txt
 ```

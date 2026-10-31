@@ -1,4 +1,4 @@
-# the lab's 1,000 files of 100 KiB, each its own url, at the home profile, from windows, by the address WSL's eth0 had when the plan was written.
+# the lab's 1,000 files of 100 KiB, each its own url, at the home profile, from windows, using FETCHLOOM_LAB.
 # every tool gets its list from the same wrapper, which writes it into the run's folder.
 # shape first: wsl -d Ubuntu-24.04 -u root -e bash bench/lab/net.sh home
 name = "lab-home-windows-urls"
@@ -7,8 +7,8 @@ profile = "home"
 repetitions = 5
 
 [vars]
-lab = "https://172.31.233.169:8443"
-py = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe"
+lab = "{env:FETCHLOOM_LAB}"
+py = "{env:FETCHLOOM_BENCH_PY}"
 wrappers = "{repo}/bench/tools"
 
 [[workload]]

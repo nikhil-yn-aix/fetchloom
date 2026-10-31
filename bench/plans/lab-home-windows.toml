@@ -1,4 +1,4 @@
-# the lab's single files and archives at the home profile, from windows, by the address WSL's eth0 had when the plan was written.
+# the lab's single files and archives at the home profile, from windows, using FETCHLOOM_LAB.
 # shape first: wsl -d Ubuntu-24.04 -u root -e bash bench/lab/net.sh home
 name = "lab-home-windows"
 layer = "lab"
@@ -6,10 +6,10 @@ profile = "home"
 repetitions = 5
 
 [vars]
-lab = "https://172.31.233.169:8443"
-py = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe"
+lab = "{env:FETCHLOOM_LAB}"
+py = "{env:FETCHLOOM_BENCH_PY}"
 wrappers = "{repo}/bench/tools"
-ca = "C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/lab-ca.crt"
+ca = "{env:FETCHLOOM_LAB_CA}"
 unpack = ""
 
 [[workload]]
@@ -80,16 +80,16 @@ version = ["aria2c", "--version"]
 first = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "{url}", "{known}", "--unpack={unpack}"]
 second = ["{py}", "{wrappers}/pooch_fetch.py", "{out}", "{home}", "{url}", "{known}", "--unpack={unpack}"]
 env = { REQUESTS_CA_BUNDLE = "{ca}" }
-version = ["C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe", "-c", "from importlib.metadata import version; print('pooch', version('pooch'))"]
+version = ["{py}", "-c", "from importlib.metadata import version; print('pooch', version('pooch'))"]
 
 [tool.dvc]
 first = ["{py}", "{wrappers}/dvc_import.py", "{out}", "{home}", "{url}"]
 second = ["{py}", "{wrappers}/dvc_import.py", "{out}", "{home}", "{url}", "--again"]
 env = { SSL_CERT_FILE = "{ca}" }
 ignore = [".dvc/*", "out/*.dvc"]
-version = ["C:/Users/t-nikhilyn/AppData/Local/fetchloom-work/bench-venv/Scripts/python.exe", "-c", "from importlib.metadata import version; print('dvc', version('dvc'))"]
+version = ["{py}", "-c", "from importlib.metadata import version; print('dvc', version('dvc'))"]
 
 [tool.curl-bsdtar]
 first = ["{py}", "{wrappers}/curl_bsdtar.py", "{out}", "{url}"]
 ignore = ["*.zip", "*.tar.zst"]
-version = ["C:/Windows/System32/tar.exe", "--version"]
+version = ["tar.exe", "--version"]
