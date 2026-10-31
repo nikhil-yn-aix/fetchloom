@@ -851,8 +851,11 @@ fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
             };
             assert!(details.contains("could not restore data.toml"), "{details}");
             if let Some(before) = before {
-                assert!(details.contains("restore data.toml from this backup text"), "{details}");
-                assert!(details.contains(before.trim_end()), "{details}");
+                assert!(
+                    details.contains("restore data.toml from this backup text"),
+                    "{details}"
+                );
+                assert!(details.contains(&serde_json::to_string(before)?), "{details}");
             } else {
                 assert!(details.contains("remove the iris dataset entry"), "{details}");
             }
@@ -873,7 +876,10 @@ fn remove_checks_cache_and_plan_before_changing_metadata() -> Result {
         fs::write(&blocker, b"not a directory")?;
         if !blocked_cache {
             let text = fs::read_to_string(&manifest)?;
-            fs::write(&manifest, format!("[project]\ndata_dir = \"blocked\"\n\n{text}"))?;
+            fs::write(
+                &manifest,
+                format!("[project]\ndata_dir = \"blocked\"\n\n{text}"),
+            )?;
         }
         let before = (fs::read(&manifest)?, fs::read(&lock)?);
         let mut command = sandbox.command(&["--json", "remove", "iris"]);
@@ -897,14 +903,19 @@ fn remove_explains_how_to_finish_after_placement_fails() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let path = sandbox.work().join("data").join("iris").join("iris.csv");
-    let held = fs::OpenOptions::new().read(true).share_mode(3).open(&path)?;
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(&path)?;
     let output = sandbox.run(&["--json", "remove", "iris"])?;
     assert_eq!(output.status.code(), Some(50));
     let error = json(&output)?;
     let details = error["errors"][0]["details"].to_string();
     assert!(details.contains("fetchloom sync"), "{details}");
     assert!(details.contains("finishes the removal"), "{details}");
-    assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris"));
+    assert!(
+        !fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris")
+    );
     drop(held);
     let synced = sandbox.run(&["sync"])?;
     assert!(synced.status.success(), "{}", text(&synced.stderr)?);
@@ -945,7 +956,8 @@ fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
     added(&sandbox, &server)?;
     for cold in [false, true] {
         let clone = clone(&sandbox, if cold { "cold-clone" } else { "warm-clone" })?;
-        let mut command = sandbox.command_in(&clone, &["--json", "--offline", "path", "iris/no.csv"]);
+        let mut command = sandbox
+            .command_in(&clone, &["--json", "--offline", "path", "iris/no.csv"]);
         if cold {
             command.env("FETCHLOOM_CACHE", sandbox.folder("cold-cache")?);
         }
@@ -954,8 +966,14 @@ fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
         let report = json(&output)?;
         assert_eq!(report["errors"][0]["kind"], "usage");
         assert_eq!(report["work"]["requests"], 0);
-        assert!(!clone.join("data").exists(), "an impossible member must not place data");
-        assert!(!clone.join(".fetchloom").exists(), "an impossible member must not sync");
+        assert!(
+            !clone.join("data").exists(),
+            "an impossible member must not place data"
+        );
+        assert!(
+            !clone.join(".fetchloom").exists(),
+            "an impossible member must not sync"
+        );
     }
     Ok(())
 }

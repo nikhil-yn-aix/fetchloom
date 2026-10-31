@@ -186,7 +186,9 @@ mod tests {
                     assert_eq!(error.kind, kind);
                     assert_eq!(error.message, "listing failed");
                     assert_eq!(error.help.as_deref(), Some("source-specific recovery"));
-                    assert!(error.details.iter().any(|line| line == "source-specific detail"));
+                    assert!(
+                        error.details.iter().any(|line| line == "source-specific detail")
+                    );
                     if kind == Kind::Interrupted {
                         assert_eq!(error.kind.exit_code(), 130);
                         assert_eq!(error.details, ["source-specific detail"]);

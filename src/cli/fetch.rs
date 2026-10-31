@@ -29,9 +29,8 @@ pub(super) struct Job {
     pub(super) again: Option<Again>,
 }
 
-/// the download of one listed file, which will be called `name`. a file no checksum pins is asked
-/// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
-/// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
+/// builds a listed download, revalidating unpinned links on later runs. cached members can stand
+/// for an archive when `name` identifies one and extraction is enabled.
 pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
     Job {
         fetch: Fetch {

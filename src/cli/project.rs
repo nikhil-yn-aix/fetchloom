@@ -114,10 +114,9 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         None,
     )
     .await;
-    let (lock_changed, placement) =
-        synced.map_err(|error| {
-            restore(&project, existed.then_some(text.as_str()), &name, error)
-        })?;
+    let (lock_changed, placement) = synced.map_err(|error| {
+        restore(&project, existed.then_some(text.as_str()), &name, error)
+    })?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -149,12 +148,14 @@ fn restore(project: &Project, before: Option<&str>, name: &str, mut failure: Err
         if let Some(help) = err.help {
             failure = failure.detail(help);
         }
-        failure = failure.detail(match before {
-            Some(text) => format!("restore data.toml from this backup text:\n{text}"),
-            None => format!(
+        failure = match before {
+            Some(text) => failure
+                .detail("restore data.toml from this backup text (decode it as a JSON string):")
+                .detail(serde_json::Value::String(text.to_owned()).to_string()),
+            None => failure.detail(format!(
                 "remove the {name} dataset entry from data.toml, or remove data.toml if it holds nothing else"
-            ),
-        });
+            )),
+        };
     }
     failure
 }
@@ -544,7 +545,11 @@ fn check_member(
     let Some(locked) = lock.get(name) else {
         return Ok(());
     };
-    if manifest.datasets.get(name).is_none_or(|entry| locked.spec != lock::spec(entry)) {
+    if manifest
+        .datasets
+        .get(name)
+        .is_none_or(|entry| locked.spec != lock::spec(entry))
+    {
         return Ok(());
     }
     let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;

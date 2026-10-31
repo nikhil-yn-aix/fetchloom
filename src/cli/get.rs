@@ -480,7 +480,10 @@ mod tests {
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
         approve(&context, &cache, &jobs).unwrap();
         jobs[0].fetch.unpack = false;
-        assert_eq!(approve(&context, &cache, &jobs).unwrap_err().kind, Kind::Unconfirmed);
+        assert_eq!(
+            approve(&context, &cache, &jobs).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
         context.offline = net::Offline::Flag;
         approve(&context, &cache, &jobs).unwrap();
     }
@@ -506,7 +509,10 @@ mod tests {
         let context = approval_context();
         approve(&context, &cache, &jobs).unwrap();
         jobs[1].fetch.expect.size = Some(super::super::ASK_ABOVE + 1);
-        assert_eq!(approve(&context, &cache, &jobs).unwrap_err().kind, Kind::Unconfirmed);
+        assert_eq!(
+            approve(&context, &cache, &jobs).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
     }
 
     #[test]
