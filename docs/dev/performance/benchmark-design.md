@@ -60,12 +60,20 @@ live runs fetch real public datasets, 5 interleaved rounds each with empty cache
 | service | dataset | other tool |
 |---|---|---|
 | zenodo | [8164711](https://zenodo.org/records/8164711), `pbmc.RData`, 106,968,050 bytes | zenodo_get |
-| hugging face | [stanfordnlp/imdb](https://huggingface.co/datasets/stanfordnlp/imdb), three `plain_text/*.parquet` files, 83,446,840 bytes, revision `e6281661ce1c48d982bc483cf8a173c1bbeb5d31` | `hf download` with hf_xet |
-| kaggle | [zynicide/wine-reviews](https://www.kaggle.com/datasets/zynicide/wine-reviews), version 4, `winemag-data-130k-v2.csv`, 52,908,706 bytes | kagglehub |
+| hugging face | [stanfordnlp/imdb](https://huggingface.co/datasets/stanfordnlp/imdb), three `plain_text/*.parquet` files, 83,446,840 bytes, revision `e6281661ce1c48d982bc483cf8a173c1bbeb5d31` | `hf download` with hf_xet, then `sha256sum -c` |
+| kaggle | [zynicide/wine-reviews](https://www.kaggle.com/datasets/zynicide/wine-reviews), version 4, `winemag-data-130k-v2.csv`, 52,908,706 bytes | kagglehub, then a SHA-256 check |
 | figshare | [10.6084/m9.figshare.5616403](https://api.figshare.com/v2/articles/5616403), three files, 7,425,546 bytes | datahugger |
 | dataverse | [doi:10.7910/DVN/TJCLKP](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP), version recorded at preparation, three raw files in version 5.0 | datahugger |
 
 the public APIs confirmed these inputs on 2026-10-31. dataverse now exposes three raw files, including an archive, rather than 175 separate downloads. live runs keep archives packed in both clients, compare an independently hashed reference, and report layout differences separately from content differences. the selected zenodo and kaggle files keep each job near the stated size. metadata, exact selections and hashes are recorded again for each run.
+
+the hugging face and kaggle clients do not accept the supplied expected SHA-256 as a download option. their timed commands check it after download, following the same rule as curl and wget.
+
+datahugger receives the explicit dataverse `dataset.xhtml?persistentId=...` URL: the DOI now redirects to `/citation`, which its URL parser does not support. Harvard Dataverse returns HTTP 403 for the default `python-requests` User-Agent and 200 for an identified client. its datahugger wrapper sets the request header to `fetchloom-benchmark/1 datahugger/0.13`; download, checksum and concurrency behavior are unchanged, and the wrapper is recorded in the results. 
+
+native cache metadata and generated checksum reports are not dataset payloads; their creation still counts toward time and disk. 
+
+the full dataverse dataset has a tabular-format difference: fetchloom requests the original TSV, while datahugger retrieves the ingested TAB. those bytes differ and fail the shared SHA-256 check; the comparison reports the difference rather than presenting it as a speed result.
 
 live numbers vary with the service, so they show ranges and no ratios. quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files below 1 KiB in the figshare and dataverse datasets. unreachable public inputs are skipped with their errors; no credentials are required by the harness.
 
