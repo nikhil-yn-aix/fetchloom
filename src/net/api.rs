@@ -56,6 +56,15 @@ impl Api for Net {
             )
             .help(self.offline.retry()));
         }
+        #[cfg(debug_assertions)]
+        let local = test_endpoint(url);
+        #[cfg(debug_assertions)]
+        let url = if let Some(local) = &local {
+            self.typed(local);
+            local
+        } else {
+            url
+        };
         self.typed
             .check(url)
             .map_err(|reason| failure::refused(url, &reason))?;
@@ -146,6 +155,29 @@ impl Net {
             body: body.to_vec(),
         })
     }
+}
+
+/// local catalog replay for CLI tests; release builds never read these overrides.
+#[cfg(debug_assertions)]
+fn test_endpoint(url: &Url) -> Option<Url> {
+    let variable = match url.host_str()? {
+        "huggingface.co" => "FETCHLOOM_TEST_HF_API",
+        "api.kaggle.com" => "FETCHLOOM_TEST_KAGGLE_API",
+        "zenodo.org" => "FETCHLOOM_TEST_ZENODO_API",
+        _ => return None,
+    };
+    let mut local = Url::parse(&std::env::var(variable).ok()?).ok()?;
+    if local.scheme() != "http"
+        || local.host_str() != Some("127.0.0.1")
+        || !local.username().is_empty()
+        || local.password().is_some()
+    {
+        return None;
+    }
+    local.set_path(url.path());
+    local.set_query(url.query());
+    local.set_fragment(None);
+    Some(local)
 }
 
 /// the target of the `rel="next"` link in a `Link` header.

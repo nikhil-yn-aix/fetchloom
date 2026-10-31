@@ -69,7 +69,7 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     for text in references {
         assert_eq!(Reference::parse(&text).unwrap().reference.to_string(), text);
     }
-    assert!(result.warnings.is_empty());
+    assert_eq!(result.warnings, Vec::<String>::new());
     let hf = &result.candidates[0];
     assert_eq!(hf.title, "scikit-learn/iris");
     assert_eq!(hf.source, "hugging face");
@@ -80,11 +80,11 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     assert_eq!(kaggle.title, "Iris Species");
     assert_eq!(kaggle.source, "kaggle");
     assert_eq!(kaggle.size, Some(3687));
-    assert_eq!(kaggle.downloads, Some(958555));
+    assert_eq!(kaggle.downloads, Some(958_555));
     let zenodo = &result.candidates[2];
     assert_eq!(zenodo.title, "IRIS: ICESat-2 River Surface Slope");
     assert_eq!(zenodo.source, "zenodo");
-    assert_eq!(zenodo.size, Some(1147253099));
+    assert_eq!(zenodo.size, Some(1_147_253_099));
     assert_eq!(zenodo.downloads, Some(2400));
 }
 
@@ -161,7 +161,7 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://zenodo.org/api/records?q=title%3A%28fashion+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
     let result = block_on(search(&api, "fashion (mnist):*&")).unwrap();
     assert!(result.candidates.is_empty());
-    assert!(result.warnings.is_empty());
+    assert_eq!(result.warnings, Vec::<String>::new());
     assert_eq!(api.asked().len(), 3);
 }
 

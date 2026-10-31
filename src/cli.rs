@@ -7,6 +7,7 @@ mod get;
 mod help;
 mod logs;
 mod project;
+mod search;
 mod status;
 mod sync;
 mod usage;
@@ -306,6 +307,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Get(args) => {
             let outcome = block_on(context, get::run(context, args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Search(args) => {
+            let outcome = block_on(context, search::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Help(asked) => help::show(context, &asked.topic, started),

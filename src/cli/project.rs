@@ -35,7 +35,7 @@ pub(super) struct Report {
     placement: Option<Placement>,
 }
 
-pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
+pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
@@ -47,13 +47,16 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         String::new()
     };
     let manifest = Manifest::parse(&text)?;
+    let net = Arc::new(net(context, &manifest));
+    if crate::source::search::is_search(&args.link) {
+        args.link = super::search::pick(context, net.as_ref(), &args.link, "add").await?;
+    }
     let parsed = Reference::parse(&args.link)?;
     parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
         usable(asked, &manifest)?;
     }
-    let net = Arc::new(net(context, &manifest));
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
     }

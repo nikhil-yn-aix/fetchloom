@@ -184,7 +184,7 @@ fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
-    assert!(stdout.lines().count() <= 16, "{stdout}");
+    assert!(stdout.lines().count() <= 17, "{stdout}");
     for line in ANALOGY {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
