@@ -175,8 +175,10 @@ impl Cache {
         stop: &Stop,
     ) -> Result<Freed, Error> {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
-        let unused =
-            |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age >= grace);
+        let unused = |modified: SystemTime| {
+            // FAT rounds a new file's time up, into the future, so no age is asked of `--now`
+            grace.is_zero() || now.duration_since(modified).is_ok_and(|age| age >= grace)
+        };
         let scan = self.scan_objects(stop)?;
         if let Some(path) = scan.unreadable.first() {
             return Err(Error::new(
@@ -507,6 +509,47 @@ mod tests {
             assert_eq!(checked.changed, []);
             assert!(object.exists());
         }
+    }
+
+    #[test]
+    fn gc_now_frees_an_unneeded_object_whose_time_is_ahead_of_the_clock() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"from the future");
+        let object = cache.object_path(&stored.digest);
+        // FAT rounds a new file's time up by as much as two seconds
+        let ahead = SystemTime::now() + Duration::from_secs(2);
+        let mut permissions = fs::metadata(&object).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test moves a sealed object's time"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(&object, permissions).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(ahead)
+            .unwrap();
+        let young = cache
+            .sweep_with_stop(
+                &Needed::default(),
+                SystemTime::now(),
+                GRACE,
+                &Stop::default(),
+            )
+            .unwrap();
+        assert_eq!(young.kept_objects, 1);
+        let now = cache
+            .sweep_with_stop(
+                &Needed::default(),
+                SystemTime::now(),
+                Duration::ZERO,
+                &Stop::default(),
+            )
+            .unwrap();
+        assert_eq!(now.objects, 1);
+        assert!(!object.exists());
     }
 
     #[test]

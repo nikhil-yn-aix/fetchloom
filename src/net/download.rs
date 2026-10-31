@@ -206,6 +206,17 @@ impl Net {
         cache: &Cache,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
+        // one span per file, so a timeline shows each download as a bar with its link
+        let span = tracing::debug_span!("download", url = %crate::net::Shown(&fetch.url));
+        tracing::Instrument::instrument(self.download_in_span(fetch, cache, on), span).await
+    }
+
+    async fn download_in_span(
+        &self,
+        fetch: &Fetch,
+        cache: &Cache,
+        on: Listener<'_>,
+    ) -> Result<Fetched, Error> {
         if let Some(found) = self.in_cache(fetch, cache) {
             return Ok(found);
         }

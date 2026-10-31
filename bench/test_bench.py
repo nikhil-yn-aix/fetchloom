@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 
 import fixtures
@@ -34,7 +35,7 @@ class MeasurementTests(unittest.TestCase):
     def test_exclusive_lock_rejects_overlapping_runs(self):
         from pathlib import Path
         import shutil
-        root = Path("/srv/fl-bench/unit-lock")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-lock"
         root.mkdir(parents=True, exist_ok=True)
         try:
             with lab.exclusive(root / "lock"):
@@ -49,7 +50,7 @@ class MeasurementTests(unittest.TestCase):
         import run
         from pathlib import Path
         import shutil
-        root = Path("/srv/fl-bench/unit-checks")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-checks"
         root.mkdir(parents=True, exist_ok=True)
         try:
             path = root / "value"
@@ -65,7 +66,7 @@ class MeasurementTests(unittest.TestCase):
         import os
         from pathlib import Path
         import shutil
-        root = Path("/srv/fl-bench/unit-process")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-process"
         root.mkdir(parents=True, exist_ok=True)
         try:
             passed = run.measure(["/bin/true"], root, os.environ, root / "log", 2)
@@ -86,7 +87,7 @@ class MeasurementTests(unittest.TestCase):
         from pathlib import Path
         import shutil
         import run
-        root = Path("/srv/fl-bench/unit-kill")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-kill"
         root.mkdir(parents=True, exist_ok=True)
         try:
             result = run.measure(["bash", "-c", "trap '' INT; sleep 30 & wait"], root,

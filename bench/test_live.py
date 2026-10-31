@@ -1,3 +1,4 @@
+import tempfile
 import os
 import unittest
 
@@ -7,7 +8,7 @@ class LiveTests(unittest.TestCase):
         from pathlib import Path
         import shutil
         import live
-        root = Path("/srv/fl-bench/unit-live-files")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-live-files"
         (root / "generated").mkdir(parents=True)
         try:
             (root / "value").write_bytes(b"abc")

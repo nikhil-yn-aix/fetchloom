@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 
 
@@ -21,7 +22,7 @@ class RenderTests(unittest.TestCase):
         from pathlib import Path
         import shutil
         import render
-        root = Path("/srv/fl-bench/unit-render")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-render"
         root.mkdir(parents=True)
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         try:
@@ -41,7 +42,7 @@ class RenderTests(unittest.TestCase):
         import shutil
         import xml.etree.ElementTree as ET
         import render
-        root = Path("/srv/fl-bench/unit-chart")
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-chart"
         root.mkdir(parents=True)
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         try:

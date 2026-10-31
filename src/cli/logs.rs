@@ -49,7 +49,7 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
         tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(color)
-            .without_time()
+            .with_timer(tracing_subscriber::fmt::time::uptime())
             .with_filter(filter)
     });
     // the file is created here, since the builder panics on a path it cannot create

@@ -14,6 +14,7 @@ mod sync;
 mod usage;
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -222,11 +223,20 @@ pub(crate) fn run() -> ExitCode {
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
     if args.version {
-        return about(
-            &context,
-            &format!("fetchloom {}", env!("CARGO_PKG_VERSION")),
-            started,
-        );
+        let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
+        // what a bug report needs: which build, on which system
+        if level >= Level::Verbose {
+            let _ = write!(
+                text,
+                "\n{} {} \u{b7} commit {} \u{b7} cache {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                option_env!("FETCHLOOM_COMMIT").unwrap_or("unknown"),
+                crate::cache::Cache::locate(&var)
+                    .map_or_else(|| "unknown".to_owned(), |root| root.display().to_string())
+            );
+        }
+        return about(&context, &text, started);
     }
     if let Some(args::Command::Help(asked)) = &args.command {
         return help::show(&context, &asked.topic, started);
