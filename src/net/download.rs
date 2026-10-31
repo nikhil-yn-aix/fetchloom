@@ -197,6 +197,40 @@ enum Run {
 
 pub(crate) type Listener<'a> = &'a (dyn Fn(Event) -> Result<(), Error> + Sync);
 
+/// how much a stream gathers before the writer thread takes it. a 16 KiB chunk at a time woke
+/// the writer for each, which cost more than the download on a fast link.
+const BATCH: usize = 256 * 1024;
+
+/// chunks on their way to the writer thread, handed over together without copying.
+#[derive(Default)]
+struct Batch {
+    chunks: Vec<Bytes>,
+    bytes: usize,
+}
+
+impl Batch {
+    fn push(&mut self, chunk: Bytes) {
+        self.bytes += chunk.len();
+        self.chunks.push(chunk);
+    }
+
+    fn full(&self) -> bool {
+        self.bytes >= BATCH
+    }
+
+    /// sends what was gathered. an error means the writer stopped.
+    async fn flush(&mut self, sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>) -> Result<(), ()> {
+        if self.chunks.is_empty() {
+            return Ok(());
+        }
+        self.bytes = 0;
+        sender
+            .send(std::mem::take(&mut self.chunks))
+            .await
+            .map_err(|_| ())
+    }
+}
+
 impl Net {
     /// puts the file into the cache, downloading only what the cache does not already hold.
     /// `on` sees every event and may stop the download by returning an error.
@@ -542,10 +576,12 @@ impl Net {
         watch: Option<u64>,
     ) -> Result<Run, Failure> {
         let reached = writer.written();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<Bytes>>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
-            while let Some(chunk) = receiver.blocking_recv() {
-                writer.write_chunk(writer.written(), &chunk)?;
+            while let Some(batch) = receiver.blocking_recv() {
+                for chunk in &batch {
+                    writer.write_chunk(writer.written(), chunk)?;
+                }
             }
             writer.save()?;
             Ok(writer)
@@ -589,7 +625,30 @@ impl Net {
         &self,
         url: &Url,
         response: &mut reqwest::Response,
-        sender: &tokio::sync::mpsc::Sender<Bytes>,
+        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        reached: u64,
+        on: Listener<'_>,
+        watch: Option<u64>,
+    ) -> Result<Option<(u64, f64)>, Failure> {
+        let mut batch = Batch::default();
+        let read = self
+            .read_batches(url, response, sender, &mut batch, reached, on, watch)
+            .await;
+        // whatever arrived is kept, so a resume or a split goes on from the last byte received
+        let _ = batch.flush(sender).await;
+        read
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the stream's state, passed as it was"
+    )]
+    async fn read_batches(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        batch: &mut Batch,
         mut reached: u64,
         on: Listener<'_>,
         watch: Option<u64>,
@@ -598,10 +657,27 @@ impl Net {
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
+        // the idle deadline moves with every chunk without touching the timer, which is reset
+        // only when it fires early
         let mut idle = tokio::time::Instant::now() + self.idle;
+        let quiet = tokio::time::sleep_until(idle);
+        tokio::pin!(quiet);
+        let stopped = self.stop.asked();
+        tokio::pin!(stopped);
         loop {
             let next = tokio::select! {
-                next = tokio::time::timeout_at(idle, response.chunk()) => next,
+                next = response.chunk() => next,
+                () = &mut quiet => {
+                    if tokio::time::Instant::now() < idle {
+                        quiet.as_mut().reset(idle);
+                        continue;
+                    }
+                    break Err(failure::transient(format!(
+                        "{} sent nothing for {} s",
+                        host(url),
+                        self.idle.as_secs()
+                    )));
+                }
                 () = &mut lap, if watch.is_some() => {
                     let now = std::time::Instant::now();
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
@@ -619,24 +695,17 @@ impl Net {
                     lap.as_mut().reset(tokio::time::Instant::now() + window);
                     continue;
                 }
-                () = self.stop.asked() => break Err(Failure::Final(failure::interrupted(url))),
+                () = &mut stopped => break Err(Failure::Final(failure::interrupted(url))),
             };
             match next {
-                Err(_) => {
-                    break Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        self.idle.as_secs()
-                    )));
-                }
-                Ok(Err(err)) => {
+                Err(err) => {
                     break Err(failure::transient(format!(
                         "the connection to {} broke: {err}",
                         host(url)
                     )));
                 }
-                Ok(Ok(None)) => break Ok(None),
-                Ok(Ok(Some(chunk))) => {
+                Ok(None) => break Ok(None),
+                Ok(Some(chunk)) => {
                     idle = tokio::time::Instant::now() + self.idle;
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
@@ -647,8 +716,9 @@ impl Net {
                     if let Err(err) = on(Event::Bytes(length)) {
                         break Err(Failure::Final(err));
                     }
+                    batch.push(chunk);
                     // a closed channel means the writer failed, and its own error says why
-                    if sender.send(chunk).await.is_err() {
+                    if batch.full() && batch.flush(sender).await.is_err() {
                         break Ok(None);
                     }
                 }
