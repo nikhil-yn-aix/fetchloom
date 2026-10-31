@@ -33,6 +33,10 @@ cargo run --locked -- --version
 
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 
+### test directories
+
+if you override `TMPDIR` on linux or `TMP` and `TEMP` on windows, choose an existing writable folder outside every git repository and fetchloom project. `Sandbox::new` uses `tempfile::tempdir`, and commands still inspect parent folders for project discovery and git integration. a test folder inside a checkout can therefore produce extra `.gitignore` files or different snapshots. do not accept those differences as intended output.
+
 ### select narrowly
 
 ```sh
@@ -101,18 +105,20 @@ keep build output on the linux filesystem. the separate worktree lets windows an
 
 ## xfs loop mount
 
-ext4 does not exercise reflinks. on linux with `xfsprogs` installed, a local image gives the placement tests an xfs destination. the mount commands need root; run cargo as your normal user.
+ext4 does not exercise reflinks. on linux with `xfsprogs` installed, a local image gives the placement tests an xfs destination. the mount commands need root; run cargo as your normal user. the example puts test files outside the checkout; confirm that your home folder is not itself a git repository or fetchloom project.
 
 ```sh
-mkdir -p .local-test/xfs
-truncate -s 4G .local-test/xfs.img
-mkfs.xfs -q .local-test/xfs.img
-sudo mount -o loop .local-test/xfs.img .local-test/xfs
-sudo chown "$(id -u):$(id -g)" .local-test/xfs
-TMPDIR="$PWD/.local-test/xfs" cargo test --locked --test cli placing::
-sudo umount .local-test/xfs
-rm .local-test/xfs.img
-rmdir .local-test/xfs .local-test
+scratch="$HOME/fetchloom-xfs-$"
+mkdir "$scratch"
+mkdir "$scratch/xfs"
+truncate -s 4G "$scratch/xfs.img"
+mkfs.xfs -q "$scratch/xfs.img"
+sudo mount -o loop "$scratch/xfs.img" "$scratch/xfs"
+sudo chown "$(id -u):$(id -g)" "$scratch/xfs"
+TMPDIR="$scratch/xfs" cargo test --locked --test cli placing::
+sudo umount "$scratch/xfs"
+rm "$scratch/xfs.img"
+rmdir "$scratch/xfs" "$scratch"
 ```
 
 unmount even if tests fail. do not delete an image while it is mounted. [CI](ci.md) runs every test on xfs and btrfs, and on ReFS, exFAT and FAT32 on windows.

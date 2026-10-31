@@ -33,6 +33,8 @@ $env:FETCHLOOM_TRACE = 'run.json'
 Remove-Item Env:\FETCHLOOM_TRACE
 ```
 
+create the trace file's parent directory first and choose a writable destination. if opening the file fails, fetchloom warns and continues without a timeline; JSON retains the warning. a trace path is not created recursively.
+
 open the recording in [perfetto](https://ui.perfetto.dev). it contains local paths and source references, so review it before sharing. [cli/logs.rs](../../../src/cli/logs.rs) holds the flush guard until the command ends.
 
 spans cover command dispatch, source resolution and phases such as reading metadata, scanning, relocking, planning and placing. downloads and unpacking have no standalone spans of their own; CPU samples can explain work inside their surrounding phases. separate command duration from start-to-exit duration when process startup is noisy.
