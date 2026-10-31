@@ -42,7 +42,7 @@ flowchart TD
 
 lookup checks that an object is a plain file and matches the expected size. a writable object or an object no newer than its change mark is doubtful and must be hashed before trusted placement. intact writable objects are sealed again; damaged objects remain marked until verified replacement bytes arrive.
 
-object reads use `read_unfollowed`: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. hashing, archive reads and copy input use this path. directory checks and no-follow opens do not authenticate other writers of a shared cache.
+object hashing and copy input use `read_unfollowed`: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
 
 ### publication and repair
 
