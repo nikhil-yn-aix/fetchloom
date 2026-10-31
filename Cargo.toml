@@ -7,7 +7,10 @@ description = "put the exact data a project needs onto any machine with one comm
 license = "Apache-2.0"
 repository = "https://github.com/nikhil-yn-aix/fetchloom"
 authors = ["Nikhil Y N", "KairosLab India Private Limited"]
-publish = false
+readme = "README.md"
+keywords = ["dataset", "research", "reproducibility", "download", "lockfile"]
+categories = ["command-line-utilities", "science"]
+include = ["/src/**/*.rs", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/NOTICE", "/README.md"]
 default-run = "fetchloom"
 
 [[bin]]
@@ -68,6 +71,10 @@ winapi-util = "0.1"
 # targets under cargo bolero
 bolero = "0.13"
 insta = { version = "1.49", features = ["filters"] }
+
+# the md-5 package's library is named md5, which cargo machete does not match to the package
+[package.metadata.cargo-machete]
+ignored = ["md-5"]
 
 [lints.rust]
 missing_docs = "warn"

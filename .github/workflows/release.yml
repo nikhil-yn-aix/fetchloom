@@ -136,6 +136,40 @@ jobs:
           else
             tar --owner=0 --group=0 --numeric-owner -czf "../dist/$name.tar.gz" "$name"
           fi
+      - name: package the debian archive
+        if: runner.os == 'Linux'
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-*) arch=amd64 ;;
+            aarch64-*) arch=arm64 ;;
+          esac
+          root=.release/deb
+          install -Dm755 "target/${{ matrix.target }}/release/fetchloom" "$root/usr/bin/fetchloom"
+          install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
+          install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
+          mkdir -p "$root/DEBIAN"
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: fetchloom
+          Version: $VERSION
+          Architecture: $arch
+          Maintainer: Nikhil Y N <nikhil-yn-aix@users.noreply.github.com>
+          Installed-Size: $(du -sk "$root/usr" | cut -f1)
+          Section: utils
+          Priority: optional
+          Homepage: https://github.com/nikhil-yn-aix/fetchloom
+          Description: put the exact data a project needs onto any machine
+           fetchloom pins research datasets by SHA-256 in data.lock and places
+           them in data/ from one shared cache.
+          EOF
+          deb="dist/fetchloom_${VERSION}_$arch.deb"
+          dpkg-deb --build --root-owner-group "$root" "$deb"
+          sudo dpkg -i "$deb"
+          said=$(/usr/bin/fetchloom --version)
+          sudo dpkg -r fetchloom
+          if [ "$said" != "fetchloom $VERSION" ]; then
+            echo "::error::the debian package's fetchloom --version printed $said"
+            exit 1
+          fi
       - name: build the wheel
         run: |
           "${{ matrix.python }}" -m venv .release/maturin
@@ -212,7 +246,7 @@ jobs:
         run: |
           cp install.sh install.ps1 dist/
           cd dist
-          sha256sum -- *.zip *.tar.gz *.whl install.sh install.ps1 > SHA256SUMS
+          sha256sum -- *.zip *.tar.gz *.deb *.whl install.sh install.ps1 > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

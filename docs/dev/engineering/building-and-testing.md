@@ -18,7 +18,7 @@ cargo run --locked -- --version
 
 the first cold build can take several minutes, especially while compiling native compression libraries and optimized development dependencies. subsequent focused test runs reuse those artifacts. python helper tests need python 3.9 or newer, matching `requires-python` in [pyproject.toml](../../../pyproject.toml).
 
-`publish = false` keeps the rust crate off crates.io. [pyproject.toml](../../../pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
+the crate on crates.io holds only `src`, the license files and the README; `include` in [Cargo.toml](../../../Cargo.toml) keeps test data, docs and the benchmark out. [pyproject.toml](../../../pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
 
 ## test layers
 

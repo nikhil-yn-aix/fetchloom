@@ -1,8 +1,8 @@
 # releasing
 
-the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance.
+the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI, crates.io and the apt repository.
 
-no release or PyPI package has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
+no release has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
 
 ## workflow
 
@@ -10,7 +10,7 @@ no release or PyPI package has been published yet. use [source installation](../
 
 | job | permissions | work |
 |---|---|---|
-| `build`, four matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, build and install a wheel, exercise its executable and python module |
+| `build`, four matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build and install a wheel, exercise its executable and python module |
 | `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
@@ -23,9 +23,19 @@ no release or PyPI package has been published yet. use [source installation](../
 
 build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version` and verify that the python helper reports `project.invalid` outside a project.
 
+[publish.yml](../../../.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
+
+| job | needs | work |
+|---|---|---|
+| `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS`, upload them |
+| `crates` | the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked` from the tag |
+| `apt` | the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase, and pages served by actions | download the `.deb` files, write a flat repository signed by that key, deploy it to `https://nikhil-yn-aix.github.io/fetchloom/apt` |
+
+the `github-pages` environment allows tags matching `v*.*.*`. losing the signing key means generating a new one, replacing the secret and asking apt users to fetch `fetchloom.gpg` again.
+
 ## artifacts
 
-for the current Cargo version, 0.1.0, the workflow will produce four archives, four wheels, two installers and a checksum file.
+for the current Cargo version, 0.1.0, the workflow will produce four archives, two debian packages, four wheels, two installers and a checksum file.
 
 | artifact | contents |
 |---|---|
@@ -33,36 +43,29 @@ for the current Cargo version, 0.1.0, the workflow will produce four archives, f
 | `fetchloom-0.1.0-aarch64-pc-windows-msvc.zip` | same layout for arm64 windows |
 | `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE and README.md in a matching folder |
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
+| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, license and notice in `/usr/share/doc/fetchloom` |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |
 | `fetchloom-0.1.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl` | same for arm64 linux |
 | `install.sh`, `install.ps1` | release installers |
-| `SHA256SUMS` | SHA-256 of every archive, wheel and installer |
+| `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
 
 ## publish a version
 
 1. set the Cargo version, refresh `Cargo.lock` through cargo and commit on main. wait for [CI](ci.md) on that commit.
 2. create the matching tag and publish it. for version 0.1.0, the commands are `git tag v0.1.0` and `git push origin v0.1.0`.
 3. watch the workflow with `gh run watch`. if it fails, fix the cause before retrying. a failed prerequisite does not create a release. retag only an unpublished failed release; published version tags must remain stable.
-4. inspect the draft's four archives, four wheels, installers and checksums. download and check provenance:
+4. inspect the draft's archives, debian packages, wheels, installers and checksums. download and check provenance:
 
    ```sh
    gh release download v0.1.0 --pattern '*.tar.gz' --dir check
    gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
    ```
 
-5. edit release notes and publish the draft. installer `latest` URLs begin serving it then.
-6. upload wheels manually to PyPI with a token scoped to the fetchloom project:
-
-   ```sh
-   gh release download v0.1.0 --pattern '*.whl' --dir wheels
-   python -m pip install twine
-   python -m twine check wheels/*
-   python -m twine upload wheels/*
-   ```
-
-in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. trusted publishing is not configured; [roadmap](../roadmap.md#publishing) tracks it.
+5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` starts. watch it with `gh run watch`.
+6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. check `cargo install fetchloom` and the apt lines in [getting started](../../user/getting-started.md#install) on a clean machine or container.
+7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 
 to exercise build jobs without a tag, temporarily add a branch trigger for `release-check` to a test branch of the workflow. `attest` and `release` remain tag-only. remove the test trigger and branch after the check.
 
