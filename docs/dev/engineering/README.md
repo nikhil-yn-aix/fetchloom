@@ -1,4 +1,4 @@
-﻿# engineering
+# engineering
 
 start with the smallest test that demonstrates your change, then widen coverage before merging.
 

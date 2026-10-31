@@ -1,4 +1,4 @@
-﻿# building and testing
+# building and testing
 
 one rust crate builds the library and executable, with module tests and real-binary scenarios covering different contracts.
 
