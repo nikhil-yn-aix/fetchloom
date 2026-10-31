@@ -469,3 +469,46 @@ fn expired_storage_responses_are_not_retried_for_other_sources() {
         assert_eq!(net.work.counts().retries, 0);
     }
 }
+
+#[test]
+fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
+    let body = "abcdefgh".repeat(32 * 1024);
+    let received = body.len() / 2;
+    let cut = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\nETag: \"v1\"\r\n\r\n{}",
+        body.len(),
+        &body[..received]
+    );
+    let range = format!("bytes {received}-{}/{}", body.len() - 1, body.len());
+    let (url, asked) = serve(vec![
+        cut.into_bytes(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", &range), ("ETag", "\"v1\"")],
+            &body[received..],
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let net = net(&url);
+    let fetch = Fetch::new(url.clone());
+    let mut split = false;
+    let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
+    assert!(matches!(result, Err(Failure::Transient { .. })));
+    assert_eq!(
+        partial.resumable().unwrap().0,
+        u64::try_from(received).unwrap()
+    );
+    drop(partial);
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(body.as_bytes()));
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        body.as_bytes()
+    );
+    assert_eq!(net.work.counts().resumes, 1);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}

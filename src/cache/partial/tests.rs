@@ -330,3 +330,162 @@ fn a_download_with_gaps_is_never_published() {
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(cache.objects().is_empty());
 }
+
+#[test]
+fn pipelined_checkpoints_hash_exactly_the_received_prefix() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/checkpoints");
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    let mut expected = Vec::new();
+    for index in 0u8..48 {
+        let chunk = Bytes::from(vec![index; 96 * 1024 + usize::from(index)]);
+        writer.write_chunk(writer.written(), &chunk).unwrap();
+        expected.extend_from_slice(&chunk);
+        if index % 7 == 0 {
+            writer.save().unwrap();
+            let record = partial.recorded().unwrap();
+            assert_eq!(record.received, u64::try_from(expected.len()).unwrap());
+            let received = usize::try_from(record.received).unwrap();
+            let on_disk = fs::read(&partial.bytes).unwrap();
+            assert_eq!(record.sha256, digest::sha256(&on_disk[..received]));
+            assert_eq!(record.sha256, digest::sha256(&expected));
+            assert!(record.ranges.is_empty());
+        }
+    }
+    assert_eq!(writer.finish().unwrap().digest, digest::sha256(&expected));
+}
+
+#[test]
+fn pipelined_chunks_resume_with_sha256_and_md5() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/pipelined-resume");
+    let mut writer = partial
+        .writer(0, None, Validators::default(), true, false)
+        .unwrap();
+    let first = Bytes::from(vec![b'a'; 128 * 1024]);
+    let last = Bytes::from(vec![b'b'; 128 * 1024]);
+    let mut expected = Vec::new();
+    for _ in 0..40 {
+        writer.write_chunk(writer.written(), &first).unwrap();
+        expected.extend_from_slice(&first);
+    }
+    writer.save().unwrap();
+    writer.write_chunk(writer.written(), &last).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let (received, validators) = partial.resumable().unwrap();
+    assert_eq!(received, u64::try_from(expected.len()).unwrap());
+    let mut writer = partial
+        .writer(received, None, validators, true, false)
+        .unwrap();
+    for _ in 0..40 {
+        writer.write_chunk(writer.written(), &last).unwrap();
+        expected.extend_from_slice(&last);
+    }
+    let mut hashes = Hasher::with_md5();
+    hashes.update(&expected);
+    let stored = writer.finish().unwrap();
+    assert_eq!((stored.digest, stored.md5), hashes.finish());
+    assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), expected);
+}
+
+#[test]
+fn a_split_checkpoint_waits_for_read_back_hashing() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/pipelined-split");
+    let mut writer = split_writer(&partial);
+    writer.write_chunk(8, &Bytes::from_static(b"ijkl")).unwrap();
+    writer.write_chunk(4, &Bytes::from_static(b"efgh")).unwrap();
+    writer.save().unwrap();
+    let record = partial.recorded().unwrap();
+    assert_eq!(record.received, 0);
+    assert_eq!(record.sha256, digest::sha256(b""));
+    assert_eq!(record.ranges.len(), 2);
+    writer.write_chunk(0, &Bytes::from_static(b"abcd")).unwrap();
+    writer.save().unwrap();
+    let record = partial.recorded().unwrap();
+    assert_eq!(record.received, 12);
+    assert_eq!(record.sha256, digest::sha256(b"abcdefghijkl"));
+    assert!(record.ranges.is_empty());
+    assert_eq!(writer.read_back(), 8);
+    assert_eq!(writer.finish().unwrap().digest, record.sha256);
+}
+
+#[test]
+fn pipelined_write_errors_preserve_the_last_checkpoint() {
+    for size in [3, BUFFER] {
+        let (_dir, cache) = cache();
+        let partial = owned(&cache, "https://example.org/write-error");
+        let mut writer = partial
+            .writer(0, None, Validators::default(), false, false)
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        writer.file = File::open(&partial.bytes).unwrap();
+        let refused = write_all_at(&writer.file, 3, b"x").unwrap_err();
+        let chunk = Bytes::from(vec![b'x'; size]);
+        let error = writer
+            .write_chunk(3, &chunk)
+            .and_then(|()| writer.save())
+            .unwrap_err();
+        assert_eq!(error.kind(), refused.kind());
+        assert_eq!(error.raw_os_error(), refused.raw_os_error());
+        let record = partial.recorded().unwrap();
+        assert_eq!(record.received, 3);
+        assert_eq!(record.sha256, digest::sha256(b"abc"));
+        assert!(cache.objects().is_empty());
+    }
+}
+
+#[test]
+fn read_back_hashing_errors_prevent_checkpoints_and_publication() {
+    for checkpoint in [true, false] {
+        let (_dir, cache) = cache();
+        let partial = owned(&cache, "https://example.org/hash-error");
+        let mut writer = split_writer(&partial);
+        writer.write_chunk(0, &Bytes::from_static(b"abc")).unwrap();
+        writer.save().unwrap();
+        writer.write_chunk(6, &Bytes::from_static(b"ghi")).unwrap();
+        writer.file.set_len(6).unwrap();
+        let result = writer.write_chunk(3, &Bytes::from_static(b"def"));
+        let error = result
+            .and_then(|()| {
+                if checkpoint {
+                    writer.save()
+                } else {
+                    writer.finish().map(|_| ())
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        let record = partial.recorded().unwrap();
+        assert_eq!(record.received, 3);
+        assert_eq!(record.sha256, digest::sha256(b"abc"));
+        assert!(cache.objects().is_empty());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pipelined_writes_preserve_full_disk_errors() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/full-disk");
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    writer.file = OpenOptions::new().write(true).open("/dev/full").unwrap();
+    let error = writer
+        .write_chunk(0, &Bytes::from(vec![0; BUFFER]))
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+    assert_eq!(writer.written(), 0);
+    assert!(partial.recorded().is_none());
+    assert!(cache.objects().is_empty());
+    assert_eq!(
+        crate::error::advice(&error),
+        Some("free some space on that disk, then run the command again")
+    );
+}

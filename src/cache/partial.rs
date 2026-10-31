@@ -8,12 +8,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::{Cache, Stored, Validators};
 use crate::digest::{self, Hasher, Sha256};
 use crate::place::{FolderUse, real_folder};
 use crate::volume::is_plain;
+
+mod hashing;
+
+use hashing::HashPipe;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
@@ -119,16 +124,35 @@ impl Partial {
         keep: bool,
     ) -> io::Result<PartialWriter> {
         let file = self.open(offset, keep)?;
+        let mut hasher = if md5 {
+            Hasher::with_md5()
+        } else {
+            Hasher::default()
+        };
+        if offset > 0 {
+            hash_range(&file, &mut hasher, 0, offset).map_err(|err| {
+                if err.kind() == io::ErrorKind::UnexpectedEof {
+                    io::Error::new(io::ErrorKind::InvalidData, err)
+                } else {
+                    err
+                }
+            })?;
+        }
+        let sha256 = hasher.sha256_so_far();
+        let recorded = self.recorded().filter(|record| record.received == offset);
+        if offset > 0 && recorded.as_ref().map(|record| record.sha256) != Some(sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the bytes kept from an earlier download are not the ones it recorded",
+            ));
+        }
+        let hasher = HashPipe::new(hasher, file.try_clone()?, offset)?;
         let mut writer = PartialWriter {
             cache: self.cache.clone(),
             file,
+            hasher,
             _lock: self.lock.clone(),
-            hasher: if md5 {
-                Hasher::with_md5()
-            } else {
-                Hasher::default()
-            },
-            prefix: 0,
+            prefix: offset,
             pending: Vec::with_capacity(BUFFER),
             runs: Vec::new(),
             read_back: 0,
@@ -138,35 +162,16 @@ impl Partial {
             record: Record {
                 url: self.url.clone(),
                 received: offset,
-                sha256: digest::sha256(b""),
+                sha256,
                 length,
                 validators,
                 ranges: Vec::new(),
             },
         };
-        if offset > 0 {
-            hash_range(&writer.file, &mut writer.hasher, 0, offset).map_err(|err| {
-                if err.kind() == io::ErrorKind::UnexpectedEof {
-                    io::Error::new(io::ErrorKind::InvalidData, err)
-                } else {
-                    err
-                }
-            })?;
-            writer.prefix = offset;
-        }
-        let recorded = self.recorded().filter(|record| record.received == offset);
-        if offset > 0
-            && recorded.as_ref().map(|record| record.sha256) != Some(writer.hasher.sha256_so_far())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "the bytes kept from an earlier download are not the ones it recorded",
-            ));
-        }
         if keep && let Some(record) = recorded {
             writer.keep(record.ranges, length)?;
         }
-        writer.record.sha256 = writer.hasher.sha256_so_far();
+        writer.record.sha256 = writer.hasher.sha256_so_far(writer.prefix)?;
         Ok(writer)
     }
 
@@ -281,15 +286,13 @@ fn continuable(metadata: &Metadata) -> bool {
     is_plain(metadata) && !metadata.permissions().readonly()
 }
 
-/// the writing end of a download: hashes every byte on its way to disk, in order. it keeps the
-/// download claimed until it is done, since a stopped run may drop its claim while this still
-/// writes.
+/// keeps the download claimed while its writer and hash worker still use the unfinished file.
 pub(crate) struct PartialWriter {
     cache: Cache,
     file: File,
+    hasher: HashPipe,
+    // the worker must stop before another writer can claim the download.
     _lock: Option<Arc<File>>,
-    /// covers the prefix: the bytes from the first on that are written, in order.
-    hasher: Hasher,
     prefix: u64,
     /// the end of the prefix, not yet in the file.
     pending: Vec<u8>,
@@ -304,7 +307,7 @@ pub(crate) struct PartialWriter {
 }
 
 impl PartialWriter {
-    /// how many bytes from the first on are written and hashed.
+    /// counts the prefix accepted by both queues, so callers never need to wait for hashing.
     pub(crate) fn written(&self) -> u64 {
         self.prefix
     }
@@ -335,10 +338,14 @@ impl PartialWriter {
         self.read_back
     }
 
-    /// writes `bytes` at `at`. bytes that continue the prefix are hashed as they pass. bytes past
-    /// it are hashed once the prefix reaches them, read back from the file, so a download that
-    /// arrives in order reads nothing back.
+    /// copies borrowed bytes so hashing can continue after the caller reuses its buffer.
     pub(crate) fn write_at(&mut self, at: u64, bytes: &[u8]) -> io::Result<()> {
+        self.write_chunk(at, &Bytes::copy_from_slice(bytes))
+    }
+
+    /// shares response chunks with the hash worker, avoiding a copy on the download path.
+    /// bytes past the prefix are read back only once the prefix reaches them.
+    pub(crate) fn write_chunk(&mut self, at: u64, bytes: &Bytes) -> io::Result<()> {
         let end = at + bytes.len() as u64;
         let overlaps =
             at < self.prefix || self.runs.iter().any(|run| at < run.end && run.start < end);
@@ -348,13 +355,14 @@ impl PartialWriter {
             ));
         }
         if at == self.prefix {
-            self.hasher.update(bytes);
             if self.pending.len() + bytes.len() > BUFFER {
                 self.flush_pending()?;
             }
             if bytes.len() >= BUFFER {
                 write_all_at(&self.file, at, bytes)?;
-            } else {
+            }
+            self.hasher.update(bytes.clone())?;
+            if bytes.len() < BUFFER {
                 self.pending.extend_from_slice(bytes);
             }
             self.prefix = end;
@@ -384,7 +392,7 @@ impl PartialWriter {
         Ok(())
     }
 
-    /// moves the prefix over the runs it reached, hashing them from the file.
+    /// flushes before queuing read-back, so the hash worker only reads bytes already written.
     fn absorb(&mut self) -> io::Result<()> {
         while self
             .runs
@@ -393,7 +401,7 @@ impl PartialWriter {
         {
             self.flush_pending()?;
             let run = self.runs.remove(0);
-            hash_range(&self.file, &mut self.hasher, run.start, run.end)?;
+            self.hasher.range(run.start, run.end)?;
             self.read_back += run.end - run.start;
             self.prefix = run.end;
         }
@@ -438,14 +446,13 @@ impl PartialWriter {
         self.absorb()
     }
 
-    /// records how far the download got, so a later run continues from there. the bytes are not
-    /// flushed first, which would stall the download every second. the record holds their hash
-    /// instead, and a resume that finds other bytes starts over, or for a range past the prefix,
-    /// fetches it again.
+    /// waits for hashing so the recorded hash covers exactly the prefix written to the file.
+    /// skips a durable flush to avoid stalling every second; a resume rechecks the saved hashes
+    /// in case a power cut kept the record but lost some bytes.
     pub(crate) fn save(&mut self) -> io::Result<()> {
         self.flush_pending()?;
         self.record.received = self.prefix;
-        self.record.sha256 = self.hasher.sha256_so_far();
+        self.record.sha256 = self.hasher.sha256_so_far(self.prefix)?;
         self.record.ranges = self
             .runs
             .iter()
@@ -484,8 +491,11 @@ impl PartialWriter {
             prefix,
             bytes,
             record_path,
+            _lock,
             ..
         } = self;
+        // read-back must finish before resizing could hide a short read.
+        let (digest, md5) = hasher.finish(prefix)?;
         // bytes past the prefix are not in the hash, such as the end of an earlier version
         if file.metadata()?.len() != prefix {
             file.set_len(prefix)?;
@@ -497,7 +507,6 @@ impl PartialWriter {
         permissions.set_readonly(true);
         file.set_permissions(permissions)?;
         drop(file);
-        let (digest, md5) = hasher.finish();
         let stored = cache.link_object(&bytes, digest, prefix, md5)?;
         let _ = fs::remove_file(&record_path);
         Ok(stored)

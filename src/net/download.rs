@@ -2,7 +2,7 @@
 //! hash every byte on its way to disk, and check the bytes against what was expected.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 
 use bytes::Bytes;
 use reqwest::StatusCode;
@@ -536,7 +536,7 @@ impl Net {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
             while let Some(chunk) = receiver.blocking_recv() {
-                writer.write_all(&chunk)?;
+                writer.write_chunk(writer.written(), &chunk)?;
             }
             writer.save()?;
             Ok(writer)
