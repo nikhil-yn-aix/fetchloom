@@ -19,7 +19,7 @@ apt-get install -y \
   openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 python3-venv
 ```
 
-use an Ubuntu package snapshot if a pin has left the mirror. python clients share the pinned environment below; each measured command has its own empty home and cache. `pathspec` is pinned for DVC's gitignore parser, and `chardet` for requests compatibility. DVC includes HTTP support without an extra. the runner itself imports only the standard library; matplotlib is used only by the renderer.
+use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner itself imports only the standard library. matplotlib sits in the `render` group, used only by the renderer. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it.
 
 ## build the measured executable
 
@@ -43,10 +43,8 @@ python3 bench/lab.py setup
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 export TMPDIR=/srv/fl-bench/scratch
-python3 -m venv /opt/fl-bench/venv
-/opt/fl-bench/venv/bin/pip install --no-cache-dir -r bench/requirements.txt
-/opt/fl-bench/venv/bin/pip check
-/opt/fl-bench/venv/bin/python -m unittest discover -s bench -p 'test_*.py'
+UV_PROJECT_ENVIRONMENT=/opt/fl-bench/venv uv sync --project bench --locked
+uv run --project bench --locked --only-group render python -m unittest discover -s bench -p 'test_*.py'
 ```
 
 set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
@@ -92,7 +90,7 @@ the full dataverse TSV/TAB representation difference is reported as a content mi
 ## render and keep results
 
 ```sh
-/opt/fl-bench/venv/bin/python bench/render.py /srv/fl-bench/results/full
+uv run --project bench --locked --only-group render python bench/render.py /srv/fl-bench/results/full
 mkdir -p bench/results
 cp -a /srv/fl-bench/results/full bench/results/
 ```

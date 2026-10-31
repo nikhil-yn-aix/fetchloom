@@ -1,0 +1,26 @@
+[project]
+name = "fetchloom-bench"
+version = "0"
+description = "the python tools the benchmark measures, and the chart renderer"
+requires-python = "==3.12.*"
+dependencies = [
+    "pooch==1.8.2",
+    "dvc==3.63.0",
+    "datalad==1.7.2",
+    "zenodo_get==3.1.0",
+    "huggingface_hub[hf_xet]==0.35.3",
+    "kagglehub==0.3.13",
+    "gdown==5.2.0",
+    "datahugger==0.13",
+    "requests==2.32.5",
+    # pinned for dvc's gitignore parser and for requests compatibility
+    "pathspec==0.12.1",
+    "chardet==5.2.0",
+    "hf-xet==1.8.0",
+]
+
+[dependency-groups]
+render = ["matplotlib==3.10.7"]
+
+[tool.uv]
+package = false

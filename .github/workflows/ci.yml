@@ -57,12 +57,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
       - run: python -m unittest discover -s python
         if: matrix.os == 'windows-latest'
-      # the benchmark harness's own checks; its charts need the pinned matplotlib
+      # the benchmark harness's own checks; its charts need the locked render group
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: matrix.os == 'ubuntu-latest'
       - name: benchmark harness checks
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          python3 -m pip install --quiet --break-system-packages "$(grep '^matplotlib==' bench/requirements.txt)"
-          python3 -m unittest discover -s bench
+        run: uv run --project bench --locked --only-group render python -m unittest discover -s bench
       # the default disks never show some paths: refs clones blocks, which ntfs never does, while
       # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
       # read-only file the way ntfs allows. tests run again with their folders on each, except

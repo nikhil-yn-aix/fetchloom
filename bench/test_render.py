@@ -2,8 +2,8 @@ import importlib.util
 import tempfile
 import unittest
 
-# ci installs the pinned matplotlib, so these never skip there
-CHARTS = unittest.skipUnless(importlib.util.find_spec("matplotlib"), "needs matplotlib from bench/requirements.txt")
+# ci runs these through uv with the render group, so they never skip there
+CHARTS = unittest.skipUnless(importlib.util.find_spec("matplotlib"), "needs the render group: uv run --project bench --only-group render")
 
 
 class RenderTests(unittest.TestCase):

@@ -1,6 +1,7 @@
 """Run sequential, checked Linux benchmark cases."""
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -154,8 +155,12 @@ def metadata(args, adapters):
                 native_packages=subprocess.check_output(["dpkg-query", "-W", "nginx", "aria2", "wget", "curl",
                                                          "git-annex", "git", "iproute2", "python3", "xfsprogs",
                                                          "e2fsprogs", "unzip", "openssl"], text=True).splitlines(),
-                requirements=Path(__file__).with_name("requirements.txt").read_text(),
-                installed_packages=subprocess.check_output(["/opt/fl-bench/venv/bin/pip", "freeze"], text=True).splitlines())
+                lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
+                installed_packages=subprocess.check_output(
+                    ["/opt/fl-bench/venv/bin/python", "-c",
+                     "import importlib.metadata as m\n"
+                     "print('\\n'.join(sorted(f'{d.name}=={d.version}' for d in m.distributions())))"],
+                    text=True).splitlines())
 
 
 def append(path, row):
