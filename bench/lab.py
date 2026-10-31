@@ -1,5 +1,6 @@
 """Root-owned, disposable Linux network and filesystem lab."""
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -30,12 +31,23 @@ def call(argv, **kwargs):
 def environment():
     env = os.environ.copy()
     env.update(REQUESTS_CA_BUNDLE=BUNDLE, SSL_CERT_FILE=BUNDLE,
+               TMPDIR=str(ROOT / "scratch"), HOME=str(ROOT / "home"),
+               XDG_CACHE_HOME=str(ROOT / "cache"), DVC_NO_ANALYTICS="true",
                GIT_AUTHOR_NAME="benchmark", GIT_AUTHOR_EMAIL="bench@localhost",
                GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost")
     env["PATH"] = "/opt/fl-bench/venv/bin:" + env["PATH"]
     env["NO_PROXY"] = env["no_proxy"] = "lab.flb,10.77.0.2,localhost,127.0.0.1"
     return env
 
+
+def exclusive(path=None):
+    lock = (path or ROOT / "run.lock").open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise RuntimeError("another benchmark is using the lab") from None
+    return lock
 
 def require_root():
     if os.geteuid() != 0:
@@ -50,6 +62,8 @@ def shaping(profile):
 
 def profile(name):
     require_root()
+    if not (ROOT / "owned.json").exists():
+        raise RuntimeError("run lab.py setup before changing a profile")
     client, server = shaping(name)
     call(["tc", "qdisc", "replace", "dev", CLIENT, "root", *client])
     call(["ip", "netns", "exec", NS, "tc", "qdisc", "replace", "dev", SERVER,
@@ -81,7 +95,7 @@ def setup(image_gib=12):
     ROOT.mkdir(parents=True, exist_ok=True)
     (ROOT / "owned.json").write_text(json.dumps({"image_gib": image_gib}))
     try:
-        for name in ("www", "cert", "fs", "images", "prepared", "results"):
+        for name in ("www", "cert", "fs", "images", "prepared", "results", "scratch", "home", "cache"):
             (ROOT / name).mkdir(exist_ok=True)
         (ROOT / "www" / "health").write_text("fl-bench\n")
         cert = ROOT / "cert"
@@ -100,7 +114,7 @@ def setup(image_gib=12):
         shutil.copyfile(cert / "ca.crt", CA)
         call(["update-ca-certificates"], **quiet)
         with Path("/etc/hosts").open("a") as f:
-            f.write("\n" + HOST_LINE)
+            f.write(HOST_LINE)
         call(["ip", "netns", "add", NS])
         call(["ip", "link", "add", CLIENT, "type", "veth", "peer", "name", SERVER])
         call(["ip", "link", "set", SERVER, "netns", NS])
@@ -150,6 +164,7 @@ def teardown():
     if not (ROOT / "owned.json").exists():
         print("lab is already absent")
         return
+    lock = exclusive()
     for fs in ("ext4", "xfs"):
         target = ROOT / "fs" / fs
         if os.path.ismount(target):
@@ -168,6 +183,7 @@ def teardown():
     CA.unlink(missing_ok=True)
     call(["update-ca-certificates"], stdout=subprocess.DEVNULL)
     shutil.rmtree(ROOT)
+    lock.close()
     print("lab removed, including its results; copy wanted results before teardown")
 
 
@@ -182,7 +198,8 @@ def main():
     elif args.action == "teardown":
         teardown()
     else:
-        profile(args.profile)
+        with exclusive():
+            profile(args.profile)
 
 
 if __name__ == "__main__":

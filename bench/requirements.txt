@@ -9,3 +9,6 @@ datahugger==0.13
 matplotlib==3.10.7
 requests==2.32.5
 
+pathspec==0.12.1
+chardet==5.2.0
+hf-xet==1.8.0

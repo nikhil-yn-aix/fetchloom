@@ -81,3 +81,62 @@ def build(case, seed):
     data = dict(files=files, members=members, server_dir=str(target))
     manifest.write_text(json.dumps(data, indent=2) + "\n")
     return dict(case, **data)
+
+
+def prepare_native(case, fetchloom, names):
+    root = lab.ROOT / "prepared" / case["key"]
+    root.mkdir(parents=True, exist_ok=True)
+    env = lab.environment()
+    for tool in names:
+        target = root / tool
+        if (target / ".ready").exists():
+            continue
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir()
+        log = root / f"{tool}-prepare.log"
+        with log.open("w") as output:
+            def run(argv, cwd=target, input=None):
+                subprocess.run([str(x) for x in argv], cwd=cwd, env=env, input=input,
+                               text=True, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=1200)
+            if tool == "fetchloom":
+                text = "\n".join(f'[datasets.f{i:05}]\nref = "{item["url"]}"\n'
+                                 for i, item in enumerate(case["files"]))
+                (target / "data.toml").write_text(text)
+                env["FETCHLOOM_CACHE"] = str(root / "lock-cache")
+                run([fetchloom, "-q", "--yes", "lock"])
+                shutil.rmtree(root / "lock-cache", ignore_errors=True)
+                env.pop("FETCHLOOM_CACHE", None)
+            elif tool == "dvc":
+                run(["git", "init", "-q"])
+                run(["dvc", "init", "-q"])
+                data = target / "data"
+                data.mkdir()
+                for item in case["files"]:
+                    shutil.copyfile(Path(case["server_dir"]) / item["name"], data / item["name"])
+                run(["dvc", "add", "data"])
+                remote = lab.ROOT / "www" / "dvc" / case["key"]
+                remote.mkdir(parents=True, exist_ok=True)
+                run(["dvc", "remote", "add", "stage", remote])
+                run(["dvc", "push", "-r", "stage"])
+                run(["dvc", "remote", "remove", "stage"])
+                run(["dvc", "remote", "add", "-d", "lab", f"https://lab.flb/dvc/{case['key']}"])
+                run(["dvc", "remote", "modify", "lab", "verify", "true"])
+                run(["dvc", "config", "cache.type", "reflink,hardlink,copy"])
+                shutil.rmtree(data)
+                shutil.rmtree(target / ".dvc" / "cache", ignore_errors=True)
+                shutil.rmtree(target / ".dvc" / "tmp", ignore_errors=True)
+            elif tool == "datalad":
+                run(["datalad", "create", "-f", "."])
+                run(["git", "config", "annex.backend", "SHA256E"])
+                run(["git", "config", "annex.security.allowed-ip-addresses", "10.77.0.2"])
+                (target / "data").mkdir(exist_ok=True)
+                batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in case["files"])
+                run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)
+                run(["datalad", "save", "-m", "prepare benchmark inputs"])
+                run(["git", "annex", "drop", "--force", "--all"])
+            else:
+                (target / "registry.json").write_text(json.dumps(case["files"]))
+            (target / ".ready").write_text("1\n")
+    case["prepared"] = str(root)
+    return case
