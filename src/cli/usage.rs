@@ -100,7 +100,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         }
         _ => None,
     };
-    let help = if let Some(command) = named(ContextKind::SuggestedSubcommand) {
+    let placement = (err.kind() == ErrorKind::UnknownArgument)
+        .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg)))
+        .flatten();
+    let help = if let Some(placement) = placement {
+        placement
+    } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
         match parent {
             Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
             None => format!("did you mean `fetchloom {command}`?"),
@@ -128,6 +133,52 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     .help(help)
 }
 
+fn misplaced_option(argument: &str) -> Option<String> {
+    let long = argument.strip_prefix("--")?.split('=').next()?;
+    let command = args::Args::command();
+    let owners: Vec<_> = command
+        .get_subcommands()
+        .filter_map(|command| {
+            let option = command
+                .get_arguments()
+                .find(|arg| arg.get_long() == Some(long))?;
+            Some((command, option))
+        })
+        .collect();
+    let (first, option) = *owners.first()?;
+    let names: Vec<_> = owners
+        .iter()
+        .map(|(command, _)| command.get_name())
+        .collect();
+    let commands = match names.split_last()? {
+        (last, []) => (*last).to_owned(),
+        (last, rest) => format!("{} and {last}", rest.join(", ")),
+    };
+    let mut example = format!("fetchloom {}", first.get_name());
+    for arg in first.get_positionals().filter(|arg| arg.is_required_set()) {
+        let name = arg
+            .get_value_names()
+            .and_then(|names| names.first())
+            .map_or(arg.get_id().as_str(), |name| name.as_str());
+        example.push_str(&format!(" <{name}>"));
+    }
+    example.push_str(&format!(" --{long}"));
+    if option.get_action().takes_values() {
+        let value = option
+            .get_value_names()
+            .and_then(|names| names.first())
+            .map_or("value", |name| name.as_str());
+        if value == "glob" {
+            example.push_str(" \"*.csv\"");
+        } else {
+            example.push_str(&format!(" <{value}>"));
+        }
+    }
+    Some(format!(
+        "--{long} is an option of {commands}, so it goes after the command, as in {example}"
+    ))
+}
+
 fn first_line(err: &clap::Error) -> String {
     let text = err.to_string();
     let line = text.lines().next().unwrap_or_default();
@@ -147,6 +198,27 @@ mod tests {
             .ignore_errors(true)
             .try_get_matches_from(arguments)?;
         Ok(describe(&error, named_command(&parsed).as_deref()))
+    }
+
+    #[test]
+    fn misplaced_options_name_their_commands_and_show_correct_placement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (option, arguments, expected) in [
+            (
+                "--select",
+                vec!["fetchloom", "--select", "*.csv", "add", "zenodo:1"],
+                "--select is an option of add and get, so it goes after the command, as in fetchloom add <link> --select \"*.csv\"",
+            ),
+            (
+                "--force",
+                vec!["fetchloom", "--force", "sync"],
+                "--force is an option of sync, so it goes after the command, as in fetchloom sync --force",
+            ),
+        ] {
+            let error = problem(&arguments)?;
+            assert_eq!(error.help.as_deref(), Some(expected), "{option}");
+        }
+        Ok(())
     }
 
     #[test]
