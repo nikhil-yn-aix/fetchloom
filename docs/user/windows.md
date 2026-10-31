@@ -4,7 +4,7 @@ windows supports the same fetchloom commands, with placement affected by the dri
 
 ## defender and new files
 
-many small files give Microsoft Defender many new files to scan. in a recorded 10,000-file unpack on one laptop, Defender scanned every staged file. that observation depends on the machine and its protection settings.
+many small files give Microsoft Defender many new files to scan. the [historical defender observations](../dev/performance/windows-defender.md#recorded-workload) describe one laptop; costs depend on the machine and its protection settings.
 
 a dev drive with Defender's performance mode defers scans until after file open completes. [Microsoft's performance mode comparison](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-endpoint-antivirus-performance-mode#performance-mode-compared-to-real-time-protection) states the trade-off:
 
@@ -51,6 +51,6 @@ do not make a managed hardlink writable to edit it. set `copy = true` on the dat
 
 use `/` inside `data.toml` paths and `fetchloom path iris/iris.csv` on windows too. returned absolute paths use the platform's filesystem representation.
 
-fetchloom uses the windows long-path form for project metadata renames. other programs opening your data may still impose their own path limits. keep the project root and cache path short when working with deeply nested datasets. a short `path` in the manifest can shorten the dataset folder too.
+fetchloom uses the windows long-path form for project metadata renames. a working directory can still be too long for `-C`; that error reports the path length and suggests moving the project to a shorter path before rerunning. other programs opening your data may still impose their own path limits. keep the project root and cache path short when working with deeply nested datasets. a short `path` in the manifest can shorten the dataset folder too.
 
 if a replacement or deletion fails, close editors, notebooks or other programs holding the file open, then check permissions. [troubleshooting](troubleshooting.md) covers error handling without discarding local work.

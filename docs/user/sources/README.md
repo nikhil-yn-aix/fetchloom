@@ -27,6 +27,8 @@ use [search](../commands/search.md) when you have words rather than a reference.
 
 listing-size limits apply before filtering. filters cannot bypass zenodo, figshare or dataverse access checks. a selected google docs entry is different: you can exclude it before fetching the remaining fixed files.
 
+plain URLs have no resolved-metadata line. other sources show available metadata; a license containing `-NC` or `-ND`, ignoring case, gets a warning. check the license before using or sharing those files.
+
 accepting a reference spelling does not guarantee access or a successful download. hosts can move or remove files. [locked URL recovery](../concepts.md#recovery) can find a replacement URL while retaining the original hashes.
 
 [environment](../reference/environment.md#credentials) defines credential precedence. [lock records](../reference/data-lock.md#what-each-source-records) defines resolved references and download URLs.
