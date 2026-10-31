@@ -854,11 +854,17 @@ fn choose_name(listing: &Listing, parsed: &Parsed, manifest: &Manifest) -> Resul
     };
     let name = single
         .and_then(|file| name::dataset_name(&name::folder_for(&file)))
-        .or_else(|| listing.title.as_deref().and_then(name::dataset_name))
-        .or_else(|| name::dataset_name(&parsed.reference.to_string()))
+        .or_else(|| listing.title.as_deref().and_then(name::title_name))
+        .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
-    unused(&name, manifest)?;
-    Ok(name)
+    // a clash with --as is refused, but a name fetchloom chose can simply take the next number
+    if !manifest.datasets.contains_key(&name) {
+        return Ok(name);
+    }
+    (2..100)
+        .map(|number| format!("{name}-{number}"))
+        .find(|numbered| !manifest.datasets.contains_key(numbered))
+        .map_or_else(|| unused(&name, manifest).map(|()| name), Ok)
 }
 
 /// refuses a name data.toml already has.

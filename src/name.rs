@@ -69,6 +69,54 @@ pub(crate) fn dataset_name(text: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// words a cut title should not end on.
+const DANGLING: [&str; 13] = [
+    "a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "the", "to", "with",
+];
+
+/// a dataset name made from a title: at most its first four words and 32 characters, without
+/// a dangling "and" or "of" at the end.
+pub(crate) fn title_name(title: &str) -> Option<String> {
+    let lower = title.to_lowercase();
+    let words = lower
+        .split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+        .map(|word| word.trim_start_matches('_'))
+        .filter(|word| !word.is_empty());
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 0;
+    for word in words {
+        let grown = length + usize::from(!kept.is_empty()) + word.len();
+        if kept.len() == 4 || grown > 32 {
+            break;
+        }
+        kept.push(word);
+        length = grown;
+    }
+    while kept.len() > 1 && kept.last().is_some_and(|word| DANGLING.contains(word)) {
+        kept.pop();
+    }
+    if kept.is_empty() {
+        return dataset_name(title);
+    }
+    Some(kept.join("-"))
+}
+
+/// a dataset name made from a reference: its last part when that holds a letter, as iris for
+/// hf:datasets/scikit-learn/iris, else the whole reference without its version.
+pub(crate) fn reference_name(reference: &str) -> Option<String> {
+    let bare = reference.split('@').next().unwrap_or(reference);
+    let last = bare
+        .rsplit(['/', ':'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(bare);
+    if last.chars().any(|c| c.is_ascii_alphabetic())
+        && let Some(name) = dataset_name(last)
+    {
+        return Some(name);
+    }
+    dataset_name(bare)
+}
+
 pub(crate) fn is_dataset_name(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 64
@@ -461,6 +509,46 @@ mod tests {
         assert!(is_dataset_name("eeg-2024_v2"));
         for bad in ["", "EEG", "a b", "-lead", "x.y"] {
             assert!(!is_dataset_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn titles_give_short_names() {
+        for (title, name) in [
+            (
+                "Pitch, yaw and roll (torsion) of left and right hands",
+                "pitch-yaw-and-roll",
+            ),
+            (
+                "Effects of xylooligosaccharide supplementation on methane",
+                "effects-of-xylooligosaccharide",
+            ),
+            ("Data for the", "data"),
+            ("Iris Species", "iris-species"),
+            ("DatasetIris", "datasetiris"),
+            ("The", "the"),
+            ("_private notes", "private-notes"),
+        ] {
+            assert_eq!(title_name(title).as_deref(), Some(name), "{title}");
+        }
+        assert_eq!(title_name(&"x".repeat(50)).map(|name| name.len()), Some(40));
+        assert_eq!(title_name(" -- "), None);
+    }
+
+    #[test]
+    fn references_give_their_last_named_part() {
+        for (reference, name) in [
+            ("hf:datasets/scikit-learn/iris", "iris"),
+            ("hf:datasets/org/name@main", "name"),
+            ("kaggle:uciml/iris", "iris"),
+            ("zenodo:3608990", "zenodo-3608990"),
+            ("figshare:5616403@1", "figshare-5616403"),
+        ] {
+            assert_eq!(
+                reference_name(reference).as_deref(),
+                Some(name),
+                "{reference}"
+            );
         }
     }
 

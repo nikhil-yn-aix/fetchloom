@@ -49,6 +49,9 @@ pub(crate) struct Freed {
     /// unfinished downloads and temporary files nobody came back for.
     pub(crate) leftovers: u64,
     pub(crate) not_removed: Vec<PathBuf>,
+    /// objects no project needs that stay because they are younger than a day.
+    pub(crate) kept_objects: u64,
+    pub(crate) kept_bytes: u64,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -183,14 +186,17 @@ impl Cache {
         let mut freed = Freed::default();
         for object in scan.objects {
             stop.check()?;
-            if !needed.objects.contains(&object.digest)
-                && old(object.modified)
-                && removed(
-                    &object.path,
-                    self.volume.remove(&object.path),
-                    &mut freed.not_removed,
-                )
-            {
+            if needed.objects.contains(&object.digest) {
+                continue;
+            }
+            if !old(object.modified) {
+                freed.kept_objects += 1;
+                freed.kept_bytes += object.size;
+            } else if removed(
+                &object.path,
+                self.volume.remove(&object.path),
+                &mut freed.not_removed,
+            ) {
                 freed.objects += 1;
                 freed.bytes += object.size;
             }

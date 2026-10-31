@@ -374,8 +374,8 @@ fn folder_for(
         _ => listing
             .title
             .as_deref()
-            .and_then(name::dataset_name)
-            .or_else(|| name::dataset_name(&parsed.reference.to_string()))
+            .and_then(name::title_name)
+            .or_else(|| name::reference_name(&parsed.reference.to_string()))
             .unwrap_or_else(|| "download".to_owned()),
     };
     PathBuf::from(name)

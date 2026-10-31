@@ -71,7 +71,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         );
         output.hint("`fetchloom cache gc` frees the rest, once it is a day old");
     }
-    output.answer(&cache.root().display().to_string());
+    output.answer_untold(&cache.root().display().to_string());
     Ok(Info {
         path: cache.root().to_path_buf(),
         objects: objects.len() as u64,
@@ -89,11 +89,21 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
     for path in &freed.not_removed {
         output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
     }
+    let kept = (freed.kept_objects > 0).then(|| {
+        format!(
+            "{} in {} no project needs, gc frees it once it is a day old",
+            units::size(freed.kept_bytes),
+            units::count(freed.kept_objects, "file", "files")
+        )
+    });
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
-        output.done(
-            "Ok",
-            "no cached data files or download leftovers were removed",
-        );
+        match &kept {
+            Some(kept) => output.done("Kept", kept),
+            None => output.done(
+                "Ok",
+                "no cached data files or download leftovers were removed",
+            ),
+        }
         return Ok(freed);
     }
     if freed.objects > 0 {
@@ -111,6 +121,9 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
             "Removed",
             &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
+    }
+    if let Some(kept) = &kept {
+        output.step("Kept", kept);
     }
     if !freed.not_removed.is_empty() {
         let result = serde_json::to_value(&freed).map_err(|err| {

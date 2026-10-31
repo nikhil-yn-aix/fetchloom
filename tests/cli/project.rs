@@ -24,6 +24,23 @@ fn clone(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf> {
 }
 
 #[test]
+fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(PATH, vec![file(b"species\nsetosa\n", "\"a\"")])?;
+    added(&sandbox, &first)?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?.contains("[datasets.iris-2]"),
+        "{stderr}"
+    );
+    assert!(sandbox.work().join("data/iris-2/iris.csv").is_file());
+    Ok(())
+}
+
+#[test]
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
@@ -628,6 +645,14 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
         Some(0),
         "a project without data.toml is forgotten"
     );
+    let young = sandbox.run(&["cache", "gc"])?;
+    assert_eq!(
+        text(&young.stderr)?,
+        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old\n"
+    );
+    let document = json(&sandbox.run(&["--json", "cache", "gc"])?)?;
+    assert_eq!(document["result"]["kept_objects"], 1);
+    assert_eq!(document["result"]["kept_bytes"], IRIS.len());
     Ok(())
 }
 

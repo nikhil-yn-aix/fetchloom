@@ -172,6 +172,14 @@ impl Output {
         }
     }
 
+    /// an answer the story already showed, printed only when a script reads stdout or `-q`
+    /// hid the story.
+    pub(crate) fn answer_untold(&self, text: &str) {
+        if !self.shows_next() {
+            self.answer(text);
+        }
+    }
+
     /// a failure: the sentence, its supporting lines, and what to do next.
     pub(crate) fn error(&self, error: &Error) {
         if self.json {
