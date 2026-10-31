@@ -911,3 +911,29 @@ fn remove_explains_how_to_finish_after_placement_fails() -> Result {
     assert!(!path.exists());
     Ok(())
 }
+
+#[test]
+fn status_reports_datasets_removed_from_the_manifest() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let clone = clone(&sandbox, "removed")?;
+    fs::write(clone.join("data.toml"), "[datasets]\n")?;
+    let before = fs::read(clone.join("data.lock"))?;
+    let output = sandbox.command_in(&clone, &["status"]).output()?;
+    assert!(output.status.success());
+    let stderr = text(&output.stderr)?;
+    assert!(stderr.contains("Removed"), "{stderr}");
+    assert!(stderr.contains("iris from data.toml"), "{stderr}");
+    assert!(stderr.contains("fetchloom sync"), "{stderr}");
+    assert!(!stderr.contains("everything matches"), "{stderr}");
+    let output = sandbox.command_in(&clone, &["--json", "status"]).output()?;
+    let report = json(&output)?;
+    assert_eq!(report["result"]["removed"], serde_json::json!(["iris"]));
+    assert_eq!(report["result"]["unlocked"], serde_json::json!([]));
+    assert_eq!(report["work"]["requests"], 0);
+    let brief = sandbox.command_in(&clone, &[]).output()?;
+    assert!(!text(&brief.stderr)?.contains("everything matches"));
+    assert_eq!(fs::read(clone.join("data.lock"))?, before);
+    Ok(())
+}
