@@ -36,6 +36,14 @@ show the command and only the output needed to teach its behavior. say when an e
 
 examples of `data.toml`, `data.lock` and JSON must use accepted keys and values. show complete hashes in valid file examples. do not silently turn a known limitation into a guarantee.
 
+## terminal output
+
+keep step and completion verbs right-aligned in 11 columns, with no status glyphs. use a clear completion verb such as `Added`, `Fetched`, `Synced` or `Ok`. completed work is bold green, ongoing work cyan, attention yellow and failures red. details after `·` are dim.
+
+errors use `error:`, indented details and an optional `help:` line. warnings use `warning:`; hints stay dim, with commands in bold cyan. keep backticks in plain text. headings in welcome and help are bold and commands cyan; preserve the kitchen analogy.
+
+progress keeps the filename when space is tight. colored bars use `━`, with the remainder dimmed; uncolored terminal bars use `#` and `-`. pipes have no bars. never rely on color to convey meaning. see [output and errors](cli.md#output-and-errors) for color controls and stream behavior.
+
 ## code comments
 
 a comment explains a reason, an outside constraint or a trap the code cannot express. if it repeats the code, rename the item or remove the comment.

@@ -75,7 +75,7 @@ if `iris.csv` is missing and `notes.txt` is an extra file, stderr shows:
 ```text
     Missing data/iris/iris.csv
       Extra data/iris/notes.txt
-✓ found 2 differences from data.lock
+      Found 2 differences from data.lock
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
 ```
 
@@ -162,7 +162,7 @@ approval is required above 1 GiB, not at exactly 1 GiB:
 `--yes` or `-y` approves. questions default to no and need interactive stdin and stderr. pipes, CI and JSON mode cannot answer. for a 2 GiB file, stderr can report:
 
 ```text
-✗ downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here
+error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here
   help: add --yes to approve this download
 ```
 
@@ -231,11 +231,15 @@ rate suffixes `K`, `M`, `G` and `T` use powers of 1024. `2.5M` allows 2,621,440 
 
 stdout carries paths from `get`, `path` and `cache`, plus version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` prints no closing summary; successful `lock --check` is silent unless verbose or JSON output was requested.
 
-interactive runs show spinners or download bars. without bars, long batches report progress after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress progress. explicit debug logging can still write stderr and disables bars.
+interactive stderr shows a verb, filename and bar while downloading or unpacking. colored bars use `━` for both portions, with the remaining portion dimmed; uncolored bars use `#` and `-`. counters show bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. waits show their elapsed time without a spinner.
+
+non-terminal stderr has no bars. long batches report progress after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress progress. explicit debug logging can still write stderr and disables bars.
 
 when stdout and stderr are terminals, successful changes may end with a `next:` suggestion. `-q`, `--json` and redirected stdout omit it. plain URLs have no resolved-metadata line. other sources show available metadata; a license containing `-NC` or `-ND`, ignoring case, gets a warning.
 
-color is automatic on suitable terminals. `NO_COLOR` disables automatic color even if `CLICOLOR_FORCE` is set. explicit `--color always` or `--color never` wins over color variables, including for help. symbols and words identify success, warnings and errors without relying on color.
+steps and closing lines share an 11-column, right-aligned bold verb. completed work is green, ongoing work cyan, attention yellow and failures red. details after `·` are dimmed. errors start with bold red `error:`, followed by indented dim details and bold cyan `help:` when a fix is available. `warning:` is bold yellow; hints are dim with backticked commands in bold cyan. welcome and help use bold headings and cyan commands. there are no status symbols.
+
+color is automatic on suitable terminals. `NO_COLOR` disables automatic color even if `CLICOLOR_FORCE` is set. pipes and files receive no ANSI color codes unless `--color always` forces them. `--color never` disables color; both explicit choices override color variables, including for welcome and help. stdout and stderr are checked separately. verbs and labels retain their meaning without color.
 
 with no reference:
 
@@ -246,7 +250,7 @@ fetchloom get
 stderr:
 
 ```text
-✗ <link> is missing
+error: <link> is missing
   usage: fetchloom get [options] <link>
   help: `fetchloom get --help` says what it takes
 ```
@@ -254,7 +258,7 @@ stderr:
 if a locked 32-byte file is replaced upstream by a 15-byte file, sync reports on stderr:
 
 ```text
-✗ iris/iris.csv is not the file that was locked
+error: iris/iris.csv is not the file that was locked
   expected 32 bytes, got 15
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```
