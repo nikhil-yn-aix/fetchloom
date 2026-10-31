@@ -38,22 +38,24 @@ files = [
 
 hashes are written in lowercase. datasets sort by name and files by path. the writer uses the field order above, inline file tables, LF newlines and a final newline. identical lock contents render identically; a fresh resolution can have a different timestamp.
 
-`locked` stays unchanged when `resolved` and `files` stay unchanged, even after re-resolution. `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
+`locked` stays unchanged when `resolved` and `files` stay unchanged, even after re-resolution.
+
+`lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
 
 a newer lock version asks you to update fetchloom. a broken or older lock must be restored from git, or deleted before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
 
 ## the spec hash
 
-SHA-256 hashes this UTF-8 text, with a final newline:
+for the unfiltered iris entry above, SHA-256 hashes these UTF-8 bytes, including the final newline:
 
 ```text
 ref=zenodo:3608990
-select=*.csv
-exclude=**/drafts/**
 extract=true
 ```
 
-the `ref=` line contains the manifest reference. there is one `select=` or `exclude=` line per pattern, in written order; empty pattern lists add no lines. the last value is `true` or `false`. `copy`, `path` and `project.data_dir` are excluded.
+the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines.
+
+the final `extract=` value is `true` or `false`. `copy`, `path` and `project.data_dir` are excluded.
 
 an unchanged spec keeps the existing lock entry unless an upgrade is requested. filter or extraction edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 
@@ -84,7 +86,9 @@ dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask recognized query secrets, including errors for malformed links. local URL records keep the raw links, so do not share those records. masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask recognized query secrets, including errors for malformed links. local URL records keep the raw links, so do not share those records.
+
+masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
 ## the tree hash
 

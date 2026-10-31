@@ -36,7 +36,13 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. the cache writes no `layout` marker. existing `layout` files are left untouched. opening, verifying and collecting the cache ignore unknown top-level files.
 
-objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup. the next unpack or gc removes a staging folder as soon as it can take that lock. where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule. random names use 16 hexadecimal digits. older loose `.new` files still use the age rule.
+objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup.
+
+the next unpack or gc removes a staging folder as soon as it can take that lock.
+
+where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule.
+
+random names use 16 hexadecimal digits. older loose `.new` files still use the age rule.
 
 `tmp/` also holds atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
@@ -53,7 +59,11 @@ objects hold read-only payloads. each archive stages its read-only `.new` member
 | `validators.etag` | `ETag` string, or null |
 | `validators.last_modified` | `Last-Modified` string, or null |
 
-partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null. a split download adds `ranges`, the pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; the field is absent when there are none. progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
+partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
+
+a split download adds `ranges`, the pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; the field is absent when there are none.
+
+progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 
 the `.lock` file coordinates writers; its contents are unused. gc removes an abandoned download's `.part` and `.json` but keeps its `.lock`, since a run waiting for that download may already have it open. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 
@@ -91,9 +101,19 @@ owner fields:
 | `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
 | `command` | subcommand name, without arguments or credentials |
 
-fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty. the temporary name is removed after the attempt. when hardlinks fail for another reason, fetchloom falls back to exclusive creation followed by a temporary-file write and rename; only this fallback can expose an empty reservation. dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
+fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty. the temporary name is removed after the attempt.
 
-an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale. before removing a stale record, fetchloom reads it again and requires the same bytes and modification time. any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
+when hardlinks fail for another reason, fetchloom falls back to exclusive creation followed by a temporary-file write and rename; only this fallback can expose an empty reservation.
+
+dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
+
+an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale.
+
+before removing a stale record, fetchloom reads it again and requires the same bytes and modification time.
+
+any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone.
+
+a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
 
 state fields:
 
