@@ -268,7 +268,7 @@ fn write_at_places(
 ) -> tokio::task::JoinHandle<io::Result<PartialWriter>> {
     tokio::task::spawn_blocking(move || {
         while let Some((at, bytes)) = receiver.blocking_recv() {
-            writer.write_at(at, &bytes)?;
+            writer.write_chunk(at, &bytes)?;
         }
         writer.save()?;
         Ok(writer)
