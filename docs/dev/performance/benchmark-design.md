@@ -87,8 +87,8 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 |---|---|---|---|---|---|
 | lan | 0 ms | 0% | unlimited | 1 GiB | 1,000 |
 | home | 20 ms | 0% | 100 Mbit/s | 256 MiB | 1,000 |
-| far | 150 ms | 1% | 50 Mbit/s | 128 MiB | 300 |
-| poor | 300 ms | 3% | 10 Mbit/s | 32 MiB | 100 |
+| far | 150 ms | 1% | 50 Mbit/s | 4 MiB | 50 |
+| poor | 300 ms | 3% | 10 Mbit/s | 1 MiB | 20 |
 
 ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the published xfs comparison runs only s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](../../../bench/README.md#run).
 
@@ -113,7 +113,7 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 
 ## runs and statistics
 
-lab cases run 10 rounds on lan and 5 on shaped profiles, after one warmup round. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
+lab cases run 5 rounds on lan and home and 3 on far and poor, after one warmup round. a lossy link holds one TCP stream to roughly 120 KB/s at 1% loss and 150 ms, and 35 KB/s at 3% loss and 300 ms, so their sizes and round counts keep each case near a minute per run. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
 
 ## results and presentation
 

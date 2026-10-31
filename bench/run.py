@@ -16,6 +16,9 @@ import fixtures
 import lab
 import tools
 
+# measured rounds per profile, after one warmup. lossy links take minutes per run, so they get fewer
+ROUNDS = {"lan": 5, "home": 5, "far": 3, "poor": 3}
+
 
 def verify(outputs):
     failures = []
@@ -280,7 +283,7 @@ def main():
     rng = random.Random(args.seed)
     estimate = 0
     for case in cases:
-        rounds = 1 if args.quick else args.rounds or (10 if case["profile"] == "lan" else 5)
+        rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
         estimate += (rounds + 1) * sum(t.supports(case) for t in adapters.values()) * (30 if case["id"] == "s7" else 3 if args.quick else 60)
     estimate *= len(args.fs)
     meta["estimated_seconds"] = estimate
@@ -298,7 +301,7 @@ def main():
                     case = fixtures.prepare_native(case, args.fetchloom, [name])
                 except Exception as error:
                     preparation_errors[name] = f"native preparation failed: {error}"
-            rounds = 1 if args.quick else args.rounds or (10 if case["profile"] == "lan" else 5)
+            rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
             meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds))
             lab.profile(case["profile"])
             for number in range(rounds + 1):

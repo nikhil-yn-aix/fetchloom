@@ -68,7 +68,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" \
   --seed 1729 --out /srv/fl-bench/results/full/live
 ```
 
-there are 10 measured rounds on lan and 5 on shaped links, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
+there are 5 measured rounds on lan and home and 3 on far and poor, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
 smoke tests use 12 files per set, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
 
