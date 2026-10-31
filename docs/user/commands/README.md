@@ -7,12 +7,14 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`add`](add.md) | add a dataset, lock its files and sync the project | start using a dataset in a project |
 | [`sync`](sync.md) | place locked files, updating a stale lock first | restore data after cloning or changing the manifest |
 | [`lock`](lock.md) | update or check pins without placing files | review an input change before syncing |
+| [`list`](list.md) | show dataset references, locked sizes and folders | inspect the project manifest and lock |
+| [`search`](search.md) | find datasets on public catalogs | choose a reference from plain words |
 | [`status`](status.md) | list missing, edited and extra files | check local inputs without downloads |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
 | [`remove`](remove.md) | remove an entry and unchanged managed files | stop using a dataset |
 | [`get`](get.md) | fetch once without project files | inspect a source before adding it |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
-| [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day | clean up the cache |
+| [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
 | [`cache verify`](cache.md#verify) | rehash cache objects and mark changed bytes | investigate suspected cache damage |
 | `help concepts` | explain the shopping list, receipt and pantry | learn the [project model](../concepts.md) |
 | `help <command>` | show a command's help | check syntax at the terminal |
@@ -29,7 +31,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 | `-vv` | also enable debug logs |
 | `--json` | print one result document on stdout, including failures; never prompt |
 | `--offline` | prevent HTTP and DNS requests by fetchloom |
-| `-y`, `--yes` | approve downloads without asking |
+| `-y`, `--yes` | approve confirmations, but never choose a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running |
 | `-h`, `--help` | print help, including after a command |
@@ -51,18 +53,10 @@ project commands find the nearest `data.toml` at or above the working directory.
 
 ## output
 
-stdout carries paths from `get` and `path`, plus version, welcome, help or JSON. `cache` prints its bare path on stdout only when stdout is not a terminal or quiet mode hides the story. at a terminal, the story already shows the cache path. stderr carries progress, warnings, summaries and errors. a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested.
+stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
 
-interactive stderr shows a verb, filename and bar during downloads and unpacking. counters show bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. waits show elapsed time without a spinner.
+a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested. quiet mode keeps stdout answers and errors. JSON mode returns one document and never prompts; explicit debug logging can still write stderr.
 
-non-terminal stderr has no bars. long batches report progress after two seconds, then at ten-second intervals from the start. quiet and JSON modes suppress progress. explicit debug logging can still write stderr and disables bars.
-
-when stdout and stderr are terminals, successful changes may end with a `next:` suggestion. quiet, JSON and redirected stdout omit it. plain URLs have no resolved-metadata line. other sources show available metadata. a license containing `-NC` or `-ND`, ignoring case, gets a warning.
-
-steps and closing lines use an 11-column, right-aligned bold verb. completed work is green, ongoing work cyan, attention yellow and failures red. details after `·` are dimmed. colored bars use `━`, with the remaining portion dimmed; uncolored bars use `#` and `-`.
-
-errors start with bold red `error:`, followed by indented dim details and bold cyan `help:` when a fix is available. `warning:` is bold yellow. hints are dim with backticked commands in bold cyan. welcome and help use bold headings and cyan commands. output has no status symbols.
-
-stdout and stderr are checked separately for color. pipes and files receive no ANSI color unless `--color always` forces it. labels remain meaningful without color. sizes use binary units, and small durations use milliseconds.
+[terminal output](../../dev/architecture/output.md) defines the palette and terminal fallbacks. [search selection](search.md#choosing-a-dataset) explains the picker and noninteractive refusal to guess.
 
 [scripting](../scripting.md) covers machine-readable answers. [exit codes](../reference/exit-codes.md) distinguishes usage, network, integrity and local failures.
