@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,25 +33,25 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
       # advisories, licenses, duplicate crates and sources, as deny.toml sets them. it reads the
-      # lock file, which every platform shares, so linux alone runs it
+      # lock file, which every platform shares, so x86_64 linux alone runs it
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --locked check advisories licenses bans sources
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: python3 -m unittest discover -s python
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
       # the default disks never show some paths: refs clones blocks, which ntfs never does, while
       # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
       # read-only file the way ntfs allows. every test runs again with its folders on each.
       # windows runners are admin, which diskpart needs
       - name: cargo test on refs, exfat and fat32
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $failed = @()
@@ -80,7 +80,7 @@ jobs:
           if ($failed) { throw "tests failed on $($failed -join ', ')" }
       # btrfs and xfs clone blocks, a path ext4 never takes
       - name: cargo test on btrfs and xfs
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
