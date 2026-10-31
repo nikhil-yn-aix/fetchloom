@@ -1,5 +1,6 @@
 //! what fetchloom prints. stdout carries the answer and nothing else, stderr carries the story.
 
+mod picker;
 mod progress;
 mod style;
 
@@ -250,6 +251,22 @@ impl Output {
             }
             answer
         };
+        match &self.bars {
+            Some(bars) => bars.suspend(ask),
+            None => ask(),
+        }
+    }
+
+    /// asks which option to use, or returns none when nobody can answer.
+    pub(crate) fn choose(
+        &self,
+        question: &str,
+        options: &[String],
+    ) -> Result<Option<usize>, Error> {
+        if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
+            return Ok(None);
+        }
+        let ask = || picker::choose(question, options, self.style);
         match &self.bars {
             Some(bars) => bars.suspend(ask),
             None => ask(),

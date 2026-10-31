@@ -10,6 +10,7 @@ pub(crate) enum Kind {
     Unconfirmed,
     ReferenceInvalid,
     ReferenceUnresolved,
+    ReferenceAmbiguous,
     /// a source answered in a way fetchloom cannot use, such as a listing it cannot read.
     SourceInvalid,
     NetworkUnreachable,
@@ -36,6 +37,7 @@ impl Kind {
             Kind::Unconfirmed => "unconfirmed",
             Kind::ReferenceInvalid => "reference.invalid",
             Kind::ReferenceUnresolved => "reference.unresolved",
+            Kind::ReferenceAmbiguous => "reference.ambiguous",
             Kind::SourceInvalid => "source.invalid",
             Kind::NetworkUnreachable => "network.unreachable",
             Kind::NetworkStatus => "network.status",
@@ -56,7 +58,10 @@ impl Kind {
         match self {
             Kind::Unconfirmed | Kind::Outdated => 1,
             Kind::Usage => 2,
-            Kind::ReferenceInvalid | Kind::ReferenceUnresolved | Kind::SourceInvalid => 10,
+            Kind::ReferenceInvalid
+            | Kind::ReferenceUnresolved
+            | Kind::ReferenceAmbiguous
+            | Kind::SourceInvalid => 10,
             Kind::NetworkUnreachable
             | Kind::NetworkStatus
             | Kind::NetworkRateLimited
@@ -188,6 +193,12 @@ impl std::error::Error for Error {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ambiguous_reference_is_a_reference_error() {
+        assert_eq!(Kind::ReferenceAmbiguous.name(), "reference.ambiguous");
+        assert_eq!(Kind::ReferenceAmbiguous.exit_code(), 10);
+    }
 
     #[test]
     fn io_errors_a_person_can_fix_come_with_help() {
