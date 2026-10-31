@@ -870,4 +870,175 @@ mod tests {
         assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"second");
         assert!(project.root.join(FOLDER).join("state").is_file());
     }
+
+    #[test]
+    fn invalid_utf8_metadata_has_a_project_error_and_a_recovery_step() {
+        let (_dir, project) = project(&[]);
+        for name in [manifest::FILE, lock::FILE] {
+            fs::write(project.root.join(name), [0xff, 0xfe]).unwrap();
+        }
+        let manifest = project.manifest().unwrap_err();
+        assert_eq!(manifest.kind, Kind::ProjectInvalid);
+        assert!(manifest.message.contains("UTF-8"));
+        assert!(manifest.help.unwrap().contains("UTF-8"));
+        let lock = project.lock_and_text().unwrap_err();
+        assert_eq!(lock.kind, Kind::ProjectInvalid);
+        assert!(lock.message.contains("UTF-8"));
+        assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
+    }
+
+    #[test]
+    fn missing_and_unreadable_metadata_are_not_treated_as_parse_errors() {
+        let (_dir, project) = project(&[]);
+        assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
+        assert_eq!(project.lock().unwrap(), None);
+        fs::create_dir(project.root.join(manifest::FILE)).unwrap();
+        fs::create_dir(project.root.join(lock::FILE)).unwrap();
+        assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
+        assert_eq!(project.lock().unwrap_err().kind, Kind::LocalIo);
+    }
+
+    #[test]
+    fn state_round_trips_and_a_broken_state_does_not_vouch_for_files() {
+        use crate::place::Method;
+        use crate::project::state::{Placed, Synced};
+
+        let (_dir, project) = project(&[]);
+        let (empty, written) = project.state();
+        assert_eq!(empty.files.len(), 0);
+        assert_eq!(written, 0);
+        let mut state = State::default();
+        state.files.insert(
+            "data/set/a".to_owned(),
+            Placed {
+                dataset: "set".to_owned(),
+                sha256: crate::digest::sha256(b"a"),
+                method: Method::Copy,
+                look: Look {
+                    size: 1,
+                    modified: 42,
+                },
+                writable: true,
+                checked: 43,
+            },
+        );
+        state.synced = Some(Synced {
+            manifest: crate::digest::sha256(b"manifest"),
+            lock: crate::digest::sha256(b"lock"),
+            complete: true,
+        });
+        project.write_state(&state).unwrap();
+        let (read, written) = project.state();
+        assert_eq!(read.files, state.files);
+        assert_eq!(read.synced, state.synced);
+        let path = project.own_folder().join("state");
+        assert_eq!(written, Look::of(&fs::metadata(&path).unwrap()).modified);
+        fs::write(&path, b"broken state").unwrap();
+        let (read, _) = project.state();
+        assert_eq!(read.files.len(), 0);
+        assert_eq!(read.synced, None);
+    }
+
+    #[test]
+    fn files_blocking_metadata_or_data_folders_are_preserved() {
+        let (_dir, project) = project(&[
+            (".fetchloom", "keep metadata blocker"),
+            ("data", "keep data blocker"),
+        ]);
+        let error = project.write_state(&State::default()).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(error.help.unwrap().contains("real folder"));
+        let error = project.data_dir(&Manifest::parse("").unwrap()).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(error.help.unwrap().contains("move that file"));
+        assert_eq!(
+            fs::read(project.own_folder()).unwrap(),
+            b"keep metadata blocker"
+        );
+        assert_eq!(
+            fs::read(project.root.join("data")).unwrap(),
+            b"keep data blocker"
+        );
+    }
+
+    #[test]
+    fn failed_atomic_replacement_leaves_the_destination_and_no_staging_files() {
+        let (_dir, project) = project(&[("data.lock/keep", "untouched")]);
+        let error = project.write("data.lock", b"replacement").unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(error.message.contains("data.lock"));
+        assert_eq!(
+            fs::read(project.root.join("data.lock/keep")).unwrap(),
+            b"untouched"
+        );
+        assert_eq!(fs::read_dir(&project.root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn stale_owner_cleanup_is_idempotent_and_reports_unreadable_owners() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "stale")]);
+        let path = project.own_folder().join("owner");
+        let (bytes, modified) = read_owner(&path).unwrap();
+        remove_stale_owner(&path, &bytes, modified).unwrap();
+        assert!(!path.exists());
+        remove_stale_owner(&path, &bytes, modified).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("keep"), b"not an owner").unwrap();
+        assert!(remove_stale_owner(&path, &bytes, modified).is_err());
+        assert_eq!(fs::read(path.join("keep")).unwrap(), b"not an owner");
+    }
+
+    #[test]
+    fn gitignore_recognizes_equivalent_entries_in_nested_projects() {
+        for entry in ["/inputs/raw/", "inputs/raw/", "/inputs/raw", "inputs/raw"] {
+            let (dir, _) = project(&[(".git", "gitdir: elsewhere"), ("child/data.toml", "")]);
+            let project = Project {
+                root: dir.path().join("child"),
+            };
+            let text = format!("# existing\n  {entry}  \n");
+            fs::write(project.root.join(".gitignore"), &text).unwrap();
+            assert!(!project.ignore_in_git("inputs/raw").unwrap());
+            assert_eq!(
+                fs::read_to_string(project.root.join(".gitignore")).unwrap(),
+                text
+            );
+        }
+        let (dir, _) = project(&[(".git", "gitdir: elsewhere"), ("child/data.toml", "")]);
+        let project = Project {
+            root: dir.path().join("child"),
+        };
+        assert!(project.ignore_in_git("inputs/raw").unwrap());
+        assert_eq!(
+            fs::read(project.root.join(".gitignore")).unwrap(),
+            b"/inputs/raw/\n"
+        );
+        fs::write(project.root.join(".gitignore"), [0xff]).unwrap();
+        assert_eq!(
+            project.ignore_in_git("inputs/raw").unwrap_err().kind,
+            Kind::LocalIo
+        );
+        assert_eq!(fs::read(project.root.join(".gitignore")).unwrap(), [0xff]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_and_metadata_symlinks_never_create_files_outside_the_project() {
+        use std::os::unix::fs::symlink;
+
+        let (dir, project) = project(&[]);
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, project.root.join("data")).unwrap();
+        symlink(&outside, project.own_folder()).unwrap();
+        let manifest = Manifest::parse("[project]\ndata_dir = 'data/child'\n").unwrap();
+        assert_eq!(
+            project.data_dir(&manifest).unwrap_err().kind,
+            Kind::ProjectInvalid
+        );
+        assert_eq!(
+            project.write_state(&State::default()).unwrap_err().kind,
+            Kind::ProjectInvalid
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    }
 }
