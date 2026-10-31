@@ -68,6 +68,27 @@ each method installs one program, `fetchloom`. for a shorter name, add a shell a
 
 ## quick start
 
+run `fetchloom` with no arguments to see where to start:
+
+```text
+fetchloom 0.1.0
+
+fetchloom puts the exact research data a project needs into its data/ folder.
+
+  data.toml, the shopping list: which datasets you want
+  data.lock, the receipt: the exact files and their fingerprints
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
+
+try it with zenodo:3608990, a 4 KB iris.csv:
+
+  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
+  fetchloom sync                 restock data/ in a project you cloned
+  fetchloom get zenodo:3608990   fetch it once, without a project
+
+learn more with `fetchloom help concepts` and `fetchloom <command> --help`
+```
+
 ### add
 
 run in your project to download iris and pin it:
