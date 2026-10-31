@@ -85,9 +85,8 @@ s1 and s2 run on every profile. s3 to s6 run on lan, where local costs dominate.
 | machine | filesystems |
 |---|---|
 | linux x86_64 | ext4 and xfs, each a fresh loop-mounted image |
-| windows x86_64 | NTFS with defender on |
 
-windows runs s1, s2, s3, s5 and s6 on lan over plain HTTP, because a test certificate cannot be trusted there without a manual prompt; every tool uses the same plain link. its tools are fetchloom, curl with `certutil -hashfile`, aria2c and pooch.
+the harness does not produce windows numbers. namespaces, `tc`, loop mounts and `wait4` require linux; WSL results describe its linux filesystem, not NTFS or defender. a windows comparison needs a separate native runner.
 
 ## metrics
 
@@ -106,7 +105,7 @@ lab cases run 10 rounds on lan and 5 on shaped profiles, after one warmup round.
 
 ## results and presentation
 
-each run of the suite writes `meta.json` and `runs.jsonl` under `bench/results/`, which git ignores. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables in [benchmark results](benchmarks.md), so every published number traces back to a results file.
+each run writes `meta.json` and `runs.jsonl` under `/srv/fl-bench/results/` on the linux filesystem. copy wanted results into the ignored `bench/results/` before teardown. measuring on a windows-mounted worktree would mix filesystem overhead into the lab. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables in [benchmark results](benchmarks.md), so every published number traces back to a results file.
 
 ## not measured
 
