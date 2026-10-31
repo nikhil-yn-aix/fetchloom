@@ -403,10 +403,7 @@ impl Net {
             status => return Err(failure::refusal(from, status, &head)),
         };
         let total = headers::total_length(&head, status);
-        let name = server_name(&response, &fetch.url)?;
-        if headers::is_html(&head) {
-            on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
-        }
+        let name = describe_response(&response, &fetch.url, on)?;
         let proven = pinned || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
         let body = Body {
@@ -732,7 +729,11 @@ impl Net {
     }
 }
 
-fn server_name(response: &reqwest::Response, url: &Url) -> Result<Option<String>, Failure> {
+fn describe_response(
+    response: &reqwest::Response,
+    url: &Url,
+    on: Listener<'_>,
+) -> Result<Option<String>, Failure> {
     let name = headers::file_name(response.headers()).or_else(|| {
         let path = crate::name::from_url(url).unwrap_or_default();
         if std::path::Path::new(&path).extension().is_some() {
@@ -756,6 +757,9 @@ fn server_name(response: &reqwest::Response, url: &Url) -> Result<Option<String>
             )
             .help("ask the file's publisher to remove the control character from its name"),
         ));
+    }
+    if headers::is_html(response.headers()) {
+        on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
     }
     Ok(name)
 }

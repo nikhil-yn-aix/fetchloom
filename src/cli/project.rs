@@ -83,10 +83,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
-    let (old, lock_text) = match project.lock_and_text()? {
-        Some((lock, text)) => (Some(lock), Some(text)),
-        None => (None, None),
-    };
+    let (old, lock_text) = project.lock_and_text()?.unzip();
     if args.name.is_none()
         && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
     {
@@ -121,15 +118,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         None,
     )
     .await;
-    let (lock_changed, placement) = synced.map_err(|error| {
-        restore(
-            &project,
-            existed.then_some(text.as_str()),
-            lock_text.as_deref(),
-            &name,
-            error,
-        )
-    })?;
+    let before = (existed.then_some(text.as_str()), lock_text.as_deref());
+    let (lock_changed, placement) =
+        synced.map_err(|error| restore(&project, before, &name, error))?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -151,8 +142,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
 /// restores both project files after a failed add, including their original absence.
 fn restore(
     project: &Project,
-    manifest: Option<&str>,
-    lock: Option<&str>,
+    (manifest, lock): (Option<&str>, Option<&str>),
     name: &str,
     mut failure: Error,
 ) -> Error {

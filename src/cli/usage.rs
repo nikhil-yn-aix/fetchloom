@@ -1,5 +1,6 @@
 //! a command line clap cannot read, answered like every other failure.
 
+use std::fmt::Write as _;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -160,9 +161,9 @@ fn misplaced_option(argument: &str) -> Option<String> {
             .get_value_names()
             .and_then(|names| names.first())
             .map_or(arg.get_id().as_str(), |name| name.as_str());
-        example.push_str(&format!(" <{name}>"));
+        let _ = write!(example, " <{name}>");
     }
-    example.push_str(&format!(" --{long}"));
+    let _ = write!(example, " --{long}");
     if option.get_action().takes_values() {
         let value = option
             .get_value_names()
@@ -171,7 +172,7 @@ fn misplaced_option(argument: &str) -> Option<String> {
         if value == "glob" {
             example.push_str(" \"*.csv\"");
         } else {
-            example.push_str(&format!(" <{value}>"));
+            let _ = write!(example, " <{value}>");
         }
     }
     Some(format!(
