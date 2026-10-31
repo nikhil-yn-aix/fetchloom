@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::{local, placed};
+use super::placed;
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
 use crate::place::{Method, Order, Placer};
@@ -32,24 +32,15 @@ pub(super) fn put_all<'t>(
     checked: u64,
     work: &Work,
 ) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
-    let objects: Vec<PathBuf> = todo
-        .iter()
-        .map(|target| cache.object_path(&target.sha256))
-        .collect();
-    let destinations: Vec<PathBuf> = todo
-        .iter()
-        .map(|target| project.root.join(&target.path))
-        .collect();
-    let orders: Vec<Order> = todo
-        .iter()
-        .zip(objects.iter().zip(&destinations))
-        .map(|(target, (object, destination))| Order {
-            object,
-            destination,
+    let order = |index: usize| {
+        let target = todo[index];
+        Order {
+            object: cache.object_path(&target.sha256),
+            destination: project.root.join(&target.path),
             writable: target.copy,
-        })
-        .collect();
-    let results = placer.place_all(&orders, Look::of);
+        }
+    };
+    let results = placer.place_all(todo.len(), order, Look::of);
     let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
     let mut failure = None;
     for (index, result) in results.into_iter().enumerate() {
@@ -57,8 +48,10 @@ pub(super) fn put_all<'t>(
         let (method, look) = match result {
             Ok(done) => done,
             Err(err) => {
-                failure = failure
-                    .or_else(|| Some(failed(target, &objects[index], &destinations[index], &err)));
+                failure = failure.or_else(|| {
+                    let order = order(index);
+                    Some(failed(target, &order.object, &order.destination, &err))
+                });
                 continue;
             }
         };
@@ -85,11 +78,23 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
     if err.kind() == io::ErrorKind::NotFound && !object.exists() {
         return Error::new(
             Kind::LocalIo,
-            format!("the cache lost {} while placing it", target.path),
+            format!(
+                "the cache lost {} while placing {} at {}",
+                object.display(),
+                target.path,
+                destination.display()
+            ),
         )
         .help("run the same command again to download it");
     }
-    local(destination, err)
+    Error::io(
+        format_args!(
+            "could not place {} at {}",
+            object.display(),
+            destination.display()
+        ),
+        err,
+    )
 }
 
 fn count(work: &Work, method: Method) {
