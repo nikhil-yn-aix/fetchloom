@@ -11,7 +11,6 @@
 set -eu
 
 repository=https://github.com/nikhil-yn-aix/fetchloom
-target=x86_64-unknown-linux-musl
 bin_dir=$HOME/.local/bin
 
 fail() {
@@ -44,10 +43,14 @@ else
     fail "installing fetchloom needs sha256sum or shasum to check the download"
 fi
 
-case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64 | Linux/amd64) ;;
-    *) fail "there is no fetchloom build for $(uname -s) on $(uname -m). build it from source: $repository#install" ;;
+system=$(uname -s)
+machine=$(uname -m)
+case "$system/$machine" in
+    Linux/x86_64 | Linux/amd64) arch=x86_64 ;;
+    Linux/aarch64 | Linux/arm64) arch=aarch64 ;;
+    *) fail "there is no fetchloom build for $system on $machine. supported linux machines: x86_64, amd64, aarch64, arm64. build it from source: $repository#install" ;;
 esac
+target=$arch-unknown-linux-musl
 
 version=${1:-${FETCHLOOM_VERSION:-}}
 version=${version#v}
