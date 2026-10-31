@@ -1,0 +1,51 @@
+{
+  "hits": {
+    "hits": [
+      {
+        "files": [
+          {
+            "size": 1126260736
+          },
+          {
+            "size": 20992363
+          }
+        ],
+        "id": 23233774,
+        "stats": {
+          "unique_downloads": 2400
+        },
+        "metadata": {
+          "title": "IRIS: ICESat-2 River Surface Slope"
+        }
+      },
+      {
+        "files": [
+          {
+            "size": 3716
+          }
+        ],
+        "id": 1319069,
+        "stats": {
+          "unique_downloads": 13183
+        },
+        "metadata": {
+          "title": "Edgar Anderson's Iris Data"
+        }
+      },
+      {
+        "files": [
+          {
+            "size": 5342063818
+          }
+        ],
+        "id": 4135078,
+        "stats": {
+          "unique_downloads": 270
+        },
+        "metadata": {
+          "title": "Data and analysis script for channel measurement campaign at POWDER-RENEW using Iris SDRs"
+        }
+      }
+    ]
+  }
+}

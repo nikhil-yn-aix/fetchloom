@@ -11,6 +11,7 @@ mod kaggle;
 mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
+pub(crate) mod search;
 mod zenodo;
 
 use std::collections::HashSet;
