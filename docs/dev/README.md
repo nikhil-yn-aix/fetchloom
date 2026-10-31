@@ -1,4 +1,4 @@
-﻿# developer guide
+# developer guide
 
 fetchloom resolves research-data references into files pinned by SHA-256 and size. it downloads those bytes into a shared cache and places them where a project expects them. a committed `data.toml` and `data.lock` let another machine retrieve the same inputs while local state protects files you edited.
 

@@ -1,4 +1,4 @@
-﻿# architecture
+# architecture
 
 fetchloom separates source resolution, checked byte storage and placement so a project can recover without trusting an interrupted run.
 
@@ -42,21 +42,29 @@ sequenceDiagram
     participant K as cache and archive
     participant F as plan and place
     C->>P: hold project; read manifest and lock
-    C->>S: sync_all
-    S->>P: read state; survey files; audit hardlinks
+    C->>C: sync_all
+    C->>S: survey files; check racy files and hardlinks
+    S->>P: read state for survey
     alt complete, unchanged and settled
-        S->>K: register project
+        C->>K: register project
     else work remains
-        S->>N: resolve changed entries; learn missing pins
+        C->>S: relock changed entries
+        S->>N: resolve sources; learn missing file pins
         N->>K: download through partial writer and hash worker
+        S->>K: unpack new archives to learn tree pins
+        S-->>C: resolved lock
+        C->>S: write_lock
         S->>P: write changed data.lock
+        C->>S: place
         S->>K: unpack unknown member trees
         S->>F: plan targets and decide actions
         S->>N: fetch only missing objects for those actions
         S->>K: unpack required archives
         S->>F: remove, adopt, place; flush copies
         S->>P: write changed state
-        S->>K: drop unneeded packed objects; register project
+        C->>S: drop_unpacked
+        S->>K: drop unneeded packed objects
+        C->>K: register project
     end
     C->>C: render result and work counts
 ```
