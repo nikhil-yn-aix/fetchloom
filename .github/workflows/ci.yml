@@ -44,6 +44,8 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      - run: python3 -m unittest discover -s python
+        if: runner.os == 'Linux'
       # the default disks never show some paths: refs clones blocks, which ntfs never does, while
       # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
       # read-only file the way ntfs allows. every test runs again with its folders on each.
