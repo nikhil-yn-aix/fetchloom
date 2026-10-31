@@ -69,9 +69,9 @@ the public APIs confirmed these inputs on 2026-10-31. dataverse now exposes thre
 
 the hugging face and kaggle clients do not accept the supplied expected SHA-256 as a download option. their timed commands check it after download, following the same rule as curl and wget.
 
-datahugger receives the explicit dataverse `dataset.xhtml?persistentId=...` URL: the DOI now redirects to `/citation`, which its URL parser does not support. Harvard Dataverse returns HTTP 403 for the default `python-requests` User-Agent and 200 for an identified client. its datahugger wrapper sets the request header to `fetchloom-benchmark/1 datahugger/0.13`; download, checksum and concurrency behavior are unchanged, and the wrapper is recorded in the results. 
+datahugger receives the explicit dataverse `dataset.xhtml?persistentId=...` URL: the DOI now redirects to `/citation`, which its URL parser does not support. Harvard Dataverse returns HTTP 403 for the default `python-requests` User-Agent and 200 for an identified client. its datahugger wrapper sets the request header to `fetchloom-benchmark/1 datahugger/0.13`; download, checksum and concurrency behavior are unchanged, and the wrapper is recorded in the results.
 
-native cache metadata and generated checksum reports are not dataset payloads; their creation still counts toward time and disk. 
+native cache metadata and generated checksum reports are not dataset payloads; their creation still counts toward time and disk.
 
 the full dataverse dataset has a tabular-format difference: fetchloom requests the original TSV, while datahugger retrieves the ingested TAB. those bytes differ and fail the shared SHA-256 check; the comparison reports the difference rather than presenting it as a speed result.
 

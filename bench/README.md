@@ -77,7 +77,7 @@ s5 fills that client's cache from s2 before each run. s6 runs the same s2 workfl
 
 live runs check a separately downloaded reference against the public manifest, then compare the clients' file SHA-256s and layouts. quick inputs are zenodo's iris record, one hugging face iris CSV, kaggle's iris dataset, the two sub-KiB figshare files and the sub-KiB dataverse file. inaccessible services and anonymous kaggle refusals have recorded skip reasons. the hugging face and kaggle commands include the expected SHA-256 check because their download APIs have no such option. live results have no speed ratios.
 
-datahugger uses an explicit dataverse landing URL and an identified User-Agent because its DOI parser and the default Python User-Agent are rejected there. its generated checksum reports are excluded from dataset comparisons, but still count toward time and disk. 
+datahugger uses an explicit dataverse landing URL and an identified User-Agent because its DOI parser and the default Python User-Agent are rejected there. its generated checksum reports are excluded from dataset comparisons, but still count toward time and disk.
 
 the full dataverse TSV/TAB representation difference is reported as a content mismatch; the quick shared file has identical bytes.
 

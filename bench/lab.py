@@ -25,6 +25,8 @@ PROFILES = {
 
 
 def call(argv, **kwargs):
+    if (ROOT / "scratch").is_dir():
+        kwargs.setdefault("env", dict(os.environ, TMPDIR=str(ROOT / "scratch")))
     return subprocess.run([str(x) for x in argv], check=True, **kwargs)
 
 
