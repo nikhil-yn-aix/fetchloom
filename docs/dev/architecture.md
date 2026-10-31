@@ -35,7 +35,7 @@ flowchart TD
 | `source` | reference parsing and listings | [source.rs](../../src/source.rs): `Reference`, `Listing`, `Remote`; [recorded.rs](../../src/source/recorded.rs): `Recorded` | adapter tests in [source](../../src/source), [fixtures](../../tests/fixtures/sources) |
 | `net` | HTTP, retries and scheduling | [net.rs](../../src/net.rs): `Net`; [api.rs](../../src/net/api.rs): `Api`; [download.rs](../../src/net/download.rs): `Fetch`, `Fetched` | [download](../../src/net/download/tests.rs), [split](../../tests/cli/split.rs), [proxy](../../tests/cli/proxy.rs), [secrets](../../tests/cli/secrets.rs) |
 | `cache` | objects and reusable records | [cache.rs](../../src/cache.rs): `Cache`; [partial.rs](../../src/cache/partial.rs): `PartialWriter`; [staging.rs](../../src/cache/staging.rs): `Staging` | [cache tests](../../src/cache.rs), [partial tests](../../src/cache/partial/tests.rs), [link tests](../../src/cache/link_tests.rs), [CLI cache](../../tests/cli/cache.rs) |
-| `archive` | decoding, member guards and staged writes | [archive.rs](../../src/archive.rs): `Packed`, `Limits`, `Unpacked`; [store.rs](../../src/archive/store.rs): `Writers` | [archive tests](../../src/archive/tests.rs), [samples](../../src/archive/samples.rs), [CLI archives](../../tests/cli/archives.rs), [fixtures](../../tests/fixtures/archives) |
+| `archive` | decoding, member guards and staged writes | [archive.rs](../../src/archive.rs): `Packed`, `Limits`, `Unpacked`; [store.rs](../../src/archive/store.rs): `Writers` | [archive tests](../../src/archive/tests.rs), [CLI archives](../../tests/cli/archives.rs), [fixtures](../../tests/fixtures/archives) |
 | `plan` | destinations and collision checks | [plan.rs](../../src/plan.rs): `Plan`, `Target`, `Patterns` | inline tests; [placing](../../tests/cli/placing.rs) |
 | `place` | links, copies and directory checks | [place.rs](../../src/place.rs): `Placer`, `Method`; [synced.rs](../../src/place/synced.rs) | inline tests; [placing](../../tests/cli/placing.rs), [moved](../../tests/cli/moved.rs) |
 | `output`, `work` | rendering, progress and counters | [output.rs](../../src/output.rs): `Output`; [progress.rs](../../src/output/progress.rs): `Bar`; [work.rs](../../src/work.rs): `Work`, `Counts` | inline output tests; [progress](../../tests/cli/progress.rs), [get](../../tests/cli/get.rs), [snapshots](../../tests/cli/snapshots) |
@@ -231,7 +231,7 @@ FAT32 and exFAT cannot hardlink, and windows refuses to remove a read-only file 
 
 ## archive
 
-`Packed` selects the decoder and `Limits` bounds expansion. the hot path reads members through the shared guard into `Writers`, which hash and stage them before publication. [archive tests](../../src/archive/tests.rs), [sample tests](../../src/archive/samples.rs) and [CLI archive tests](../../tests/cli/archives.rs) pin rejected entries, cleanup and locked trees.
+`archive` decodes members; `Limits` bounds expansion. the hot path reads members through the shared guard into `Writers`, which hash and stage them before publication. [archive tests](../../src/archive/tests.rs) and [CLI archive tests](../../tests/cli/archives.rs) pin rejected entries, cleanup and locked trees.
 
 the CLI chooses candidates by filename; byte inspection chooses the decoder. names and placement rules are in [CLI](../cli.md#archives). zip uses its central directory to check entries first; tar is read sequentially. both feed the same name and byte guard.
 
@@ -248,7 +248,7 @@ links, devices, fifos, sparse tar files, encrypted zip entries and unsupported z
 
 members are written and sealed in a per-archive staging folder. the writer holds an OS lock until every member is published or discarded. the next unpack or gc takes unheld staging locks and removes those folders immediately, while held locks protect live runs regardless of age. if locking is unavailable, staging stays until its folder and files have gone 24 hours without a write. none of the members is published until the archive passes its checks. a publication IO failure can leave already published members for reuse or gc. the downloaded packed object can also remain after a refused extraction.
 
-unpacking records a sorted member tree under the archive hash, unless data.lock pins another tree. a locked tree hash is compared before placement. an archive that unpacks to another tree than the lock pins is hashed first: when its bytes changed in the cache, as a plain tar's can without any error, it is marked and downloaded again to replace the damaged bytes, and only an intact archive fails with advice to pin what this version unpacks. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding. rebuilding a missing member object requires the original archive again.
+unpacking records a sorted member tree under the archive hash, unless data.lock pins another tree. a locked tree hash is compared before placement. an archive that unpacks to another tree than the lock pins is hashed first: when its bytes changed in the cache, as a plain tar's can without any error, it is marked and downloaded again to replace the damaged bytes, and only an intact archive fails with advice to pin what this version unpacks. the packed object is dropped when no registered project or current lock needs it, subject to deletion succeeding.
 
 ## plan
 

@@ -1,119 +1,51 @@
 # decisions
 
-## 1. rust, with two entry points
+## implementation
 
-`fetchloom` and `fl` call one rust implementation. shell users need no language environment once it is built. python packaging remains separate release work; it is not a runtime dependency.
+| decision | reason | implementation |
+|---|---|---|
+| keep one rust crate | installed binaries need no language environment; modules provide boundaries without separate package versions. split a crate when an independent consumer needs it | [code map](architecture.md#code-map) |
+| keep `fetchloom` and `fl` on one entry point | two executable names do not need two CLIs to maintain | [entry points](architecture.md) |
+| keep source adapters in the crate | version, checksum and paging rules stay beside their tests; a plugin protocol has no current consumer | [source adapters](architecture.md#source-adapters) |
+| route DOIs through the handle URL | a registered destination avoids guessing from DOI prefixes or landing-page redirects | [DOI resolution](architecture.md#source-adapters) |
+| include shared-link sources | the first users fetch from hugging face, kaggle, drive and dropbox as well as repositories | [source scope](../scope.md#sources) |
+| use reqwest, tokio and rustls | the client supplies HTTP/2 and system proxies; fetchloom retains redirect handling to check each hop before sending credentials or reaching private addresses | [net](architecture.md#net) |
+| keep byte processing off async workers | bounded writer queues overlap network, decompression and disk work | [concurrency](architecture.md#concurrency) |
 
-## 2. keep the project loop small
+## project inputs
 
-add, remove, sync, lock, status, path, get and cache cover fetching published inputs. preprocessing, publishing and workflow execution stay outside the command set. [scope](../scope.md) sets those boundaries.
+| decision | reason | contract |
+|---|---|---|
+| use SHA-256 as file identity | different URLs can share an object, and moving a URL need not change its pin | [cache](architecture.md#cache) |
+| learn missing hashes from bytes | a source without a usable hash still needs a checked identity before its files can be pinned | [relocking](architecture.md#clisync) |
+| keep archive member lists outside the lock | a source-file entry and tree hash keep lock size independent of the number of archive members | [lock format](../formats.md#datalock) |
+| unpack recognized archive names by default | research code usually needs the members; name-based selection leaves zip-based data formats such as `.npz` intact | [archives](../cli.md#archives) |
+| reuse resolved references for filter or extraction edits when `ref` is unchanged | explicit versions can stay fixed while selection changes; changing `ref` or using `--upgrade` resolves the manifest reference instead | [source records](../formats.md#what-each-source-records) |
+| cap listings before filtering | limit accepted source-list work even when selection would keep few files; the cap does not bound total project or lock size | [listing limits](architecture.md#source-adapters) |
 
-## 3. SHA-256 is a file's identity
+mutable URLs and OSF nodes cannot preserve a past listing through a filter edit. review the lock diff: new selections may include newer files, and only recorded hashes pin bytes.
 
-objects use the hash of their bytes as their name. two source URLs can therefore share one object, and a moved URL need not change a pin. source MD5 values get a lookup index; they do not replace SHA-256 identities. hash measurements belong in [performance](performance.md).
+## storage and requests
 
-## 4. learn missing hashes from bytes
+| decision | reason | invariant |
+|---|---|---|
+| try reflink, hardlink, then copy | reflinks share blocks with independent writes; hardlinks share the file; copies work when links fail. symlinks can dangle after cache deletion and need extra windows permissions | [placement](architecture.md#place) |
+| separate object publication from partial ownership | hardlink publication avoids a global cache lock; unfinished bytes need an OS lock to keep writers apart | [publication and its fallback limits](architecture.md#cache) |
+| limit silence instead of total download time | a large transfer that keeps producing bytes can finish without a whole-download deadline | [network limits](architecture.md#net) |
+| put archive readers behind one guard | each decoder must obey the same name, entry-type and expanded-byte checks before its members become visible | [archive guard](architecture.md#archive) |
 
-when a source supplies no usable SHA-256 and size, locking learns them from an earlier pin, a checked MD5 mapping or a download. new downloads check stated MD5 too. later project downloads must match the pin. unpinned `get` revalidates URLs and may accept changed bytes.
+## interface and maintenance
 
-## 5. record source files, not every archive member
+| decision | reason | contract |
+|---|---|---|
+| use flags and environment variables | avoid a config file and another precedence system | [settings](../formats.md#settings) |
+| give errors stable kinds | scripts can act without parsing prose | [error kinds](../agents.md#error-kinds-and-exit-codes) |
+| keep terminal output in one renderer | command handlers share rendering and report policy | [output](architecture.md#output) |
+| test behavior and work counters without coverage quotas | request, byte and placement counts catch repeated work independently of runner speed | [checks](engineering.md#checks), [regression checks](performance.md#regression-checks) |
+| fuzz parsers inside their modules | parsers stay private without a separate public fuzzing API | [fuzzing](engineering.md#fuzzing) |
+| package the same executables in wheels | pip users need no rust toolchain and receive the same implementation as a source install | [releases](engineering.md#releases) |
+| keep design reasons with code | contributors can review a choice alongside its implementation; update documentation with format and behavior changes | [style](style.md) |
 
-`data.lock` records the selected source files, even when a stated hash lets `lock` avoid downloading one. an unpacked archive gets one file entry and one tree hash. member lists stay in the cache, keeping the lock independent of the number of files inside an archive.
+## apache-2.0
 
-## 6. unpack recognized archive names by default
-
-research code usually needs the members. `extract = false` and `--no-extract` preserve the packed file when it is the input instead. filename-based selection keeps zip-based data formats such as `.npz` intact. packed objects can leave the cache after unpacking, unless a registered project still needs them packed.
-
-## 7. keep source adapters in the crate
-
-source APIs have different version, checksum and paging rules. a closed enum and rust modules keep those rules beside their tests. a plugin interface would add a protocol without a current consumer.
-
-## 8. route DOIs through their handle URL
-
-fetchloom reads the URL value from doi.org's handles API, then parses that URL as a source reference. it does not infer a repository from a DOI prefix or follow a landing-page redirect to identify it. unknown destinations fail rather than being downloaded as datasets.
-
-## 9. finish the shared-link sources before release
-
-hugging face, kaggle, drive and dropbox remain in the release scope because the first users fetch from those hosts as well as repositories. that is scope, not a completion claim: [plan](plan.md#milestones) records what each adapter does today.
-
-## 10. keep `fetchloom` and `fl`
-
-both executable names use the same entry point, avoiding a second CLI to maintain. powershell already uses `fl` for `Format-List`; use `fetchloom` there.
-
-## 11. reflink, else hardlink, else copy
-
-reflinks share blocks while keeping independent files. hardlinks reuse the cached file itself. copying works when neither is available. symlinks would dangle after cache deletion and can require extra permissions on windows.
-
-hardlinks are read-only. recognized synced folders and writable placements skip hardlinks, but still try reflinks. a changed-hardlink audit covers only the project being synced, so a writable shared cache still requires trust. [placement](architecture.md#place) states the limits.
-
-## 12. separate publication from partial ownership
-
-hardlink publication lets competing writers publish a completed object without a global cache lock. unfinished downloads need an OS lock because their bytes are still changing. when locking is unavailable, private partials keep writers apart but lose cross-run resume.
-
-the object-publication rename fallback still has a check/rename race. it must not be described as no-clobber on every filesystem.
-
-## 13. keep one crate
-
-modules hold the current boundaries without separate package versions. the only public library entry point runs the CLI. a second independent consumer would be a reason to split a crate.
-
-## 14. reqwest, tokio and rustls
-
-the client provides HTTP/2 and system proxy support. rustls uses the platform verifier, and ring is selected as its crypto provider. redirects are handled by fetchloom so each hop can be checked before sending credentials or reaching a private address.
-
-## 15. keep byte processing off async workers
-
-downloads hand bounded batches of chunks to blocking writers. archive readers use worker threads to write and seal members. this overlaps network, decompression and disk work. placement and metadata operations are still synchronous; there is no blanket rule that every disk call runs off the runtime.
-
-## 16. limit silence, not download duration
-
-a connection has 45 seconds to connect, each request hop has 75 seconds to produce headers, and a body may be silent for 30 seconds between chunks. there is no whole-download deadline. [network limits](architecture.md#net) define retries and redirects separately.
-
-## 17. use flags and environment variables
-
-there is no config file or config-file precedence to maintain. flags cover invocation choices; environment variables cover the cache, concurrency and logging. the exceptions to simple flag precedence are explicit in [settings](../formats.md#settings).
-
-## 18. give errors stable kinds
-
-kinds such as `network.unreachable` and `integrity.mismatch` let scripts act without parsing prose. a small set of exit codes groups them. the error carries a message, detail lines and optional help; not every failure has a next-step command.
-
-## 19. keep terminal output in one renderer
-
-clap parses arguments. anstream and anstyle handle color, indicatif and console draw progress, and dialoguer asks yes/no questions. no text-entry prompt is implemented. normal output uses human steps; JSON combines a final report with collected warnings and errors.
-
-## 20. put archive readers behind a shared guard
-
-zip 9.1.3, tar, flate2 with zlib-rs, liblzma, zstd and bzip2 supply readers. fetchloom checks names, entry types and actual expanded bytes. members stay staged until the archive passes. 7z and rar decoders are not included; those files stay packed with a warning.
-
-## 21. test behavior without coverage quotas
-
-unit tests, CLI scenarios, snapshots and work counters check observable behavior. no coverage or mutation gate is configured, and mutation tooling remains work to add. five parsers have fuzz targets written as bolero tests inside their modules, so fuzzing needs no public API; `cargo test` runs them briefly, and [engineering](engineering.md#fuzzing) shows how to fuzz one with libfuzzer.
-
-## 22. assert work counters
-
-CLI tests assert requests, bytes and placements for selected scenarios. these catch repeat work without relying on a runner's speed. there is no instruction-count harness or CI performance gate. wall-clock measurements belong in [performance](performance.md), with the machine and workload named.
-
-## 23. keep distribution work explicit
-
-release.yml builds both executables with cargo, as a source install does, and maturin's bin bindings wrap the same binaries in wheels, so `pip install` needs no rust toolchain. the installers are two short scripts that check `SHA256SUMS`; dist is not used. PyPI uploads stay manual until trusted publishing is set up. [releases](engineering.md#releases) lists the steps.
-
-## 24. no telemetry
-
-there is no telemetry client or background service. network operations resolve references and fetch the selected data. no account with fetchloom is needed.
-
-## 25. keep design with code
-
-format and behavior changes need matching documentation in the same change. keeping the reasons in the repository lets a contributor review a choice with its implementation.
-
-## 26. apache-2.0
-
-[LICENSE](../../LICENSE) grants use, modification and redistribution under apache-2.0, including its patent terms. [NOTICE](../../NOTICE) names Nikhil Y N and KairosLab India Private Limited and preserves the notice about the project names. the license grants no trademark rights beyond describing origin.
-
-## 27. reuse resolved references for filter edits
-
-changing filters or extraction settings resolves the existing `resolved` reference when `ref` is unchanged. explicit versions can therefore stay fixed while the selection changes. changing `ref` or using `--upgrade` instead resolves the manifest reference.
-
-this cannot preserve a past listing for a mutable URL or OSF node. new selections may include newer files. review the lock diff; only its recorded file hashes pin bytes.
-
-## 28. cap listings per dataset
-
-the accepted listing limit is 100,000 files; OSF includes folders in that count. filters run afterward. archives have a separate 1,000,000-entry limit. these limits bound individual accepted lists, not the total project size or serialized lock size.
+[LICENSE](../../LICENSE) grants use, modification and redistribution under apache-2.0, including its patent terms. [NOTICE](../../NOTICE) preserves the attribution and project-name notice. the license grants no trademark rights beyond describing origin.

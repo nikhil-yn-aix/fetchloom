@@ -138,15 +138,13 @@ files are read-only by default. for an analysis that writes into its inputs, set
 
 ## how fast
 
-on one laptop, in WSL with ubuntu 24.04, from a test server on the same machine, medians of 3 runs: a 1 GiB file took 4.0 s against 3.4 s for curl followed by sha256sum, 1.9 s for aria2c and 8.8 s for pooch, and a second project got it from the cache in 0.01 s. a zip of 10,000 small files took 0.87 s against 0.66 s for curl with bsdtar and 2.2 s for pooch. 1,000 files of 100 KiB at 100 Mbit/s took 9.5 s against 9.0 s for curl's parallel mode. on a lossy far link, splitting a slow download across streams fetched 100 MiB 65% faster than one stream. [performance](docs/dev/performance.md#against-other-tools) has the method, every tool, the misses and the windows results.
-
 the first download depends on the source, your connection and your disk. the cache stores files by their content hash, so projects with identical files can reuse the same bytes. reflinks and hardlinks avoid copying the whole file, where supported. a project whose files are already in place can sync without network requests.
 
 one-off `get` may still ask a source for metadata or check whether a URL changed. avoiding a file download does not always mean avoiding requests. [performance](docs/dev/performance.md) has measurements and their conditions.
 
 ## windows tips
 
-Microsoft Defender scans every new file an unrecognized program writes. with many small files, those scans can set the pace: about 21 ms per file was measured for 4 KiB random files.
+Microsoft Defender scans every new file an unrecognized program writes. with many small files, those scans can set the pace: [small-file measurements](docs/dev/performance.md#small-files-on-windows) record the scan cost.
 
 a dev drive with defender's performance mode scans after the file-open operation completes. [Microsoft's performance mode comparison](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-endpoint-antivirus-performance-mode#performance-mode-compared-to-real-time-protection) states the trade-off:
 
@@ -186,6 +184,7 @@ use `--json` for a machine-readable answer, including failures. [agents](docs/ag
 |---|---|
 | [cli](docs/cli.md) | commands, options and output |
 | [scope](docs/scope.md) | sources, platforms and limits |
+| [agents](docs/agents.md) | scripts, JSON and the python helper |
 | [formats](docs/formats.md) | manifest, lock, settings and JSON fields |
 
 ## contributing

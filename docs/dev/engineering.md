@@ -229,7 +229,7 @@ to make a release:
    python -m twine upload wheels/*
    ```
 
-   then, in a new virtual environment, run `pip install fetchloom==0.1.0` and `fetchloom --version`. PyPI trusted publishing is not set up, so this upload stays manual; [plan](plan.md#next) tracks it.
+   then, in a new virtual environment, run `pip install fetchloom==0.1.0` and `fetchloom --version`. PyPI trusted publishing is not set up, so this upload stays manual; [plan](plan.md#publishing) tracks it.
 
 to try the build jobs without a tag, add `branches: [release-check]` under `push` in release.yml and push that branch. `attest` and `release` run only for tags. delete the branch after the run.
 
@@ -246,4 +246,4 @@ check format changes against the readers and recovery behavior in [formats](../f
 
 ## license
 
-contributions use apache-2.0. keep [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE) with distributions. NOTICE names Nikhil Y N and KairosLab India Private Limited. the [license decision](decisions.md#26-apache-20) records why.
+contributions use apache-2.0. keep [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE) with distributions. NOTICE names Nikhil Y N and KairosLab India Private Limited. the [license decision](decisions.md#apache-20) records why.
