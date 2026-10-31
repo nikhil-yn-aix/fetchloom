@@ -99,7 +99,7 @@ impl Output {
     /// detail for `-v`: where things are, which method was used, full hashes.
     pub(crate) fn detail(&self, text: &str) {
         if self.tells(Level::Verbose) {
-            let dim = Paint::new().dimmed();
+            let dim = paint(self.style.color, Paint::new().dimmed());
             self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(text)));
         }
     }
@@ -110,7 +110,10 @@ impl Output {
             .unwrap_or_else(PoisonError::into_inner)
             .push(text.to_owned());
         if self.tells(Level::Normal) {
-            let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
+            let yellow = paint(
+                self.style.color,
+                Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold(),
+            );
             self.line(&format!(
                 "{yellow}warning:{yellow:#} {}",
                 accented(&plain(text), Paint::new(), self.style.color)
@@ -127,18 +130,14 @@ impl Output {
 
     pub(crate) fn hint(&self, text: &str) {
         if self.tells(Level::Normal) {
-            let bold = Paint::new().bold();
-            self.line(&format!(
-                "  {bold}hint:{bold:#} {}",
-                accented(&plain(text), Paint::new(), self.style.color)
-            ));
+            self.line(&hint_line(text, self.style.color));
         }
     }
 
     /// the step a person usually takes after a run that worked, such as committing data.lock.
     pub(crate) fn next(&self, text: &str) {
         if self.shows_next() {
-            let dim = Paint::new().dimmed();
+            let dim = paint(self.style.color, Paint::new().dimmed());
             self.line(&format!(
                 "  {dim}next: {}{dim:#}",
                 accented(&plain(text), dim, self.style.color)
@@ -169,28 +168,7 @@ impl Output {
         if self.json {
             return;
         }
-        let red = Paint::new().fg_color(Some(AnsiColor::Red.into())).bold();
-        let bold = Paint::new().bold();
-        let dim = Paint::new().dimmed();
-        let mut text = format!(
-            "{red}{}{red:#} {}",
-            self.style.failed(),
-            accented(&plain(&error.message), Paint::new(), self.style.color)
-        );
-        for line in &error.details {
-            let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim, self.style.color));
-        }
-        if let Some(help) = &error.help {
-            let _ = write!(
-                text,
-                "\n  {bold}help:{bold:#} {}",
-                accented(&plain(help), Paint::new(), self.style.color)
-            );
-        }
-        if self.level >= Level::Verbose {
-            let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
-        }
-        self.line(&text);
+        self.line(&error_text(error, self.level, self.style.color));
     }
 
     /// a bar for one download, hidden unless a person is watching the terminal.
@@ -238,8 +216,7 @@ impl Output {
             });
         let color = self.style.color;
         Ticker::start(verb, what, known, move |verb, text| {
-            let cyan = Paint::new().fg_color(Some(AnsiColor::Cyan.into())).bold();
-            write_line(color, &format!("{cyan}{verb:>11}{cyan:#} {}", plain(text)));
+            write_line(color, &verb_line(verb, text, AnsiColor::Cyan, color));
         })
     }
 
@@ -370,6 +347,35 @@ fn verb_line(verb: &str, text: &str, tone: AnsiColor, color: bool) -> String {
     format!("{style}{verb:>11}{style:#} {}", subject(&plain(text), color))
 }
 
+fn error_text(error: &Error, level: Level, color: bool) -> String {
+    let red = paint(color, Paint::new().fg_color(Some(AnsiColor::Red.into())).bold());
+    let cyan = paint(color, ACCENT.bold());
+    let dim = paint(color, Paint::new().dimmed());
+    let mut text = format!(
+        "{red}error:{red:#} {}",
+        accented(&plain(&error.message), Paint::new(), color)
+    );
+    for line in &error.details {
+        let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim, color));
+    }
+    if let Some(help) = &error.help {
+        let _ = write!(
+            text,
+            "\n  {cyan}help:{cyan:#} {}",
+            accented(&plain(help), Paint::new(), color)
+        );
+    }
+    if level >= Level::Verbose {
+        let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
+    }
+    text
+}
+
+fn hint_line(text: &str, color: bool) -> String {
+    let dim = paint(color, Paint::new().dimmed());
+    format!("  {dim}hint: {}{dim:#}", accented(&plain(text), dim, color))
+}
+
 /// the one color for names and commands, wherever they appear. the stream drops it, like every
 /// color, when color is off.
 const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
@@ -377,7 +383,7 @@ const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor:
 /// `text` with each command in backticks in the accent, then back to `around`. the backticks
 /// stay, so a command still stands out without color.
 fn accented(text: &str, around: Paint, color: bool) -> String {
-    let accent = paint(color, ACCENT);
+    let accent = paint(color, ACCENT.bold());
     let mut shown = String::with_capacity(text.len() + 16);
     let mut rest = text;
     while let Some(start) = rest.find('`') {
@@ -387,7 +393,7 @@ fn accented(text: &str, around: Paint, color: bool) -> String {
         let end = start + length + 2;
         let _ = write!(
             shown,
-            "{}{accent}{}{accent:#}{around}",
+            "{}{around:#}{accent}{}{accent:#}{around}",
             &rest[..start],
             &rest[start..end]
         );
@@ -516,6 +522,51 @@ mod tests {
     }
 
     #[test]
+    fn error_and_help_are_plain_when_color_is_off() {
+        let error = crate::error::Error::new(crate::error::Kind::OfflineMissing, "iris is missing")
+            .detail("iris.csv is not in the cache")
+            .help("run `fetchloom sync` again");
+        let shown = super::error_text(&error, Level::Normal, false);
+        assert_eq!(
+            shown,
+            "error: iris is missing\n  iris.csv is not in the cache\n  help: run `fetchloom sync` again"
+        );
+        assert!(!shown.contains('\u{1b}'));
+        let verbose = super::error_text(&error, Level::Verbose, false);
+        assert!(verbose.ends_with("\n  kind: offline.missing"));
+        assert!(!verbose.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn error_and_help_color_the_labels_and_dim_the_details() {
+        let error = crate::error::Error::new(crate::error::Kind::OfflineMissing, "iris is missing")
+            .detail("iris.csv is not in the cache")
+            .help("run `fetchloom sync` again");
+        assert_eq!(
+            super::error_text(&error, Level::Normal, true),
+            concat!(
+                "\u{1b}[1m\u{1b}[31merror:\u{1b}[0m iris is missing",
+                "\n  \u{1b}[2miris.csv is not in the cache\u{1b}[0m",
+                "\n  \u{1b}[1m\u{1b}[36mhelp:\u{1b}[0m run ",
+                "\u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m again",
+            )
+        );
+    }
+
+    #[test]
+    fn hints_are_dim_with_commands_in_bold_cyan() {
+        let text = "try `fetchloom path iris` next";
+        assert_eq!(super::hint_line(text, false), "  hint: try `fetchloom path iris` next");
+        assert_eq!(
+            super::hint_line(text, true),
+            concat!(
+                "  \u{1b}[2mhint: try \u{1b}[0m\u{1b}[1m\u{1b}[36m",
+                "`fetchloom path iris`\u{1b}[0m\u{1b}[2m next\u{1b}[0m",
+            )
+        );
+    }
+
+    #[test]
     fn the_first_ctrl_c_at_a_question_is_interrupted() {
         for key in [
             Ok(console::Key::CtrlC),
@@ -551,11 +602,11 @@ mod tests {
         let dim = Paint::new().dimmed();
         assert_eq!(
             accented("run `fetchloom sync` again", Paint::new(), true),
-            "run \u{1b}[36m`fetchloom sync`\u{1b}[0m again"
+            "run \u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m again"
         );
         assert_eq!(
             accented("commit it; then `fetchloom sync`", dim, true),
-            "commit it; then \u{1b}[36m`fetchloom sync`\u{1b}[0m\u{1b}[2m"
+            "commit it; then \u{1b}[0m\u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m\u{1b}[2m"
         );
         assert_eq!(accented("an odd ` mark", Paint::new(), true), "an odd ` mark");
     }

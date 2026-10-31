@@ -40,10 +40,6 @@ impl Style {
         }
     }
 
-    pub(crate) fn failed(self) -> &'static str {
-        if self.unicode { "✗" } else { "[x]" }
-    }
-
     /// what ends text that was cut short.
     pub(crate) fn more(self) -> &'static str {
         if self.unicode { "…" } else { "..." }
