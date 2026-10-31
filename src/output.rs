@@ -172,27 +172,17 @@ impl Output {
     }
 
     /// a bar for one download, hidden unless a person is watching the terminal.
-    pub(crate) fn bar(&self, message: String) -> Bar {
+    pub(crate) fn bar(&self, verb: &'static str, message: String) -> Bar {
         match &self.bars {
-            Some(bars) => Bar::add(bars, message, self.style.unicode),
+            Some(bars) => Bar::add(bars, verb, message, self.style.color),
             None => Bar::hidden(),
         }
     }
 
-    /// a step that waits on something, such as `resolving zenodo:3608990`: a spinner with the
-    /// time it has taken on a terminal, and plain lines off one once it takes more than a
-    /// moment. it ends when dropped.
+    /// a wait ends when dropped, with elapsed time on a terminal and occasional lines elsewhere.
     pub(crate) fn wait(&self, verb: &'static str, what: String) -> Wait {
-        let spinner = match &self.bars {
-            Some(bars) => Bar::spin(
-                bars,
-                format!("{} {}", verb.to_lowercase(), plain(&what)),
-                self.style.unicode,
-            ),
-            None => Bar::hidden(),
-        };
         Wait {
-            _spinner: spinner,
+            _bar: self.bar(verb, what.clone()),
             _ticker: self.ticker(verb, what, [None]),
         }
     }

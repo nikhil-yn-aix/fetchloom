@@ -357,7 +357,7 @@ pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec
     draft::filter(name, entry, listing)
 }
 
-/// resolves a reference, with a spinner or plain lines while its source takes its time.
+/// resolves a reference, with progress or plain lines while its source takes its time.
 pub(super) async fn resolve(
     output: &Output,
     reference: &Reference,
@@ -369,7 +369,7 @@ pub(super) async fn resolve(
 }
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may
-/// also carry a token, which no spinner should print.
+/// also carry a token, which no progress line should print.
 fn stands_for_itself(reference: &Reference) -> bool {
     matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }

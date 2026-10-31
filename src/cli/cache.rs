@@ -110,7 +110,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
     let total: u64 = cache.objects().iter().map(|object| object.size).sum();
     let what = "cached data files";
-    let bar = context.output.bar(format!("checking {what}"));
+    let bar = context.output.bar("Checking", what.to_owned());
     bar.start(Some(total), 0);
     let ticker = context
         .output
