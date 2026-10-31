@@ -88,7 +88,10 @@ fn unreadable_objects_have_their_own_report() -> Result {
         let report = if json {
             let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(document["errors"][0]["kind"], "local.io");
-            assert!(document["result"].is_null());
+            assert_eq!(document["result"]["objects"], 1);
+            assert_eq!(document["result"]["bytes"], 3);
+            assert_eq!(document["result"]["changed"], serde_json::json!([]));
+            assert_eq!(document["result"]["unreadable"], serde_json::json!([object]));
             document["warnings"]
                 .as_array()
                 .ok_or("warnings is not an array")?
@@ -161,5 +164,189 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
         "{stderr}"
     );
     assert!(stderr.contains("fetchloom cache gc"), "{stderr}");
+    Ok(())
+}
+
+
+#[test]
+fn gc_refuses_unreadable_project_records() -> Result {
+    for broken in ["registration", "data.toml", "data.lock"] {
+        let sandbox = Sandbox::new()?;
+        let registrations = sandbox.cache().join("projects");
+        fs::create_dir_all(&registrations)?;
+        let registration = registrations.join("project.json");
+        fs::write(&registration, serde_json::to_vec(&serde_json::json!({"root": sandbox.work()}))?)?;
+        fs::write(sandbox.work().join("data.toml"), "")?;
+        let path = if broken == "registration" {
+            registration.clone()
+        } else {
+            sandbox.work().join(broken)
+        };
+        if path.is_file() {
+            fs::remove_file(&path)?;
+        }
+        fs::create_dir(&path)?;
+        let output = sandbox.run(&["--json", "cache", "gc"])?;
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(output.status.code(), Some(50), "{document}");
+        assert_eq!(document["errors"][0]["kind"], "local.io");
+        assert!(document["errors"][0]["message"].as_str().unwrap().contains(&path.display().to_string()));
+        assert!(registration.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn verify_reports_unenumerable_object_folders() -> Result {
+    let sandbox = Sandbox::new()?;
+    let fan = sandbox.cache().join("objects").join("ba");
+    fs::create_dir_all(fan.parent().unwrap())?;
+    fs::write(&fan, b"not a folder")?;
+    let output = sandbox.run(&["--json", "cache", "verify"])?;
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "local.io");
+    assert_eq!(document["result"]["unreadable"], serde_json::json!([fan]));
+    assert_eq!(document["result"]["objects"], 0);
+    Ok(())
+}
+
+#[test]
+fn verify_keeps_damage_findings_in_json() -> Result {
+    let sandbox = Sandbox::new()?;
+    let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let object = sandbox.cache().join("objects").join(&digest[..2]).join(&digest[2..]);
+    fs::create_dir_all(object.parent().unwrap())?;
+    fs::write(&object, b"bad")?;
+    let output = sandbox.run(&["--json", "cache", "verify"])?;
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(30), "{document}");
+    assert_eq!(document["status"], "error");
+    assert_eq!(document["errors"][0]["kind"], "integrity.mismatch");
+    assert_eq!(document["result"]["objects"], 1);
+    assert_eq!(document["result"]["bytes"], 3);
+    assert_eq!(document["result"]["changed"], serde_json::json!([digest]));
+    assert_eq!(document["result"]["unreadable"], serde_json::json!([]));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    for broken in ["registration", "data.toml", "data.lock", "project"] {
+        let sandbox = Sandbox::new()?;
+        let registrations = sandbox.cache().join("projects");
+        fs::create_dir_all(&registrations)?;
+        let registration = registrations.join("project.json");
+        fs::write(&registration, serde_json::to_vec(&serde_json::json!({"root": sandbox.work()}))?)?;
+        fs::write(sandbox.work().join("data.toml"), "")?;
+        fs::write(sandbox.work().join("data.lock"), "version = 1\n")?;
+        let path = match broken {
+            "registration" => registration.clone(),
+            "project" => sandbox.work(),
+            _ => sandbox.work().join(broken),
+        };
+        let before = fs::metadata(&path)?.permissions();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0))?;
+        let output = sandbox.command_in(&sandbox.folder("elsewhere")?, &["--json", "cache", "gc"]).output();
+        fs::set_permissions(&path, before)?;
+        let output = output?;
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(output.status.code(), Some(50), "{document}");
+        assert_eq!(document["errors"][0]["kind"], "local.io");
+        assert!(registration.exists());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_warns_when_gc_registration_fails() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    for json in [false, true] {
+        let sandbox = Sandbox::new()?;
+        assert!(sandbox.run(&["cache"])?.status.success());
+        fs::write(sandbox.work().join("data.toml"), "")?;
+        let registrations = sandbox.cache().join("projects");
+        let before = fs::metadata(&registrations)?.permissions();
+        fs::set_permissions(&registrations, fs::Permissions::from_mode(0o500))?;
+        let args: &[&str] = if json { &["--json", "sync"] } else { &["sync"] };
+        let output = sandbox.run(args);
+        fs::set_permissions(&registrations, before)?;
+        let output = output?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let warnings = if json {
+            let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            document["warnings"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join("\n")
+        } else {
+            text(&output.stderr)?
+        };
+        assert!(warnings.contains("gc may not keep"), "{warnings}");
+        assert!(warnings.contains("permissions"), "{warnings}");
+        assert!(warnings.contains("again"), "{warnings}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let sandbox = Sandbox::new()?;
+    let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let object = sandbox.cache().join("objects").join(&digest[..2]).join(&digest[2..]);
+    fs::create_dir_all(object.parent().unwrap())?;
+    // a sparse file keeps hashing busy without allocating its payload on disk.
+    fs::File::create(&object)?.set_len(64 * 1024 * 1024 * 1024)?;
+    let mut child = sandbox.command(&["cache", "verify"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stderr = child.stderr.take().ok_or("missing child stderr")?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut report = String::new();
+        for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok) {
+            if line.contains("Checking") {
+                let _ = sender.send(());
+            }
+            report.push_str(&line);
+            report.push('\n');
+        }
+        report
+    });
+    if receiver.recv_timeout(Duration::from_secs(10)).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err("verification never reported that hashing started".into());
+    }
+    let signal = Command::new("kill").args(["-INT", &child.id().to_string()]).status()?;
+    assert!(signal.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err("verification ignored ctrl-c while hashing".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let report = reader.join().unwrap();
+    assert_eq!(status.code(), Some(130), "{report}");
+    assert!(report.contains("stopped"), "{report}");
+    assert!(object.exists());
+    assert_eq!(fs::read_dir(sandbox.cache().join("changed"))?.count(), 0);
     Ok(())
 }

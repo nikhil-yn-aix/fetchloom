@@ -265,6 +265,29 @@ mod tests {
     }
 
     #[test]
+    fn a_sweep_reports_refused_removals() {
+        let (_dir, mut cache) = cache();
+        let stored = store(&cache, b"cannot remove");
+        let object = cache.object_path(&stored.digest);
+        let leftover = cache.root.join("tmp").join("left.new");
+        fs::write(&leftover, b"leftover").unwrap();
+        seal(&leftover);
+        cache.volume = std::sync::Arc::new(crate::volume::Volume::refusing(
+            cache.root.join("tmp"),
+            true,
+        ));
+        let freed = cache.sweep(&Needed::default(), SystemTime::now() + GRACE + Duration::from_secs(60));
+        assert_eq!((freed.objects, freed.bytes, freed.leftovers), (0, 0, 0));
+        let report = serde_json::to_value(&freed).unwrap();
+        let paths = report["not_removed"].as_array().unwrap();
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&serde_json::json!(object)));
+        assert!(paths.contains(&serde_json::json!(leftover)));
+        assert!(object.exists());
+        assert!(leftover.exists());
+    }
+
+    #[test]
     fn a_sweep_keeps_what_is_needed_and_what_is_new() {
         for (_dir, cache) in [cache(), fat()] {
             let needed = store(&cache, b"needed");
