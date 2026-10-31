@@ -141,6 +141,7 @@ jobs:
           try:
               fetchloom.path("iris", project=".release/empty")
           except fetchloom.Error as error:
+              assert error.kind == "project.invalid", f"unexpected error kind: {error.kind}"
               print(f"fetchloom.path outside a project raised {error.kind}: {error.message}")
           else:
               raise SystemExit("fetchloom.path found a dataset outside a project")

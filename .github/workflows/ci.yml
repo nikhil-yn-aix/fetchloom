@@ -33,6 +33,7 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
+        if: runner.os == 'Linux'
       # advisories, licenses, duplicate crates and sources, as deny.toml sets them. it reads the
       # lock file, which every platform shares, so linux alone runs it
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
