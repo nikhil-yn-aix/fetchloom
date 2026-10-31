@@ -181,7 +181,18 @@ impl Reference {
             }
         }
         .instrument(span)
-        .await?;
+        .await
+        .map_err(|error: Error| {
+            if error.kind == Kind::OfflineMissing {
+                Error::new(
+                    Kind::OfflineMissing,
+                    format!("looking up {} needs the internet", self.shown()),
+                )
+                .help("in a project prepared online, fetchloom sync --offline works without it")
+            } else {
+                error
+            }
+        })?;
         check(self, listing)
     }
 

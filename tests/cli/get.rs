@@ -642,3 +642,32 @@ fn unnamed_numeric_links_keep_the_number_and_suggest_an_article_or_doi() -> Resu
     assert!(stderr.contains("article or DOI link"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn offline_identifiers_explain_why_lookup_needs_the_internet() -> Result {
+    for reference in [
+        "zenodo:3608990",
+        "figshare:123",
+        "doi:10.5281/zenodo.3608990",
+    ] {
+        let sandbox = Sandbox::new()?;
+        let output = sandbox.run(&["get", reference, "--offline"])?;
+        assert_eq!(output.status.code(), Some(20));
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains(&format!("looking up {reference} needs the internet")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "in a project prepared online, fetchloom sync --offline works without it"
+            ),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("run it again without --offline"),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}
