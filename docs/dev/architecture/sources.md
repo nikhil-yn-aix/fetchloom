@@ -11,6 +11,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 | file | what it holds | types and functions |
 |---|---|---|
 | [source.rs](../../../src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `credentials` |
+| [search.rs](../../../src/source/search.rs), [search/tests.rs](../../../src/source/search/tests.rs) | public catalog queries and interleaved candidates | `Candidate`, `Search`, `search`, `is_search` |
 | [recorded.rs](../../../src/source/recorded.rs) | in-memory answers for adapter tests | `Recorded`, `on`, `fixture`, `next`, `asked`, `block_on` |
 | [doi.rs](../../../src/source/doi.rs) | handle resolution and destination routing | `Doi`, `locate` |
 | [zenodo.rs](../../../src/source/zenodo.rs) | record API and stated MD5 values | `Record`, `resolve` |
@@ -30,7 +31,13 @@ adapters own source-specific identifiers, versions, listing pages and access err
 
 `Reference::parse` recognizes identifiers and known pasted-link shapes. `Parsed.file` keeps an individual file selection embedded in a link. an unrecognized page on a known source host fails instead of being mistaken for a plain downloadable file.
 
+github and gitlab file-page URLs are normalized to raw URLs before ordinary URL resolution. [URL references](../../user/sources/urls-and-dois.md) owns accepted forms and HTML warnings.
+
 DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's host selects an adapter. unknown hosts and another DOI are refused without fetching a landing page; DOI prefixes do not select a repository.
+
+### catalog search
+
+`is_search` recognizes alphanumeric input without a colon, excluding bare DOIs. `search` uses `tokio::join!` for hugging face, kaggle and zenodo, takes up to three matches each and interleaves their rank order. `Candidate` carries a canonical reference and optional catalog facts. one failing catalog contributes a warning; all failing returns the first error. CLI selection is separate from source resolution.
 
 ### keep listing and transfer separate
 
@@ -54,13 +61,14 @@ listings accept at most 100,000 files per dataset before selection; OSF's walk a
 - project references reject recognized secret query keys. masking a URL is explicit through `Shown` or `shown`, not an invariant of `url::Url`.
 - a reported MD5 is checked against bytes before its mapping to SHA-256 can be reused.
 - mutable services cannot guarantee historical listings. the lock's hashes establish byte identity even when a source changes.
-- tests use recorded responses or local servers. they do not prove a live service still follows its API.
+- default tests use recorded responses or local servers. [ignored live tests](../engineering/ci.md#live-source-checks) check current services separately.
 
 ## tests
 
 | files | cargo filter |
 |---|---|
 | [source.rs](../../../src/source.rs), adapter module tests and [source fixtures](../../../tests/fixtures/sources) | `cargo test --locked --lib source::` |
+| [search/tests.rs](../../../src/source/search/tests.rs) | `cargo test --locked --lib source::search::` |
 | [zenodo.rs](../../../src/source/zenodo.rs) | `cargo test --locked --lib source::zenodo::` |
 | [DOI tests](../../../src/source/doi/tests.rs), [dataverse tests](../../../src/source/dataverse/tests.rs) | `cargo test --locked --lib source::doi::`; `cargo test --locked --lib source::dataverse::` |
 | [drive folder tests](../../../src/source/drive/folder_tests.rs), [OSF walk tests](../../../src/source/osf/walk_tests.rs) | `cargo test --locked --lib source::drive::`; `cargo test --locked --lib source::osf::` |
