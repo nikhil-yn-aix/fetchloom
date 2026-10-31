@@ -21,14 +21,14 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use changed::Doubt;
 pub(crate) use object::{NewObject, Sealed};
-pub(crate) use partial::{Claim, Partial, PartialWriter};
+pub(crate) use partial::{Claim, Partial, PartialWriter, read_unfollowed};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, Needed};
 
 use crate::digest::{self, Md5, Sha256};
 use crate::place::{FolderUse, real_folder};
-use crate::volume::Volume;
+use crate::volume::{Volume, is_plain};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 8] = [
@@ -124,12 +124,12 @@ impl Cache {
     /// marked objects must still hash to their names.
     pub(crate) fn find(&self, digest: &Sha256, size: Option<u64>) -> Option<PathBuf> {
         let path = self.object_path(digest);
-        let metadata = fs::metadata(&path).ok()?;
-        if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
+        let metadata = fs::symlink_metadata(&path).ok()?;
+        if !is_plain(&metadata) || size.is_some_and(|size| metadata.len() != size) {
             return None;
         }
         if changed::doubted(&metadata, self.changed_at(digest))
-            && Sha256::of_file(&path).ok()? != *digest
+            && hash_object(&path).ok()? != *digest
         {
             return None;
         }
@@ -150,7 +150,7 @@ impl Cache {
     /// leaves the object and its change mark untouched.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
-        match Sha256::of_file(&path) {
+        match hash_object(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
                 self.mark_changed(digest)?;
@@ -293,8 +293,8 @@ impl Cache {
             },
         };
         if !new {
-            let found = fs::metadata(path);
-            match existing(&found, size, || Sha256::of_file(path), digest) {
+            let found = fs::symlink_metadata(path);
+            match existing(&found, size, || hash_object(path), digest) {
                 Existing::Keep => {}
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
@@ -307,7 +307,7 @@ impl Cache {
                         // was being opened to clear its flag
                         Err(_)
                             if source.exists()
-                                && Sha256::of_file(path).is_ok_and(|actual| actual == *digest) => {}
+                                && hash_object(path).is_ok_and(|actual| actual == *digest) => {}
                         Err(err) => {
                             return Err(io::Error::new(
                                 err.kind(),
@@ -321,6 +321,10 @@ impl Cache {
         volume.remove(source)?;
         Ok(new)
     }
+}
+
+fn hash_object(path: &Path) -> io::Result<Sha256> {
+    Sha256::of_reader(read_unfollowed(path)?)
 }
 
 /// what is at an object's path when a new copy of its bytes arrives.
@@ -342,7 +346,7 @@ fn existing(
     digest: &Sha256,
 ) -> Existing {
     match found {
-        Ok(found) if found.is_file() && found.len() == size => match hash() {
+        Ok(found) if is_plain(found) && found.len() == size => match hash() {
             Ok(actual) if actual == *digest => Existing::Keep,
             Ok(_) => Existing::Changed,
             Err(err) if err.kind() == io::ErrorKind::NotFound => Existing::Gone,

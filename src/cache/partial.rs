@@ -228,10 +228,21 @@ pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
         .write(true)
         .create(create)
         .truncate(false);
+    open_plain(path, &mut options)
+}
+
+/// shares the no-follow checks so reading an object never needs write access to its bytes.
+pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
+    open_plain(path, OpenOptions::new().read(true))
+}
+
+fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     #[cfg(unix)]
     {
+        use rustix::fs::OFlags;
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        // a fifo must not block opening before its handle can be refused
+        options.custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits().cast_signed());
     }
     #[cfg(windows)]
     {
@@ -244,7 +255,7 @@ pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "{} is a link or a special file, which fetchloom never writes into",
+                "{} is a link or a special file, which fetchloom never reads or writes",
                 path.display()
             ),
         )

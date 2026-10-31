@@ -13,8 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cache::read_unfollowed;
 use crate::threads::Threads;
-use crate::volume::{Volume, crosses_volumes, refuses_links};
+use crate::volume::{Volume, crosses_volumes, is_plain, refuses_links};
 
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
@@ -56,9 +57,9 @@ pub(crate) struct Placer {
 }
 
 /// one file to place: the object, where it goes, and whether it must be a writable copy.
-pub(crate) struct Order<'a> {
-    pub(crate) object: &'a Path,
-    pub(crate) destination: &'a Path,
+pub(crate) struct Order {
+    pub(crate) object: PathBuf,
+    pub(crate) destination: PathBuf,
     pub(crate) writable: bool,
 }
 
@@ -163,27 +164,32 @@ impl Placer {
     /// places every order and says how each went, in order, with what `seen` keeps of the metadata
     /// of each placed file, read right after it was placed, so a later edit is never taken for the
     /// placed file. the first goes alone, so it learns which methods the filesystem allows before
-    /// the rest go several at once.
+    /// the rest go several at once. orders are rebuilt for checks and placement so only active
+    /// workers keep their paths.
     pub(crate) fn place_all<T: Send>(
         &mut self,
-        orders: &[Order],
+        count: usize,
+        order: impl Fn(usize) -> Order + Sync,
         seen: impl Fn(&Metadata) -> T + Sync,
     ) -> Vec<io::Result<(Method, T)>> {
-        let mut results = Vec::with_capacity(orders.len());
-        let mut ready = Vec::with_capacity(orders.len());
-        for (index, order) in orders.iter().enumerate() {
-            match self.check_folders(order.destination, true) {
-                Ok(()) => ready.push((index, order)),
-                Err(err) => results.push((index, Err(err))),
+        let mut results = Vec::with_capacity(count);
+        let ready = spread((0..count).filter_map(|index| {
+            let order = order(index);
+            match self.check_folders(&order.destination, true) {
+                Ok(()) => Some((index, order)),
+                Err(err) => {
+                    results.push((index, Err(err)));
+                    None
+                }
             }
-        }
-        let ready = spread(ready);
+        }));
         let this = &*self;
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
-        let put = |(index, order): &(usize, &Order)| {
+        let put = |index: &usize| {
+            let order = order(*index);
             let placed = this
-                .put(order.object, order.destination, order.writable)
-                .and_then(|method| Ok((method, seen(&fs::symlink_metadata(order.destination)?))));
+                .put(&order.object, &order.destination, order.writable)
+                .and_then(|method| Ok((method, seen(&fs::symlink_metadata(&order.destination)?))));
             (*index, placed)
         };
         if let Some((first, rest)) = ready.split_first() {
@@ -197,6 +203,7 @@ impl Placer {
     /// tries each method the filesystem may allow, best first.
     fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
         if self.can_reflink.load(Ordering::Relaxed) {
+            check_object(object)?;
             match reflink_copy::reflink(object, destination) {
                 Ok(()) => {
                     seal(destination, writable)?;
@@ -207,6 +214,7 @@ impl Placer {
         }
         // sync clients break hardlinks or upload every link as a full file.
         if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
+            check_object(object)?;
             match fs::hard_link(object, destination) {
                 Ok(()) => return Ok(Method::Hardlink),
                 Err(error) => self.learn(Method::Hardlink, error)?,
@@ -374,21 +382,21 @@ pub(crate) fn run_all<T: Sync, R: Send>(
 
 /// the orders reordered so that neighbours go to different folders. links made into one folder
 /// wait on each other, so threads taking the next order in turn would queue on one folder.
-fn spread<'o, 'p>(orders: Vec<(usize, &'o Order<'p>)>) -> Vec<(usize, &'o Order<'p>)> {
-    let mut seen: HashMap<&Path, usize> = HashMap::new();
-    let mut ranked: Vec<(usize, (usize, &Order))> = orders
+fn spread(orders: impl IntoIterator<Item = (usize, Order)>) -> Vec<usize> {
+    let mut seen: HashMap<PathBuf, usize> = HashMap::new();
+    let mut ranked: Vec<(usize, usize)> = orders
         .into_iter()
-        .map(|item| {
-            let destination = item.1.destination;
+        .map(|(index, order)| {
+            let destination = &order.destination;
             let rank = seen
-                .entry(destination.parent().unwrap_or(destination))
+                .entry(destination.parent().unwrap_or(destination).to_path_buf())
                 .or_default();
             *rank += 1;
-            (*rank, item)
+            (*rank, index)
         })
         .collect();
     ranked.sort_by_key(|(rank, _)| *rank);
-    ranked.into_iter().map(|(_, item)| item).collect()
+    ranked.into_iter().map(|(_, index)| index).collect()
 }
 
 /// how a caller creates missing folders and reports invalid ones.
@@ -447,6 +455,19 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     Err(io::Error::new(kind, message))
 }
 
+fn check_object(object: &Path) -> io::Result<()> {
+    if is_plain(&fs::symlink_metadata(object)?) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} is a link or a special file, which fetchloom never places",
+            object.display()
+        ),
+    ))
+}
+
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
 fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> io::Result<()> {
@@ -468,6 +489,7 @@ fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> 
     #[cfg(not(windows))]
     let staged_writable = writable;
     fill(object, &claimed, staged_writable, threads)?;
+    claimed.sync_all()?;
     temporary
         .persist_noclobber(&destination)
         .map_err(|error| error.error)?;
@@ -488,7 +510,7 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
 fn fill(object: &Path, mut output: &File, writable: bool, threads: Threads) -> io::Result<()> {
-    let mut input = File::open(object)?;
+    let mut input = read_unfollowed(object)?;
     if threads.is_limited() {
         // a reader per copy would multiply the placement worker cap.
         io::copy(&mut input, &mut output)?;
@@ -1000,6 +1022,53 @@ mod tests {
         assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_never_reads_an_object_swapped_for_a_symlink() {
+        let (folder, object) = cache(true);
+        let outside = folder.path().join("outside");
+        fs::write(&outside, CONTENTS).unwrap();
+        fs::rename(&object, folder.path().join("original")).unwrap();
+        std::os::unix::fs::symlink(&outside, &object).unwrap();
+        let destination = folder.path().join("placed.csv");
+        let capped = Threads::read(&|_| Some("1".into())).unwrap();
+
+        for threads in [Threads::default(), capped] {
+            for writable in [false, true] {
+                let error = copy(&object, &destination, writable, threads).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                assert!(error.to_string().contains(&object.display().to_string()));
+                assert!(!destination.exists());
+                assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 3);
+            }
+        }
+        assert_eq!(fs::read_to_string(&outside).unwrap(), CONTENTS);
+        assert!(!is_read_only(&outside));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn placement_refuses_an_object_swapped_for_a_symlink() {
+        for first in [Method::Reflink, Method::Hardlink, Method::Copy] {
+            let (folder, object) = cache(true);
+            let outside = folder.path().join("outside");
+            fs::write(&outside, CONTENTS).unwrap();
+            fs::rename(&object, folder.path().join("original")).unwrap();
+            std::os::unix::fs::symlink(&outside, &object).unwrap();
+            let root = folder.path().join("data");
+            let destination = root.join("placed.csv");
+            let mut placer = Placer::starting_at(root, first, None);
+
+            let error = placer.place(&object, &destination, false).unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains(&object.display().to_string()));
+            assert!(fs::symlink_metadata(&destination).is_err());
+            assert_eq!(fs::read_to_string(&outside).unwrap(), CONTENTS);
+            assert!(!is_read_only(&outside));
+        }
+    }
+
     #[test]
     fn a_failed_copy_leaves_no_staging_file() {
         let folder = TempDir::new().unwrap();
@@ -1199,34 +1268,27 @@ mod tests {
         };
         let root = folder.path().join("data");
         let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
-        let destinations: Vec<PathBuf> = (0..300)
+        let mut destinations: Vec<PathBuf> = (0..300)
             .map(|index| {
                 root.join(format!("{}", index % 7))
                     .join(format!("{index}.csv"))
-            })
-            .collect();
-        let mut orders: Vec<Order> = destinations
-            .iter()
-            .map(|destination| Order {
-                object: &object,
-                destination,
-                writable: false,
             })
             .collect();
         // one order that cannot succeed, to see its error land in its own place
         let taken = root.join("taken.csv");
         fs::create_dir_all(&root).unwrap();
         fs::write(&taken, "mine").unwrap();
-        orders.insert(
-            150,
-            Order {
-                object: &object,
-                destination: &taken,
+        destinations.insert(150, taken.clone());
+
+        let results = placer.place_all(
+            destinations.len(),
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
                 writable: false,
             },
+            |_| (),
         );
-
-        let results = placer.place_all(&orders, |_| ());
 
         assert_eq!(results.len(), 301);
         for (index, result) in results.iter().enumerate() {
@@ -1238,8 +1300,9 @@ mod tests {
                 _ => assert_eq!(result.as_ref().unwrap().0, expected, "{index}"),
             }
         }
-        for destination in &destinations {
-            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        for (index, destination) in destinations.iter().enumerate() {
+            let expected = if index == 150 { "mine" } else { CONTENTS };
+            assert_eq!(fs::read_to_string(destination).unwrap(), expected);
         }
         assert_eq!(fs::read_to_string(&taken).unwrap(), "mine");
     }
@@ -1251,16 +1314,17 @@ mod tests {
             .iter()
             .map(PathBuf::from)
             .collect();
-        let orders: Vec<Order> = paths
-            .iter()
-            .map(|destination| Order {
-                object,
-                destination,
-                writable: false,
-            })
-            .collect();
-        let spread = spread(orders.iter().enumerate().collect());
-        let indexes: Vec<usize> = spread.iter().map(|(index, _)| *index).collect();
+        let orders = paths.iter().enumerate().map(|(index, destination)| {
+            (
+                index,
+                Order {
+                    object: object.to_path_buf(),
+                    destination: destination.clone(),
+                    writable: false,
+                },
+            )
+        });
+        let indexes = spread(orders);
         assert_eq!(indexes, [0, 3, 4, 1, 5, 2]);
     }
 

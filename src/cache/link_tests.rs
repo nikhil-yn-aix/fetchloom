@@ -172,3 +172,88 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
 
     assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
 }
+
+#[cfg(unix)]
+#[test]
+fn verifying_never_hashes_an_object_swapped_for_a_symlink() {
+    for bytes in [b"good", b"evil"] {
+        let (dir, cache) = super::tests::cache();
+        let stored = super::tests::store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let outside = dir.path().join("outside");
+        fs::write(&outside, bytes).unwrap();
+        fs::rename(&object, dir.path().join("original")).unwrap();
+        std::os::unix::fs::symlink(&outside, &object).unwrap();
+
+        let error = cache.verify(&stored.digest).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains(&object.display().to_string()));
+        assert!(cache.changed().is_empty());
+        assert_eq!(fs::read(&outside).unwrap(), bytes);
+        assert!(!fs::metadata(&outside).unwrap().permissions().readonly());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn finding_never_hashes_an_object_swapped_for_a_symlink() {
+    for readonly in [false, true] {
+        let (dir, cache) = super::tests::cache();
+        let stored = super::tests::store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"good").unwrap();
+        if readonly {
+            super::tests::seal(&outside);
+        }
+        fs::rename(&object, dir.path().join("original")).unwrap();
+        std::os::unix::fs::symlink(&outside, &object).unwrap();
+        cache.mark_changed(&stored.digest).unwrap();
+
+        assert!(cache.find(&stored.digest, Some(4)).is_none());
+        assert_eq!(fs::read(&outside).unwrap(), b"good");
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().readonly(),
+            readonly
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn trusting_never_hashes_an_object_swapped_for_a_symlink() {
+    let (dir, cache) = super::tests::cache();
+    let stored = super::tests::store(&cache, b"good");
+    let object = cache.object_path(&stored.digest);
+    let outside = dir.path().join("outside");
+    fs::write(&outside, b"good").unwrap();
+    fs::rename(&object, dir.path().join("original")).unwrap();
+    std::os::unix::fs::symlink(&outside, &object).unwrap();
+
+    let found = cache.trusted(&stored.digest, Some(4), &cache.changed());
+
+    assert!(!matches!(found, Ok(Some(_))));
+    assert_eq!(fs::read(&outside).unwrap(), b"good");
+    assert!(!fs::metadata(&outside).unwrap().permissions().readonly());
+}
+
+#[cfg(unix)]
+#[test]
+fn publishing_replaces_an_object_swapped_for_a_symlink() {
+    let (dir, cache) = super::tests::cache();
+    let stored = super::tests::store(&cache, b"good");
+    let object = cache.object_path(&stored.digest);
+    let outside = dir.path().join("outside");
+    fs::write(&outside, b"good").unwrap();
+    fs::rename(&object, dir.path().join("original")).unwrap();
+    std::os::unix::fs::symlink(&outside, &object).unwrap();
+
+    let replacement = super::tests::store(&cache, b"good");
+
+    assert!(replacement.new);
+    assert!(fs::symlink_metadata(&object).unwrap().is_file());
+    assert_eq!(fs::read(&object).unwrap(), b"good");
+    assert_eq!(fs::read(&outside).unwrap(), b"good");
+    assert!(!fs::metadata(&outside).unwrap().permissions().readonly());
+}

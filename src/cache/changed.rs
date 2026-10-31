@@ -8,9 +8,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::Cache;
+use super::{Cache, hash_object};
 use crate::digest::Sha256;
 use crate::place::{FolderUse, real_folder};
+use crate::volume::is_plain;
 
 /// an object in doubt that could not be hashed, sealed or marked for repair.
 #[derive(Debug)]
@@ -33,10 +34,10 @@ impl Cache {
         marks: &HashMap<Sha256, u64>,
     ) -> Result<Option<PathBuf>, Doubt> {
         let path = self.object_path(digest);
-        let Ok(metadata) = fs::metadata(&path) else {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
             return Ok(None);
         };
-        if !metadata.is_file() || size.is_some_and(|size| metadata.len() != size) {
+        if !is_plain(&metadata) || size.is_some_and(|size| metadata.len() != size) {
             return Ok(None);
         }
         let mut permissions = metadata.permissions();
@@ -44,7 +45,7 @@ impl Cache {
         if !doubted(&metadata, marks.get(digest).copied()) {
             return Ok(Some(path));
         }
-        match Sha256::of_file(&path) {
+        match hash_object(&path) {
             Ok(actual) if actual == *digest => {
                 if writable {
                     permissions.set_readonly(true);
