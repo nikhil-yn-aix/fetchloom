@@ -32,11 +32,7 @@ configuration and JSON examples must use accepted fields and values; valid file 
 
 ## terminal output
 
-verbs are right-aligned in 11 columns without status glyphs. completed work is bold green, ongoing work cyan, attention yellow and failures red; details after `·` are dim. completion verbs include `Added`, `Fetched`, `Synced` and `Ok`.
-
-errors use `error:`, indented details and optional `help:`. warnings use `warning:`. hints are dim with commands in bold cyan; plain output keeps backticks. welcome and help headings are bold and commands cyan; preserve the kitchen analogy.
-
-progress keeps the filename when space is tight. colored bars use `━` with a dim remainder; uncolored terminal bars use `#` and `-`. pipes have no bars. never rely on color for meaning. [output](architecture/output.md) owns stream and color policy.
+[output](architecture/output.md) owns the CLI palette, rendering mechanics and terminal fallbacks. keep meaning readable without color and use its existing renderer for new command output.
 
 ## code comments and names
 
