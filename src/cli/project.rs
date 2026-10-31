@@ -116,7 +116,9 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     )
     .await;
     let (lock_changed, placement) =
-        synced.inspect_err(|_| restore(&project, existed.then_some(text.as_str())))?;
+        synced.map_err(|error| {
+            restore(&project, existed.then_some(text.as_str()), &name, error)
+        })?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -137,15 +139,25 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
 
 /// puts data.toml back as it was before `add`, or removes it when `add` created it, so a dataset
 /// that could not be fetched never stays behind.
-fn restore(project: &Project, before: Option<&str>) {
+fn restore(project: &Project, before: Option<&str>, name: &str, mut failure: Error) -> Error {
     let restored = match before {
         Some(text) => project.write(manifest::FILE, text.as_bytes()),
         None => std::fs::remove_file(project.manifest_path())
             .map_err(|err| Error::io("could not remove data.toml", &err)),
     };
     if let Err(err) = restored {
-        tracing::debug!(%err, "could not restore data.toml");
+        failure = failure.detail(format!("could not restore data.toml: {err}"));
+        if let Some(help) = err.help {
+            failure = failure.detail(help);
+        }
+        failure = failure.detail(match before {
+            Some(text) => format!("restore data.toml from this backup text:\n{text}"),
+            None => format!(
+                "remove the {name} dataset entry from data.toml, or remove data.toml if it holds nothing else"
+            ),
+        });
     }
+    failure
 }
 
 /// the dataset in data.toml that already pins what was just resolved, under any spelling of its
