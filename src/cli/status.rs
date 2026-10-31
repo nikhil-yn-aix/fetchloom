@@ -25,6 +25,8 @@ pub(super) struct Status {
     project: PathBuf,
     /// datasets whose entry in data.toml changed since data.lock was written.
     unlocked: Vec<String>,
+    /// datasets still in data.lock whose entries were removed from data.toml.
+    removed: Vec<String>,
     missing: Vec<String>,
     /// files fetchloom placed that changed since.
     edited: Vec<String>,
@@ -85,6 +87,12 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
             status.unlocked.push(name.clone());
         }
     }
+    status.removed = lock
+        .datasets
+        .iter()
+        .filter(|dataset| !manifest.datasets.contains_key(&dataset.name))
+        .map(|dataset| dataset.name.clone())
+        .collect();
     let cache = super::open_cache()?;
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
@@ -147,7 +155,8 @@ impl Status {
     }
 
     fn needs_sync(&self) -> bool {
-        !self.unlocked.is_empty()
+        !self.removed.is_empty()
+            || !self.unlocked.is_empty()
             || !self.missing.is_empty()
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
@@ -162,6 +171,12 @@ fn list(output: &Output, status: &Status) {
         output.mark(
             "Unlocked",
             &format!("{name} · data.toml changed since data.lock was written"),
+        );
+    }
+    for name in &status.removed {
+        output.mark(
+            "Removed",
+            &format!("{name} from data.toml; `fetchloom sync` updates data.lock"),
         );
     }
     for (verb, paths) in status.lists() {
@@ -189,7 +204,8 @@ fn list(output: &Output, status: &Status) {
 
 /// the closing line, and whether anything differs.
 fn sum_up(output: &Output, status: &Status) -> bool {
-    let differences = status.unlocked.len()
+    let differences = status.removed.len()
+        + status.unlocked.len()
         + status.not_unpacked.len()
         + status.edited_elsewhere.len()
         + status
