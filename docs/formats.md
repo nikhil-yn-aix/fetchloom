@@ -34,7 +34,7 @@ path = "signals"
 
 names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit. generated names are at most 40 characters.
 
-`data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](dev/architecture.md#placing-files).
+`data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](dev/architecture.md#place).
 
 `data_dir`, `path` and every placed file path refuse repository metadata components: `.git`, `.hg`, `.svn` and `.fetchloom`, ignoring case. this includes trailing dots or spaces, a `:` stream suffix, and the windows short names `git~1`, `hg~1`, `svn~1` and `fetchl~1`. the rule also covers source listings, unpacked archive members and paths inside a `get` folder. names such as `.github` and `.gitignore` remain usable.
 
@@ -214,7 +214,7 @@ the `.lock` file coordinates writers; its contents are unused. gc removes an aba
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
 - an unpack record uses the tree encoding above. its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. each replacement refreshes the mark and dates it just before the new bytes were written, so projects recheck old hardlinks without putting the good object in doubt. gc removes a mark only after its object is gone and no registered project needs it. [placement](dev/architecture.md#placing-files) explains what other projects do with a mark.
+- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. each replacement refreshes the mark and dates it just before the new bytes were written, so projects recheck old hardlinks without putting the good object in doubt. gc removes a mark only after its object is gone and no registered project needs it. [placement](dev/architecture.md#place) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](cli.md#cache) explain retention and gc.
 
@@ -260,7 +260,7 @@ state fields:
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
 | `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
-| `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the project loop](dev/architecture.md#the-project-loop) uses it to skip planning |
+| `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the project loop](dev/architecture.md#clisync) uses it to skip planning |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 

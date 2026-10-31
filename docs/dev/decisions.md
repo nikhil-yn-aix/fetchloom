@@ -44,7 +44,7 @@ both executable names use the same entry point, avoiding a second CLI to maintai
 
 reflinks share blocks while keeping independent files. hardlinks reuse the cached file itself. copying works when neither is available. symlinks would dangle after cache deletion and can require extra permissions on windows.
 
-hardlinks are read-only. recognized synced folders and writable placements skip hardlinks, but still try reflinks. a changed-hardlink audit covers only the project being synced, so a writable shared cache still requires trust. [placement](architecture.md#placing-files) states the limits.
+hardlinks are read-only. recognized synced folders and writable placements skip hardlinks, but still try reflinks. a changed-hardlink audit covers only the project being synced, so a writable shared cache still requires trust. [placement](architecture.md#place) states the limits.
 
 ## 12. separate publication from partial ownership
 
@@ -66,7 +66,7 @@ downloads hand bounded batches of chunks to blocking writers. archive readers us
 
 ## 16. limit silence, not download duration
 
-a connection has 45 seconds to connect, each request hop has 75 seconds to produce headers, and a body may be silent for 30 seconds between chunks. there is no whole-download deadline. [network limits](architecture.md#the-network) define retries and redirects separately.
+a connection has 45 seconds to connect, each request hop has 75 seconds to produce headers, and a body may be silent for 30 seconds between chunks. there is no whole-download deadline. [network limits](architecture.md#net) define retries and redirects separately.
 
 ## 17. use flags and environment variables
 

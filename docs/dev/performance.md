@@ -111,7 +111,7 @@ making 10,000 hardlinks with defender on still limits placement: one loaded run 
 
 the build was faster in 3 of 10 interleaved pairs for 10,000 files and in 6 of 10 for 8,000, with single pairs apart by up to 2 times either way, so neither median is outside the spread. placing in this load took 2 to 3 times as long as in the earlier quiet window, and the slow live runs are mostly the cost of making links on windows under load, not work fetchloom adds.
 
-the [settled-sync shortcut](architecture.md#the-project-loop) changed these timings:
+the [settled-sync shortcut](architecture.md#clisync) changed these timings:
 
 | sync with nothing to do | before | after |
 |---|---|---|

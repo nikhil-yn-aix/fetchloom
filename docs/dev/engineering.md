@@ -13,7 +13,7 @@ the compression dependencies need native build tools. keep `Cargo.lock` when bui
 
 ## code boundaries
 
-parsers, digest types, glob matching and destination expansion can be tested as functions over data. project and cache modules own disk records. the CLI orders their effects; the HTTP layer also writes through the cache. [architecture](architecture.md#modules) maps the modules.
+parsers, digest types, glob matching and destination expansion can be tested as functions over data. project and cache modules own disk records. the CLI orders their effects; the HTTP layer also writes through the cache. [architecture](architecture.md#code-map) maps the modules.
 
 the cache writes no `layout` marker; [formats](../formats.md#the-cache) defines its records.
 

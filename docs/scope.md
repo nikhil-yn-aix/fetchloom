@@ -38,7 +38,7 @@ the adapters, credentials and release status are separate from accepting a refer
 
 fetchloom runs on windows and linux, and [CI](../.github/workflows/ci.yml) runs the checks on both. macos is not supported. releases carry static x86_64 binaries, installers and wheels for both; other machines build the executables [from source](../README.md#install). source completion remains in [plan](dev/plan.md).
 
-one user's processes can share a cache. a cache writable by several people trusts all of them; no group-permission or cross-user administration feature is provided. recognized synced folders skip hardlinks but can use reflinks. placement details belong in [architecture](dev/architecture.md#placing-files).
+one user's processes can share a cache. a cache writable by several people trusts all of them; no group-permission or cross-user administration feature is provided. recognized synced folders skip hardlinks but can use reflinks. placement details belong in [architecture](dev/architecture.md#place).
 
 ## outside the project
 
