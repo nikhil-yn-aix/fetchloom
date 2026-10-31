@@ -367,7 +367,7 @@ fn a_pinned_file_splits_without_validators() {
 #[test]
 fn a_whole_answer_to_a_range_stops_splitting() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
-        let body = body(MIB);
+        let body = body(4 * MIB);
         let server = serve(
             body.clone(),
             Serving {

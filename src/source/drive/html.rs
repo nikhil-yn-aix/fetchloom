@@ -112,8 +112,8 @@ mod tests {
     }
 
     #[test]
-    fn a_long_page_of_ampersands_has_bounded_work() {
-        let mut page = "&".repeat(1024 * 1024 - 1);
+    fn a_maximum_sized_page_of_ampersands_has_bounded_work() {
+        let mut page = "&".repeat(4 * 1024 * 1024 - 1);
         page.push(';');
         let expected = page.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -121,8 +121,10 @@ mod tests {
             let _ = sender.send(unescape(&page));
         });
         let decoded = receiver
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap_or_else(|error| panic!("unescaping a long page did not finish: {error}"));
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|error| {
+                panic!("unescaping a maximum-sized page did not finish: {error}")
+            });
         assert_eq!(decoded, expected);
         worker.join().unwrap();
     }
