@@ -892,7 +892,7 @@ fn status_and_sync_explain_untracked_conflicts() -> Result {
 }
 
 #[test]
-fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
+fn failed_add_reports_manifest_and_lock_rollback_and_recovery() -> Result {
     for before in [None, Some("# keep this comment\n[datasets]\n")] {
         for machine in [false, true] {
             let sandbox = Sandbox::new()?;
@@ -926,6 +926,8 @@ fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
                 text(&output.stderr)?
             };
             assert!(details.contains("could not restore data.toml"), "{details}");
+            assert!(details.contains("data.toml and data.lock"), "{details}");
+            assert!(!sandbox.work().join("data.lock").exists());
             if let Some(before) = before {
                 assert!(
                     details.contains("restore data.toml from this backup text"),
@@ -1132,5 +1134,75 @@ fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
     assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
     assert!(!sandbox.work().join(".fetchloom").exists());
     assert_eq!(fs::read(sandbox.work().join("data/extra24.txt"))?, b"keep");
+    Ok(())
+}
+
+#[test]
+fn failed_add_restores_both_project_files_after_writing_the_lock() -> Result {
+    for existing in [false, true] {
+        let sandbox = Sandbox::new()?;
+        if existing {
+            let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+            added(&sandbox, &server)?;
+            let path = sandbox.work().join("data.lock");
+            let locked = fs::read_to_string(&path)?;
+            fs::write(path, format!("# keep lock formatting\n{locked}"))?;
+        }
+        let before_manifest = fs::read(sandbox.work().join("data.toml")).ok();
+        let before_lock = fs::read(sandbox.work().join("data.lock")).ok();
+        let data = sandbox.work().join("data");
+        let mut response = vec![crate::support::Part::Action(Box::new(move || {
+            fs::create_dir_all(&data).unwrap();
+            fs::write(data.join("experiment"), b"block placement after locking").unwrap();
+        }))];
+        response.extend(file(IRIS, "\"v2\""));
+        let server = Server::start("/experiment.csv", vec![response])?;
+        let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
+        let stderr = text(&output.stderr)?;
+        assert!(!output.status.success(), "{stderr}");
+        assert_eq!(
+            fs::read(sandbox.work().join("data.toml")).ok(),
+            before_manifest
+        );
+        assert_eq!(fs::read(sandbox.work().join("data.lock")).ok(), before_lock);
+        assert!(
+            stderr.contains("restored data.toml and data.lock"),
+            "{stderr}"
+        );
+        if existing {
+            let status = sandbox.run(&["status"])?;
+            assert!(!text(&status.stderr)?.contains("Removed experiment"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result {
+    let sandbox = Sandbox::new()?;
+    let initial = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &initial)?;
+    let lock = sandbox.work().join("data.lock");
+    let before_lock = fs::read_to_string(&lock)?;
+    let before_manifest = fs::read(sandbox.work().join("data.toml"))?;
+    let mut response = vec![crate::support::Part::Action(Box::new(move || {
+        fs::remove_file(&lock).unwrap();
+        fs::create_dir(&lock).unwrap();
+    }))];
+    response.extend(reply("403 Forbidden", &[], b"denied"));
+    let server = Server::start("/experiment.csv", vec![response])?;
+    let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success());
+    assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before_manifest);
+    assert!(stderr.contains("could not restore data.lock"), "{stderr}");
+    assert!(
+        stderr.contains("restore data.lock from this backup text"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&serde_json::to_string(&before_lock)?),
+        "{stderr}"
+    );
     Ok(())
 }

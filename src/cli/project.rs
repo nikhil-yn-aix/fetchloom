@@ -83,7 +83,10 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
-    let old = project.lock()?;
+    let (old, lock_text) = match project.lock_and_text()? {
+        Some((lock, text)) => (Some(lock), Some(text)),
+        None => (None, None),
+    };
     if args.name.is_none()
         && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
     {
@@ -118,8 +121,15 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         None,
     )
     .await;
-    let (lock_changed, placement) = synced
-        .map_err(|error| restore(&project, existed.then_some(text.as_str()), &name, error))?;
+    let (lock_changed, placement) = synced.map_err(|error| {
+        restore(
+            &project,
+            existed.then_some(text.as_str()),
+            lock_text.as_deref(),
+            &name,
+            error,
+        )
+    })?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -138,29 +148,45 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     })
 }
 
-/// puts data.toml back as it was before `add`, or removes it when `add` created it, so a dataset
-/// that could not be fetched never stays behind.
-fn restore(project: &Project, before: Option<&str>, name: &str, mut failure: Error) -> Error {
-    let restored = match before {
-        Some(text) => project.write(manifest::FILE, text.as_bytes()),
-        None => std::fs::remove_file(project.manifest_path())
-            .map_err(|err| Error::io("could not remove data.toml", &err)),
-    };
-    if let Err(err) = restored {
-        failure = failure.detail(format!("could not restore data.toml: {err}"));
-        if let Some(help) = err.help {
-            failure = failure.detail(help);
-        }
-        failure = match before {
-            Some(text) => failure
-                .detail("restore data.toml from this backup text (decode it as a JSON string):")
-                .detail(serde_json::Value::String(text.to_owned()).to_string()),
-            None => failure.detail(format!(
-                "remove the {name} dataset entry from data.toml, or remove data.toml if it holds nothing else"
-            )),
+/// restores both project files after a failed add, including their original absence.
+fn restore(
+    project: &Project,
+    manifest: Option<&str>,
+    lock: Option<&str>,
+    name: &str,
+    mut failure: Error,
+) -> Error {
+    let mut complete = true;
+    for (file, before) in [(manifest::FILE, manifest), (lock::FILE, lock)] {
+        let restored = match before {
+            Some(text) => project.write(file, text.as_bytes()),
+            None => match std::fs::remove_file(project.root.join(file)) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(Error::io(format!("could not remove {file}"), &err)),
+            },
         };
+        if let Err(err) = restored {
+            complete = false;
+            failure = failure.detail(format!("could not restore {file}: {err}"));
+            if let Some(help) = err.help {
+                failure = failure.detail(help);
+            }
+            failure = match before {
+                Some(text) => failure
+                    .detail(format!("restore {file} from this backup text (decode it as a JSON string):"))
+                    .detail(serde_json::Value::String(text.to_owned()).to_string()),
+                None => failure.detail(format!(
+                    "remove the {name} dataset entry from {file}, or remove {file} if it holds nothing else"
+                )),
+            };
+        }
     }
-    failure
+    failure.detail(if complete {
+        "restored data.toml and data.lock to their state before add"
+    } else {
+        "could not finish rolling back data.toml and data.lock; follow the recovery steps above"
+    })
 }
 
 /// the dataset in data.toml that already pins what was just resolved, under any spelling of its
