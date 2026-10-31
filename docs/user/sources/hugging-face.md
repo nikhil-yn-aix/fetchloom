@@ -16,20 +16,10 @@ use quoted `--select` and `--exclude` patterns to choose listed files. patterns 
 
 ## credentials
 
-fetchloom chooses credentials in this order, ignoring empty environment values:
-
-1. `HF_TOKEN`, used directly.
-2. the file named by `HF_TOKEN_PATH`.
-3. `token` inside `HF_HOME`.
-4. `huggingface/token` inside `XDG_CACHE_HOME`.
-5. `~/.cache/huggingface/token`.
-
-the token or file contents are trimmed. once a location is chosen, an unreadable file or blank token yields no credential. lower-priority locations are not tried.
-
-tokens stay out of project files, logs and JSON. [environment](../reference/environment.md#credentials) also lists other sources' credentials.
+use the [credential precedence](../reference/environment.md#credentials) for `HF_TOKEN` and existing token files.
 
 ## limits
 
 gated data requires approval from the repository owner before a token can download it. fetchloom cannot grant that approval.
 
-repository listings are not cached for offline resolution. prepare the project online, then keep the manifest and lock unchanged for [offline sync](../concepts.md#offline).
+follow [offline preparation](../concepts.md#offline) before disconnecting.
