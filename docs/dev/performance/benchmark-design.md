@@ -14,12 +14,12 @@ the benchmark suite compares the time and resources needed to retrieve checked r
 
 ## fairness rules
 
-1. same job. every tool starts from the same inputs (the URLs or the project, and the expected SHA-256 of each file) and must end with the same files on disk. a run counts only when a checker finds every expected file with the right SHA-256; a run with a missing or wrong file is reported as failed, never as fast.
+1. same job. every tool starts from the same fixture bytes, through its URLs or prepared project, with an expected SHA-256 for every required output. layouts follow each client's native workflow, including pooch returning paths in its cache. a run counts only when a checker finds every expected file with the right SHA-256; a run with a missing or wrong file is reported as failed, never as fast.
 2. same checking. each client uses its native integrity check on downloaded bytes (aria2c `--checksum`, pooch `known_hash`, DVC remote verification and git-annex SHA-256 keys). fetchloom verifies every downloaded byte. on a no-op it trusts recorded size and modification time, like git, unless a racy timestamp or change mark requires hashing; pooch rehashes its cached file. this difference is part of what s5 and s6 measure. a client without a hash option, such as curl or wget, runs `sha256sum -c` in the same timed command. every run also gets the independent SHA-256 checker outside the clock.
 3. each tool's own way. a tool runs the workflow its documentation recommends for the job, not an imitation of fetchloom: DVC pulls a tracked folder from an HTTP remote, datalad clones a dataset and gets its files, pooch retrieves files by known hash.
 4. each tool's own speed settings. a tool runs with the parallelism its documentation offers (curl `--parallel --parallel-max 4`, aria2c `-j 4 -x 4`, DVC `-j 4` and datalad `-J 4`) and defaults for everything else. wget and pooch have no parallel mode and run as they are. every flag is in the results.
 5. same machine, same network. all tools run one at a time on a dedicated idle machine, against the same local server, through the same shaped link.
-6. no ordering luck. each round runs the tools in a new random order (seed recorded), so a slow minute on the machine hits every tool alike. one untimed warmup round per case loads binaries and python bytecode first.
+6. no ordering luck. each round runs the tools in a new random order (seed recorded), so a slow minute on the machine hits every tool alike. one lab warmup round per case is recorded but excluded from summary statistics. cold runs still drop page caches after preparation. live runs have no warmup round.
 7. whole command. the clock covers process start to exit, including interpreter startup, resolution and verification, because that is what a person waits for.
 8. pinned and recorded. clients have pinned versions; python clients share the requested virtual environment, with its full package list recorded. every run has a separate home and cache. versions, commands, kernel, filesystem and CPU are written into the results.
 
@@ -53,7 +53,7 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
 | datalad | `datalad clone`, then `datalad get -J 4` from URLs registered with git-annex | s1 to s3, s5 to s7 |
 
-cache locations and the system CA bundle are set explicitly. telemetry is disabled to keep unrelated services out of the measurement. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
+cache locations and the system CA bundle are set explicitly. DVC analytics and hugging face telemetry are disabled explicitly. use a clean benchmark environment so unrelated credentials and settings do not affect clients. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
 for s4 the downloaders run `unzip -q` after the check, in the same timed command. DVC and datalad track files rather than archives, so they sit s4 out. s6 uses each tool's own way to skip work: curl `-z` asks the server whether each file changed, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
 
@@ -61,23 +61,23 @@ live runs fetch real public datasets, 5 interleaved rounds each with empty cache
 
 | service | dataset | other tool |
 |---|---|---|
-| zenodo | [8164711](https://zenodo.org/records/8164711), `pbmc.RData`, 106,968,050 bytes | zenodo_get |
-| hugging face | [stanfordnlp/imdb](https://huggingface.co/datasets/stanfordnlp/imdb), three `plain_text/*.parquet` files, 83,446,840 bytes, revision `e6281661ce1c48d982bc483cf8a173c1bbeb5d31` | `hf download` with hf_xet, then `sha256sum -c` |
-| kaggle | [zynicide/wine-reviews](https://www.kaggle.com/datasets/zynicide/wine-reviews), version 4, `winemag-data-130k-v2.csv`, 52,908,706 bytes | kagglehub, then a SHA-256 check |
-| figshare | [10.6084/m9.figshare.5616403](https://api.figshare.com/v2/articles/5616403), three files, 7,425,546 bytes | datahugger |
-| dataverse | [doi:10.7910/DVN/TJCLKP](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP), version recorded at preparation, three raw files in version 5.0 | datahugger |
+| zenodo | [8164711](https://zenodo.org/records/8164711), `pbmc.RData` | zenodo_get |
+| hugging face | [stanfordnlp/imdb](https://huggingface.co/datasets/stanfordnlp/imdb), files matching `plain_text/*.parquet`, revision `e6281661ce1c48d982bc483cf8a173c1bbeb5d31` | `hf download` with hf_xet, then `sha256sum -c` |
+| kaggle | [zynicide/wine-reviews](https://www.kaggle.com/datasets/zynicide/wine-reviews), version 4, `winemag-data-130k-v2.csv` | kagglehub, then a SHA-256 check |
+| figshare | [10.6084/m9.figshare.5616403](https://api.figshare.com/v2/articles/5616403), files in the current article listing | datahugger |
+| dataverse | [doi:10.7910/DVN/TJCLKP](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP), current published version and public raw files, recorded at preparation | datahugger |
 
-the public APIs confirmed these inputs on 2026-10-31. dataverse now exposes three raw files, including an archive, rather than 175 separate downloads. live runs keep archives packed in both clients, compare an independently hashed reference, and report layout differences separately from content differences. the selected zenodo and kaggle files keep each job near the stated size. metadata, exact selections and hashes are recorded again for each run.
+`live.py` reads metadata, sizes and exact selections during preparation and downloads an independent reference before timing either client. live runs keep archives packed in both clients, then compare file hashes and report layout differences separately from content differences. figshare and dataverse use their current public listings, so their file counts and sizes are not fixed benchmark constants.
 
 the hugging face and kaggle clients do not accept the supplied expected SHA-256 as a download option. their timed commands check it after download, following the same rule as curl and wget.
 
-datahugger receives the explicit dataverse `dataset.xhtml?persistentId=...` URL: the DOI now redirects to `/citation`, which its URL parser does not support. Harvard Dataverse returns HTTP 403 for the default `python-requests` User-Agent and 200 for an identified client. its datahugger wrapper sets the request header to `fetchloom-benchmark/1 datahugger/0.13`; download, checksum and concurrency behavior are unchanged, and the wrapper is recorded in the results.
+datahugger receives the explicit dataverse landing URL and an identified `fetchloom-benchmark/1 datahugger/0.13` User-Agent. [bench access notes](../../../bench/README.md#run) record the DOI-parser and default-User-Agent refusals that motivated this wrapper. the timed call uses `checksum=True` and `unzip=False`, and its exact wrapper is recorded.
 
 native cache metadata and generated checksum reports are not dataset payloads; their creation still counts toward time and disk.
 
 the full dataverse dataset has a tabular-format difference: fetchloom requests the original TSV, while datahugger retrieves the ingested TAB. those bytes differ and fail the shared SHA-256 check; the comparison reports the difference rather than presenting it as a speed result.
 
-live numbers vary with the service, so they show ranges and no ratios. quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files below 1 KiB in the figshare and dataverse datasets. unreachable public inputs are skipped with their errors; no credentials are required by the harness.
+live numbers vary with the service, so they show ranges and no ratios. quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files no larger than 1 KiB in the figshare and dataverse datasets. unreachable public inputs are skipped with their errors; no credentials are required by the harness.
 
 ## network profiles
 
