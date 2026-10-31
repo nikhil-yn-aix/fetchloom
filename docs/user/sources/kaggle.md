@@ -30,4 +30,4 @@ credentials stay out of the manifest, lock, logs and JSON output.
 
 competitions are refused. fetchloom handles dataset downloads and does not accept competition rules or request access on your behalf.
 
-repository listings are not cached for offline resolution. prepare a locked project online before [offline sync](../concepts.md#offline).
+follow [offline preparation](../concepts.md#offline) before disconnecting.
