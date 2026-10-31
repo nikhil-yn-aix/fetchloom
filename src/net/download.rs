@@ -76,6 +76,35 @@ pub(crate) struct Fetch {
 }
 
 impl Fetch {
+    /// the bytes a download would produce, when the expectations already identify them and the
+    /// cache holds them.
+    pub(crate) fn cached(&self, cache: &Cache) -> Option<Fetched> {
+        let expect = &self.expect;
+        let (digest, size) = match (expect.sha256, expect.md5) {
+            (Some(digest), _) => (digest, expect.size),
+            (None, Some(md5)) => {
+                let (digest, size) = cache.stated_md5(&md5)?;
+                if expect.size.is_some_and(|expected| expected != size) {
+                    return None;
+                }
+                (digest, Some(size))
+            }
+            (None, None) => return None,
+        };
+        let size = match (cache.find(&digest, size), size) {
+            (Some(_), Some(size)) => size,
+            (Some(path), None) => fs::metadata(&path).ok()?.len(),
+            (None, Some(size)) if holds(cache, self, &digest, Some(size)) => size,
+            (None, _) => return None,
+        };
+        Some(Fetched {
+            digest,
+            size,
+            name: None,
+            origin: Origin::Cache,
+        })
+    }
+
     pub(crate) fn new(url: Url) -> Fetch {
         Fetch {
             from: url.clone(),
@@ -298,34 +327,10 @@ impl Net {
         }
     }
 
-    /// the bytes a download would produce, when the expectations already identify them and the
-    /// cache holds them.
     fn in_cache(&self, fetch: &Fetch, cache: &Cache) -> Option<Fetched> {
-        let expect = &fetch.expect;
-        let (digest, size) = match (expect.sha256, expect.md5) {
-            (Some(digest), _) => (digest, expect.size),
-            (None, Some(md5)) => {
-                let (digest, size) = cache.stated_md5(&md5)?;
-                if expect.size.is_some_and(|expected| expected != size) {
-                    return None;
-                }
-                (digest, Some(size))
-            }
-            (None, None) => return None,
-        };
-        let size = match (cache.find(&digest, size), size) {
-            (Some(_), Some(size)) => size,
-            (Some(path), None) => fs::metadata(&path).ok()?.len(),
-            (None, Some(size)) if holds(cache, fetch, &digest, Some(size)) => size,
-            (None, _) => return None,
-        };
+        let fetched = fetch.cached(cache)?;
         Work::add(&self.work.cache_hits, 1);
-        Some(Fetched {
-            digest,
-            size,
-            name: None,
-            origin: Origin::Cache,
-        })
+        Some(fetched)
     }
 
     /// claims the download of `url`, waiting while another fetchloom downloads the same URL.

@@ -155,7 +155,7 @@ successful downloads stay cached when another file fails. retries can reuse save
 
 approval is required above 1 GiB, not at exactly 1 GiB:
 
-- `get` checks the total known selected size, including cache hits.
+- `get` checks known bytes that still need downloading. cached checksummed files and unpacked archives do not count. offline runs never ask for download approval.
 - project downloads check known bytes still missing from the cache.
 - when the source gives no size, a server's length is checked against the remaining download. without either size, the question comes after a file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch.
 

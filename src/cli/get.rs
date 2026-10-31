@@ -74,8 +74,8 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         .zip(&names)
         .map(|(remote, name)| fetch::listed_job(remote, name, extract))
         .collect();
-    approve(context, &cache, &jobs)?;
     vet(&cache, &files, &names, extract)?;
+    approve(context, &cache, &jobs)?;
     let started = Instant::now();
     let fetched = fetch::all(context, &net, &cache, jobs).await?;
     let paths: Vec<String> = files
@@ -147,12 +147,19 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     })
 }
 
-fn approve(context: &Context, _cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
-    let size: u64 = jobs.iter().filter_map(|job| job.fetch.expect.size).sum();
+fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
+    if context.offline.enabled() {
+        return Ok(());
+    }
+    let missing: Vec<&Job> = jobs
+        .iter()
+        .filter(|job| job.fetch.cached(cache).is_none())
+        .collect();
+    let size: u64 = missing.iter().filter_map(|job| job.fetch.expect.size).sum();
     super::confirm(
         &context.output,
         context.yes,
-        &units::count(jobs.len() as u64, "file", "files"),
+        &units::count(missing.len() as u64, "file", "files"),
         size,
     )
 }
