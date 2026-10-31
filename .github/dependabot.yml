@@ -1,0 +1,11 @@
+# keeps the pinned github actions current, once a month in one pull request. crates are updated
+# by hand, since each update needs the full gate and cargo deny.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

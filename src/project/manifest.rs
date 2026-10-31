@@ -39,7 +39,10 @@ pub(crate) struct Entry {
 impl Manifest {
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let reader = Reader { text };
+        let reader = Reader {
+            text,
+            starts: std::cell::OnceCell::new(),
+        };
         let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
         let root = document.as_table();
         reader.known(root, &TOP_KEYS, "")?;
@@ -79,6 +82,8 @@ impl Manifest {
 /// reads data.toml's items into types, pointing at the line of any mistake.
 struct Reader<'a> {
     text: &'a str,
+    /// where each line begins, found the first time a line is cited.
+    starts: std::cell::OnceCell<Vec<usize>>,
 }
 
 impl Reader<'_> {
@@ -242,13 +247,18 @@ impl Reader<'_> {
     /// the line holding `offset`, as `data.toml:7   select = ["*.edf"]`.
     fn cite(&self, offset: usize) -> String {
         let offset = offset.min(self.text.len());
-        let before = &self.text[..offset];
-        let number = before.matches('\n').count() + 1;
-        let start = before.rfind('\n').map_or(0, |at| at + 1);
+        // the lines are found once, since a large data.toml cites every key of every dataset
+        let starts = self.starts.get_or_init(|| {
+            std::iter::once(0)
+                .chain(self.text.match_indices('\n').map(|(at, _)| at + 1))
+                .collect()
+        });
+        let line = starts.partition_point(|&start| start <= offset);
+        let start = starts[line - 1];
         let end = self.text[start..]
             .find('\n')
             .map_or(self.text.len(), |at| start + at);
-        format!("{FILE}:{number}   {}", self.text[start..end].trim())
+        format!("{FILE}:{line}   {}", self.text[start..end].trim())
     }
 }
 
@@ -367,12 +377,15 @@ fn editable(text: &str) -> Result<DocumentMut, Error> {
 /// data.toml that is not TOML at all, pointing at the line where reading it stopped.
 fn not_toml(text: &str, err: &TomlError) -> Error {
     let message = err.message().lines().next().unwrap_or_default().trim();
-    Reader { text }
-        .error(
-            err.span(),
-            format!("data.toml is not valid TOML: {message}"),
-        )
-        .help("fix that line, then run the command again")
+    Reader {
+        text,
+        starts: std::cell::OnceCell::new(),
+    }
+    .error(
+        err.span(),
+        format!("data.toml is not valid TOML: {message}"),
+    )
+    .help("fix that line, then run the command again")
 }
 
 #[cfg(test)]

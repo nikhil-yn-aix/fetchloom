@@ -1,0 +1,37 @@
+name: live
+
+# the tests that talk to zenodo, figshare, dataverse, osf, hugging face, kaggle and doi.org, and
+# the heavy archive test. services change without notice, so this runs weekly and on demand,
+# apart from the ci check that gates pull requests.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one run at a time, so a manual run never doubles the load on the services
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test --locked -- --ignored

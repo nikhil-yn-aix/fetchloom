@@ -7,7 +7,7 @@ fetchloom get zenodo:3608990
 fetchloom add zenodo:3608990 --select "*.csv"
 ```
 
-use `get` to inspect data once, or `add` to pin it in a project. each selected file gets a SHA-256 and size in `data.lock`. supported source checksums are checked while pinning downloads.
+use [search](../commands/search.md) when you have words rather than a reference. use `get` to inspect data once, or `add` to pin it in a project. each selected file gets a SHA-256 and size in `data.lock`. supported source checksums are checked while pinning downloads.
 
 | family | reference spellings | what gets pinned | credentials | limits |
 |---|---|---|---|---|
@@ -26,6 +26,8 @@ use `get` to inspect data once, or `add` to pin it in a project. each selected f
 `--select` and `--exclude` match listed source paths before download. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions; some files must remain. patterns do not select members inside an archive.
 
 listing-size limits apply before filtering. filters cannot bypass zenodo, figshare or dataverse access checks. a selected google docs entry is different: you can exclude it before fetching the remaining fixed files.
+
+plain URLs have no resolved-metadata line. other sources show available metadata; a license containing `-NC` or `-ND`, ignoring case, gets a warning. check the license before using or sharing those files.
 
 accepting a reference spelling does not guarantee access or a successful download. hosts can move or remove files. [locked URL recovery](../concepts.md#recovery) can find a replacement URL while retaining the original hashes.
 

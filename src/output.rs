@@ -1,5 +1,6 @@
 //! what fetchloom prints. stdout carries the answer and nothing else, stderr carries the story.
 
+mod picker;
 mod progress;
 mod style;
 
@@ -165,6 +166,73 @@ impl Output {
         units::clip(text, most, self.style.more())
     }
 
+    /// the width of the terminal a person watches the story on, or none for a pipe or a file.
+    fn width(&self) -> Option<usize> {
+        self.style
+            .interactive
+            .then(|| usize::from(console::Term::stderr().size().1))
+    }
+
+    /// the width of stdout when it is a terminal, or none when a script reads it.
+    pub(crate) fn answer_width(&self) -> Option<usize> {
+        self.style
+            .watched
+            .then(|| usize::from(console::Term::stdout().size().1))
+    }
+
+    /// one numbered choice: what to type, padded to `pad`, then its title and dim facts. on a
+    /// narrow terminal the facts, then the title, give way, and what to type never does.
+    pub(crate) fn candidate(
+        &self,
+        number: usize,
+        typed: &str,
+        pad: usize,
+        title: &str,
+        facts: &str,
+    ) {
+        if !self.tells(Level::Normal) {
+            return;
+        }
+        let color = self.style.color;
+        let cyan = paint(color, ACCENT.bold());
+        let accent = paint(color, ACCENT);
+        let dim = paint(color, Paint::new().dimmed());
+        let typed = plain(typed);
+        let title = plain(title);
+        let head = format!("{cyan}{number:>11}{cyan:#} {accent}{typed:pad$}{accent:#}");
+        let head_width = 12 + typed.chars().count().max(pad);
+        let width = self.width().unwrap_or(usize::MAX);
+        let mut line = if head_width > width {
+            format!("{cyan}{number:>3}{cyan:#} {accent}{typed}{accent:#}")
+        } else {
+            head
+        };
+        if head_width <= width {
+            let room = width - head_width;
+            let mut rest = String::new();
+            if !title.is_empty() {
+                let _ = write!(rest, "  {title}");
+            }
+            if !facts.is_empty() {
+                let gap = if title.is_empty() { "  " } else { " \u{b7} " };
+                let _ = write!(rest, "{gap}{facts}");
+            }
+            if rest.chars().count() > room {
+                rest = console::truncate_str(&rest, room, self.style.more()).into_owned();
+            }
+            if rest.trim().chars().count() > 3 {
+                let split = if title.is_empty() {
+                    0
+                } else {
+                    rest.find(" \u{b7} ").unwrap_or(rest.len())
+                };
+                let (named, told) = rest.split_at(split);
+                let _ = write!(line, "{named}{dim}{told}{dim:#}");
+            }
+        }
+        self.line(line.trim_end());
+    }
+
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
         if !self.json {
@@ -191,7 +259,7 @@ impl Output {
     /// a bar for one download, hidden unless a person is watching the terminal.
     pub(crate) fn bar(&self, verb: &'static str, message: String) -> Bar {
         match &self.bars {
-            Some(bars) => Bar::add(bars, verb, message, self.style.color),
+            Some(bars) => Bar::add(bars, verb, message, self.style.color, self.style.unicode),
             None => Bar::hidden(),
         }
     }
@@ -222,8 +290,12 @@ impl Output {
                 None => (total, unknown + 1),
             });
         let color = self.style.color;
+        let unicode = self.style.unicode;
         Ticker::start(verb, what, known, move |verb, text| {
-            write_line(color, &verb_line(verb, text, AnsiColor::Cyan, color));
+            write_line(
+                color,
+                &shown(&verb_line(verb, text, AnsiColor::Cyan, color), unicode),
+            );
         })
     }
 
@@ -250,6 +322,22 @@ impl Output {
             }
             answer
         };
+        match &self.bars {
+            Some(bars) => bars.suspend(ask),
+            None => ask(),
+        }
+    }
+
+    /// asks which option to use, or returns none when nobody can answer.
+    pub(crate) fn choose(
+        &self,
+        question: &str,
+        options: &[String],
+    ) -> Result<Option<usize>, Error> {
+        if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
+            return Ok(None);
+        }
+        let ask = || picker::choose(question, options, self.style);
         match &self.bars {
             Some(bars) => bars.suspend(ask),
             None => ask(),
@@ -332,12 +420,27 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let write = || write_line(self.style.color, text);
+        let text = shown(text, self.style.unicode);
+        let write = || write_line(self.style.color, &text);
         match &self.bars {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
     }
+}
+
+/// `text` as the terminal can draw it: the few symbols fetchloom uses become ascii where the
+/// terminal or locale cannot show unicode.
+pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
+    if unicode || text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.replace('\u{b7}', "-")
+            .replace('\u{2026}', "...")
+            .replace('\u{203a}', ">")
+            .replace('\u{2501}', "-"),
+    )
 }
 
 pub(crate) fn help(text: &str, choice: ColorChoice) {
@@ -379,6 +482,17 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                     let gap = if description.is_empty() { "" } else { "  " };
                     return format!("  {ACCENT}{command}{ACCENT:#}{gap}{description}");
                 }
+                // an option or an argument: its spelling is what a person types
+                if command.trim_start().starts_with(['-', '<']) {
+                    let indent = &command[..command.len() - command.trim_start().len()];
+                    let entry = command.trim_start();
+                    let (flag, description) = entry.split_once("  ").unwrap_or((entry, ""));
+                    let gap = &entry[flag.len()..entry.len() - description.trim_start().len()];
+                    return format!(
+                        "  {indent}{ACCENT}{flag}{ACCENT:#}{gap}{}",
+                        description.trim_start()
+                    );
+                }
                 if commands {
                     let end = command.find(' ').unwrap_or(command.len());
                     return format!("  {ACCENT}{}{ACCENT:#}{}", &command[..end], &command[end..]);
@@ -408,11 +522,20 @@ fn paint(color: bool, style: Paint) -> Paint {
     if color { style } else { Paint::new() }
 }
 
+/// the palette: green for what finished, cyan for work under way and for anything a person
+/// types, yellow for what needs attention, red for what failed. a line's subject is bold and its
+/// facts are dim, so color always means the same thing.
 fn verb_color(verb: &str) -> AnsiColor {
     match verb {
-        "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" => AnsiColor::Cyan,
-        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" => AnsiColor::Yellow,
+        "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" | "Searching" => {
+            AnsiColor::Cyan
+        }
+        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Untracked" | "Outdated" => {
+            AnsiColor::Yellow
+        }
         "Failed" => AnsiColor::Red,
+        // the numbers of a list to choose from
+        verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => AnsiColor::Cyan,
         _ => AnsiColor::Green,
     }
 }
@@ -461,8 +584,8 @@ fn hint_line(text: &str, color: bool) -> String {
     format!("  {dim}hint: {}{dim:#}", accented(&plain(text), dim, color))
 }
 
-/// the one color for names and commands, wherever they appear. the stream drops it, like every
-/// color, when color is off.
+/// the one color for what a person types, commands and options, wherever they appear. the stream
+/// drops it, like every color, when color is off.
 const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
 /// `text` with each command in backticks in the accent, then back to `around`. the backticks
@@ -488,14 +611,17 @@ fn accented(text: &str, around: Paint, color: bool) -> String {
     shown
 }
 
-/// a step's facts with what it is about, such as a file or a dataset, in the accent: the text
-/// before the first `·`, or the whole text when it is one word.
+/// a step's facts with what it is about, such as a file or a dataset, in bold: the text before
+/// the first `·`, or the whole text when it is one word. the facts after it are dim.
 fn subject(text: &str, color: bool) -> String {
-    let accent = paint(color, ACCENT);
+    let bold = paint(color, Paint::new().bold());
     let dim = paint(color, Paint::new().dimmed());
     match text.split_once(" · ") {
-        Some((name, facts)) => format!("{accent}{name}{accent:#}{dim} · {facts}{dim:#}"),
-        None if !text.is_empty() && !text.contains(' ') => format!("{accent}{text}{accent:#}"),
+        Some((name, facts)) => format!(
+            "{bold}{name}{bold:#}{dim} · {}{dim:#}",
+            accented(facts, dim, color)
+        ),
+        None if !text.is_empty() && !text.contains(' ') => format!("{bold}{text}{bold:#}"),
         None => accented(text, Paint::new(), color),
     }
 }
@@ -596,8 +722,28 @@ mod tests {
                 &["Downloaded", "Unpacked", "Locked", "Placed", "Removed"][..],
                 Green,
             ),
-            (&["Downloading", "Unpacking", "Waiting"][..], Cyan),
-            (&["Missing", "Extra", "Kept", "Edited"][..], Yellow),
+            (
+                &[
+                    "Downloading",
+                    "Unpacking",
+                    "Waiting",
+                    "Searching",
+                    "1",
+                    "12",
+                ][..],
+                Cyan,
+            ),
+            (
+                &[
+                    "Missing",
+                    "Extra",
+                    "Kept",
+                    "Edited",
+                    "Untracked",
+                    "Outdated",
+                ][..],
+                Yellow,
+            ),
             (&["Failed"][..], Red),
         ] {
             for verb in verbs {
@@ -719,14 +865,14 @@ mod tests {
     }
 
     #[test]
-    fn a_step_names_its_subject_in_the_accent() {
+    fn a_step_names_its_subject_in_bold() {
         assert_eq!(
             subject("iris · 1 file in data.lock", true),
-            "\u{1b}[36miris\u{1b}[0m\u{1b}[2m · 1 file in data.lock\u{1b}[0m"
+            "\u{1b}[1miris\u{1b}[0m\u{1b}[2m · 1 file in data.lock\u{1b}[0m"
         );
         assert_eq!(
             subject("data/iris/iris.csv", true),
-            "\u{1b}[36mdata/iris/iris.csv\u{1b}[0m"
+            "\u{1b}[1mdata/iris/iris.csv\u{1b}[0m"
         );
         assert_eq!(
             subject("for another fetchloom working in this project", true),

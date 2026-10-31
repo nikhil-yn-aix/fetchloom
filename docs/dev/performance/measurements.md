@@ -1,6 +1,12 @@
 # measurements
 
-these measurements record the workloads that changed implementation choices, including changes that were dropped.
+historical workload observations explain retained and rejected performance changes.
+
+## evidence limits
+
+these are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
+
+use the [benchmark workflow](../engineering/benchmarks.md) for new comparisons with retained commands, run records and independent checking.
 
 ## conditions
 
@@ -24,7 +30,7 @@ placement was 2 to 3 times slower than in the earlier quiet window. the no-readb
 
 network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
 
-## results and rejected experiments
+## observations and rejected experiments
 
 parenthesized bounds are observed minima and maxima. when only a time, rate or peak was recorded, the median and range columns say so rather than supplying a new statistic.
 
@@ -34,6 +40,9 @@ parenthesized bounds are observed minima and maxima. when only a time, rate or p
 | in-memory SHA-256, 1 GiB | not recorded | same laptop; best of three | median not recorded; sha2 and ring rates at right | sha2 1.70 to 1.83 GB/s; ring 1.63 to 1.69 GB/s | keep sha2 |
 | MD5 alone and SHA-256 with MD5 | not recorded | same CPU; best of three over 1 GiB | median not recorded; 0.68 GB/s and 0.48 GB/s | not recorded | compute MD5 only when needed |
 | separate hash thread, local 1 GiB | 1648e29 | linux, machine not recorded; four interleaved pairs | median not recorded; about 25% faster | before 2.06 to 2.27 s; after 1.58 to 1.65 s | keep `HashPipe` |
+| hand response chunks to the writer and hash threads in batches | 0616aa1 to 57438ae | L, benchmark lab: 1 GiB over HTTPS and HTTP/2 from a separate network namespace, empty cache, page cache dropped; five interleaved pairs | median 5.37 s to 4.03 s, 25% faster; futex calls 117,064 to 6,702 | before 4.73 to 5.73 s; after 3.53 to 4.64 s | keep: 256 KiB batches to the writer, 1 MiB to the hasher |
+| the same, writer batches alone | 0616aa1 to a9c909f | same lab; five interleaved pairs | no change: 4.05 to 6.54 s against 4.08 to 5.42 s | as stated | kept with the hasher batches; the hasher handoff was the cost |
+| flush a batch of downloads once with `syncfs`, then name them | 57438ae to 3837774 | L, benchmark lab: 1,000 files of 100 KiB over HTTPS, empty cache, page cache dropped; five interleaved pairs | median 4.93 s to 1.79 s, 64% faster; an upper bound without any flush was 1.36 to 1.74 s | before 4.16 to 5.61 s; after 1.62 to 2.14 s | keep on linux 5.8 and later; elsewhere each download still flushes on its own |
 | flush 10,000 copies of 4 KiB with `copy = true` | f68ef48 per-copy; 1ef51b7 batching | linux, machine not recorded; six interleaved pairs | reported times: 0.27 s without flushing, 9.19 s per-copy, 0.41 s one `syncfs`; separate medians not recorded | not recorded | keep payload durability and batch on linux |
 | checkpoint and index flush removal, 1,000 small downloads | 0533392 | L, local lan; ten interleaved pairs | before 4.46 s; after 2.18 s | before 4.27 to 6.31 s; after 2.09 to 3.87 s | 51% faster; keep |
 | archive-member batch flush | 26a3dbc | L, ext4; three runs each | median not recorded; after about half a second; per-file flush 0.7 ms | before 8.5 to 10.2 s | per-file path cost twenty times more; keep batch |

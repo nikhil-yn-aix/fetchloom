@@ -5,13 +5,16 @@ mod cache;
 mod fetch;
 mod get;
 mod help;
+mod list;
 mod logs;
 mod project;
+mod search;
 mod status;
 mod sync;
 mod usage;
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -187,7 +190,15 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
             path.display()
         ),
     )
-    .help("move the project to a folder with a shorter path, then run the same command there")
+    .help(match moved_command(std::env::args_os().skip(1)) {
+        Some(command) => {
+            format!("move the project to a folder with a shorter path, then run `{command}` there")
+        }
+        None => {
+            "move the project to a folder with a shorter path, then run fetchloom from that folder"
+                .to_owned()
+        }
+    })
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -202,6 +213,9 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
+    if let Some(refused) = &logs.refused {
+        context.output.warn(refused);
+    }
     context.offline = net::Offline::from_settings(
         global.offline,
         var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
@@ -209,11 +223,20 @@ pub(crate) fn run() -> ExitCode {
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
     if args.version {
-        return about(
-            &context,
-            &format!("fetchloom {}", env!("CARGO_PKG_VERSION")),
-            started,
-        );
+        let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
+        // what a bug report needs: which build, on which system
+        if level >= Level::Verbose {
+            let _ = write!(
+                text,
+                "\n{} {} \u{b7} commit {} \u{b7} cache {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                option_env!("FETCHLOOM_COMMIT").unwrap_or("unknown"),
+                crate::cache::Cache::locate(&var)
+                    .map_or_else(|| "unknown".to_owned(), |root| root.display().to_string())
+            );
+        }
+        return about(&context, &text, started);
     }
     if let Some(args::Command::Help(asked)) = &args.command {
         return help::show(&context, &asked.topic, started);
@@ -292,10 +315,14 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = cache::info(context);
             finish(context, name, outcome, started)
         }
+        args::Command::List => {
+            let outcome = list::run(context);
+            finish(context, name, outcome, started)
+        }
         args::Command::Cache(args::Cache {
-            action: Some(args::CacheAction::Gc),
+            action: Some(args::CacheAction::Gc(gc)),
         }) => {
-            let outcome = cache::gc(context);
+            let outcome = cache::gc(context, gc.now);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
@@ -306,6 +333,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Get(args) => {
             let outcome = block_on(context, get::run(context, args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Search(args) => {
+            let outcome = block_on(context, search::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Help(asked) => help::show(context, &asked.topic, started),
@@ -453,7 +484,10 @@ fn finish<T: Serialize>(
     if let Err(error) = &outcome {
         context.output.error(error);
     }
-    context.output.summary(counts, elapsed);
+    // a run that did no work, such as `--version`, has no counters worth a line
+    if command.is_some() || counts != crate::work::Counts::default() {
+        context.output.summary(counts, elapsed);
+    }
     match outcome {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => ExitCode::from(error.kind.exit_code()),
@@ -490,6 +524,39 @@ fn shell_word(word: &str) -> Cow<'_, str> {
     }
 }
 
+/// retry from the moved project, without the old working directory or its attached forms.
+fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
+    let command = <args::Args as clap::CommandFactory>::command();
+    let mut kept = Vec::new();
+    let mut positional = false;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            positional = true;
+        }
+        if !positional
+            && let Some(word) = arg.to_str()
+            && word.starts_with('-')
+            && !word.starts_with("--")
+            && let Some(at) = word.find('C')
+            && word[1..at].chars().all(|short| {
+                command
+                    .get_arguments()
+                    .any(|arg| arg.get_short() == Some(short) && !arg.get_action().takes_values())
+            })
+        {
+            if at > 1 {
+                kept.push(std::ffi::OsString::from(&word[..at]));
+            }
+            if at + 1 == word.len() {
+                args.next();
+            }
+        } else {
+            kept.push(arg);
+        }
+    }
+    command_line(kept.into_iter())
+}
+
 /// the command line as typed, ready to copy, for help that says to run it again. none when an
 /// argument holds a secret no message may repeat, such as a token in a link, or is not unicode.
 fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
@@ -510,6 +577,39 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moved_commands_keep_other_option_values_and_literal_arguments() {
+        let line = |args: &[&str]| moved_command(args.iter().map(std::ffi::OsString::from));
+        assert_eq!(
+            line(&[
+                "-C",
+                "old",
+                "get",
+                "https://example.org/data.csv",
+                "-oCaseStudy"
+            ])
+            .as_deref(),
+            Some("fetchloom get https://example.org/data.csv -oCaseStudy")
+        );
+        assert_eq!(
+            line(&["-qvCold", "sync", "--offline"]).as_deref(),
+            Some("fetchloom -qv sync --offline")
+        );
+        assert_eq!(
+            line(&["-C", "old", "get", "--", "-CaseStudy"]).as_deref(),
+            Some("fetchloom get -- -CaseStudy")
+        );
+        assert_eq!(
+            line(&[
+                "-C",
+                "old",
+                "get",
+                "https://example.org/data.csv?token=secret"
+            ]),
+            None
+        );
+    }
 
     #[test]
     fn the_command_line_is_named_as_typed_unless_it_holds_a_secret() {

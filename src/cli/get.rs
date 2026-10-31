@@ -52,10 +52,14 @@ struct Got {
     unpacked_from: Option<String>,
 }
 
-pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
-    let parsed = Reference::parse(&args.link)?;
-    let cache = open_cache()?;
+pub(super) async fn run(context: &Context, mut args: Get) -> Result<Report, Error> {
     let net = Arc::new(context.net());
+    if crate::source::search::is_search(&args.link) {
+        args.link = super::search::pick(context, net.as_ref(), &args.link, "get").await?;
+    }
+    let parsed = Reference::parse(&args.link)?;
+    engine::tell_raw(&context.output, &args.link, &parsed.reference);
+    let cache = open_cache()?;
     net.trust(parsed.reference.written_host());
     let listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
     engine::tell_resolved(&context.output, &listing);

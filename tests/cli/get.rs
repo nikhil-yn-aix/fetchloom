@@ -447,18 +447,28 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         ],
         b"",
     );
-    slow.push(Part::Pause(Duration::from_millis(1500)));
+    let (release, held) = std::sync::mpsc::channel();
+    slow.push(Part::Wait(held));
     slow.push(Part::Bytes(IRIS.to_vec()));
     let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
     let server = Server::start(PATH, vec![slow, unchanged])?;
-    let first = sandbox
-        .command(&["get", &server.url, "-o", "first"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    std::thread::sleep(Duration::from_millis(300));
-    let second = sandbox.run(&["get", &server.url, "-o", "second"])?;
-    let first = first.wait_with_output()?;
+    let first =
+        crate::support::Running::start(&mut sandbox.command(&["get", &server.url, "-o", "first"]))?;
+    crate::support::wait_until("the first download request", || {
+        Ok(!server.requests().is_empty())
+    })?;
+    let second = crate::support::Running::start(&mut sandbox.command(&[
+        "get",
+        &server.url,
+        "-o",
+        "second",
+    ]))?;
+    // redirected stderr reports the running batch; the per-file waiting bar is hidden.
+    let waiting = second.wait_for("Downloading");
+    drop(release);
+    waiting?;
+    let second = second.finish()?;
+    let first = first.finish()?;
     assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
     assert_eq!(second.status.code(), Some(0), "{}", text(&second.stderr)?);
     let downloads = server
@@ -535,5 +545,139 @@ fn get_reports_zero_byte_copies_in_a_synced_folder() -> Result {
         fs::metadata(sandbox.work().join("empty/empty.csv"))?.len(),
         0
     );
+    Ok(())
+}
+
+#[test]
+fn data_file_links_warn_when_the_server_returns_html() -> Result {
+    for (path, warns) in [
+        ("/iris.csv", true),
+        ("/iris.CSV", true),
+        ("/index.html", false),
+        ("/index.HTM", false),
+        ("/index.xhtml", false),
+        ("/download", false),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let body = b"<html>not the data</html>";
+        let server = Server::start(
+            path,
+            vec![reply(
+                "200 OK",
+                &[("Content-Type", "text/html; charset=utf-8")],
+                body,
+            )],
+        )?;
+        let output = sandbox.run(&["get", &server.url])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let message = format!(
+            "{} came back as a web page, not a data file. the link may open a page instead of downloading; look for a download or raw link",
+            &path[1..]
+        );
+        assert_eq!(stderr.contains(&message), warns, "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn repository_file_pages_report_the_raw_link_before_downloading() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&[
+        "get",
+        "https://github.com/mwaskom/seaborn-data/blob/master/iris.csv",
+        "--offline",
+    ])?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success());
+    assert!(stderr.contains("Using raw file"), "{stderr}");
+    assert!(
+        stderr.contains("https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn extensionless_links_use_redirect_names_and_prefer_final_names() -> Result {
+    for final_name in [None, Some("final.mat")] {
+        let sandbox = Sandbox::new()?;
+        let mut headers = vec![("Content-Type", "application/octet-stream")];
+        let disposition = final_name.map(|name| format!("attachment; filename={name}"));
+        if let Some(value) = disposition.as_deref() {
+            headers.push(("Content-Disposition", value));
+        }
+        let server = Server::start(
+            "/files/9778519",
+            vec![
+                reply(
+                    "302 Found",
+                    &[
+                        ("Location", "/storage"),
+                        ("Content-Disposition", "attachment;filename=dir.mat"),
+                    ],
+                    b"",
+                ),
+                reply("200 OK", &headers, IRIS),
+            ],
+        )?;
+        let output = sandbox.run(&["get", &server.url])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let (folder, name) = if final_name.is_some() {
+            ("final", "final.mat")
+        } else {
+            ("dir", "dir.mat")
+        };
+        assert_eq!(fs::read(sandbox.work().join(folder).join(name))?, IRIS);
+        let offline = sandbox.run(&["get", &server.url, "--offline", "-o", "cached"])?;
+        assert!(offline.status.success(), "{}", text(&offline.stderr)?);
+        assert_eq!(fs::read(sandbox.work().join("cached").join(name))?, IRIS);
+        assert_eq!(server.requests().len(), 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn unnamed_numeric_links_keep_the_number_and_suggest_an_article_or_doi() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/9778519", vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(sandbox.work().join("9778519").join("9778519"))?,
+        IRIS
+    );
+    assert!(stderr.contains("article or DOI link"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn offline_identifiers_explain_why_lookup_needs_the_internet() -> Result {
+    for reference in [
+        "zenodo:3608990",
+        "figshare:123",
+        "doi:10.5281/zenodo.3608990",
+    ] {
+        let sandbox = Sandbox::new()?;
+        let output = sandbox.run(&["get", reference, "--offline"])?;
+        assert_eq!(output.status.code(), Some(20));
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains(&format!("looking up {reference} needs the internet")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "in a project prepared online, fetchloom sync --offline works without it"
+            ),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("run it again without --offline"),
+            "{stderr}"
+        );
+    }
     Ok(())
 }

@@ -16,5 +16,6 @@ try it with zenodo:3608990, a 4 KB iris.csv:
   fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
   fetchloom sync                 restock data/ in a project you cloned
   fetchloom get zenodo:3608990   fetch it once, without a project
+  fetchloom search iris          find datasets by name
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`

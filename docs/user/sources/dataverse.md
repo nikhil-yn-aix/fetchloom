@@ -30,4 +30,4 @@ use public dataverse links. `DATAVERSE_TOKEN` is not read. access refusal requir
 
 a dataset is refused if any listed file is restricted. a restricted file page is also refused. selection cannot bypass these checks or the listing-size limit.
 
-prepare the locked files online before using [offline sync](../concepts.md#offline). repository listings are not cached for offline resolution.
+follow [offline preparation](../concepts.md#offline) before disconnecting.

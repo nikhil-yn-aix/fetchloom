@@ -1,56 +1,25 @@
 # getting started
 
-fetchloom installs as one executable and restores a project's research inputs from a committed lock.
+fetchloom puts the research data your project needs in `data/` and records how to restore it.
 
 ## install
 
-release binaries support windows and linux on x86_64 and arm64. windows needs windows 10 or later; the static linux binary works with any C library. macos is not supported.
-
-on linux:
+no release or PyPI package has been published yet. install from source with [rust](https://rustup.rs) and a C toolchain:
 
 ```sh
-curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
-```
-
-on windows, in powershell:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
-```
-
-the installers select the architecture and check the download against the release's `SHA256SUMS`. installation uses `~/.local/bin` on linux or `%LOCALAPPDATA%\Programs\fetchloom\bin` on windows. the installer adds the folder to shell profiles or the user PATH when needed.
-
-to choose a version, pass it as the first argument or set `FETCHLOOM_VERSION`:
-
-```sh
-curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh -s -- 0.1.0
-```
-
-with pip, on python 3.9 or later:
-
-```sh
-pip install fetchloom
-```
-
-this also installs the [python helper](scripting.md#python-helper).
-
-from source, with rust 1.99.1 and a C toolchain:
-
-```sh
-git clone https://github.com/nikhil-yn-aix/fetchloom.git
-cd fetchloom
-cargo install --path . --locked
+cargo install --locked --git https://github.com/nikhil-yn-aix/fetchloom
 fetchloom --version
 ```
 
-each method installs one program, `fetchloom`. use a [shell alias](windows.md#short-name) if you want a shorter name.
+fetchloom supports windows and linux on x86_64 and arm64. windows needs windows 10 or later; macos is not supported. [building and testing](../dev/engineering/building-and-testing.md) covers the pinned rust toolchain and platform setup.
+
+for the executable together with the [python helper](scripting.md#python-helper), install the python package from source instead. a [shell alias](windows.md#short-name) can give the executable a shorter name.
 
 ## first project
 
 ```sh
 mkdir iris-study
 cd iris-study
-git init
 fetchloom add zenodo:3608990
 ```
 
@@ -71,7 +40,9 @@ find the file without assuming where the data folder lives:
 fetchloom path iris/iris.csv
 ```
 
-## what to commit
+## sharing a project
+
+send `data.toml` and `data.lock` with your project. git is optional. to start tracking the project with git after the example above, initialize it and repeat `add`; the existing dataset is reused and `.gitignore` is updated.
 
 | path | keep in git? | reason |
 |---|---|---|
@@ -82,34 +53,36 @@ fetchloom path iris/iris.csv
 | `.gitignore` | yes | it keeps downloaded files out of commits |
 
 ```sh
+git init
+fetchloom add zenodo:3608990
 git add data.toml data.lock .gitignore
 git commit -m "pin iris inputs"
 ```
 
-## cloning a project
+## restoring a project
 
-clone the project's git repository and enter its folder. if it commits both `data.toml` and `data.lock`, run:
+enter a project folder containing `data.toml` and `data.lock`, whether you received the files directly or cloned them with git, then run:
 
 ```sh
 fetchloom sync
 ```
 
-sync fills `data/` from the pins. cached bytes need no download. if the manifest changed, sync updates the lock first while preserving unchanged entries. use `fetchloom lock --check` first when a job must require an up-to-date committed lock.
+sync fills `data/` from the pins. cached bytes need no download. if the manifest changed, sync updates the lock first while preserving unchanged entries. use `fetchloom sync --locked` when a job must require an up-to-date lock.
 
 ## working offline
 
-prepare the project with an online sync before disconnecting. then run:
+follow [offline preparation](concepts.md#offline), then restore without requests:
 
 ```sh
 fetchloom sync --offline
 ```
 
-unchanged files can suffice. restoring missing files needs cached objects and, for extracted archives, unpack records. keep the manifest and lock unchanged while offline.
-
 ## next commands
 
 | need | command or guide |
 |---|---|
+| find a dataset by name | [`fetchloom search`](commands/search.md) |
+| see the datasets in a project | [`fetchloom list`](commands/list.md) |
 | inspect missing, edited or extra files | [`fetchloom status`](commands/status.md) |
 | try data without creating project files | [`fetchloom get`](commands/get.md) |
 | use a different host | [sources](sources/README.md) |

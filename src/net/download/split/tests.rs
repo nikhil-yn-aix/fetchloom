@@ -310,27 +310,22 @@ fn a_file_is_split_only_when_it_is_large_and_its_ranges_are_safe_to_join() {
                 ranges: false,
                 ..fast
             },
-            4 * MIB,
+            MIB,
             true,
             "no ranges",
         ),
-        (
-            Serving { etag: None, ..fast },
-            4 * MIB,
-            true,
-            "no validator",
-        ),
+        (Serving { etag: None, ..fast }, MIB, true, "no validator"),
         (
             Serving {
                 etag: Some("W/\"weak\""),
                 ..fast
             },
-            4 * MIB,
+            MIB,
             true,
             "a weak validator",
         ),
         (fast, MIB / 2, true, "small"),
-        (fast, 4 * MIB, false, "turned off"),
+        (fast, MIB, false, "turned off"),
     ] {
         let body = body(size);
         let server = serve(body.clone(), serving);

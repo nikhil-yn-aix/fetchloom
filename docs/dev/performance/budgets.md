@@ -6,7 +6,7 @@ performance budgets set whole-command targets, with observed misses kept visible
 
 release measurements on 2026-10-30 and 2026-10-31 used one laptop: an 11th gen intel i7-1185G7, 4 cores, 8 threads, 32 GB and nvme. windows was windows 11 with defender real-time protection on; linux was ubuntu 24.04 in WSL 2 on ext4.
 
-baseline f9bbda5 used at least ten runs after three warm-ups without other work running. follow-ups have their own counts and load conditions in [measurements](measurements.md). ranges are observed minima and maxima, not confidence intervals. a single reported value has no recorded range unless one is stated.
+baseline f9bbda5 used at least ten runs after three warm-ups without other work running. follow-ups have their own counts and load conditions in [measurements](measurements.md). these baseline timings share the [historical evidence limits](measurements.md#evidence-limits); they are observations, not reproducible current benchmark results. ranges are observed minima and maxima, not confidence intervals. a single reported value has no recorded range unless one is stated.
 
 ## targets and observations
 

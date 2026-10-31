@@ -8,7 +8,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
 | cloud copying and mirroring | use a transfer application such as rclone |
-| dataset search | supply a reference you chose |
+| search beyond hugging face, kaggle and zenodo | choose a reference from the source's own catalog |
 | plugins | source adapters live in the fetchloom crate |
 | accounts, hosting and telemetry | fetchloom is a local command |
 | controlled-data access approval | request access from the institution or owner |
@@ -37,6 +37,6 @@ offline mode uses local placements, cache objects and unpack records. it cannot 
 
 ## access and platforms
 
-windows and linux releases cover x86_64 and arm64. one executable is installed as `fetchloom`. an accepted source spelling does not guarantee that access or a download will succeed.
+windows and linux are supported on x86_64 and arm64; [installation](getting-started.md#install) is currently from source. one executable is installed as `fetchloom`. an accepted source spelling does not guarantee that access or a download will succeed.
 
 source restrictions and listing-size limits apply before most filtering. credentials cannot grant approvals that a source has not given. [source guides](sources/README.md) lists each family's rules.

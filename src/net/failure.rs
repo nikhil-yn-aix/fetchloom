@@ -156,7 +156,7 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
             return Failure::Final(refused(url, reason));
         }
         if current.is::<address::Offline>() {
-            return Failure::Final(offline(url, mode));
+            return Failure::Final(offline(url, mode, true));
         }
         cause = current.source();
     }
@@ -182,7 +182,21 @@ fn without_link(err: &reqwest::Error) -> String {
     }
 }
 
-pub(super) fn offline(url: &Url, mode: Offline) -> Error {
+pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
+    if !pinned {
+        // a new link has no fingerprint yet, so no cached file can stand in for it
+        return Error::new(
+            Kind::OfflineMissing,
+            format!(
+                "offline, and a new link must be downloaded once to learn its fingerprint: {}",
+                Shown(url)
+            ),
+        )
+        .help(format!(
+            "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
+            mode.retry()
+        ));
+    }
     Error::new(
         Kind::OfflineMissing,
         format!("offline, and {} is not in the cache", Shown(url)),

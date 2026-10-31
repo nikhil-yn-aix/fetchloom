@@ -192,25 +192,43 @@ fn key(path: &str) -> String {
     name::fold(path)
 }
 
+/// refuses two datasets whose folders are the same or one inside the other, as a
+/// case-insensitive disk sees them. each folder is folded once and checks only its own parents,
+/// so a project of many datasets costs no more than its folders' depth.
 fn overlapping(folders: &[(String, &str)]) -> Result<(), Error> {
-    for (index, (a, name_a)) in folders.iter().enumerate() {
-        for (b, name_b) in &folders[index + 1..] {
-            let (a_key, b_key) = (key(a), key(b));
-            let inside = a_key == b_key
-                || b_key.starts_with(&format!("{a_key}/"))
-                || a_key.starts_with(&format!("{b_key}/"));
-            if inside {
-                return Err(Error::new(
-                    Kind::ProjectInvalid,
-                    format!(
-                        "datasets {name_a} and {name_b} would share files: {a} and {b} overlap"
-                    ),
-                )
-                .help("give one of them another path in data.toml"));
+    let overlap = |first: usize, second: usize| {
+        let ((a, name_a), (b, name_b)) = (&folders[first], &folders[second]);
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("datasets {name_a} and {name_b} would share files: {a} and {b} overlap"),
+        )
+        .help("give one of them another path in data.toml")
+    };
+    let keys: Vec<String> = folders.iter().map(|(folder, _)| key(folder)).collect();
+    let mut seen: HashMap<&str, usize> = HashMap::with_capacity(keys.len());
+    // the pair the old pairwise scan met first: the lowest earlier index, then the lowest later
+    let mut found: Option<(usize, usize)> = None;
+    let mut consider = |pair: (usize, usize)| {
+        found = Some(found.map_or(pair, |best| best.min(pair)));
+    };
+    for (index, folder) in keys.iter().enumerate() {
+        match seen.get(folder.as_str()) {
+            Some(&earlier) => consider((earlier, index)),
+            None => {
+                seen.insert(folder, index);
             }
         }
     }
-    Ok(())
+    for (index, folder) in keys.iter().enumerate() {
+        let mut parent = folder.as_str();
+        while let Some((up, _)) = parent.rsplit_once('/') {
+            if let Some(&outer) = seen.get(up) {
+                consider((outer.min(index), outer.max(index)));
+            }
+            parent = up;
+        }
+    }
+    found.map_or(Ok(()), |(first, second)| Err(overlap(first, second)))
 }
 
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
@@ -572,6 +590,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn overlapping_folders_are_found_once_each_and_name_the_first_pair() {
+        let folders = |names: &[&'static str]| -> Vec<(String, &'static str)> {
+            names
+                .iter()
+                .map(|name| (format!("data/{name}"), *name))
+                .collect()
+        };
+        let message =
+            |names: &[&'static str]| overlapping(&folders(names)).map_err(|error| error.message);
+        assert_eq!(message(&["a", "b", "c"]), Ok(()));
+        assert_eq!(
+            message(&["a", "a-x", "ab"]),
+            Ok(()),
+            "a shared prefix is not a parent"
+        );
+        assert_eq!(
+            message(&["a", "b", "a"]),
+            Err("datasets a and a would share files: data/a and data/a overlap".to_owned())
+        );
+        assert_eq!(
+            message(&["x/y", "b", "x"]),
+            Err("datasets x/y and x would share files: data/x/y and data/x overlap".to_owned()),
+            "the earlier dataset is named first, inside or not"
+        );
+        assert!(
+            message(&["Iris", "iris"]).is_err(),
+            "a disk that ignores case"
+        );
+        assert_eq!(
+            message(&["c", "b", "c/d", "b/e"]),
+            Err("datasets c and c/d would share files: data/c and data/c/d overlap".to_owned()),
+            "the pair a scan in order meets first"
+        );
+        let many: Vec<(String, &str)> = (0..10_000)
+            .map(|index| (format!("data/f{index:05}"), "f"))
+            .collect();
+        assert!(overlapping(&many).is_ok());
+    }
     #[test]
     fn a_top_folder_is_shared_only_by_every_member() {
         let members = |paths: &[&str]| paths.iter().map(|path| member(path)).collect::<Vec<_>>();

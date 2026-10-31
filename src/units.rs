@@ -101,6 +101,27 @@ pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
     format!("{kept}{more}")
 }
 
+/// a compact decimal count for catalog popularity.
+pub(crate) fn compact(n: u64) -> String {
+    const UNITS: [&str; 6] = ["k", "M", "B", "T", "P", "E"];
+    if n < 1000 {
+        return n.to_string();
+    }
+    let n = u128::from(n);
+    let mut divisor = 1000;
+    let mut unit = 0;
+    while (n + divisor / 2) / divisor >= 1000 && unit < UNITS.len() - 1 {
+        divisor *= 1000;
+        unit += 1;
+    }
+    let tenths = (n * 10 + divisor / 2) / divisor;
+    if tenths < 100 && tenths % 10 != 0 {
+        format!("{}.{}{}", tenths / 10, tenths % 10, UNITS[unit])
+    } else {
+        format!("{}{}", (n + divisor / 2) / divisor, UNITS[unit])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +196,28 @@ mod tests {
             clip(&"é".repeat(60), 50, "…"),
             format!("{}…", "é".repeat(50))
         );
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::compact;
+    #[test]
+    fn compact_counts_round_without_losing_the_unit() {
+        for (n, expected) in [
+            (0, "0"),
+            (950, "950"),
+            (999, "999"),
+            (1_000, "1k"),
+            (1_200, "1.2k"),
+            (12_000, "12k"),
+            (12_490, "12k"),
+            (999_500, "1M"),
+            (3_400_000, "3.4M"),
+            (1_000_000_000, "1B"),
+            (u64::MAX, "18E"),
+        ] {
+            assert_eq!(compact(n), expected, "{n}");
+        }
     }
 }

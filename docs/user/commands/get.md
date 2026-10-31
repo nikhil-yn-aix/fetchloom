@@ -3,6 +3,7 @@
 `get` downloads into a folder through the shared cache without creating a project.
 
 ```sh
+fetchloom get iris
 fetchloom get zenodo:3608990
 fetchloom get zenodo:3608990 -o flowers
 fetchloom get https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz --no-extract
@@ -21,7 +22,7 @@ fetchloom get [options] <link>
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed |
 
-[global options](README.md#global-options) also apply. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
+[global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
 ## what happens
 
@@ -30,7 +31,7 @@ fetchloom get [options] <link>
 3. unpack recognized archives unless disabled, then place the files in the output folder.
 4. print the absolute output folder on stdout. no manifest, lock or project state is written.
 
-a single file defaults to a folder named after its filename stem. several files use a name derived from their title or reference. a direct download's `Content-Disposition` filename replaces the name guessed from the URL. unsafe characters are replaced and names shortened for filesystem limits.
+a single file defaults to a folder named after its filename stem. several files use a name derived from their title or reference. a direct download's `Content-Disposition` filename, including one received after redirects, replaces the name guessed from the URL. unsafe characters are replaced and names shortened for filesystem limits.
 
 stderr excerpt for a single-file download on a filesystem that supports links:
 
@@ -59,6 +60,6 @@ the output folder itself may link elsewhere. links below it are refused. read-on
 |---|---|---|
 | a rerun fetches changed data | `get` has no project lock | use `add` and commit the pins |
 | an output folder has unrelated contents | `get` protects existing files | choose another folder with `-o` |
-| offline get cannot resolve a repository | repository listings are not cached for offline resolution | prepare a locked project for offline use |
+| offline get cannot resolve a repository | the reference needs network resolution | follow [offline preparation](../concepts.md#offline) |
 | a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |

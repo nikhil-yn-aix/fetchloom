@@ -300,6 +300,23 @@ impl<'a> Loop<'a> {
                 .map(|job| job.label.as_str())
                 .collect();
             if !missing.is_empty() {
+                // a new link has no fingerprint yet, so the cache cannot be asked for it
+                let unknown = jobs.iter().any(|job| {
+                    job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch.expect)
+                });
+                if unknown {
+                    let mut error = Error::new(
+                        Kind::OfflineMissing,
+                        "offline, and a new link must be downloaded once to learn its fingerprint",
+                    );
+                    for label in missing.iter().take(5) {
+                        error = error.detail((*label).to_owned());
+                    }
+                    return Err(error.help(format!(
+                        "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
+                        self.net.offline().retry()
+                    )));
+                }
                 let mut error = Error::new(
                     Kind::OfflineMissing,
                     format!(
@@ -462,6 +479,14 @@ fn cite_place(error: Error, entry: &Entry, key: &str) -> Error {
     {
         Some(place) => error.detail(place.to_owned()),
         None => error,
+    }
+}
+
+pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
+    if let Reference::Url(raw) = parsed
+        && Url::parse(typed.trim()).is_ok_and(|typed| typed != *raw)
+    {
+        output.step("Using", &format!("raw file {}", crate::net::Shown(raw)));
     }
 }
 

@@ -24,13 +24,13 @@ downloads must match their locked size and hashes. cached objects are not rehash
 
 source checksum support covers MD5 and SHA-256. a known SHA-256 and size can allow a file to be locked without downloading it. hashes pin bytes after resolution; a source reference is not always immutable. see [lock rules](reference/data-lock.md#the-spec-hash).
 
-`sync` updates missing or stale locks first. unchanged entries retain their pins. `lock --check` checks manifest membership and specs without changing files, while `lock --upgrade` deliberately asks sources again.
+`sync` updates missing or stale locks first unless `--locked` requires an up-to-date lock. unchanged entries retain their pins. `lock --check` checks manifest membership and specs without changing files, while `lock --upgrade` deliberately asks sources again.
 
 ## cache
 
 the cache is local and content-addressed: objects are named by SHA-256. projects reuse the same bytes rather than downloading a separate copy for each project.
 
-one user's processes can share it. a cache writable by several people trusts everyone who can write there; fetchloom has no cross-user administration or group-permission layer.
+one user's processes can share it. on shared machines, give each user their own cache. a group-writable cache is suitable only among trusted users, with permissions managed through umask or ACLs; fetchloom has no cross-user administration or group-permission layer. use `copy = true` for students or jobs that edit inputs.
 
 successful project sync registers its root for garbage collection. `get` and standalone `lock` do not. [cache commands](commands/cache.md) covers retention, verification and cleanup; [cache folder](reference/cache-folder.md) covers locations and records.
 
@@ -54,7 +54,7 @@ copy = true
 
 then run `fetchloom sync`. it replaces unchanged read-only files with writable reflinks or copies, never hardlinks. edited files stay. turning `copy` off leaves existing writable files as they are.
 
-keep results outside managed input paths. do not make a shared hardlink writable to edit it. another project's bytes can change too. on windows, that change may remain unseen until the editing project syncs, cache verification runs, or `sync --force` reads each hardlink by name.
+keep results outside managed input paths. do not make a shared hardlink writable to edit it: every project using that link shares the change. sync keeps a visibly changed hardlink as an edit with reason `shared`; `sync --force` restores it. [shared edits](commands/sync.md#local-changes) explains detection and repair, including windows aliases whose directory listings can hide a change.
 
 sync preserves local conflicts unless forced. status differences and kept conflicts still exit 0. [scripting](scripting.md) shows how to inspect them.
 
@@ -91,7 +91,7 @@ fetchloom --offline path iris
 
 offline mode prevents fetchloom from making HTTP or DNS requests. a locked project can use unchanged placed files, cached objects and unpack records.
 
-an entry needing resolution fails offline, even for a plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes.
+search and entries needing resolution fail offline, even when you already know a source id or plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes. an unpinned new link reports "offline, and a new link must be downloaded once to learn its fingerprint". the help names the flag or environment setting to change, followed by "to pin it. `fetchloom get <link> --offline` reuses a file fetched before".
 
 prepare the project online before disconnecting and keep its manifest and lock unchanged. `FETCHLOOM_OFFLINE=1` also enables offline mode. to reconnect, remove `--offline` and unset that variable if it is `1`.
 
@@ -119,7 +119,7 @@ approval is required above 1 GiB, not at exactly 1 GiB.
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
 
-`--yes` or `-y` approves. questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`.
+`--yes` or `-y` approves downloads, never a [dataset search choice](commands/search.md#choosing-a-dataset). questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`.
 
 ## interruptions
 

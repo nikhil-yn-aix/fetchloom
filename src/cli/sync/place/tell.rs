@@ -54,6 +54,10 @@ pub(super) fn tell(
                 "{} has changed, so it stays. `fetchloom sync --force` replaces it",
                 kept.path
             ),
+            Reason::Shared => format!(
+                "{} has changed in place through a hardlink, so every project sharing that file sees the change. it stays; if the change is not yours, `fetchloom sync --force` restores it",
+                kept.path
+            ),
             Reason::Foreign => format!(
                 "{} is not recorded by fetchloom and has different contents, so it stays. `fetchloom sync --force` replaces it",
                 kept.path

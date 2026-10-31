@@ -3,11 +3,10 @@
 
 use std::fs;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::support::{Ranged, Result, Sandbox, text};
+use crate::support::{Ranged, Result, Sandbox, text, wait_until};
 
 /// the smallest file that may split, 64 MiB.
 const LARGE: u64 = 64 * 1024 * 1024;
@@ -31,7 +30,21 @@ fn a_slow_large_download_splits_across_streams() -> Result {
     let body = large();
     let server = Ranged::start("/large.bin", body.clone(), SLOW)?;
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["--json", "get", &server.url])?;
+    let mut child = sandbox
+        .command(&["--json", "get", &server.url])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let split = wait_until("concurrent range requests", || {
+        if child.try_wait()?.is_some() {
+            return Err("the download ended before splitting".into());
+        }
+        Ok(server.most() >= 2 && !server.parts().is_empty())
+    });
+    // only the adaptive handover needs a slow stream; verify the remaining bytes at full speed.
+    server.pace(0);
+    let output = child.wait_with_output()?;
+    split?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = &json(&output)?["work"];
     let requests = server.requests();
@@ -82,15 +95,16 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while server.parts().is_empty() && child.try_wait()?.is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    // the streams run on for two checkpoints, so one records ranges past the first one's bytes
-    std::thread::sleep(Duration::from_secs(2));
+    let checkpoint = wait_until("a checkpoint with ranges past the prefix", || {
+        if child.try_wait()?.is_some() {
+            return Err("the first download ended before its split checkpoint".into());
+        }
+        Ok(!server.parts().is_empty() && saved_ranges(&sandbox))
+    });
     let ended = child.try_wait()?;
     child.kill()?;
     child.wait()?;
+    checkpoint?;
     assert!(
         ended.is_none() && !server.parts().is_empty(),
         "the first run ended or never split before the kill"
@@ -120,4 +134,30 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
         body
     );
     Ok(())
+}
+
+/// the on-disk receipt must prove there is work beyond the prefix for the next run to reuse.
+fn saved_ranges(sandbox: &Sandbox) -> bool {
+    fs::read_dir(sandbox.cache().join("partial"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .filter_map(|path| fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .any(|record| {
+            let received = record["received"].as_u64().unwrap_or_default();
+            received > 0
+                && record["ranges"].as_array().is_some_and(|ranges| {
+                    ranges.iter().any(|range| {
+                        let start = range["start"].as_u64().unwrap_or_default();
+                        let end = range["end"].as_u64().unwrap_or_default();
+                        start > received && end > start
+                    })
+                })
+        })
 }

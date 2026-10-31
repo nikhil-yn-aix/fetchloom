@@ -2,10 +2,8 @@
 //! uses what it did.
 
 use std::fs;
-use std::process::Stdio;
-use std::time::Duration;
 
-use crate::support::{Part, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text, wait_until};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -21,7 +19,8 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
         ],
         b"",
     );
-    slow.push(Part::Pause(Duration::from_millis(2000)));
+    let (release, held) = std::sync::mpsc::channel();
+    slow.push(Part::Wait(held));
     slow.push(Part::Bytes(IRIS.to_vec()));
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), slow])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -31,18 +30,24 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
         fs::copy(sandbox.work().join(name), clone.join(name))?;
     }
     let cold = sandbox.folder("cold")?;
-    let syncing = sandbox
-        .command_in(&clone, &["sync"])
-        .env("FETCHLOOM_CACHE", &cold)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    std::thread::sleep(Duration::from_millis(500));
-    let path = sandbox
-        .command_in(&clone, &["path", "iris"])
-        .env("FETCHLOOM_CACHE", &cold)
-        .output()?;
-    let synced = syncing.wait_with_output()?;
+    let syncing = Running::start(
+        sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cold),
+    )?;
+    wait_until("the sync download request", || {
+        Ok(server.requests().len() >= 2)
+    })?;
+    let path = Running::start(
+        sandbox
+            .command_in(&clone, &["path", "iris"])
+            .env("FETCHLOOM_CACHE", &cold),
+    )?;
+    let waiting = path.wait_for("Waiting");
+    drop(release);
+    waiting?;
+    let path = path.finish()?;
+    let synced = syncing.finish()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     let story = text(&path.stderr)?;
     assert_eq!(path.status.code(), Some(0), "{story}");
@@ -51,7 +56,7 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
         clone.join("data").join("iris").display().to_string()
     );
     assert!(
-        story.lines().all(|line| line.contains("Waiting")),
+        story.contains("Waiting") && story.lines().all(|line| line.contains("Waiting")),
         "only the wait is told: {story}"
     );
     Ok(())

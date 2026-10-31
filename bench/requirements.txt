@@ -1,0 +1,14 @@
+pooch==1.8.2
+dvc==3.63.0
+datalad==1.7.2
+zenodo_get==3.1.0
+huggingface_hub[hf_xet]==0.35.3
+kagglehub==0.3.13
+gdown==5.2.0
+datahugger==0.13
+matplotlib==3.10.7
+requests==2.32.5
+
+pathspec==0.12.1
+chardet==5.2.0
+hf-xet==1.8.0

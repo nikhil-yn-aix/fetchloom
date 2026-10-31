@@ -95,6 +95,7 @@ impl Cache {
 
 /// new objects written since the batch began, flushed together.
 #[cfg(target_os = "linux")]
+#[derive(Debug)]
 pub(crate) struct Batch(File);
 
 #[cfg(target_os = "linux")]

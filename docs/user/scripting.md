@@ -4,7 +4,7 @@
 
 ```sh
 fetchloom --json lock --check
-fetchloom --json --yes sync
+fetchloom --json --yes sync --locked
 fetchloom --json status
 ```
 
@@ -33,7 +33,7 @@ import json
 import subprocess
 
 completed = subprocess.run(
-    ["fetchloom", "--json", "--yes", "sync"],
+    ["fetchloom", "--json", "--yes", "sync", "--locked"],
     stdin=subprocess.DEVNULL,
     capture_output=True,
     encoding="utf-8",
@@ -51,7 +51,7 @@ if answer["result"]["placement"]["kept"]:
 
 invalid or missing JSON raises before inputs are used. pass `--yes` only when you approve the download. JSON mode cannot answer a question, so an unapproved large download fails with `unconfirmed` and exit 1.
 
-`kept` lists project-relative paths and reasons: `changed`, `foreign` or `unneeded`. `restored` lists repaired shared hardlinks. do not add `--force` automatically; it can overwrite a person's files.
+`kept` lists project-relative paths and reasons: `changed`, `shared`, `foreign` or `unneeded`. `restored` lists repaired shared hardlinks. do not add `--force` automatically; it can overwrite a person's files.
 
 kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `extra` and `not_unpacked`. all nine arrays empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan.
 
@@ -81,36 +81,33 @@ JSON `result` is an absolute path string. the quiet form prints only the path on
 
 ## offline jobs
 
-prepare the project online before disconnecting:
+follow [offline preparation](concepts.md#offline) before disconnecting. a prepared job can require its lock without allowing requests:
 
 ```sh
-fetchloom --json --yes sync
-```
-
-then keep the manifest and lock unchanged:
-
-```sh
-fetchloom --json --offline sync
+fetchloom --json --offline sync --locked
 fetchloom --json --offline path iris
 ```
 
-unchanged placed files can suffice. restoring missing files needs cached objects and, for extracted archives, unpack records. an entry needing resolution fails offline. repository listings are not cached for offline resolution; offline `get` of a direct URL needs its URL record and cached bytes.
+## CI cache
 
-`--offline` prevents HTTP and DNS requests by fetchloom. `FETCHLOOM_OFFLINE=1` also enables it, including in the python helper. to reconnect, remove the flag and unset that variable if it is `1`.
+restore `FETCHLOOM_CACHE` using the operating system, architecture and `data.lock` hash. after checkout, with fetchloom [installed from source](getting-started.md#install), these GitHub Actions steps try offline first and allow a download on a cache miss:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: .fetchloom-cache
+    key: data-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('data.lock') }}
+- name: restore research inputs
+  shell: bash
+  env:
+    FETCHLOOM_CACHE: ${{ github.workspace }}/.fetchloom-cache
+  run: |
+    fetchloom sync --locked --offline || fetchloom sync --locked --yes
+```
+
+`--locked` fails with `lock.outdated`, exit 1, when the manifest and lock differ. neither attempt updates stale pins. remove `--yes` if the job must not approve a large download. this recipe checks command success; jobs that reject preserved edits must also inspect [placement results](#checking-and-syncing).
 
 ## errors and exit codes
-
-| exit | meaning |
-|---|---|
-| 0 | success, possibly with status differences, preserved conflicts or warnings |
-| 1 | missing approval or stale lock under `--check` |
-| 2 | usage error |
-| 10 | invalid or unresolved reference, or unusable source response |
-| 20 | network failure or missing offline data |
-| 30 | integrity failure |
-| 40 | required authentication |
-| 50 | local I/O, occupied destination or invalid project |
-| 130 | interruption |
 
 branch on `errors[0].kind`, not progress messages. [exit codes](reference/exit-codes.md) lists every kind and a next step. `help` is human advice to check, not an instruction to execute unchecked.
 
@@ -120,8 +117,10 @@ download errors include each failed file under `failures`, with its kind, messag
 
 ## python helper
 
+install from source with python 3.9 or later and the [rust build prerequisites](getting-started.md#install). maturin builds the executable and packages it with the helper; no PyPI package is published yet.
+
 ```sh
-pip install fetchloom
+pip install "git+https://github.com/nikhil-yn-aix/fetchloom"
 ```
 
 on python 3.9 or later:
@@ -129,21 +128,21 @@ on python 3.9 or later:
 ```python
 import fetchloom
 
-project = fetchloom.sync(project=".", yes=True)
+project = fetchloom.sync(project=".", yes=True, strict=True)
 iris = fetchloom.path("iris/iris.csv", project=".", offline=True)
 ```
 
 | function | return |
 |---|---|
-| `fetchloom.sync(project=".", *, yes=False, offline=False)` | absolute project root as `pathlib.Path` |
+| `fetchloom.sync(project=".", *, yes=False, offline=False, strict=False)` | absolute project root as `pathlib.Path` |
 | `fetchloom.path(name, project=".", *, yes=False, offline=False)` | dataset, file or subfolder as `pathlib.Path` |
 
 `project` accepts a string or path-like object naming any folder in the project and defaults to the current directory. `path()` may sync the whole project and download data when the dataset is not ready.
 
-both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits. use CLI JSON when you need to inspect kept conflicts or status arrays.
+both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. use CLI JSON when you need status arrays.
 
-`yes` and `offline` are keyword-only booleans, both false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`.
+`yes`, `offline` and sync's `strict` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`.
 
-neither helper accepts `--force`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
+neither helper exposes `--force` or `--locked`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
 
 a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. a missing executable raises `FileNotFoundError`.

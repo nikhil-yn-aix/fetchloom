@@ -13,9 +13,9 @@ fetchloom --json status
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
 | `status` | `ok` or `error` |
-| `result` | command result on success; also retained for cache verification findings and gc removal failures; null for other failures |
+| `result` | command result on success; also retained for cache verification findings, gc removal failures and search candidates; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
 | `errors` | empty on success; one error object on failure |
 | `errors[].kind` | one of the names in [exit codes](exit-codes.md) |
@@ -37,6 +37,8 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 |---|---|
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
 | `get` | `folder`: absolute path; `files`: file records below |
+| `search` | `candidates`: records [below](#search-candidates) |
+| `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, and project-relative `folder`; counts describe locked source files, not archive members |
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
@@ -45,7 +47,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
-placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks whose edit is shared with the cache, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
@@ -67,11 +69,26 @@ status lists all differences in JSON. human output limits each file category to 
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
 
-`cache gc` keeps objects no project needs until they are a day old by modification time. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
+`cache gc` keeps objects no project needs until they are a day old by modification time, unless `--now` removes that grace period. partial downloads retain their one-day grace period. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
 `cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` paths; the array length is the failed-path count. human output and JSON `warnings` name those paths. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
+
+## search candidates
+
+`search` returns `candidates` on success. plain-word `add` and `get` retain the same array when they fail with `reference.ambiguous`; no matches returns an empty array with `reference.unresolved`.
+
+| field | value |
+|---|---|
+| `reference` | canonical reference string to pass to add or get |
+| `title` | catalog title |
+| `source` | `hugging face`, `kaggle` or `zenodo` |
+| `size` | byte count, or null when unknown |
+| `downloads` | catalog download count, or null |
+| `note` | access note, or null |
+
+[catalog search](../commands/search.md) defines ordering and interactive selection. `list.datasets` instead reflects the manifest and lock, with null lock-derived values when a dataset has no lock entry; a stale entry can still supply values.
 
 ## work counters
 

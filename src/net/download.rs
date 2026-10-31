@@ -127,6 +127,9 @@ pub(crate) enum Event {
         total: Option<u64>,
         resumed: u64,
     },
+    WebPage {
+        name: Option<String>,
+    },
     Bytes(u64),
 }
 
@@ -194,10 +197,55 @@ enum Run {
 
 pub(crate) type Listener<'a> = &'a (dyn Fn(Event) -> Result<(), Error> + Sync);
 
+/// how much a stream gathers before the writer thread takes it. a 16 KiB chunk at a time woke
+/// the writer for each, which cost more than the download on a fast link.
+const BATCH: usize = 256 * 1024;
+
+/// chunks on their way to the writer thread, handed over together without copying.
+#[derive(Default)]
+struct Batch {
+    chunks: Vec<Bytes>,
+    bytes: usize,
+}
+
+impl Batch {
+    fn push(&mut self, chunk: Bytes) {
+        self.bytes += chunk.len();
+        self.chunks.push(chunk);
+    }
+
+    fn full(&self) -> bool {
+        self.bytes >= BATCH
+    }
+
+    /// sends what was gathered. an error means the writer stopped.
+    async fn flush(&mut self, sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>) -> Result<(), ()> {
+        if self.chunks.is_empty() {
+            return Ok(());
+        }
+        self.bytes = 0;
+        sender
+            .send(std::mem::take(&mut self.chunks))
+            .await
+            .map_err(|_| ())
+    }
+}
+
 impl Net {
     /// puts the file into the cache, downloading only what the cache does not already hold.
     /// `on` sees every event and may stop the download by returning an error.
     pub(crate) async fn download(
+        &self,
+        fetch: &Fetch,
+        cache: &Cache,
+        on: Listener<'_>,
+    ) -> Result<Fetched, Error> {
+        // one span per file, so a timeline shows each download as a bar with its link
+        let span = tracing::debug_span!("download", url = %crate::net::Shown(&fetch.url));
+        tracing::Instrument::instrument(self.download_in_span(fetch, cache, on), span).await
+    }
+
+    async fn download_in_span(
         &self,
         fetch: &Fetch,
         cache: &Cache,
@@ -214,7 +262,12 @@ impl Net {
         if self.offline.enabled() {
             return known
                 .map(|record| fetched(record, Origin::Cache))
-                .ok_or_else(|| failure::offline(&fetch.url, self.offline));
+                .ok_or_else(|| {
+                    // a link fetched before has a record, so its bytes are the ones missing
+                    let pinned = fetch.expect.sha256.is_some()
+                        || cache.url_record(fetch.url.as_str()).is_some();
+                    failure::offline(&fetch.url, self.offline, pinned)
+                });
         }
         self.typed
             .check(&fetch.from)
@@ -345,6 +398,15 @@ impl Net {
         loop {
             match cache.claim(url.as_str()) {
                 Ok(Claim::Owned(partial)) => return Ok((partial, waited)),
+                // this run may hold the link itself, finished and waiting for its batch flush
+                Ok(Claim::Busy)
+                    if cache
+                        .publish_download_of(url.as_str())
+                        .map_err(|err| local(&err))? =>
+                {
+                    waited = true;
+                    continue;
+                }
                 Ok(Claim::Busy) if !waited => {
                     on(Event::Waiting)?;
                     waited = true;
@@ -382,25 +444,15 @@ impl Net {
             Err(next) => return Ok(Answer::Divert(next)),
         };
         let validators = headers::validators(&head);
-        let offset = match status {
-            StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
-                return Ok(Answer::NotModified);
-            }
-            StatusCode::OK => 0,
-            // a server that ignores If-Range sends the rest of whatever version it holds now
-            StatusCode::PARTIAL_CONTENT => match (&earlier, headers::range_start(&head)) {
-                (Some((received, recorded)), Some(start))
-                    if start == *received && !headers::changed(recorded, &validators) =>
-                {
-                    *received
-                }
-                _ => return Ok(Answer::StartOver),
-            },
-            StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => return Ok(Answer::StartOver),
-            status => return Err(failure::refusal(from, status, &head)),
+        if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
+            return Ok(Answer::NotModified);
+        }
+        let Some(offset) = starting_offset(from, status, &head, earlier.as_ref(), &validators)?
+        else {
+            return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);
-        let name = server_name(&head)?;
+        let name = describe_response(&response, &fetch.url, on)?;
         let proven = pinned || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
         let body = Body {
@@ -532,75 +584,20 @@ impl Net {
         on: Listener<'_>,
         watch: Option<u64>,
     ) -> Result<Run, Failure> {
-        let mut reached = writer.written();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
+        let reached = writer.written();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<Bytes>>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
-            while let Some(chunk) = receiver.blocking_recv() {
-                writer.write_chunk(writer.written(), &chunk)?;
+            while let Some(batch) = receiver.blocking_recv() {
+                for chunk in &batch {
+                    writer.write_chunk(writer.written(), chunk)?;
+                }
             }
             writer.save()?;
             Ok(writer)
         });
-        let window = self.split.window;
-        let lap = tokio::time::sleep(window);
-        tokio::pin!(lap);
-        let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
-        let mut idle = tokio::time::Instant::now() + IDLE;
-        let body = loop {
-            let next = tokio::select! {
-                next = tokio::time::timeout_at(idle, response.chunk()) => next,
-                () = &mut lap, if watch.is_some() => {
-                    let now = std::time::Instant::now();
-                    let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
-                    #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
-                    let rate = moved as f64 / seconds;
-                    #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
-                    let slow = rate < self.split.slow as f64;
-                    if let Some(total) = watch
-                        && slow
-                        && total.saturating_sub(reached) >= 2 * self.split.piece
-                    {
-                        break Ok(Some((total, rate)));
-                    }
-                    (since, moved) = (now, 0);
-                    lap.as_mut().reset(tokio::time::Instant::now() + window);
-                    continue;
-                }
-                () = self.stop.asked() => break Err(Failure::Final(failure::interrupted(url))),
-            };
-            match next {
-                Err(_) => {
-                    break Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        IDLE.as_secs()
-                    )));
-                }
-                Ok(Err(err)) => {
-                    break Err(failure::transient(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
-                }
-                Ok(Ok(None)) => break Ok(None),
-                Ok(Ok(Some(chunk))) => {
-                    idle = tokio::time::Instant::now() + IDLE;
-                    if let Err(err) = self.throttle(url, chunk.len()).await {
-                        break Err(err);
-                    }
-                    let length = chunk.len() as u64;
-                    Work::add(&self.work.bytes_down, length);
-                    (reached, moved) = (reached + length, moved + length);
-                    if let Err(err) = on(Event::Bytes(length)) {
-                        break Err(Failure::Final(err));
-                    }
-                    // a closed channel means the writer failed, and its own error says why
-                    if sender.send(chunk).await.is_err() {
-                        break Ok(None);
-                    }
-                }
-            }
-        };
+        let body = self
+            .read_stream(url, &mut response, &sender, reached, on, watch)
+            .await;
         drop(sender);
         let writer = writing
             .await
@@ -631,6 +628,111 @@ impl Net {
             )));
         }
         Ok(Run::Whole(writer))
+    }
+
+    async fn read_stream(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        reached: u64,
+        on: Listener<'_>,
+        watch: Option<u64>,
+    ) -> Result<Option<(u64, f64)>, Failure> {
+        let mut batch = Batch::default();
+        let read = self
+            .read_batches(url, response, sender, &mut batch, reached, on, watch)
+            .await;
+        // whatever arrived is kept, so a resume or a split goes on from the last byte received
+        let _ = batch.flush(sender).await;
+        read
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the stream's state, passed as it was"
+    )]
+    async fn read_batches(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        batch: &mut Batch,
+        mut reached: u64,
+        on: Listener<'_>,
+        watch: Option<u64>,
+    ) -> Result<Option<(u64, f64)>, Failure> {
+        let window = self.split.window;
+        let lap = tokio::time::sleep(window);
+        tokio::pin!(lap);
+        let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
+        // the idle deadline moves with every chunk without touching the timer, which is reset
+        // only when it fires early
+        let mut idle = tokio::time::Instant::now() + self.idle;
+        let quiet = tokio::time::sleep_until(idle);
+        tokio::pin!(quiet);
+        let stopped = self.stop.asked();
+        tokio::pin!(stopped);
+        loop {
+            let next = tokio::select! {
+                next = response.chunk() => next,
+                () = &mut quiet => {
+                    if tokio::time::Instant::now() < idle {
+                        quiet.as_mut().reset(idle);
+                        continue;
+                    }
+                    break Err(failure::transient(format!(
+                        "{} sent nothing for {} s",
+                        host(url),
+                        self.idle.as_secs()
+                    )));
+                }
+                () = &mut lap, if watch.is_some() => {
+                    let now = std::time::Instant::now();
+                    let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
+                    #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
+                    let rate = moved as f64 / seconds;
+                    #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
+                    let slow = rate < self.split.slow as f64;
+                    if let Some(total) = watch
+                        && slow
+                        && total.saturating_sub(reached) >= 2 * self.split.piece
+                    {
+                        break Ok(Some((total, rate)));
+                    }
+                    (since, moved) = (now, 0);
+                    lap.as_mut().reset(tokio::time::Instant::now() + window);
+                    continue;
+                }
+                () = &mut stopped => break Err(Failure::Final(failure::interrupted(url))),
+            };
+            match next {
+                Err(err) => {
+                    break Err(failure::transient(format!(
+                        "the connection to {} broke: {err}",
+                        host(url)
+                    )));
+                }
+                Ok(None) => break Ok(None),
+                Ok(Some(chunk)) => {
+                    idle = tokio::time::Instant::now() + self.idle;
+                    if let Err(err) = self.throttle(url, chunk.len()).await {
+                        break Err(err);
+                    }
+                    let length = chunk.len() as u64;
+                    Work::add(&self.work.bytes_down, length);
+                    (reached, moved) = (reached + length, moved + length);
+                    if let Err(err) = on(Event::Bytes(length)) {
+                        break Err(Failure::Final(err));
+                    }
+                    batch.push(chunk);
+                    // a closed channel means the writer failed, and its own error says why
+                    if batch.full() && batch.flush(sender).await.is_err() {
+                        break Ok(None);
+                    }
+                }
+            }
+        }
     }
 
     async fn expired_link(
@@ -726,8 +828,21 @@ impl Net {
     }
 }
 
-fn server_name(head: &header::HeaderMap) -> Result<Option<String>, Failure> {
-    let name = headers::file_name(head);
+fn describe_response(
+    response: &reqwest::Response,
+    url: &Url,
+    on: Listener<'_>,
+) -> Result<Option<String>, Failure> {
+    let name = headers::file_name(response.headers()).or_else(|| {
+        let path = crate::name::from_url(url).unwrap_or_default();
+        if std::path::Path::new(&path).extension().is_some() {
+            return None;
+        }
+        response
+            .extensions()
+            .get::<super::RedirectName>()
+            .map(|name| name.0.clone())
+    });
     if let Some(given) = name.as_deref()
         && given.contains(crate::name::is_bidi_control)
     {
@@ -742,7 +857,34 @@ fn server_name(head: &header::HeaderMap) -> Result<Option<String>, Failure> {
             .help("ask the file's publisher to remove the control character from its name"),
         ));
     }
+    if headers::is_html(response.headers()) {
+        on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+    }
     Ok(name)
+}
+
+/// accepts a full body or a range that continues the same representation at the saved offset.
+fn starting_offset(
+    from: &Url,
+    status: StatusCode,
+    head: &header::HeaderMap,
+    earlier: Option<&(u64, Validators)>,
+    validators: &Validators,
+) -> Result<Option<u64>, Failure> {
+    match status {
+        StatusCode::OK => Ok(Some(0)),
+        // a server that ignores If-Range sends the rest of whatever version it holds now
+        StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
+            (Some((received, recorded)), Some(start))
+                if start == *received && !headers::changed(recorded, validators) =>
+            {
+                Ok(Some(*received))
+            }
+            _ => Ok(None),
+        },
+        StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),
+        status => Err(failure::refusal(from, status, head)),
+    }
 }
 
 /// whether an answer is a page in place of the file: HTML that names no file to save, sent as a

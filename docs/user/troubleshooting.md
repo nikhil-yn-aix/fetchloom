@@ -47,7 +47,22 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | `cache verify` exits 30 | cached bytes changed | allow a later online sync to replace damaged objects, then sync affected projects |
 | `cache verify` exits 50 without changed bytes | objects, metadata or directory entries could not be read | inspect `result.unreadable`, fix access and verify again |
 | a windows file cannot be replaced or deleted | a program holds it open, or permissions block access | close the program, check permissions and retry |
-| a long path fails in another program | that program may have a shorter path limit | use shorter project and dataset folders |
+| a long path fails | the filesystem or another program may have a shorter limit | follow the shorter-project-path hint; use shorter project and dataset folders |
+| plain-word add or get refuses to guess | no interactive dataset choice is possible | choose a returned canonical id; `--yes` never selects one |
+| an option is rejected before a command | command-specific options belong after that command | use `fetchloom add --as flowers zenodo:3608990`, not `fetchloom --as flowers add zenodo:3608990` |
+| a download warns that it is a web page | the URL may name a page rather than data | find the source's download or raw link |
+
+to make iris writable, edit its existing entry in `data.toml` and sync:
+
+```toml
+[datasets.iris]
+ref = "zenodo:3608990"
+copy = true
+```
+
+```sh
+fetchloom sync
+```
 
 copied placement inside onedrive can report:
 
@@ -61,8 +76,8 @@ move the project outside synced storage if you want fetchloom to try hardlinks. 
 
 restore a broken or older lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a newer lock version requires a newer fetchloom.
 
-if `add` cannot restore the previous manifest after a failed sync, decode the backup JSON string in its error details or remove the named entry. do not assume cache, lock and placement changes were rolled back.
+a failed `add` attempts to restore both `data.toml` and `data.lock`. if either restoration fails, follow the named file's recovery details and decode its backup JSON string. cached downloads and files already placed can remain.
 
 if `remove` changed metadata but could not delete files, fix the reported local error and run sync to finish removal.
 
-an interrupted project command can leave an owner record. only delete the exact owner path named by a waiting command after confirming that its owning process has ended. records from another operating system are never reclaimed by age or pid. [project state](reference/cache-folder.md#the-fetchloom-folder) explains the locking rules.
+an interrupted project command can leave an owner record. only delete the exact owner path named by a waiting command after confirming that its owning process has ended. records from another operating system are never reclaimed by age or pid. [project state](reference/project-folder.md#owner-record) explains the locking rules.

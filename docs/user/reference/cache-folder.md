@@ -72,70 +72,14 @@ the `.lock` file coordinates writers; its contents are unused. gc removes an aba
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
 - an unpack record uses the [tree encoding](data-lock.md#the-tree-hash). its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. each replacement refreshes the mark and dates it just before the new bytes were written, so projects recheck old hardlinks without putting the good object in doubt. gc removes a mark only after its object is gone and no registered project needs it. [placement](../../dev/architecture/README.md) explains what other projects do with a mark.
+- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one of another size. its modification time records when. each replacement refreshes the mark and dates it just before the new bytes were written, so projects recheck old hardlinks without putting the good object in doubt. gc removes a mark only after its object is gone and no registered project needs it. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](../commands/cache.md) explain retention and gc.
 
-## the .fetchloom folder
-
-`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, owner, state or ignore file.
-
-| path | contents |
-|---|---|
-| `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
-| `.fetchloom/lock` | OS project lock; file contents are unused |
-| `.fetchloom/owner` | JSON identifying the modifying command, shared by windows and WSL |
-| `.fetchloom/owner.<pid>.<16 hex digits>.tmp` | owner record being written before hardlink publication; a hard kill can leave this file behind |
-| `.fetchloom/state` | compact JSON describing tracked placements |
-| `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
-| `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
-
-inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
-
-owner fields:
-
-| field | value |
-|---|---|
-| `os` | operating system name, such as `windows` or `linux` for WSL |
-| `pid` | process id on that operating system |
-| `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
-| `command` | subcommand name, without arguments or credentials |
-
-fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty. the temporary name is removed after the attempt.
-
-when hardlinks fail for another reason, fetchloom falls back to exclusive creation followed by a temporary-file write and rename; only this fallback can expose an empty reservation.
-
-dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
-
-an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale.
-
-before removing a stale record, fetchloom reads it again and requires the same bytes and modification time.
-
-any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone.
-
-a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
-
-state fields:
-
-| field | value |
-|---|---|
-| `version` | integer `1` |
-| `files` | object keyed by project-relative path, using `/` |
-| `files[path].dataset` | dataset name |
-| `files[path].sha256` | locked member or file hash, 64 hex digits |
-| `files[path].method` | `reflink`, `hardlink` or `copy`. an adopted file is `hardlink` when it is the cached object's own file, else `copy` |
-| `files[path].look.size` | byte count |
-| `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
-| `files[path].writable` | `true` when the file was placed or adopted writable |
-| `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
-| `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the project loop](../../dev/architecture/README.md) uses it to skip planning |
-
-there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
-
-a file whose `look.modified` is not older than the state file's own modification time is hashed before its look is trusted, since both times come from one filesystem clock and a coarse clock hides an edit made in the same tick. a hash that differs counts as an edit. a sync that finds such files unchanged writes the state again, which settles them.
+project-local lock and placement records live in [the project folder](project-folder.md), outside the cache.
 
 ## sharing and retention
 
-one user can share a cache between processes and projects. anyone who can write to a shared cache is trusted. fetchloom has no cross-user permissions or administration layer.
+[cache sharing](../concepts.md#cache) covers per-user caches and trusted group access.
 
 objects are not rehashed on every use. run `fetchloom cache verify` to check their bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.

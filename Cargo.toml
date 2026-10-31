@@ -59,6 +59,10 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }
 
+# std keeps a windows file's link count unstable, and same-file already depends on this crate
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"
+
 [dev-dependencies]
 # fuzz targets over the parsers, which stay private: plain tests under cargo test, and libfuzzer
 # targets under cargo bolero

@@ -23,12 +23,14 @@ path = "measurements"
 | key | meaning | default |
 |---|---|---|
 | `project.data_dir` | folder relative to the project root | `"data"` |
-| `ref` | a reference from [scope](../sources/README.md) | required, nonempty string |
+| `ref` | a reference from [sources](../sources/README.md) | required, nonempty string |
 | `select` | keep files matching any of these patterns | all files |
 | `exclude` | drop files matching any of these patterns | none |
 | `extract` | unpack recognized archive names | `true` |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir` | the dataset name |
+
+## dataset names
 
 names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit.
 
@@ -36,13 +38,15 @@ without `--as`, fetchloom chooses a name in this order:
 
 | available information | generated name |
 |---|---|
-| one file | its filename, limited to 40 characters |
-| a title | at most its first four words and 32 characters, dropping trailing words such as `and`, `of` and `the` |
-| a reference | its last part containing a letter; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
+| one listed file or a file selected by its source link | its filename stem, limited to 40 characters |
+| a title | up to four words and 32 characters, dropping trailing words such as `and`, `of` and `the`; if no first word fits, the 40-character free-text rule applies |
+| a reference | its last part if that contains a letter, otherwise the reference without its version; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
 
-if the generated name is taken, fetchloom appends `-2`, `-3` and so on. an explicitly supplied `--as` name that is taken is refused.
+if the generated name is taken, fetchloom tries `-2` through `-99`, then fails if all are taken. an explicitly supplied `--as` name that is taken is refused.
 
-`data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](../../dev/architecture/README.md).
+## destination paths
+
+`data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [filesystem placement](../../dev/architecture/placing.md#choose-a-filesystem-method).
 
 `data_dir`, `path` and every placed file path refuse repository metadata components: `.git`, `.hg`, `.svn` and `.fetchloom`, ignoring case. this includes trailing dots or spaces, a `:` stream suffix, and the windows short names `git~1`, `hg~1`, `svn~1` and `fetchl~1`. the rule also covers source listings, unpacked archive members and paths inside a `get` folder. names such as `.github` and `.gitignore` remain usable.
 

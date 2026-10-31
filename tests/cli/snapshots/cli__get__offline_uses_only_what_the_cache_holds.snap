@@ -2,5 +2,5 @@
 source: tests/cli/get.rs
 expression: stderr
 ---
-error: offline, and http://127.0.0.1:[port]/records/3608990/files/iris.csv is not in the cache
-  help: run it again without --offline to download it
+error: offline, and a new link must be downloaded once to learn its fingerprint: http://127.0.0.1:[port]/records/3608990/files/iris.csv
+  help: run it again without --offline to pin it. `fetchloom get <link> --offline` reuses a file fetched before

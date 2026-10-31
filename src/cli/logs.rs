@@ -16,6 +16,8 @@ use crate::output::Level;
 pub(super) struct Logs {
     on_stderr: bool,
     _timeline: Option<FlushGuard>,
+    /// why the timeline could not be written, told once output exists. the run goes on without it.
+    pub(super) refused: Option<String>,
 }
 
 impl Logs {
@@ -39,6 +41,7 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
         return Logs {
             on_stderr: false,
             _timeline: None,
+            refused: None,
         };
     }
     let on_stderr = filter.is_some();
@@ -46,13 +49,25 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
         tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(color)
-            .without_time()
+            .with_timer(tracing_subscriber::fmt::time::uptime())
             .with_filter(filter)
     });
-    let (timeline, guard) = match timeline {
-        Some(path) => {
+    // the file is created here, since the builder panics on a path it cannot create
+    let mut refused = None;
+    let file = timeline.and_then(|path| match std::fs::File::create(&path) {
+        Ok(file) => Some(file),
+        Err(err) => {
+            refused = Some(format!(
+                "FETCHLOOM_TRACE cannot write {}: {err}, so this run records no timeline",
+                path.display()
+            ));
+            None
+        }
+    });
+    let (timeline, guard) = match file {
+        Some(file) => {
             let (layer, guard) = ChromeLayerBuilder::new()
-                .file(path)
+                .writer(file)
                 .include_args(true)
                 .build();
             let ours = Targets::new().with_target("fetchloom", LevelFilter::TRACE);
@@ -67,6 +82,7 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
     Logs {
         on_stderr,
         _timeline: guard,
+        refused,
     }
 }
 
@@ -84,6 +100,21 @@ mod tests {
             });
             assert!(!logs.on_stderr());
         }
+    }
+
+    #[test]
+    fn a_timeline_path_that_cannot_be_created_is_refused_without_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing").join("run.json");
+        let logs = start(Level::Normal, false, &|name| match name {
+            "FETCHLOOM_TRACE" => Some(path.clone().into_os_string()),
+            _ => None,
+        });
+        assert!(
+            logs.refused
+                .unwrap()
+                .contains("FETCHLOOM_TRACE cannot write")
+        );
     }
 
     #[test]

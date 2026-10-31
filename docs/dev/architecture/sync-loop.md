@@ -20,6 +20,10 @@
 
 ## how it works
 
+### locked entry
+
+`sync --locked` runs the same manifest-membership and spec check as `lock --check` before opening the cache or entering `sync_all`. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
+
 ### resolve only changed specifications
 
 an entry's spec hash covers the manifest choices that affect its locked data. `relock` keeps an entry when that hash matches and no upgrade asks to resolve it again. filter or extraction changes can reuse the old resolved reference when the manifest reference itself is unchanged; changing the reference or upgrading resolves the requested reference again.
@@ -61,7 +65,7 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 
 ## invariants and traps
 
-- `data.lock` may already have changed when destination planning fails. do not promise rollback of every effect.
+- ordinary sync may have changed `data.lock` when destination planning fails. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes and placements can remain.
 - matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
 - use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
 - mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.

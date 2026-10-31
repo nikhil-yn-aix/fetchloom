@@ -51,11 +51,12 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 | what | why | contract |
 |---|---|---|
 | use flags and environment variables | avoid a separate config file and another precedence system | [environment](../user/reference/environment.md) |
+| require an explicit dataset choice | public catalogs can return several plausible matches; `--yes` only approves downloads | [search selection](../user/commands/search.md#choosing-a-dataset) |
 | give errors stable kinds | scripts can act without parsing prose | [exit codes](../user/reference/exit-codes.md) |
 | keep terminal formatting in one renderer | commands share stream routing, prompts, aligned verbs and progress behavior | [output](architecture/output.md) |
 | test behavior and work counts without coverage quotas | extra requests, downloads and copies can be detected independently of runner speed | [engineering](engineering/README.md), [performance](performance/README.md) |
 | fuzz parsers in their modules | parsers can remain private without a separate fuzzing API | [fuzzing](engineering/fuzzing.md) |
-| ship the same executable in wheels | pip users need no rust toolchain and receive the same implementation | [releasing](engineering/releasing.md) |
+| ship the same executable in wheels | published binary wheels will let pip users receive the same implementation without rust; current source installation still needs it | [releasing](engineering/releasing.md) |
 | test and release native arm64 linux and windows | those artifacts need the same behavioral gate as x86_64 | [CI](engineering/ci.md), [release targets](engineering/releasing.md#workflow) |
 | keep reasons near the implementation and update docs with behavior | contributors can check the constraint before changing it | [style](style.md) |
 

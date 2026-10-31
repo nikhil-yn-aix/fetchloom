@@ -35,37 +35,139 @@ pub(super) struct Report {
     placement: Option<Placement>,
 }
 
-pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
+struct AddProject {
+    project: Project,
+    _held: Held,
+    text: Option<String>,
+    manifest: Manifest,
+}
+
+struct Addition {
+    listing: Listing,
+    reference: String,
+    select: Vec<String>,
+    entry: manifest::Entry,
+}
+
+pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
+    let adding = discover_add(context).await?;
+    let project = &adding.project;
+    let manifest = &adding.manifest;
+    let net = Arc::new(net(context, manifest));
+    let parsed = validate_add(context, manifest, &net, &mut args).await?;
+    let cache = open_cache()?;
+    let mut addition = resolve_add(context, &net, &args, &parsed).await?;
+    let (old, lock_text) = project.lock_and_text()?.unzip();
+    if args.name.is_none()
+        && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
+    {
+        let work = Loop::new(context, project, net, cache);
+        return again(
+            &work,
+            manifest,
+            old.as_ref(),
+            &name,
+            &addition.entry,
+            &addition.listing,
+        )
+        .await;
+    }
+    if args.name.is_none() {
+        learn_name(
+            context,
+            &net,
+            &cache,
+            &mut addition.listing,
+            !args.no_extract,
+        )
+        .await?;
+    }
+    let name = match args.name.take() {
+        Some(asked) => asked,
+        None => choose_name(&addition.listing, &parsed, manifest)?,
+    };
+    let new_manifest = write_add(
+        project,
+        adding.text.as_deref().unwrap_or_default(),
+        &name,
+        &args,
+        &addition,
+    )?;
+    let work = Loop::new(context, project, net, cache);
+    let before = (adding.text.as_deref(), lock_text.as_deref());
+    let (lock_changed, placement) = sync_add(
+        &work,
+        &new_manifest,
+        old.as_ref(),
+        before,
+        &name,
+        addition.listing,
+    )
+    .await?;
+    render_add(&work, &new_manifest, &name)?;
+    Ok(Report {
+        project: adding.project.root,
+        datasets: vec![name],
+        lock_changed,
+        placement: Some(placement),
+    })
+}
+
+async fn discover_add(context: &Context) -> Result<AddProject, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
-    let _held = hold(context, &project, "add").await?;
-    let existed = project.manifest_path().is_file();
-    let text = if existed {
-        project.manifest()?.0
+    let held = hold(context, &project, "add").await?;
+    let text = if project.manifest_path().is_file() {
+        Some(project.manifest()?.0)
     } else {
-        String::new()
+        None
     };
-    let manifest = Manifest::parse(&text)?;
+    let manifest = Manifest::parse(text.as_deref().unwrap_or_default())?;
+    Ok(AddProject {
+        project,
+        _held: held,
+        text,
+        manifest,
+    })
+}
+
+async fn validate_add(
+    context: &Context,
+    manifest: &Manifest,
+    net: &Net,
+    args: &mut Add,
+) -> Result<Parsed, Error> {
+    if crate::source::search::is_search(&args.link) {
+        args.link = super::search::pick(context, net, &args.link, "add").await?;
+    }
     let parsed = Reference::parse(&args.link)?;
+    engine::tell_raw(&context.output, &args.link, &parsed.reference);
     parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
-        usable(asked, &manifest)?;
+        usable(asked, manifest)?;
     }
-    let net = Arc::new(net(context, &manifest));
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
     }
-    let cache = open_cache()?;
-    let mut listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
+    Ok(parsed)
+}
+
+async fn resolve_add(
+    context: &Context,
+    net: &Net,
+    args: &Add,
+    parsed: &Parsed,
+) -> Result<Addition, Error> {
+    let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
         parsed.file.iter().cloned().collect()
     } else {
         args.filter.select.clone()
     };
-    let reference = stored_reference(&args.link, &parsed);
+    let reference = stored_reference(&args.link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
     let alone = Manifest::parse(&manifest::with_dataset(
@@ -79,84 +181,106 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
-    let old = project.lock()?;
-    if args.name.is_none()
-        && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
-    {
-        let work = Loop::new(context, &project, net, cache);
-        return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
-    }
-    if args.name.is_none() {
-        learn_name(context, &net, &cache, &mut listing, !args.no_extract).await?;
-    }
-    let name = match args.name {
-        Some(asked) => asked,
-        None => choose_name(&listing, &parsed, &manifest)?,
-    };
-    let updated = manifest::with_dataset(
-        &text,
-        &name,
-        &reference,
-        &select,
-        &args.filter.exclude,
-        !args.no_extract,
-    )?;
-    let new_manifest = Manifest::parse(&updated)?;
-    project.write(manifest::FILE, updated.as_bytes())?;
-    let work = Loop::new(context, &project, net, cache);
-    let synced = sync_all(
-        &work,
-        &new_manifest,
-        old.as_ref(),
-        &Upgrade::Nothing,
-        false,
-        Some((name.clone(), listing)),
-        None,
-    )
-    .await;
-    let (lock_changed, placement) = synced
-        .map_err(|error| restore(&project, existed.then_some(text.as_str()), &name, error))?;
-    if project.ignore_in_git(&new_manifest.data_dir)? {
-        context.output.step(
-            "Ignored",
-            &format!(
-                "{}/ in .gitignore, since its files come from data.lock",
-                new_manifest.data_dir
-            ),
-        );
-    }
-    tell_added(&work, &new_manifest, &name)?;
-    Ok(Report {
-        project: project.root,
-        datasets: vec![name],
-        lock_changed,
-        placement: Some(placement),
+    Ok(Addition {
+        listing,
+        reference,
+        select,
+        entry,
     })
 }
 
-/// puts data.toml back as it was before `add`, or removes it when `add` created it, so a dataset
-/// that could not be fetched never stays behind.
-fn restore(project: &Project, before: Option<&str>, name: &str, mut failure: Error) -> Error {
-    let restored = match before {
-        Some(text) => project.write(manifest::FILE, text.as_bytes()),
-        None => std::fs::remove_file(project.manifest_path())
-            .map_err(|err| Error::io("could not remove data.toml", &err)),
-    };
-    if let Err(err) = restored {
-        failure = failure.detail(format!("could not restore data.toml: {err}"));
-        if let Some(help) = err.help {
-            failure = failure.detail(help);
-        }
-        failure = match before {
-            Some(text) => failure
-                .detail("restore data.toml from this backup text (decode it as a JSON string):")
-                .detail(serde_json::Value::String(text.to_owned()).to_string()),
-            None => failure.detail(format!(
-                "remove the {name} dataset entry from data.toml, or remove data.toml if it holds nothing else"
-            )),
-        };
+fn write_add(
+    project: &Project,
+    text: &str,
+    name: &str,
+    args: &Add,
+    addition: &Addition,
+) -> Result<Manifest, Error> {
+    let updated = manifest::with_dataset(
+        text,
+        name,
+        &addition.reference,
+        &addition.select,
+        &args.filter.exclude,
+        !args.no_extract,
+    )?;
+    let manifest = Manifest::parse(&updated)?;
+    project.write(manifest::FILE, updated.as_bytes())?;
+    Ok(manifest)
+}
+
+async fn sync_add(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    before: (Option<&str>, Option<&str>),
+    name: &str,
+    listing: Listing,
+) -> Result<(bool, Placement), Error> {
+    sync_all(
+        work,
+        manifest,
+        old,
+        &Upgrade::Nothing,
+        false,
+        Some((name.to_owned(), listing)),
+        None,
+    )
+    .await
+    .map_err(|error| restore(work.project, before, name, error))
+}
+
+fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+    if work.project.ignore_in_git(&manifest.data_dir)? {
+        work.context.output.step(
+            "Ignored",
+            &format!(
+                "{}/ in .gitignore, since its files come from data.lock",
+                manifest.data_dir
+            ),
+        );
     }
-    failure
+    tell_added(work, manifest, name)
+}
+
+/// restores both project files after a failed add, including their original absence.
+fn restore(
+    project: &Project,
+    (manifest, lock): (Option<&str>, Option<&str>),
+    name: &str,
+    mut failure: Error,
+) -> Error {
+    let mut complete = true;
+    for (file, before) in [(manifest::FILE, manifest), (lock::FILE, lock)] {
+        let restored = match before {
+            Some(text) => project.write(file, text.as_bytes()),
+            None => match std::fs::remove_file(project.root.join(file)) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(Error::io(format!("could not remove {file}"), &err)),
+            },
+        };
+        if let Err(err) = restored {
+            complete = false;
+            failure = failure.detail(format!("could not restore {file}: {err}"));
+            if let Some(help) = err.help {
+                failure = failure.detail(help);
+            }
+            failure = match before {
+                Some(text) => failure
+                    .detail(format!("restore {file} from this backup text (decode it as a JSON string):"))
+                    .detail(serde_json::Value::String(text.to_owned()).to_string()),
+                None => failure.detail(format!(
+                    "remove the {name} dataset entry from {file}, or remove {file} if it holds nothing else"
+                )),
+            };
+        }
+    }
+    failure.detail(if complete {
+        "restored data.toml and data.lock to their state before add"
+    } else {
+        "could not finish rolling back data.toml and data.lock; follow the recovery steps above"
+    })
 }
 
 /// the dataset in data.toml that already pins what was just resolved, under any spelling of its
@@ -298,6 +422,15 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let project = find()?;
     let _held = hold(context, &project, "sync").await?;
     let (text, manifest) = project.manifest()?;
+    if args.locked {
+        let Some(lock) = project.lock()? else {
+            return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
+                .help("run `fetchloom lock` and commit data.lock, or sync without --locked"));
+        };
+        check(&project, &manifest, Some(&lock)).map_err(|error| {
+            error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
+        })?;
+    }
     let read = project.lock_and_text()?;
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
@@ -881,12 +1014,10 @@ fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
     Ok(())
 }
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
-/// pasted for drive, dropbox and plain links, which people recognize by their link.
+/// pasted for drive and dropbox, and the raw endpoint for plain file links.
 fn stored_reference(typed: &str, parsed: &Parsed) -> String {
     match parsed.reference {
-        Reference::Url(_) | Reference::Drive(_) | Reference::Dropbox(_)
-            if typed.contains("://") =>
-        {
+        Reference::Drive(_) | Reference::Dropbox(_) if typed.contains("://") => {
             typed.trim().to_owned()
         }
         _ => parsed.reference.to_string(),
@@ -907,6 +1038,16 @@ fn net(context: &Context, manifest: &Manifest) -> Net {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn raw_references_are_written_instead_of_repository_pages() {
+        let typed = "https://github.com/org/repo/blob/main/iris.csv";
+        let parsed = crate::source::Reference::parse(typed).unwrap();
+        assert_eq!(
+            super::stored_reference(typed, &parsed),
+            "https://raw.githubusercontent.com/org/repo/main/iris.csv"
+        );
+    }
+
     use super::*;
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;

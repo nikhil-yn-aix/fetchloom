@@ -55,9 +55,18 @@ jobs:
       - run: cargo test --locked
       - run: python3 -m unittest discover -s python
         if: matrix.os == 'ubuntu-latest'
+      - run: python -m unittest discover -s python
+        if: matrix.os == 'windows-latest'
+      # the benchmark harness's own checks; its charts need the pinned matplotlib
+      - name: benchmark harness checks
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 -m pip install --quiet --break-system-packages "$(grep '^matplotlib==' bench/requirements.txt)"
+          python3 -m unittest discover -s bench
       # the default disks never show some paths: refs clones blocks, which ntfs never does, while
       # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
-      # read-only file the way ntfs allows. every test runs again with its folders on each.
+      # read-only file the way ntfs allows. tests run again with their folders on each, except
+      # those that never touch a disk: parsers, sources, the network and output.
       # windows runners are admin, which diskpart needs
       - name: cargo test on refs, exfat and fat32
         if: matrix.os == 'windows-latest'
@@ -82,7 +91,7 @@ jobs:
             $env:TMP = "${letter}:\tmp"
             $env:TEMP = $env:TMP
             Write-Output "::group::cargo test on $fs"
-            cargo test --locked --no-fail-fast
+            cargo test --locked --no-fail-fast -- --skip source:: --skip net:: --skip glob:: --skip name:: --skip output:: --skip units:: --skip digest:: --skip error:: --skip basics:: --skip hints:: --skip progress:: --skip proxy:: --skip secrets:: --skip split:: --skip search:: --skip caps::
             if ($LASTEXITCODE) { $failed += $fs }
             Write-Output "::endgroup::"
           }
@@ -102,7 +111,7 @@ jobs:
             sudo mount -o loop "$image" "/mnt/$fs"
             sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
             echo "::group::cargo test on $fs"
-            TMPDIR="/mnt/$fs" cargo test --locked --no-fail-fast || failed="$failed $fs"
+            TMPDIR="/mnt/$fs" cargo test --locked --no-fail-fast -- --skip source:: --skip net:: --skip glob:: --skip name:: --skip output:: --skip units:: --skip digest:: --skip error:: --skip basics:: --skip hints:: --skip progress:: --skip proxy:: --skip secrets:: --skip split:: --skip search:: --skip caps:: || failed="$failed $fs"
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then echo "tests failed on$failed"; exit 1; fi

@@ -14,6 +14,7 @@ try it with zenodo:3608990, a 4 KB iris.csv:
   fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
   fetchloom sync                 restock data/ in a project you cloned
   fetchloom get zenodo:3608990   fetch it once, without a project
+  fetchloom search iris          find datasets by name
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 
@@ -25,9 +26,11 @@ commands:
   sync    place the files pinned in data.lock on this machine
   lock    update data.lock from data.toml without placing files in the data folder
   status  list files that are missing, changed locally or extra
+  list    list the project's datasets: where each comes from, its size and its folder
   path    print where a dataset or a file in it is, syncing first if needed
   cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project
+  search  find datasets on hugging face, kaggle and zenodo
   help    explain the ideas behind fetchloom, or one command
 
 options:
@@ -35,7 +38,7 @@ options:
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
       --json          print one JSON document on stdout instead of the story
       --offline       use only what is already on this machine
-  -y, --yes           answer yes to every question, such as before a large download
+  -y, --yes           approve confirmations, but never choose a dataset for you
       --color <when>  when to use color [default: auto] [possible values: auto, always, never]
   -C <dir>            run as if fetchloom started in <dir>
   -h, --help          print help

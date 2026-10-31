@@ -12,6 +12,7 @@ const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 /// disk.
 mod examples {
     pub(super) const ADD: &str = "examples:
+  fetchloom add iris
   fetchloom add zenodo:3608990
   fetchloom add doi:10.5281/zenodo.3608990 --as flowers
   fetchloom add zenodo:3608990 --as measurements --select \"*.csv\"
@@ -27,9 +28,10 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
   fetchloom sync --offline
+  fetchloom sync --locked
   fetchloom sync --force
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed. reports files it cannot replace without --force";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock
@@ -43,6 +45,12 @@ on disk: writes data.lock and may add files to the cache. --check writes nothing
   fetchloom status --json
 
 on disk: nothing. it reads data.toml, data.lock and data/";
+
+    pub(super) const LIST: &str = "examples:
+  fetchloom list
+  fetchloom list --json
+
+on disk: nothing. it reads data.toml and data.lock";
 
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
@@ -60,9 +68,10 @@ on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache v
 
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
+  fetchloom cache gc --now
   fetchloom cache gc --json
 
-on disk: deletes cached files no project needs once they are a day old. data/ stays as it is";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify
@@ -71,11 +80,19 @@ on disk: deletes cached files no project needs once they are a day old. data/ st
 on disk: marks changed cached files for replacement on the next download. data/ stays as it is";
 
     pub(super) const GET: &str = "examples:
+  fetchloom get iris
   fetchloom get zenodo:3608990
   fetchloom get zenodo:3608990 -o flowers
   fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
 
 on disk: writes the output folder through the cache. does not create project files";
+
+    pub(super) const SEARCH: &str = "examples:
+  fetchloom search iris
+  fetchloom search fashion mnist
+  fetchloom search iris --json
+
+on disk: nothing. prints canonical references without downloading a dataset";
 
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
@@ -100,6 +117,7 @@ try it with zenodo:3608990, a 4 KB iris.csv:
   fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
   fetchloom sync                 restock data/ in a project you cloned
   fetchloom get zenodo:3608990   fetch it once, without a project
+  fetchloom search iris          find datasets by name
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`";
 
@@ -194,7 +212,7 @@ pub(crate) struct Global {
     #[arg(long, global = true, help_heading = "options")]
     pub(crate) offline: bool,
 
-    /// answer yes to every question, such as before a large download
+    /// approve confirmations, but never choose a dataset for you
     #[arg(short, long, global = true, help_heading = "options")]
     pub(crate) yes: bool,
 
@@ -234,6 +252,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status,
 
+    /// list the project's datasets: where each comes from, its size and its folder
+    #[command(override_usage = "fetchloom list [options]", help_template = TEMPLATE, after_help = examples::LIST)]
+    List,
+
     /// print where a dataset or a file in it is, syncing first if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
@@ -245,6 +267,10 @@ pub(crate) enum Command {
     /// fetch something once, without a project
     #[command(override_usage = "fetchloom get [options] <link>", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
+
+    /// find datasets on hugging face, kaggle and zenodo
+    #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
+    Search(Search),
 
     /// explain the ideas behind fetchloom, or one command
     #[command(override_usage = "fetchloom help [topic]", help_template = TEMPLATE, after_help = examples::HELP)]
@@ -260,15 +286,17 @@ impl Command {
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Status => "status",
+            Command::List => "list",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
-                action: Some(CacheAction::Gc),
+                action: Some(CacheAction::Gc(_)),
             }) => "cache gc",
             Command::Cache(Cache {
                 action: Some(CacheAction::Verify),
             }) => "cache verify",
             Command::Get(_) => "get",
+            Command::Search(_) => "search",
             Command::Help(_) => "help",
         }
     }
@@ -285,11 +313,28 @@ pub(crate) struct Cache {
 pub(crate) enum CacheAction {
     /// free what no project needs, once it is a day old
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
-    Gc,
+    Gc(Gc),
 
     /// check cached files and mark changed files for replacement
     #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
+}
+
+/// options of `cache gc`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct Gc {
+    /// also free files no project needs that are less than a day old, such as a `get` from
+    /// today. downloads still running keep their partial files
+    #[arg(long, help_heading = "options")]
+    pub(crate) now: bool,
+}
+
+/// words to look up in public dataset catalogs.
+#[derive(Debug, clap::Args)]
+pub(crate) struct Search {
+    /// dataset names or keywords, with or without quotes
+    #[arg(value_name = "words", required = true, num_args = 1.., help_heading = "arguments")]
+    pub(crate) words: Vec<String>,
 }
 
 /// which files of a dataset to keep, for `add` and `get`.
@@ -307,7 +352,7 @@ pub(crate) struct Filter {
 /// add a dataset, pin it and download it into the data folder
 #[derive(Debug, clap::Args)]
 pub(crate) struct Add {
-    /// a link, a DOI, or an id such as zenodo:3608990
+    /// search words, a link, a DOI, or an id such as zenodo:3608990
     #[arg(value_name = "link", help_heading = "arguments")]
     pub(crate) link: String,
 
@@ -337,6 +382,10 @@ pub(crate) struct Sync {
     /// replace conflicting files at locked paths, including untracked files
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
+
+    /// fail instead of updating data.lock when it is out of date with data.toml, for CI
+    #[arg(long, help_heading = "options")]
+    pub(crate) locked: bool,
 }
 
 /// bring data.lock in line with data.toml
@@ -362,7 +411,7 @@ pub(crate) struct Path {
 /// fetch something once, without a project
 #[derive(Debug, clap::Args)]
 pub(crate) struct Get {
-    /// what to download: a link, a DOI, or an id such as zenodo:3608990
+    /// what to download: search words, a link, a DOI, or an id such as zenodo:3608990
     #[arg(value_name = "link", help_heading = "arguments")]
     pub(crate) link: String,
 

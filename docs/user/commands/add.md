@@ -3,6 +3,7 @@
 `add` puts a dataset in your manifest, pins its files and syncs the whole project.
 
 ```sh
+fetchloom add iris
 fetchloom add zenodo:3608990
 fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 ```
@@ -20,7 +21,7 @@ fetchloom add [options] <link>
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false` |
 
-[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references.
+[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote several words, as in `fetchloom add "fashion mnist"`. the manifest stores the chosen canonical id, not the search words.
 
 ## what happens
 
@@ -43,15 +44,11 @@ commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rule
 
 adding an existing reference with identical filters and extraction settings syncs it without another entry. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
-if a new addition fails to sync, fetchloom attempts to restore the previous manifest. if restoration fails too, the error includes a backup as a JSON string to decode into `data.toml`, or names the entry to remove. cache, lock and placement changes are not all rolled back.
+if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. if restoration fails, the error supplies recovery steps and the previous contents as JSON strings to decode into the named files. cached downloads and files already placed are not rolled back.
 
 ## generated names
 
-without `--as`, a single file supplies a name of at most 40 characters. otherwise a title supplies at most its first four words and 32 characters, dropping trailing words such as `and`, `of` and `the`.
-
-when neither supplies a name, fetchloom uses the reference's last part containing a letter: `hf:datasets/scikit-learn/iris` gives `iris`, while `zenodo:123` gives `zenodo-123`.
-
-a taken generated name gets `-2`, `-3` and so on. a taken explicit `--as` name is refused.
+the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions. use `--as` to choose your own.
 
 ## exit codes
 

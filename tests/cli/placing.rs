@@ -373,7 +373,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
 
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
-    let kept = "data/iris/iris.csv has changed, so it stays";
+    let kept = "data/iris/iris.csv has changed";
     let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
     assert!(
         path.contains(kept),
@@ -611,10 +611,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"sepal_length,species\n5.1,setosa\nedited\n")?;
     let (said, third) = sync("third.json")?;
-    assert!(
-        said.contains("data/iris/iris.csv has changed, so it stays"),
-        "{said}"
-    );
+    assert!(said.contains("data/iris/iris.csv has changed"), "{said}");
     assert!(plans(&third), "{third}");
     Ok(())
 }

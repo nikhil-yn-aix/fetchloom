@@ -146,7 +146,7 @@ fn a_name_add_cannot_use_is_refused_before_any_request() -> Result {
 }
 
 #[test]
-fn offline_hints_name_the_settings_that_enabled_it() -> Result {
+fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![crate::support::file(b"iris", "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -165,15 +165,27 @@ fn offline_hints_name_the_settings_that_enabled_it() -> Result {
         (
             &["get", "zenodo:1"][..],
             sandbox.work(),
-            "needs an answer from zenodo.org",
+            "looking up zenodo:1 needs the internet",
+            Some("in a project prepared online, fetchloom sync --offline works without it"),
         ),
         (
             &["get", server.url.as_str()],
             sandbox.work(),
-            "is not in the cache",
+            "a new link must be downloaded once to learn its fingerprint",
+            None,
         ),
-        (&["sync"], unresolved, "needs a new entry in data.lock"),
-        (&["sync"], locked, "the lock names is not in the cache"),
+        (
+            &["sync"],
+            unresolved,
+            "needs a new entry in data.lock",
+            None,
+        ),
+        (
+            &["sync"],
+            locked,
+            "the lock names is not in the cache",
+            None,
+        ),
     ];
     for (flag, environment, expected) in [
         (
@@ -189,7 +201,7 @@ fn offline_hints_name_the_settings_that_enabled_it() -> Result {
         ),
         (true, Some("0"), "run it again without --offline"),
     ] {
-        for (args, folder, message) in &cases {
+        for (args, folder, message, listing_help) in &cases {
             let mut command = sandbox.command_in(folder, args);
             command.arg("--json").env("FETCHLOOM_CACHE", &cache);
             if flag {
@@ -216,7 +228,7 @@ fn offline_hints_name_the_settings_that_enabled_it() -> Result {
             );
             let help = error["help"].as_str().ok_or("missing help")?;
             assert!(
-                help.starts_with(expected),
+                help.starts_with(listing_help.unwrap_or(expected)),
                 "{args:?}, flag={flag}, environment={environment:?}: {help}"
             );
             assert_eq!(document["work"]["requests"], 0);

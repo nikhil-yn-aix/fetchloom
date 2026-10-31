@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use super::deferred::Finished;
 use super::{Cache, Stored, Validators};
 use crate::digest::{self, Hasher, Sha256};
 use crate::place::{FolderUse, real_folder};
@@ -23,6 +24,8 @@ use hashing::HashPipe;
 /// how often a download records its progress, so a killed run loses about this much of it.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
 const BUFFER: usize = 1024 * 1024;
+/// the largest download hashed without a thread of its own.
+const SMALL: u64 = 1024 * 1024;
 
 pub(crate) enum Claim {
     Owned(Partial),
@@ -146,7 +149,13 @@ impl Partial {
                 "the bytes kept from an earlier download are not the ones it recorded",
             ));
         }
-        let hasher = HashPipe::new(hasher, file.try_clone()?, offset)?;
+        // a small download hashes faster than a thread starts, so it hashes on the writer's own
+        let small = length.is_some_and(|length| length <= SMALL);
+        let hasher = if small {
+            HashPipe::inline(hasher, file.try_clone()?, offset)
+        } else {
+            HashPipe::new(hasher, file.try_clone()?, offset)?
+        };
         let mut writer = PartialWriter {
             cache: self.cache.clone(),
             file,
@@ -502,7 +511,8 @@ impl PartialWriter {
             prefix,
             bytes,
             record_path,
-            _lock,
+            record,
+            _lock: lock,
             ..
         } = self;
         // read-back must finish before resizing could hide a short read.
@@ -511,16 +521,29 @@ impl PartialWriter {
         if file.metadata()?.len() != prefix {
             file.set_len(prefix)?;
         }
-        file.sync_all()?;
         // sealed through the handle that wrote it: by name, a link swapped in since would be
         // sealed in its place
         let mut permissions = file.metadata()?.permissions();
         permissions.set_readonly(true);
         file.set_permissions(permissions)?;
-        drop(file);
-        let stored = cache.link_object(&bytes, digest, prefix, md5)?;
-        let _ = fs::remove_file(&record_path);
-        Ok(stored)
+        let finished = Finished {
+            url: record.url,
+            bytes,
+            record: record_path,
+            digest,
+            size: prefix,
+            md5,
+            lock,
+        };
+        // in a batch, one flush covers every download before any takes its name
+        match cache.defer(finished) {
+            Ok(stored) => Ok(stored),
+            Err(finished) => {
+                file.sync_all()?;
+                drop(file);
+                (*finished).publish(&cache)
+            }
+        }
     }
 }
 

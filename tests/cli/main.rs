@@ -13,6 +13,7 @@ mod progress;
 mod project;
 mod proxy;
 mod recovery;
+mod search;
 mod secrets;
 mod split;
 mod support;

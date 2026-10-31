@@ -76,12 +76,15 @@ def sync(
     *,
     yes: bool = False,
     offline: bool = False,
+    strict: bool = False,
 ) -> Path:
     """make the project's data folder match data.lock and return the project's path.
 
     ``project`` is the project folder or any folder inside it. files edited by hand stay,
-    and each one fetchloom keeps is reported as a python warning. a download above 1 GiB
-    raises :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
+    and each one fetchloom keeps is reported as a python warning; ``strict=True`` raises
+    :class:`Error` with kind ``conflict.kept`` instead, listing them in ``details``, so a
+    notebook never runs on inputs that differ from the lock. a download above 1 GiB raises
+    :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
     ``offline=True`` prevents network requests.
     """
     arguments = ["sync"]
@@ -89,7 +92,17 @@ def sync(
         arguments.append("--yes")
     if offline:
         arguments.append("--offline")
-    return Path(_run(arguments, project)["project"])
+    result = _run(arguments, project)
+    placement = result.get("placement") or {}
+    kept = [file["path"] for file in placement.get("kept", [])]
+    if strict and kept:
+        raise Error(
+            "conflict.kept",
+            f"{len(kept)} file{'' if len(kept) == 1 else 's'} in the data folder differ from data.lock",
+            kept,
+            "save any changes you need, then run `fetchloom sync --force`",
+        )
+    return Path(result["project"])
 
 
 def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:

@@ -35,13 +35,16 @@ fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     let mut net = net(&url);
     net.split.above = 4096;
     net.split.piece = 1024;
+    net.split.window = std::time::Duration::from_millis(20);
+    let idle = std::time::Duration::from_millis(250);
+    net.idle = idle;
     let fetch = Fetch::new(url.clone());
     let mut split = true;
     let started = std::time::Instant::now();
     // the remaining 1024 bytes cannot split, but every rate window still wakes the stream.
     let result = block_on(async {
         tokio::time::timeout(
-            IDLE + std::time::Duration::from_secs(5),
+            idle + std::time::Duration::from_secs(2),
             net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split),
         )
         .await
@@ -52,14 +55,20 @@ fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     let Ok(Err(Failure::Transient { reason, .. })) = result else {
         panic!("the stalled body did not reach its idle timeout");
     };
-    assert!(reason.contains("sent nothing for 30 s"), "{reason}");
-    assert!(elapsed >= IDLE, "{elapsed:?}");
+    assert!(reason.contains("sent nothing for 0 s"), "{reason}");
+    assert!(elapsed >= idle, "{elapsed:?}");
     assert!(
-        elapsed < IDLE + std::time::Duration::from_secs(5),
+        elapsed < idle + std::time::Duration::from_secs(2),
         "{elapsed:?}"
     );
     assert_eq!(net.work.counts().bytes_down, 3072);
     assert_eq!(partial.resumable().unwrap().0, 3072);
+}
+
+#[test]
+fn the_production_idle_deadline_is_thirty_seconds() {
+    let url = Url::parse("http://127.0.0.1/").unwrap();
+    assert_eq!(net(&url).idle, std::time::Duration::from_secs(30));
 }
 
 #[test]

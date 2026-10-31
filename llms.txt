@@ -6,12 +6,14 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 
 - [front page](README.md): install and quick start
 - [user guide](docs/user/README.md): every user page and when to read it
-- [getting started](docs/user/getting-started.md): first project, cloned projects and files to commit
+- [getting started](docs/user/getting-started.md): source installation, first project and files to share
 - [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives and offline preparation
 - [commands](docs/user/commands/README.md): command table, global options and terminal output
 - [add](docs/user/commands/add.md): add and pin a dataset
 - [sync](docs/user/commands/sync.md): restore pins while preserving local edits
 - [lock](docs/user/commands/lock.md): check or upgrade pins without placement
+- [list](docs/user/commands/list.md): dataset references, locked sizes and folders
+- [search](docs/user/commands/search.md): concurrent public catalog search and explicit selection
 - [status](docs/user/commands/status.md): local differences and success-with-differences behavior
 - [path](docs/user/commands/path.md): absolute paths and implicit sync
 - [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
@@ -23,7 +25,8 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 - [JSON output](docs/user/reference/json-output.md): schema, command results, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
 - [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior
-- [cache folder](docs/user/reference/cache-folder.md): cache layout, indexes and project state
+- [cache folder](docs/user/reference/cache-folder.md): shared cache layout and indexes
+- [project folder](docs/user/reference/project-folder.md): owner records and placement state
 - [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
 - [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders and long paths
 - [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
@@ -31,10 +34,12 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 
 ## working on the code
 
-- [developer guide](docs/dev/README.md): contributor starting point
+- [contributing](CONTRIBUTING.md): contributor entry point
+- [developer guide](docs/dev/README.md): setup, tests, debugging and the component map
 - [architecture](docs/dev/architecture/README.md): code organization and data flow
 - [performance](docs/dev/performance/README.md): performance work and its conditions
 - [engineering](docs/dev/engineering/README.md): builds, tests and releases
+- [running benchmarks](docs/dev/engineering/benchmarks.md): linux setup, smoke runs and full comparisons
 - [style](docs/dev/style.md): prose, code and commit conventions
 - [decisions](docs/dev/decisions.md): design choices
 - [roadmap](docs/dev/roadmap.md): future work

@@ -41,6 +41,41 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
 }
 
 #[test]
+fn list_shows_each_dataset_with_its_source_and_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let listed = sandbox.run(&["list"])?;
+    assert_eq!(listed.status.code(), Some(0));
+    let stdout = text(&listed.stdout)?;
+    assert!(stdout.starts_with("iris  "), "{stdout}");
+    assert!(stdout.contains("1 file · 32 B  data/iris"), "{stdout}");
+    let document = json(&sandbox.run(&["--json", "list"])?)?;
+    let dataset = &document["result"]["datasets"][0];
+    assert_eq!(dataset["name"], "iris");
+    assert_eq!(dataset["ref"], server.url.as_str());
+    assert_eq!(dataset["files"], 1);
+    assert_eq!(dataset["bytes"], IRIS.len());
+    assert_eq!(dataset["folder"], "data/iris");
+    Ok(())
+}
+
+#[test]
+fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["--offline", "add", &server.url])?;
+    assert_eq!(output.status.code(), Some(20));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("a new link must be downloaded once to learn its fingerprint"),
+        "{stderr}"
+    );
+    assert_eq!(server.requests().len(), 0, "offline sends nothing");
+    Ok(())
+}
+
+#[test]
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
@@ -233,6 +268,37 @@ fn hand_edits_survive_sync_until_forced() -> Result {
 }
 
 #[test]
+fn an_edit_through_a_shared_link_says_every_project_sees_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    edit(&placed, b"changed in place\n")?;
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let kept = sandbox.run(&["--json", "sync"])?;
+    let reason = &json(&kept)?["result"]["placement"]["kept"][0]["reason"];
+    if added["work"]["hardlinks"] == 1 {
+        assert!(
+            status.contains("changed through a hardlink other projects may share"),
+            "{status}"
+        );
+        assert_eq!(reason, "shared");
+        let story = text(&sandbox.run(&["sync"])?.stderr)?;
+        assert!(
+            story.contains("if the change is not yours, `fetchloom sync --force` restores it"),
+            "{story}"
+        );
+    } else {
+        assert_eq!(
+            reason, "changed",
+            "a reflink or a copy is this project's own"
+        );
+    }
+    assert_eq!(fs::read(&placed)?, b"changed in place\n");
+    Ok(())
+}
+
+#[test]
 fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
@@ -381,6 +447,19 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
         "{}",
         text(&stale.stderr)?
     );
+    let lock_before = fs::read(sandbox.work().join("data.lock"))?;
+    let locked = sandbox.run(&["sync", "--locked"])?;
+    assert_eq!(locked.status.code(), Some(1));
+    assert!(
+        text(&locked.stderr)?.contains("or sync without --locked"),
+        "{}",
+        text(&locked.stderr)?
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("data.lock"))?,
+        lock_before,
+        "--locked writes nothing"
+    );
     let relocked = sandbox.run(&["lock"])?;
     assert_eq!(
         relocked.status.code(),
@@ -394,6 +473,15 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
         "a new filter on the same version downloads nothing"
     );
     assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    assert_eq!(sandbox.run(&["sync", "--locked"])?.status.code(), Some(0));
+    let empty = sandbox.folder("empty")?;
+    fs::write(empty.join("data.toml"), "")?;
+    let refused = sandbox.command_in(&empty, &["sync", "--locked"]).output()?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr)?);
+    assert!(
+        !empty.join("data.lock").exists(),
+        "--locked never writes data.lock"
+    );
     Ok(())
 }
 
@@ -648,11 +736,14 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&young.stderr)?,
-        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old\n"
+        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old, or now with --now\n"
     );
     let document = json(&sandbox.run(&["--json", "cache", "gc"])?)?;
     assert_eq!(document["result"]["kept_objects"], 1);
     assert_eq!(document["result"]["kept_bytes"], IRIS.len());
+    let now = json(&sandbox.run(&["--json", "cache", "gc", "--now"])?)?;
+    assert_eq!(now["result"]["objects"], 1);
+    assert_eq!(now["result"]["kept_objects"], 0);
     Ok(())
 }
 
@@ -786,6 +877,39 @@ fn a_folder_too_long_to_work_in_is_named_with_its_length_before_anything_is_writ
         stderr.contains(&named) && stderr.contains("300 characters"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(
+            "move the project to a folder with a shorter path, then run `fetchloom sync` there"
+        ),
+        "{stderr}"
+    );
+    for (arguments, expected) in [
+        (
+            vec![format!("-C{named}"), "sync".to_owned()],
+            "fetchloom sync",
+        ),
+        (
+            vec![format!("-C={named}"), "sync".to_owned()],
+            "fetchloom sync",
+        ),
+        (
+            vec![
+                format!("-vC{named}"),
+                "sync".to_owned(),
+                "--offline".to_owned(),
+            ],
+            "fetchloom -v sync --offline",
+        ),
+    ] {
+        let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+        let output = sandbox.run(&arguments)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.contains(&format!("then run `{expected}` there")),
+            "{stderr}"
+        );
+    }
     assert!(!deep.join(".fetchloom").exists());
     assert!(!deep.join("data").exists());
     Ok(())
@@ -844,7 +968,7 @@ fn status_and_sync_explain_untracked_conflicts() -> Result {
 }
 
 #[test]
-fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
+fn failed_add_reports_manifest_and_lock_rollback_and_recovery() -> Result {
     for before in [None, Some("# keep this comment\n[datasets]\n")] {
         for machine in [false, true] {
             let sandbox = Sandbox::new()?;
@@ -878,6 +1002,8 @@ fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
                 text(&output.stderr)?
             };
             assert!(details.contains("could not restore data.toml"), "{details}");
+            assert!(details.contains("data.toml and data.lock"), "{details}");
+            assert!(!sandbox.work().join("data.lock").exists());
             if let Some(before) = before {
                 assert!(
                     details.contains("restore data.toml from this backup text"),
@@ -1084,5 +1210,75 @@ fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
     assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
     assert!(!sandbox.work().join(".fetchloom").exists());
     assert_eq!(fs::read(sandbox.work().join("data/extra24.txt"))?, b"keep");
+    Ok(())
+}
+
+#[test]
+fn failed_add_restores_both_project_files_after_writing_the_lock() -> Result {
+    for existing in [false, true] {
+        let sandbox = Sandbox::new()?;
+        if existing {
+            let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+            added(&sandbox, &server)?;
+            let path = sandbox.work().join("data.lock");
+            let locked = fs::read_to_string(&path)?;
+            fs::write(path, format!("# keep lock formatting\n{locked}"))?;
+        }
+        let before_manifest = fs::read(sandbox.work().join("data.toml")).ok();
+        let before_lock = fs::read(sandbox.work().join("data.lock")).ok();
+        let data = sandbox.work().join("data");
+        let mut response = vec![crate::support::Part::Action(Box::new(move || {
+            fs::create_dir_all(&data).unwrap();
+            fs::write(data.join("experiment"), b"block placement after locking").unwrap();
+        }))];
+        response.extend(file(IRIS, "\"v2\""));
+        let server = Server::start("/experiment.csv", vec![response])?;
+        let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
+        let stderr = text(&output.stderr)?;
+        assert!(!output.status.success(), "{stderr}");
+        assert_eq!(
+            fs::read(sandbox.work().join("data.toml")).ok(),
+            before_manifest
+        );
+        assert_eq!(fs::read(sandbox.work().join("data.lock")).ok(), before_lock);
+        assert!(
+            stderr.contains("restored data.toml and data.lock"),
+            "{stderr}"
+        );
+        if existing {
+            let status = sandbox.run(&["status"])?;
+            assert!(!text(&status.stderr)?.contains("Removed experiment"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result {
+    let sandbox = Sandbox::new()?;
+    let initial = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &initial)?;
+    let lock = sandbox.work().join("data.lock");
+    let before_lock = fs::read_to_string(&lock)?;
+    let before_manifest = fs::read(sandbox.work().join("data.toml"))?;
+    let mut response = vec![crate::support::Part::Action(Box::new(move || {
+        fs::remove_file(&lock).unwrap();
+        fs::create_dir(&lock).unwrap();
+    }))];
+    response.extend(reply("403 Forbidden", &[], b"denied"));
+    let server = Server::start("/experiment.csv", vec![response])?;
+    let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success());
+    assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before_manifest);
+    assert!(stderr.contains("could not restore data.lock"), "{stderr}");
+    assert!(
+        stderr.contains("restore data.lock from this backup text"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&serde_json::to_string(&before_lock)?),
+        "{stderr}"
+    );
     Ok(())
 }

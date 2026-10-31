@@ -247,6 +247,12 @@ enum Probe {
     Settled,
 }
 
+struct Completion {
+    interrupted: bool,
+    start_over: bool,
+    failure: Option<Failure>,
+}
+
 struct Streams<'a> {
     job: Job<'a>,
     board: Mutex<Board>,
@@ -286,7 +292,7 @@ impl Net {
         allowed: &mut bool,
     ) -> Result<Streamed, Failure> {
         let (from, total) = (job.from, job.total);
-        let mut probe = match job.slow {
+        let probe = match job.slow {
             Some(rate) => Probe::Measured { rate },
             None => Probe::Measure {
                 since: Instant::now(),
@@ -301,7 +307,46 @@ impl Net {
             board: Mutex::new(Board::new(gaps)),
             sender,
         };
-        let shared = &streams;
+        let Completion {
+            interrupted,
+            start_over,
+            failure: outcome,
+        } = self.run_split(&streams, response, probe).await;
+        let (stopped, pieced) = {
+            let board = streams.board();
+            (board.stopped, board.pieced)
+        };
+        drop(streams);
+        let writer = writing
+            .await
+            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
+            .map_err(|err| Failure::Final(local(&err)))?;
+        if interrupted {
+            return Err(Failure::Final(failure::interrupted(from)));
+        }
+        if start_over || stopped {
+            *allowed = false;
+        }
+        if start_over {
+            return Ok(Streamed::StartOver);
+        }
+        if writer.written() == total {
+            return Ok(Streamed::Whole {
+                writer: Box::new(writer),
+                pieced,
+            });
+        }
+        Err(outcome.unwrap_or_else(|| {
+            failure::transient(format!("{} stopped sending parts of the file", host(from)))
+        }))
+    }
+
+    async fn run_split(
+        &self,
+        shared: &Streams<'_>,
+        response: reqwest::Response,
+        mut probe: Probe,
+    ) -> Completion {
         let mut running: Running<'_> = vec![Box::pin(async move {
             (0, self.split_stream(shared, 0, Some(response)).await)
         })];
@@ -356,33 +401,11 @@ impl Net {
             }
         }
         drop(running);
-        let (stopped, pieced) = {
-            let board = streams.board();
-            (board.stopped, board.pieced)
-        };
-        drop(streams);
-        let writer = writing
-            .await
-            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
-            .map_err(|err| Failure::Final(local(&err)))?;
-        if interrupted {
-            return Err(Failure::Final(failure::interrupted(from)));
+        Completion {
+            interrupted,
+            start_over,
+            failure: outcome,
         }
-        if start_over || stopped {
-            *allowed = false;
-        }
-        if start_over {
-            return Ok(Streamed::StartOver);
-        }
-        if writer.written() == total {
-            return Ok(Streamed::Whole {
-                writer: Box::new(writer),
-                pieced,
-            });
-        }
-        Err(outcome.unwrap_or_else(|| {
-            failure::transient(format!("{} stopped sending parts of the file", host(from)))
-        }))
     }
 
     /// fetches the shares the board gives stream `id`, starting with `answer` when the stream

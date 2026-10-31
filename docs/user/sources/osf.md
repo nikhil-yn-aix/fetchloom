@@ -31,4 +31,4 @@ explicitly expired storage redirects can be refreshed. locked 404 or 410 downloa
 
 the folder walk covers osfstorage. source access rules and listing-size limits still apply. fetchloom does not grant account access or guarantee permanent hosting of the locked bytes.
 
-prepare the project online before [offline sync](../concepts.md#offline); repository listings are not cached for offline resolution.
+follow [offline preparation](../concepts.md#offline) before disconnecting.

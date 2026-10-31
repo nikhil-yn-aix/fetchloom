@@ -21,15 +21,17 @@ const EVERY: Duration = Duration::from_secs(10);
 
 /// one download's bar, or nothing when bars are off. it clears itself when dropped.
 pub(crate) struct Bar {
-    bar: Option<ProgressBar>,
+    drawn: Option<ProgressBar>,
     color: bool,
+    unicode: bool,
 }
 
 impl Bar {
     pub(super) fn hidden() -> Bar {
         Bar {
-            bar: None,
+            drawn: None,
             color: false,
+            unicode: false,
         }
     }
 
@@ -38,25 +40,27 @@ impl Bar {
         verb: &'static str,
         message: String,
         color: bool,
+        unicode: bool,
     ) -> Bar {
         let bar = bars.add(ProgressBar::no_length().with_message(message));
-        bar.set_style(style(verb, color, &bar.message()));
+        bar.set_style(style(verb, color, unicode, &bar.message()));
         bar.enable_steady_tick(TICK);
         Bar {
-            bar: Some(bar),
+            drawn: Some(bar),
             color,
+            unicode,
         }
     }
 
     pub(crate) fn message(&self, verb: &'static str, text: String) {
-        if let Some(bar) = &self.bar {
-            bar.set_style(style(verb, self.color, &text));
+        if let Some(bar) = &self.drawn {
+            bar.set_style(style(verb, self.color, self.unicode, &text));
             bar.set_message(text);
         }
     }
 
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
-        if let Some(bar) = &self.bar {
+        if let Some(bar) = &self.drawn {
             if let Some(total) = total {
                 bar.set_length(total);
             }
@@ -66,7 +70,7 @@ impl Bar {
     }
 
     pub(crate) fn advance(&self, bytes: u64) {
-        if let Some(bar) = &self.bar {
+        if let Some(bar) = &self.drawn {
             bar.inc(bytes);
         }
     }
@@ -74,13 +78,13 @@ impl Bar {
 
 impl Drop for Bar {
     fn drop(&mut self) {
-        if let Some(bar) = &self.bar {
+        if let Some(bar) = &self.drawn {
             bar.finish_and_clear();
         }
     }
 }
 
-fn style(verb: &'static str, color: bool, message: &str) -> ProgressStyle {
+fn style(verb: &'static str, color: bool, unicode: bool, message: &str) -> ProgressStyle {
     let name = super::plain(message).into_owned();
     let cyan = super::paint(color, super::ACCENT.bold());
     let heading = format!("{cyan}{verb:>11}{cyan:#}");
@@ -105,7 +109,8 @@ fn style(verb: &'static str, color: bool, message: &str) -> ProgressStyle {
                     state.eta(),
                 );
                 let width = usize::from(console::Term::stderr().size().1);
-                let _ = out.write_str(&render(&name, &heading, &bar, &amount, width, color));
+                let line = render(&name, &heading, &bar, &amount, width, color);
+                let _ = out.write_str(&super::shown(&line, unicode));
             },
         )
 }
