@@ -401,22 +401,12 @@ impl Net {
             Err(next) => return Ok(Answer::Divert(next)),
         };
         let validators = headers::validators(&head);
-        let offset = match status {
-            StatusCode::NOT_MODIFIED if earlier.is_none() && known.is_some() => {
-                return Ok(Answer::NotModified);
-            }
-            StatusCode::OK => 0,
-            // a server that ignores If-Range sends the rest of whatever version it holds now
-            StatusCode::PARTIAL_CONTENT => match (&earlier, headers::range_start(&head)) {
-                (Some((received, recorded)), Some(start))
-                    if start == *received && !headers::changed(recorded, &validators) =>
-                {
-                    *received
-                }
-                _ => return Ok(Answer::StartOver),
-            },
-            StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => return Ok(Answer::StartOver),
-            status => return Err(failure::refusal(from, status, &head)),
+        if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
+            return Ok(Answer::NotModified);
+        }
+        let Some(offset) = starting_offset(from, status, &head, earlier.as_ref(), &validators)?
+        else {
+            return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);
         let name = describe_response(&response, &fetch.url, on)?;
@@ -551,7 +541,7 @@ impl Net {
         on: Listener<'_>,
         watch: Option<u64>,
     ) -> Result<Run, Failure> {
-        let mut reached = writer.written();
+        let reached = writer.written();
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
             while let Some(chunk) = receiver.blocking_recv() {
@@ -560,12 +550,56 @@ impl Net {
             writer.save()?;
             Ok(writer)
         });
+        let body = self
+            .read_stream(url, &mut response, &sender, reached, on, watch)
+            .await;
+        drop(sender);
+        let writer = writing
+            .await
+            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
+            .map_err(|err| Failure::Final(local(&err)))?;
+        if let Some((total, rate)) = body? {
+            tracing::debug!(
+                url = %super::Shown(url),
+                rate,
+                at = writer.written(),
+                "one stream is slow, so the download splits"
+            );
+            return Ok(Run::Slow {
+                writer,
+                response,
+                total,
+                rate,
+            });
+        }
+        if let Some(total) = total
+            && writer.written() != total
+        {
+            return Err(failure::transient(format!(
+                "{} closed the connection after {} of {}",
+                host(url),
+                units::size(writer.written()),
+                units::size(total)
+            )));
+        }
+        Ok(Run::Whole(writer))
+    }
+
+    async fn read_stream(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        sender: &tokio::sync::mpsc::Sender<Bytes>,
+        mut reached: u64,
+        on: Listener<'_>,
+        watch: Option<u64>,
+    ) -> Result<Option<(u64, f64)>, Failure> {
         let window = self.split.window;
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
         let mut idle = tokio::time::Instant::now() + self.idle;
-        let body = loop {
+        loop {
             let next = tokio::select! {
                 next = tokio::time::timeout_at(idle, response.chunk()) => next,
                 () = &mut lap, if watch.is_some() => {
@@ -619,37 +653,7 @@ impl Net {
                     }
                 }
             }
-        };
-        drop(sender);
-        let writer = writing
-            .await
-            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
-            .map_err(|err| Failure::Final(local(&err)))?;
-        if let Some((total, rate)) = body? {
-            tracing::debug!(
-                url = %super::Shown(url),
-                rate,
-                at = writer.written(),
-                "one stream is slow, so the download splits"
-            );
-            return Ok(Run::Slow {
-                writer,
-                response,
-                total,
-                rate,
-            });
         }
-        if let Some(total) = total
-            && writer.written() != total
-        {
-            return Err(failure::transient(format!(
-                "{} closed the connection after {} of {}",
-                host(url),
-                units::size(writer.written()),
-                units::size(total)
-            )));
-        }
-        Ok(Run::Whole(writer))
     }
 
     async fn expired_link(
@@ -778,6 +782,30 @@ fn describe_response(
         on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
     }
     Ok(name)
+}
+
+/// accepts a full body or a range that continues the same representation at the saved offset.
+fn starting_offset(
+    from: &Url,
+    status: StatusCode,
+    head: &header::HeaderMap,
+    earlier: Option<&(u64, Validators)>,
+    validators: &Validators,
+) -> Result<Option<u64>, Failure> {
+    match status {
+        StatusCode::OK => Ok(Some(0)),
+        // a server that ignores If-Range sends the rest of whatever version it holds now
+        StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
+            (Some((received, recorded)), Some(start))
+                if start == *received && !headers::changed(recorded, validators) =>
+            {
+                Ok(Some(*received))
+            }
+            _ => Ok(None),
+        },
+        StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),
+        status => Err(failure::refusal(from, status, head)),
+    }
 }
 
 /// whether an answer is a page in place of the file: HTML that names no file to save, sent as a

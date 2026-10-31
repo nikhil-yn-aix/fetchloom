@@ -46,7 +46,7 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `extra` | a scanned path is outside known targets |
 | `not_unpacked` | an archive's member record is unavailable here |
 
-a visibly changed hardlink appears as edited, with the path followed by `? changed through a hardlink other projects may share`. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
+a visibly changed hardlink appears as edited, with the path followed by `· changed through a hardlink other projects may share`. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
 
 human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files previously placed from it can also appear as extra.
 

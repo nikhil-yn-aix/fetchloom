@@ -92,7 +92,7 @@ when a recorded spelling is absent, scans consider exactly one folded alias and 
 
 | files | cargo filter |
 |---|---|
-| [plan.rs](../../../src/plan.rs), [place.rs](../../../src/place.rs), [volume.rs](../../../src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
+| [plan.rs](../../../src/plan.rs), [place/tests.rs](../../../src/place/tests.rs), [volume.rs](../../../src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
 | [sync/place.rs](../../../src/cli/sync/place.rs), [put.rs](../../../src/cli/sync/place/put.rs) | `cargo test --locked --lib cli::sync::place::` |
 | [placing.rs](../../../tests/cli/placing.rs), [recovery.rs](../../../tests/cli/recovery.rs), [moved.rs](../../../tests/cli/moved.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
 

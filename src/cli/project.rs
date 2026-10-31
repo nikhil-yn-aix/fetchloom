@@ -35,41 +35,139 @@ pub(super) struct Report {
     placement: Option<Placement>,
 }
 
+struct AddProject {
+    project: Project,
+    _held: Held,
+    text: Option<String>,
+    manifest: Manifest,
+}
+
+struct Addition {
+    listing: Listing,
+    reference: String,
+    select: Vec<String>,
+    entry: manifest::Entry,
+}
+
 pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
+    let adding = discover_add(context).await?;
+    let project = &adding.project;
+    let manifest = &adding.manifest;
+    let net = Arc::new(net(context, manifest));
+    let parsed = validate_add(context, manifest, &net, &mut args).await?;
+    let cache = open_cache()?;
+    let mut addition = resolve_add(context, &net, &args, &parsed).await?;
+    let (old, lock_text) = project.lock_and_text()?.unzip();
+    if args.name.is_none()
+        && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
+    {
+        let work = Loop::new(context, project, net, cache);
+        return again(
+            &work,
+            manifest,
+            old.as_ref(),
+            &name,
+            &addition.entry,
+            &addition.listing,
+        )
+        .await;
+    }
+    if args.name.is_none() {
+        learn_name(
+            context,
+            &net,
+            &cache,
+            &mut addition.listing,
+            !args.no_extract,
+        )
+        .await?;
+    }
+    let name = match args.name.take() {
+        Some(asked) => asked,
+        None => choose_name(&addition.listing, &parsed, manifest)?,
+    };
+    let new_manifest = write_add(
+        project,
+        adding.text.as_deref().unwrap_or_default(),
+        &name,
+        &args,
+        &addition,
+    )?;
+    let work = Loop::new(context, project, net, cache);
+    let before = (adding.text.as_deref(), lock_text.as_deref());
+    let (lock_changed, placement) = sync_add(
+        &work,
+        &new_manifest,
+        old.as_ref(),
+        before,
+        &name,
+        addition.listing,
+    )
+    .await?;
+    render_add(&work, &new_manifest, &name)?;
+    Ok(Report {
+        project: adding.project.root,
+        datasets: vec![name],
+        lock_changed,
+        placement: Some(placement),
+    })
+}
+
+async fn discover_add(context: &Context) -> Result<AddProject, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
-    let _held = hold(context, &project, "add").await?;
-    let existed = project.manifest_path().is_file();
-    let text = if existed {
-        project.manifest()?.0
+    let held = hold(context, &project, "add").await?;
+    let text = if project.manifest_path().is_file() {
+        Some(project.manifest()?.0)
     } else {
-        String::new()
+        None
     };
-    let manifest = Manifest::parse(&text)?;
-    let net = Arc::new(net(context, &manifest));
+    let manifest = Manifest::parse(text.as_deref().unwrap_or_default())?;
+    Ok(AddProject {
+        project,
+        _held: held,
+        text,
+        manifest,
+    })
+}
+
+async fn validate_add(
+    context: &Context,
+    manifest: &Manifest,
+    net: &Net,
+    args: &mut Add,
+) -> Result<Parsed, Error> {
     if crate::source::search::is_search(&args.link) {
-        args.link = super::search::pick(context, net.as_ref(), &args.link, "add").await?;
+        args.link = super::search::pick(context, net, &args.link, "add").await?;
     }
     let parsed = Reference::parse(&args.link)?;
     engine::tell_raw(&context.output, &args.link, &parsed.reference);
     parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
-        usable(asked, &manifest)?;
+        usable(asked, manifest)?;
     }
     if let Reference::Url(url) = &parsed.reference {
         net.typed(url);
     }
-    let cache = open_cache()?;
-    let mut listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
+    Ok(parsed)
+}
+
+async fn resolve_add(
+    context: &Context,
+    net: &Net,
+    args: &Add,
+    parsed: &Parsed,
+) -> Result<Addition, Error> {
+    let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
         parsed.file.iter().cloned().collect()
     } else {
         args.filter.select.clone()
     };
-    let reference = stored_reference(&args.link, &parsed);
+    let reference = stored_reference(&args.link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
     let alone = Manifest::parse(&manifest::with_dataset(
@@ -83,60 +181,66 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
-    let (old, lock_text) = project.lock_and_text()?.unzip();
-    if args.name.is_none()
-        && let Some(name) = present(&manifest, old.as_ref(), &entry, &listing)
-    {
-        let work = Loop::new(context, &project, net, cache);
-        return again(&work, &manifest, old.as_ref(), &name, &entry, &listing).await;
-    }
-    if args.name.is_none() {
-        learn_name(context, &net, &cache, &mut listing, !args.no_extract).await?;
-    }
-    let name = match args.name {
-        Some(asked) => asked,
-        None => choose_name(&listing, &parsed, &manifest)?,
-    };
+    Ok(Addition {
+        listing,
+        reference,
+        select,
+        entry,
+    })
+}
+
+fn write_add(
+    project: &Project,
+    text: &str,
+    name: &str,
+    args: &Add,
+    addition: &Addition,
+) -> Result<Manifest, Error> {
     let updated = manifest::with_dataset(
-        &text,
-        &name,
-        &reference,
-        &select,
+        text,
+        name,
+        &addition.reference,
+        &addition.select,
         &args.filter.exclude,
         !args.no_extract,
     )?;
-    let new_manifest = Manifest::parse(&updated)?;
+    let manifest = Manifest::parse(&updated)?;
     project.write(manifest::FILE, updated.as_bytes())?;
-    let work = Loop::new(context, &project, net, cache);
-    let synced = sync_all(
-        &work,
-        &new_manifest,
-        old.as_ref(),
+    Ok(manifest)
+}
+
+async fn sync_add(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    before: (Option<&str>, Option<&str>),
+    name: &str,
+    listing: Listing,
+) -> Result<(bool, Placement), Error> {
+    sync_all(
+        work,
+        manifest,
+        old,
         &Upgrade::Nothing,
         false,
-        Some((name.clone(), listing)),
+        Some((name.to_owned(), listing)),
         None,
     )
-    .await;
-    let before = (existed.then_some(text.as_str()), lock_text.as_deref());
-    let (lock_changed, placement) =
-        synced.map_err(|error| restore(&project, before, &name, error))?;
-    if project.ignore_in_git(&new_manifest.data_dir)? {
-        context.output.step(
+    .await
+    .map_err(|error| restore(work.project, before, name, error))
+}
+
+fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+    if work.project.ignore_in_git(&manifest.data_dir)? {
+        work.context.output.step(
             "Ignored",
             &format!(
                 "{}/ in .gitignore, since its files come from data.lock",
-                new_manifest.data_dir
+                manifest.data_dir
             ),
         );
     }
-    tell_added(&work, &new_manifest, &name)?;
-    Ok(Report {
-        project: project.root,
-        datasets: vec![name],
-        lock_changed,
-        placement: Some(placement),
-    })
+    tell_added(work, manifest, name)
 }
 
 /// restores both project files after a failed add, including their original absence.

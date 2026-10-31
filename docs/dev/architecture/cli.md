@@ -47,6 +47,8 @@ network clients are created only where commands need them. `Net` delays TLS root
 | `list` | read manifest and lock without scanning placements or taking the mutation lock |
 | `search` | query public catalogs concurrently; return canonical references without downloading datasets |
 
+`add` keeps its mutation lock in `AddProject` through discovery, validation, resolution, manifest writing, sync and rendering. `discover_add`, `validate_add`, `resolve_add`, `write_add`, `sync_add` and `render_add` name those phases. `sync_add` invokes `restore` on a sync failure; rendering errors do not roll back an already completed sync.
+
 plain-word `add` and `get` call `search::pick` before source resolution. an interactive choice returns a canonical reference; without one, the error carries candidate details and a JSON partial result. [catalog search](../../user/commands/search.md) owns user-facing selection rules.
 
 `fetch::all` queues only the allowed number of downloads. it shares progress and counters across them. a locked 404 or 410 may re-resolve its recorded source once per batch; replacement URLs must still produce the old pinned bytes.
