@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use changed::Doubt;
+#[cfg(target_os = "linux")]
+pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter, read_unfollowed};
 pub(crate) use staging::Staging;

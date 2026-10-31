@@ -206,6 +206,10 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
+        // the state written next vouches for these files, so their bytes reach the disk first
+        placer
+            .flush_copies()
+            .map_err(|err| Error::io("could not flush the copied files to disk", &err))?;
         let complete = failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;

@@ -108,7 +108,7 @@ impl Batch {
 /// whether a linux kernel of `release`, as `uname -r` gives it, reports write-back errors to
 /// syncfs, which it does from 5.8.
 #[cfg(any(target_os = "linux", test))]
-fn syncfs_reports_errors(release: &str) -> bool {
+pub(crate) fn syncfs_reports_errors(release: &str) -> bool {
     let mut numbers = release.split(['.', '-']).map(str::parse::<u32>);
     match (numbers.next(), numbers.next()) {
         (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (5, 8),

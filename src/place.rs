@@ -54,6 +54,13 @@ pub(crate) struct Placer {
     other_volume: AtomicBool,
     /// the volume under the root, which may refuse to remove a read-only file.
     volume: Volume,
+    /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
+    /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
+    /// times the placing of 10,000 small copies.
+    #[cfg(target_os = "linux")]
+    batch: std::sync::OnceLock<Option<File>>,
+    #[cfg(target_os = "linux")]
+    unflushed: AtomicBool,
 }
 
 /// one file to place: the object, where it goes, and whether it must be a writable copy.
@@ -129,6 +136,10 @@ impl Placer {
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            batch: std::sync::OnceLock::new(),
+            #[cfg(target_os = "linux")]
+            unflushed: AtomicBool::new(false),
         }
     }
 
@@ -220,8 +231,54 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
-        copy(object, destination, writable, self.threads)?;
+        let flush = !self.batches_copies();
+        copy(object, destination, writable, self.threads, flush)?;
+        #[cfg(target_os = "linux")]
+        if !flush {
+            self.unflushed.store(true, Ordering::Relaxed);
+        }
         Ok(Method::Copy)
+    }
+
+    /// whether copies may skip their own flush, because [`Placer::flush_copies`] flushes them all.
+    #[cfg(target_os = "linux")]
+    fn batches_copies(&self) -> bool {
+        self.batch
+            .get_or_init(|| {
+                let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+                crate::cache::syncfs_reports_errors(&release)
+                    .then(|| File::open(&self.root).ok())
+                    .flatten()
+            })
+            .is_some()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[expect(clippy::unused_self, reason = "only linux batches copies")]
+    fn batches_copies(&self) -> bool {
+        false
+    }
+
+    /// flushes the copies placed without their own flush, so what is recorded next holds only
+    /// bytes on disk.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn flush_copies(&self) -> io::Result<()> {
+        if self.unflushed.load(Ordering::Relaxed)
+            && let Some(Some(root)) = self.batch.get()
+        {
+            rustix::fs::syncfs(root)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[expect(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "other systems flush each copy as it is made"
+    )]
+    pub(crate) fn flush_copies(&self) -> io::Result<()> {
+        Ok(())
     }
 
     /// checks every folder between the root and `path`, refusing a link among them, so a link
@@ -470,7 +527,13 @@ fn check_object(object: &Path) -> io::Result<()> {
 
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
-fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> io::Result<()> {
+fn copy(
+    object: &Path,
+    destination: &Path,
+    writable: bool,
+    threads: Threads,
+    flush: bool,
+) -> io::Result<()> {
     let destination = std::path::absolute(destination)?;
     let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
     let destination = parent.join(destination.file_name().unwrap_or_default());
@@ -489,7 +552,9 @@ fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> 
     #[cfg(not(windows))]
     let staged_writable = writable;
     fill(object, &claimed, staged_writable, threads)?;
-    claimed.sync_all()?;
+    if flush {
+        claimed.sync_all()?;
+    }
     temporary
         .persist_noclobber(&destination)
         .map_err(|error| error.error)?;
@@ -929,13 +994,13 @@ mod tests {
         fs::remove_file(&probe).unwrap();
         let destination = destination_folder.path().join("placed.csv");
 
-        copy(&object, &destination, true, Threads::default()).unwrap();
+        copy(&object, &destination, true, Threads::default(), true).unwrap();
 
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(!is_read_only(&destination));
         assert!(is_read_only(&object));
         let readonly = destination_folder.path().join("readonly.csv");
-        assert!(copy(&object, &readonly, false, Threads::default()).is_err());
+        assert!(copy(&object, &readonly, false, Threads::default(), true).is_err());
         assert!(!readonly.exists());
     }
 
@@ -952,6 +1017,7 @@ mod tests {
                 &root.join("placed.bin"),
                 false,
                 Threads::default(),
+                true,
             )
             .unwrap();
             return;
@@ -1015,7 +1081,7 @@ mod tests {
         fs::create_dir_all(&parent).unwrap();
         let destination = parent.join("placed.csv");
 
-        copy(&object, &destination, false, Threads::default()).unwrap();
+        copy(&object, &destination, false, Threads::default(), true).unwrap();
 
         assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
         assert!(is_read_only(&destination));
@@ -1035,7 +1101,7 @@ mod tests {
 
         for threads in [Threads::default(), capped] {
             for writable in [false, true] {
-                let error = copy(&object, &destination, writable, threads).unwrap_err();
+                let error = copy(&object, &destination, writable, threads, true).unwrap_err();
                 assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
                 assert!(error.to_string().contains(&object.display().to_string()));
                 assert!(!destination.exists());
@@ -1075,7 +1141,7 @@ mod tests {
         let missing = folder.path().join("missing");
         let destination = folder.path().join("placed.csv");
 
-        assert!(copy(&missing, &destination, false, Threads::default()).is_err());
+        assert!(copy(&missing, &destination, false, Threads::default(), true).is_err());
 
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
     }
@@ -1090,7 +1156,7 @@ mod tests {
         fs::write(&object, &bytes).unwrap();
         let destination = folder.path().join("placed.bin");
 
-        copy(&object, &destination, false, Threads::default()).unwrap();
+        copy(&object, &destination, false, Threads::default(), true).unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), bytes);
         assert!(is_read_only(&destination));
