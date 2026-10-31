@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+mod running;
+mod server;
+
+pub(crate) use running::Running;
+
+use server::{ServerTask, Shutdown};
+
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// a working folder, a cache and a home of its own, so no test sees another's state or the
@@ -276,6 +283,7 @@ pub(crate) enum Part {
     Bytes(Vec<u8>),
     Pause(Duration),
     Action(Box<dyn FnOnce() + Send>),
+    Wait(std::sync::mpsc::Receiver<()>),
 }
 
 /// a server on this machine that answers each new connection with the next scripted response,
@@ -284,6 +292,7 @@ pub(crate) enum Part {
 pub(crate) struct Server {
     pub(crate) url: String,
     requests: Arc<Mutex<Vec<String>>>,
+    _running: ServerTask,
 }
 
 impl Server {
@@ -292,9 +301,9 @@ impl Server {
         let url = format!("http://{}{path}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let seen = requests.clone();
-        std::thread::spawn(move || {
+        let running = ServerTask::start(listener, move |listener, stop| {
             for response in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Some((mut stream, _connection)) = stop.accept(&listener) else {
                     return;
                 };
                 let head = read_head(&mut stream);
@@ -302,18 +311,39 @@ impl Server {
                     seen.push(head.to_ascii_lowercase());
                 }
                 for part in response {
+                    if stop.stopped() {
+                        return;
+                    }
                     match part {
                         Part::Bytes(bytes) => {
                             let _ = stream.write_all(&bytes);
                             let _ = stream.flush();
                         }
-                        Part::Pause(pause) => std::thread::sleep(pause),
+                        Part::Pause(pause) => {
+                            if stop.pause(pause) {
+                                return;
+                            }
+                        }
                         Part::Action(action) => action(),
+                        Part::Wait(release) => {
+                            while matches!(
+                                release.recv_timeout(Duration::from_millis(10)),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                            ) {
+                                if stop.stopped() {
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
             }
-        });
-        Ok(Server { url, requests })
+        })?;
+        Ok(Server {
+            url,
+            requests,
+            _running: running,
+        })
     }
 
     /// serves `body` with a strong `ETag`: slowly on the first connection, then at full speed and
@@ -323,9 +353,9 @@ impl Server {
         let url = format!("http://{}{path}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let seen = requests.clone();
-        std::thread::spawn(move || {
+        let running = ServerTask::start(listener, move |listener, stop| {
             for slow in [true, false] {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Some((mut stream, _connection)) = stop.accept(&listener) else {
                     return;
                 };
                 let asked = read_head(&mut stream).to_ascii_lowercase();
@@ -353,13 +383,17 @@ impl Server {
                     if stream.write_all(chunk).is_err() {
                         break;
                     }
-                    if slow {
-                        std::thread::sleep(Duration::from_millis(100));
+                    if slow && stop.pause(Duration::from_millis(100)) {
+                        return;
                     }
                 }
             }
-        });
-        Ok(Server { url, requests })
+        })?;
+        Ok(Server {
+            url,
+            requests,
+            _running: running,
+        })
     }
 
     /// the head of every request so far, lowercased.
@@ -377,6 +411,7 @@ impl Server {
 pub(crate) struct Ranged {
     pub(crate) url: String,
     site: Arc<Site>,
+    _running: ServerTask,
 }
 
 /// what every connection to a [`Ranged`] server shares.
@@ -402,13 +437,23 @@ impl Ranged {
             most: AtomicUsize::new(0),
         });
         let shared = site.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let site = shared.clone();
-                std::thread::spawn(move || site.answer(stream));
-            }
-        });
-        Ok(Ranged { url, site })
+        let running = ServerTask::start(listener, move |listener, stop| {
+            std::thread::scope(|scope| {
+                while let Some((stream, connection)) = stop.accept(&listener) {
+                    let site = shared.clone();
+                    let stop = &stop;
+                    scope.spawn(move || {
+                        let _connection = connection;
+                        site.answer(stream, stop);
+                    });
+                }
+            });
+        })?;
+        Ok(Ranged {
+            url,
+            site,
+            _running: running,
+        })
     }
 
     /// paces the answers from now on to `rate` bytes a second, or none for 0.
@@ -444,18 +489,18 @@ impl Ranged {
 }
 
 impl Site {
-    fn answer(&self, mut stream: TcpStream) {
+    fn answer(&self, mut stream: TcpStream, stop: &Shutdown) {
         let request = read_head(&mut stream).to_ascii_lowercase();
         if let Ok(mut requests) = self.requests.lock() {
             requests.push(request.clone());
         }
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.most.fetch_max(now, Ordering::SeqCst);
-        self.respond(&mut stream, &request);
+        self.respond(&mut stream, &request, stop);
         self.active.fetch_sub(1, Ordering::SeqCst);
     }
 
-    fn respond(&self, stream: &mut TcpStream, request: &str) {
+    fn respond(&self, stream: &mut TcpStream, request: &str, stop: &Shutdown) {
         const ETAG: &str = "\"v1\"";
         let size = self.body.len();
         let current = request
@@ -498,7 +543,9 @@ impl Site {
             let rate = self.rate.load(Ordering::SeqCst);
             if let Some(nanos) = (sent * 1_000_000_000).checked_div(rate) {
                 let due = begun + Duration::from_nanos(nanos);
-                std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                if stop.pause(due.saturating_duration_since(Instant::now())) {
+                    return;
+                }
             }
             if stream.write_all(chunk).is_err() {
                 return;
@@ -513,6 +560,7 @@ impl Site {
 pub(crate) struct Proxy {
     pub(crate) url: String,
     asked: Arc<Mutex<Vec<String>>>,
+    _running: ServerTask,
 }
 
 impl Proxy {
@@ -521,13 +569,23 @@ impl Proxy {
         let url = format!("http://{}", listener.local_addr()?);
         let asked = Arc::new(Mutex::new(Vec::new()));
         let seen = asked.clone();
-        std::thread::spawn(move || {
-            for client in listener.incoming().flatten() {
-                let seen = seen.clone();
-                std::thread::spawn(move || relay(client, &seen));
-            }
-        });
-        Ok(Proxy { url, asked })
+        let running = ServerTask::start(listener, move |listener, stop| {
+            std::thread::scope(|scope| {
+                while let Some((client, connection)) = stop.accept(&listener) {
+                    let seen = seen.clone();
+                    let stop = &stop;
+                    scope.spawn(move || {
+                        let _connection = connection;
+                        relay(client, &seen, stop);
+                    });
+                }
+            });
+        })?;
+        Ok(Proxy {
+            url,
+            asked,
+            _running: running,
+        })
     }
 
     /// the first line of every request so far.
@@ -540,7 +598,7 @@ impl Proxy {
 }
 
 /// passes one client's request on, then copies bytes both ways until a side hangs up.
-fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>) {
+fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>) {
     let head = read_head(&mut client);
     let line = head.lines().next().unwrap_or_default().to_owned();
     if let Ok(mut seen) = seen.lock() {
@@ -565,13 +623,23 @@ fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>) {
         let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
         return;
     };
+    let Some(_connection) = stop.track(&server) else {
+        return;
+    };
     let _ = match forwarded {
         Some(head) => server.write_all(head.as_bytes()),
         None => client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n"),
     };
     if let (Ok(mut from_client), Ok(mut to_server)) = (client.try_clone(), server.try_clone()) {
-        std::thread::spawn(move || std::io::copy(&mut from_client, &mut to_server));
-        let _ = std::io::copy(&mut server, &mut client);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _ = std::io::copy(&mut from_client, &mut to_server);
+                let _ = to_server.shutdown(std::net::Shutdown::Write);
+            });
+            let _ = std::io::copy(&mut server, &mut client);
+            let _ = client.shutdown(std::net::Shutdown::Both);
+            let _ = server.shutdown(std::net::Shutdown::Both);
+        });
     }
 }
 
@@ -623,5 +691,93 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    Ok(())
+}
+
+#[test]
+fn dropping_a_scripted_server_releases_its_listener() -> Result {
+    let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
+    let address = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .parse()?;
+    drop(server);
+    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    Ok(())
+}
+
+#[test]
+fn dropping_a_ranged_server_releases_its_listener() -> Result {
+    let server = Ranged::start("/", vec![0; 1024], 0)?;
+    let address = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .parse()?;
+    drop(server);
+    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    Ok(())
+}
+
+#[test]
+fn dropping_a_proxy_releases_its_listener() -> Result {
+    let proxy = Proxy::start()?;
+    let address = proxy.url.trim_start_matches("http://").parse()?;
+    drop(proxy);
+    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    Ok(())
+}
+
+#[test]
+fn dropping_a_server_closes_a_connection_waiting_for_a_request() -> Result {
+    let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
+    let address = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    let mut connection = TcpStream::connect(address)?;
+    drop(server);
+    connection.set_read_timeout(Some(Duration::from_secs(1)))?;
+    let closed = connection.read(&mut [0]);
+    assert!(
+        matches!(closed, Ok(0))
+            || closed.is_err_and(|error| matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ))
+    );
+    Ok(())
+}
+
+#[test]
+fn dropping_a_server_interrupts_an_unreleased_response() -> Result {
+    let (started, arrived) = std::sync::mpsc::channel();
+    let (_release, held) = std::sync::mpsc::channel();
+    let server = Server::start(
+        "/",
+        vec![vec![
+            Part::Action(Box::new(move || {
+                let _ = started.send(());
+            })),
+            Part::Wait(held),
+        ]],
+    )?;
+    let address = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    let mut client = TcpStream::connect(address)?;
+    client.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")?;
+    arrived.recv_timeout(Duration::from_secs(2))?;
+    let (finished, stopped) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        drop(server);
+        let _ = finished.send(());
+    });
+    stopped.recv_timeout(Duration::from_secs(2))?;
+    dropping.join().map_err(|_| "server shutdown panicked")?;
+    client.set_read_timeout(Some(Duration::from_secs(1)))?;
+    assert_eq!(client.read(&mut [0])?, 0);
     Ok(())
 }

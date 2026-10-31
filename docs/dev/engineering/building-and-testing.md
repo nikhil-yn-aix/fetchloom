@@ -31,7 +31,7 @@ the first cold build can take several minutes, especially while compiling native
 | [snapshots](../../../tests/cli/snapshots) | human output and selected JSON or lock text | run the owning CLI module |
 | [python tests](../../../python/test_helper.py) | wrapper arguments, paths and structured errors | `python3 -m unittest discover -s python` |
 
-`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. default tests use local servers or recorded answers. ignored tests cover live repositories and a larger archive workload.
+`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. [server ownership](../../../tests/cli/support/server.rs) closes listeners and active connections and joins workers on drop. race tests wait for requests, captured child output or saved partial-file records through bounded helpers; fixed pauses belong only to timed response behavior. default tests use local servers or recorded answers. ignored tests cover live repositories and a larger archive workload.
 
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 

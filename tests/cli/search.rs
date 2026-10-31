@@ -50,13 +50,23 @@ fn unattended_add_refuses_to_guess_even_with_yes() -> Result {
     let output = catalogs
         .command(&sandbox, &["add", "iris", "--yes", "--json"])
         .output()?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(
+        output.status.code(),
+        Some(10),
+        "stderr: {}\nstdout: {}",
+        text(&output.stderr)?,
+        text(&output.stdout)?
+    );
     let document = json(&output)?;
     assert_eq!(document["command"], "add");
-    assert_eq!(document["errors"][0]["kind"], "reference.ambiguous");
+    assert_eq!(
+        document["errors"][0]["kind"], "reference.ambiguous",
+        "{document}"
+    );
     assert_eq!(
         document["result"]["candidates"].as_array().map(Vec::len),
-        Some(9)
+        Some(9),
+        "{document}"
     );
     assert_eq!(
         document["result"]["candidates"][0]["reference"],
@@ -124,7 +134,12 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
         let output = catalogs.command(&sandbox, &args).output()?;
         assert!(output.status.success(), "{}", text(&output.stderr)?);
         let stdout = text(&output.stdout)?;
-        assert_eq!(stdout.lines().count(), 9);
+        assert_eq!(
+            stdout.lines().count(),
+            9,
+            "stderr: {}",
+            text(&output.stderr)?
+        );
         assert!(
             stdout
                 .starts_with("hf:datasets/scikit-learn/iris\nkaggle:uciml/iris\nzenodo:23233774\n")
@@ -203,7 +218,8 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
     let document = json(&output)?;
     assert_eq!(
         document["result"]["candidates"].as_array().map(Vec::len),
-        Some(6)
+        Some(6),
+        "{document}"
     );
     assert!(
         document["warnings"][0]

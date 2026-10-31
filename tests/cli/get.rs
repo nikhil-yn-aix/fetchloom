@@ -447,18 +447,28 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         ],
         b"",
     );
-    slow.push(Part::Pause(Duration::from_millis(1500)));
+    let (release, held) = std::sync::mpsc::channel();
+    slow.push(Part::Wait(held));
     slow.push(Part::Bytes(IRIS.to_vec()));
     let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
     let server = Server::start(PATH, vec![slow, unchanged])?;
-    let first = sandbox
-        .command(&["get", &server.url, "-o", "first"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    std::thread::sleep(Duration::from_millis(300));
-    let second = sandbox.run(&["get", &server.url, "-o", "second"])?;
-    let first = first.wait_with_output()?;
+    let first =
+        crate::support::Running::start(&mut sandbox.command(&["get", &server.url, "-o", "first"]))?;
+    crate::support::wait_until("the first download request", || {
+        Ok(!server.requests().is_empty())
+    })?;
+    let second = crate::support::Running::start(&mut sandbox.command(&[
+        "get",
+        &server.url,
+        "-o",
+        "second",
+    ]))?;
+    // redirected stderr reports the running batch; the per-file waiting bar is hidden.
+    let waiting = second.wait_for("Downloading");
+    drop(release);
+    waiting?;
+    let second = second.finish()?;
+    let first = first.finish()?;
     assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
     assert_eq!(second.status.code(), Some(0), "{}", text(&second.stderr)?);
     let downloads = server
