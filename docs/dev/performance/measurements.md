@@ -1,6 +1,12 @@
 # measurements
 
-these measurements record the workloads that changed implementation choices, including changes that were dropped.
+historical workload observations explain retained and rejected performance changes.
+
+## evidence limits
+
+these are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
+
+use the [benchmark workflow](../engineering/benchmarks.md) for new comparisons with retained commands, run records and independent checking.
 
 ## conditions
 
@@ -24,7 +30,7 @@ placement was 2 to 3 times slower than in the earlier quiet window. the no-readb
 
 network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
 
-## results and rejected experiments
+## observations and rejected experiments
 
 parenthesized bounds are observed minima and maxima. when only a time, rate or peak was recorded, the median and range columns say so rather than supplying a new statistic.
 
