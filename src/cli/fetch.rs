@@ -11,10 +11,12 @@ use tokio::task::JoinSet;
 
 pub(super) use self::again::Again;
 use super::Context;
+use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
-use crate::net::{Event, Fetch, Fetched, Net};
+use crate::net::{Event, Expect, Fetch, Fetched, Net};
 use crate::output::{Bar, Output, Ticker};
+use crate::source::{self, Remote};
 use crate::units;
 
 /// a file to download, the name the person watching knows it by, and the dataset it belongs to
@@ -25,6 +27,27 @@ pub(super) struct Job {
     pub(super) dataset: Option<String>,
     /// where to ask again when the file is pinned and its recorded link is dead.
     pub(super) again: Option<Again>,
+}
+
+/// the download of one listed file, which will be called `name`. a file no checksum pins is asked
+/// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
+/// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
+pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
+    Job {
+        fetch: Fetch {
+            expect: Expect {
+                sha256: remote.sha256,
+                md5: remote.md5,
+                size: remote.size,
+            },
+            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
+            unpack: extract && archive::by_name(name) == Some(Packed::Archive),
+            ..source::fetch_plan(&remote.url)
+        },
+        label: remote.path.clone(),
+        dataset: None,
+        again: None,
+    }
 }
 
 /// how all the downloads of one call go together: a bar for them all on a terminal when there

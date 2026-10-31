@@ -14,17 +14,16 @@ use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Placement, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
-use crate::archive::{self, Packed};
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{Expect, Fetch, Net};
+use crate::net::Net;
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
-use crate::source::{self, Listing, Parsed, Reference};
+use crate::source::{Listing, Parsed, Reference};
 
 /// what a project command did, as `--json` prints it.
 #[derive(Default, Serialize)]
@@ -330,7 +329,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             .output
             .done("all pinned files are in place. nothing to do");
     } else {
-        let datasets = units_datasets(manifest.datasets.len());
+        let datasets = crate::units::count(manifest.datasets.len() as u64, "dataset", "datasets");
         if placement.kept.is_empty() {
             context
                 .output
@@ -784,21 +783,7 @@ async fn learn_name(
         return Ok(());
     }
 
-    let job = fetch::Job {
-        fetch: Fetch {
-            expect: Expect {
-                sha256: remote.sha256,
-                md5: remote.md5,
-                size: remote.size,
-            },
-            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-            unpack: extract && archive::by_name(&remote.path) == Some(Packed::Archive),
-            ..source::fetch_plan(&remote.url)
-        },
-        label: remote.path.clone(),
-        dataset: None,
-        again: None,
-    };
+    let job = fetch::listed_job(remote, &remote.path, extract);
     let started = std::time::Instant::now();
     let fetched = fetch::all(context, net, cache, vec![job]).await?;
     if let Some(fetched) = fetched.first() {
@@ -887,10 +872,6 @@ fn stored_reference(typed: &str, parsed: &Parsed) -> String {
         }
         _ => parsed.reference.to_string(),
     }
-}
-
-fn units_datasets(count: usize) -> String {
-    crate::units::count(count as u64, "dataset", "datasets")
 }
 
 /// the network, trusting every host data.toml names, since a person wrote them.

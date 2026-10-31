@@ -255,7 +255,7 @@ impl<'a> Loop<'a> {
                 .reference
                 .check_shareable()
                 .map_err(|err| cite_place(err, entry, "ref"))?;
-            if !stands_for_itself(&parsed.reference) {
+            if !resolves_locally(&parsed.reference) {
                 asked.push(parsed.reference.to_string());
             }
             let net = self.net.clone();
@@ -364,13 +364,13 @@ pub(super) async fn resolve(
     net: &Net,
 ) -> Result<Listing, Error> {
     let _waiting =
-        (!stands_for_itself(reference)).then(|| output.wait("Resolving", reference.to_string()));
+        (!resolves_locally(reference)).then(|| output.wait("Resolving", reference.to_string()));
     reference.resolve(net).await
 }
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may
 /// also carry a token, which no spinner should print.
-fn stands_for_itself(reference: &Reference) -> bool {
+fn resolves_locally(reference: &Reference) -> bool {
     matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }
 

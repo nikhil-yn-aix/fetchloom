@@ -24,12 +24,12 @@ use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Expect, Fetch, Fetched, Origin};
+use crate::net::{self, Fetched, Origin};
 use crate::place::Method;
 use crate::plan::{self, Patterns, Plan};
 use crate::project::lock::LockedFile;
 use crate::project::manifest::{self, Manifest};
-use crate::source::{self, Listing, Parsed, Reference, Remote};
+use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::units;
 
 /// what `get` did, as `--json` prints it.
@@ -69,19 +69,13 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         &folder_for(chosen, &listing, &parsed, &names),
         foreseen.as_deref(),
     )?;
-    let size: u64 = files.iter().filter_map(|remote| remote.size).sum();
-    super::confirm(
-        &context.output,
-        context.yes,
-        &units::count(files.len() as u64, "file", "files"),
-        size,
-    )?;
-    vet(&cache, &files, &names, extract)?;
-    let jobs = files
+    let jobs: Vec<Job> = files
         .iter()
         .zip(&names)
-        .map(|(remote, name)| job(remote, name, extract))
+        .map(|(remote, name)| fetch::listed_job(remote, name, extract))
         .collect();
+    approve(context, &cache, &jobs)?;
+    vet(&cache, &files, &names, extract)?;
     let started = Instant::now();
     let fetched = fetch::all(context, &net, &cache, jobs).await?;
     let paths: Vec<String> = files
@@ -151,6 +145,16 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
             })
             .collect(),
     })
+}
+
+fn approve(context: &Context, _cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
+    let size: u64 = jobs.iter().filter_map(|job| job.fetch.expect.size).sum();
+    super::confirm(
+        &context.output,
+        context.yes,
+        &units::count(jobs.len() as u64, "file", "files"),
+        size,
+    )
 }
 
 /// the names the files will have, and the paths they will take in the folder when the cache
@@ -368,27 +372,6 @@ fn folder_for(
             .unwrap_or_else(|| "download".to_owned()),
     };
     PathBuf::from(name)
-}
-
-/// the download of one listed file, which will be called `name`. a file no checksum pins is asked
-/// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
-/// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
-fn job(remote: &Remote, name: &str, extract: bool) -> Job {
-    Job {
-        fetch: Fetch {
-            expect: Expect {
-                sha256: remote.sha256,
-                md5: remote.md5,
-                size: remote.size,
-            },
-            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-            unpack: extract && archive::by_name(name) == Some(Packed::Archive),
-            ..source::fetch_plan(&remote.url)
-        },
-        label: remote.path.clone(),
-        dataset: None,
-        again: None,
-    }
 }
 
 fn tell_fetched(
