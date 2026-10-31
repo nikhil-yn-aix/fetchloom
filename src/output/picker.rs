@@ -35,16 +35,29 @@ pub(super) fn choose(
 
 fn draw(terminal: &Term, question: &str, options: &[String], cursor: usize, style: Style) {
     let width = usize::from(terminal.size().1);
-    let keys = if style.unicode {
-        "\u{2191}\u{2193} move \u{b7} 1-9 or enter choose \u{b7} q cancel"
-    } else {
-        "up/down move, 1-9 or enter choose, q cancel"
-    };
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
     let question = plain(question);
-    let room = width.saturating_sub(question.len() + 4);
-    let keys = console::truncate_str(keys, room, "");
+    let room = width.saturating_sub(question.chars().count() + 4);
+    // the longest legend that fits, so cancel stays visible on a narrow terminal
+    let legends: [&str; 3] = if style.unicode {
+        [
+            "\u{2191}\u{2193} move \u{b7} 1-9 or enter choose \u{b7} q cancel",
+            "\u{2191}\u{2193} enter \u{b7} q cancel",
+            "q cancels",
+        ]
+    } else {
+        [
+            "up/down move, 1-9 or enter choose, q cancel",
+            "up/down, enter, q cancel",
+            "q cancels",
+        ]
+    };
+    let keys = legends
+        .iter()
+        .find(|legend| legend.chars().count() <= room)
+        .copied()
+        .unwrap_or("");
     let _ = terminal.write_line(&format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}"));
     for (index, option) in options.iter().enumerate() {
         let _ = terminal.write_line(&row(option, index, cursor, style, width));
@@ -88,22 +101,34 @@ fn cancelled() -> Error {
         .help("run it again with one of the references above, or with a link or an id")
 }
 
-/// one option: the reference, then its title and facts, dim unless the cursor is on it.
+/// one option: the reference, then its title and facts, dim unless the cursor is on it. the
+/// reference is never cut; the rest gives way on a narrow terminal.
 fn row(option: &str, index: usize, cursor: usize, style: Style, width: usize) -> String {
     let text = plain(option);
-    let text = console::truncate_str(&text, width.saturating_sub(7), "\u{2026}");
     let (reference, rest) = text.split_once("  ").unwrap_or((&text, ""));
+    let rest = rest.trim_start();
+    // the padding that lines the titles up, kept apart from the bold reference
+    let column = text.chars().count() - rest.chars().count();
+    let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
+    let room = width.saturating_sub(column + 7);
+    let more = if style.unicode { "\u{2026}" } else { "..." };
+    let rest = if room < 8 {
+        String::new()
+    } else {
+        console::truncate_str(rest, room, more).into_owned()
+    };
+    let rest = super::shown(&rest, style.unicode);
     let number = index + 1;
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
     if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
         let cyan = paint(style.color, ACCENT.bold());
-        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}  {rest}")
+        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}  {rest}")
             .trim_end()
             .to_owned()
     } else {
-        format!("    {dim}{number}{dim:#} {reference}  {dim}{rest}{dim:#}")
+        format!("    {dim}{number}{dim:#} {reference}{pad}  {dim}{rest}{dim:#}")
             .trim_end()
             .to_owned()
     }
@@ -202,8 +227,25 @@ mod tests {
         let unsafe_text = row("iris\x1b[2J\nnext", 0, 0, style(false, false), 80);
         assert!(!unsafe_text.contains(char::is_control));
         assert!(unsafe_text.contains("\\u{1b}"));
+        let narrow = row(
+            "zenodo:1  a long title for a narrow terminal",
+            0,
+            0,
+            style(false, false),
+            30,
+        );
+        assert!(console::measure_text_width(&narrow) <= 30, "{narrow}");
+        assert!(narrow.contains("zenodo:1"), "the reference is never cut");
+        let tight = row(
+            "kaggle:owner/a-very-long-dataset-name  title",
+            1,
+            0,
+            style(false, false),
+            30,
+        );
         assert!(
-            console::measure_text_width(&row(&"x".repeat(100), 0, 0, style(false, false), 30)) < 30
+            tight.contains("kaggle:owner/a-very-long-dataset-name"),
+            "{tight}"
         );
     }
 

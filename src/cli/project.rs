@@ -319,7 +319,11 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let _held = hold(context, &project, "sync").await?;
     let (text, manifest) = project.manifest()?;
     if args.locked {
-        check(&project, &manifest, project.lock()?.as_ref()).map_err(|error| {
+        let Some(lock) = project.lock()? else {
+            return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
+                .help("run `fetchloom lock` and commit data.lock, or sync without --locked"));
+        };
+        check(&project, &manifest, Some(&lock)).map_err(|error| {
             error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
         })?;
     }

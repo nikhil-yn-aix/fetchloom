@@ -217,7 +217,12 @@ impl Net {
         if self.offline.enabled() {
             return known
                 .map(|record| fetched(record, Origin::Cache))
-                .ok_or_else(|| failure::offline(&fetch.url, self.offline));
+                .ok_or_else(|| {
+                    // a link fetched before has a record, so its bytes are the ones missing
+                    let pinned = fetch.expect.sha256.is_some()
+                        || cache.url_record(fetch.url.as_str()).is_some();
+                    failure::offline(&fetch.url, self.offline, pinned)
+                });
         }
         self.typed
             .check(&fetch.from)

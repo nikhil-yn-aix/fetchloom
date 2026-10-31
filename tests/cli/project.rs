@@ -61,6 +61,21 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
 }
 
 #[test]
+fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["--offline", "add", &server.url])?;
+    assert_eq!(output.status.code(), Some(20));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("a new link must be downloaded once to learn its fingerprint"),
+        "{stderr}"
+    );
+    assert_eq!(server.requests().len(), 0, "offline sends nothing");
+    Ok(())
+}
+
+#[test]
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
@@ -264,7 +279,7 @@ fn an_edit_through_a_shared_link_says_every_project_sees_it() -> Result {
     let reason = &json(&kept)?["result"]["placement"]["kept"][0]["reason"];
     if added["work"]["hardlinks"] == 1 {
         assert!(
-            status.contains("shared with the cache through a link"),
+            status.contains("changed through a hardlink other projects may share"),
             "{status}"
         );
         assert_eq!(reason, "shared");
@@ -459,6 +474,14 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
     );
     assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
     assert_eq!(sandbox.run(&["sync", "--locked"])?.status.code(), Some(0));
+    let empty = sandbox.folder("empty")?;
+    fs::write(empty.join("data.toml"), "")?;
+    let refused = sandbox.command_in(&empty, &["sync", "--locked"]).output()?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr)?);
+    assert!(
+        !empty.join("data.lock").exists(),
+        "--locked never writes data.lock"
+    );
     Ok(())
 }
 

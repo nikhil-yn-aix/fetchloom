@@ -41,7 +41,7 @@ pub(super) fn run(context: &Context) -> Result<Report, Error> {
             "add one with `fetchloom add <link>`, or find one with `fetchloom search <words>`",
         );
     } else {
-        output.answer(&table(&report.datasets));
+        output.answer(&table(&report.datasets, output.answer_width()));
     }
     Ok(report)
 }
@@ -65,9 +65,23 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
     Report { datasets }
 }
 
-/// the datasets as aligned columns, one per line, for a person or for `grep`.
-fn table(datasets: &[Listed]) -> String {
-    let rows: Vec<[String; 4]> = datasets
+/// the datasets as aligned columns, one per line, for a person or for `grep`. on a terminal
+/// too narrow for every column, the source gives way, since `--json` and data.toml keep it.
+fn table(datasets: &[Listed], width: Option<usize>) -> String {
+    let full = columns(datasets, true);
+    let widest = full
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default();
+    match width {
+        Some(width) if widest > width => columns(datasets, false),
+        _ => full,
+    }
+}
+
+fn columns(datasets: &[Listed], with_source: bool) -> String {
+    let rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
             let contents = match (dataset.files, dataset.bytes) {
@@ -78,15 +92,16 @@ fn table(datasets: &[Listed]) -> String {
                 ),
                 _ => "not locked yet".to_owned(),
             };
-            [
-                dataset.name.clone(),
-                dataset.reference.clone(),
-                contents,
-                dataset.folder.clone(),
-            ]
+            let mut row = vec![dataset.name.clone()];
+            if with_source {
+                row.push(dataset.reference.clone());
+            }
+            row.extend([contents, dataset.folder.clone()]);
+            row
         })
         .collect();
-    let widths: Vec<usize> = (0..3)
+    let last = rows.first().map_or(0, Vec::len).saturating_sub(1);
+    let widths: Vec<usize> = (0..last)
         .map(|column| {
             rows.iter()
                 .map(|row| row[column].chars().count())
@@ -104,7 +119,7 @@ fn table(datasets: &[Listed]) -> String {
             let pad = width - cell.chars().count();
             let _ = write!(text, "{cell}{:pad$}  ", "");
         }
-        text.push_str(&row[3]);
+        text.push_str(&row[last]);
     }
     text
 }
@@ -121,9 +136,15 @@ mod tests {
         .unwrap();
         let report = listed(&manifest, &Lock::default());
         assert_eq!(
-            table(&report.datasets),
+            table(&report.datasets, None),
             "iris          zenodo:3608990            not locked yet  data/iris\n\
              mnist-digits  hf:datasets/ylecun/mnist  not locked yet  data/mnist-digits"
+        );
+        assert_eq!(
+            table(&report.datasets, Some(50)),
+            "iris          not locked yet  data/iris\n\
+             mnist-digits  not locked yet  data/mnist-digits",
+            "a narrow terminal drops the source"
         );
     }
 }

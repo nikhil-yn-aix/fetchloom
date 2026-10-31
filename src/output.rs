@@ -166,6 +166,73 @@ impl Output {
         units::clip(text, most, self.style.more())
     }
 
+    /// the width of the terminal a person watches the story on, or none for a pipe or a file.
+    fn width(&self) -> Option<usize> {
+        self.style
+            .interactive
+            .then(|| usize::from(console::Term::stderr().size().1))
+    }
+
+    /// the width of stdout when it is a terminal, or none when a script reads it.
+    pub(crate) fn answer_width(&self) -> Option<usize> {
+        self.style
+            .watched
+            .then(|| usize::from(console::Term::stdout().size().1))
+    }
+
+    /// one numbered choice: what to type, padded to `pad`, then its title and dim facts. on a
+    /// narrow terminal the facts, then the title, give way, and what to type never does.
+    pub(crate) fn candidate(
+        &self,
+        number: usize,
+        typed: &str,
+        pad: usize,
+        title: &str,
+        facts: &str,
+    ) {
+        if !self.tells(Level::Normal) {
+            return;
+        }
+        let color = self.style.color;
+        let cyan = paint(color, ACCENT.bold());
+        let accent = paint(color, ACCENT);
+        let dim = paint(color, Paint::new().dimmed());
+        let typed = plain(typed);
+        let title = plain(title);
+        let head = format!("{cyan}{number:>11}{cyan:#} {accent}{typed:pad$}{accent:#}");
+        let head_width = 12 + typed.chars().count().max(pad);
+        let width = self.width().unwrap_or(usize::MAX);
+        let mut line = if head_width > width {
+            format!("{cyan}{number:>3}{cyan:#} {accent}{typed}{accent:#}")
+        } else {
+            head
+        };
+        if head_width <= width {
+            let room = width - head_width;
+            let mut rest = String::new();
+            if !title.is_empty() {
+                let _ = write!(rest, "  {title}");
+            }
+            if !facts.is_empty() {
+                let gap = if title.is_empty() { "  " } else { " \u{b7} " };
+                let _ = write!(rest, "{gap}{facts}");
+            }
+            if rest.chars().count() > room {
+                rest = console::truncate_str(&rest, room, self.style.more()).into_owned();
+            }
+            if rest.trim().chars().count() > 3 {
+                let split = if title.is_empty() {
+                    0
+                } else {
+                    rest.find(" \u{b7} ").unwrap_or(rest.len())
+                };
+                let (named, told) = rest.split_at(split);
+                let _ = write!(line, "{named}{dim}{told}{dim:#}");
+            }
+        }
+        self.line(line.trim_end());
+    }
+
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
         if !self.json {
@@ -192,7 +259,7 @@ impl Output {
     /// a bar for one download, hidden unless a person is watching the terminal.
     pub(crate) fn bar(&self, verb: &'static str, message: String) -> Bar {
         match &self.bars {
-            Some(bars) => Bar::add(bars, verb, message, self.style.color),
+            Some(bars) => Bar::add(bars, verb, message, self.style.color, self.style.unicode),
             None => Bar::hidden(),
         }
     }
@@ -223,8 +290,12 @@ impl Output {
                 None => (total, unknown + 1),
             });
         let color = self.style.color;
+        let unicode = self.style.unicode;
         Ticker::start(verb, what, known, move |verb, text| {
-            write_line(color, &verb_line(verb, text, AnsiColor::Cyan, color));
+            write_line(
+                color,
+                &shown(&verb_line(verb, text, AnsiColor::Cyan, color), unicode),
+            );
         })
     }
 
@@ -349,12 +420,27 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let write = || write_line(self.style.color, text);
+        let text = shown(text, self.style.unicode);
+        let write = || write_line(self.style.color, &text);
         match &self.bars {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
     }
+}
+
+/// `text` as the terminal can draw it: the few symbols fetchloom uses become ascii where the
+/// terminal or locale cannot show unicode.
+pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
+    if unicode || text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.replace('\u{b7}', "-")
+            .replace('\u{2026}', "...")
+            .replace('\u{203a}', ">")
+            .replace('\u{2501}', "-"),
+    )
 }
 
 pub(crate) fn help(text: &str, choice: ColorChoice) {

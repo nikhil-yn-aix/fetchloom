@@ -171,7 +171,7 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
         (
             &["get", server.url.as_str()],
             sandbox.work(),
-            "is not in the cache",
+            "a new link must be downloaded once to learn its fingerprint",
             None,
         ),
         (

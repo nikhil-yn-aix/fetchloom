@@ -94,7 +94,15 @@ fn wants_unicode(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool
             .iter()
             .any(|name| var(name).is_some());
     }
-    true
+    // the locale says which characters the terminal can draw: the first of these that is set
+    // wins, as in C programs. none set keeps unicode, as most terminals draw it.
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|name| var(name).filter(|value| !value.is_empty()));
+    locale.is_none_or(|locale| {
+        let locale = locale.to_string_lossy().to_ascii_lowercase();
+        locale.contains("utf-8") || locale.contains("utf8")
+    })
 }
 
 #[cfg(test)]
@@ -149,6 +157,22 @@ mod tests {
             wants_unicode(false, &env(&[])),
             "files and pipes keep unicode"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unicode_follows_the_locale() {
+        assert!(wants_unicode(true, &env(&[("LANG", "en_US.UTF-8")])));
+        assert!(wants_unicode(true, &env(&[("LANG", "C.utf8")])));
+        assert!(!wants_unicode(true, &env(&[("LANG", "C")])));
+        assert!(!wants_unicode(
+            true,
+            &env(&[("LC_ALL", "C"), ("LANG", "en_US.UTF-8")])
+        ));
+        assert!(wants_unicode(
+            true,
+            &env(&[("LC_ALL", ""), ("LANG", "en_US.UTF-8")])
+        ));
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub(super) fn tell(
                 kept.path
             ),
             Reason::Shared => format!(
-                "{} has changed through a link it shares with the cache, so every project using it sees the change. it stays; if the change is not yours, `fetchloom sync --force` restores it",
+                "{} has changed in place through a hardlink, so every project sharing that file sees the change. it stays; if the change is not yours, `fetchloom sync --force` restores it",
                 kept.path
             ),
             Reason::Foreign => format!(

@@ -194,7 +194,7 @@ fn list(output: &Output, status: &Status) {
             if status.shared.contains(path) {
                 output.mark(
                     verb,
-                    &format!("{path} · shared with the cache through a link, so other projects see it too"),
+                    &format!("{path} · changed through a hardlink other projects may share"),
                 );
             } else {
                 output.mark(verb, path);

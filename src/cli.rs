@@ -212,6 +212,9 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
+    if let Some(refused) = &logs.refused {
+        context.output.warn(refused);
+    }
     context.offline = net::Offline::from_settings(
         global.offline,
         var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),

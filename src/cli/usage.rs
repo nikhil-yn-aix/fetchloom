@@ -104,7 +104,19 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let placement = (err.kind() == ErrorKind::UnknownArgument)
         .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg)))
         .flatten();
-    let help = if let Some(placement) = placement {
+    // `fetchloom add fashion mnist` meant one search, not a link and a stray word
+    let quoted = (err.kind() == ErrorKind::UnknownArgument
+        && matches!(parent, Some("add" | "get")))
+    .then(|| named(ContextKind::InvalidArg))
+    .flatten()
+    .filter(|arg| !arg.starts_with('-'))
+    .map(|_| {
+        let command = parent.unwrap_or("add");
+        format!(
+            "to search for several words, quote them, as in `fetchloom {command} \"fashion mnist\"`"
+        )
+    });
+    let help = if let Some(placement) = placement.or(quoted) {
         placement
     } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
         match parent {
@@ -240,6 +252,13 @@ mod tests {
         ] {
             assert_eq!(problem(arguments)?.message, expected);
         }
+        let quoted = problem(&["fetchloom", "add", "fashion", "mnist"])?;
+        assert!(
+            quoted
+                .help
+                .unwrap()
+                .contains("`fetchloom add \"fashion mnist\"`")
+        );
         Ok(())
     }
 

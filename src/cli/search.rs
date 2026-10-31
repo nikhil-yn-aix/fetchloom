@@ -25,8 +25,10 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             units::count(report.candidates.len() as u64, "dataset", "datasets")
         ),
     );
-    for (number, row) in rows(output, &report.candidates).iter().enumerate() {
-        output.step(&(number + 1).to_string(), row);
+    let parts = parts(output, &report.candidates);
+    let pad = widest(&parts);
+    for (number, (reference, title, facts)) in parts.iter().enumerate() {
+        output.candidate(number + 1, reference, pad, title, facts);
     }
     for candidate in &report.candidates {
         output.answer_untold(&candidate.reference.to_string());
@@ -58,12 +60,16 @@ pub(super) async fn pick(
 }
 
 async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, Error> {
+    if words.trim().is_empty() {
+        return Err(Error::new(Kind::Usage, "there are no words to search for")
+            .help("name what you are looking for, as in `fetchloom search iris`"));
+    }
     if context.offline.enabled() {
         return Err(Error::new(
             Kind::OfflineMissing,
             format!("searching for \"{words}\" needs the internet"),
         )
-        .help("paste a link or an id instead, such as zenodo:3608990, or search again online"));
+        .help("search again online. offline, `fetchloom sync --offline` places what a project already pinned"));
     }
     context.output.step(
         "Searching",
@@ -86,21 +92,19 @@ async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, 
     })
 }
 
-fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
-    let references: Vec<_> = candidates
-        .iter()
-        .map(|candidate| candidate.reference.to_string())
-        .collect();
-    let width = references.iter().map(String::len).max().unwrap_or_default();
+/// each candidate as what to type, its title, and its facts. hugging face titles are the
+/// repository id the reference already shows, so they are left out.
+fn parts(output: &Output, candidates: &[Candidate]) -> Vec<(String, String, String)> {
     candidates
         .iter()
-        .zip(references)
-        .map(|(candidate, reference)| {
-            // hugging face titles are the repository id the reference already shows
+        .map(|candidate| {
+            let reference = candidate.reference.to_string();
+            let title = if reference.ends_with(&candidate.title) {
+                String::new()
+            } else {
+                output.clip(&candidate.title, 52)
+            };
             let mut facts: Vec<String> = Vec::new();
-            if !reference.ends_with(&candidate.title) {
-                facts.push(output.clip(&candidate.title, 52));
-            }
             facts.extend(candidate.size.map(units::size));
             facts.extend(
                 candidate
@@ -108,7 +112,31 @@ fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
                     .map(|count| format!("{} downloads", units::compact(count))),
             );
             facts.extend(candidate.note.iter().cloned());
-            format!("{reference:width$}  {}", facts.join(" \u{b7} "))
+            (reference, title, facts.join(" \u{b7} "))
+        })
+        .collect()
+}
+
+fn widest(parts: &[(String, String, String)]) -> usize {
+    parts
+        .iter()
+        .map(|(reference, _, _)| reference.chars().count())
+        .max()
+        .unwrap_or_default()
+}
+
+/// the candidates as plain aligned lines, for the picker and for an error's details.
+fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
+    let parts = parts(output, candidates);
+    let width = widest(&parts);
+    parts
+        .into_iter()
+        .map(|(reference, title, facts)| {
+            let rest: Vec<String> = [title, facts]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect();
+            format!("{reference:width$}  {}", rest.join(" \u{b7} "))
                 .trim_end()
                 .to_owned()
         })
