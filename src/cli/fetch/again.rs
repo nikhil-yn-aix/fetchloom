@@ -113,3 +113,85 @@ pub(super) async fn recover(
     ));
     Ok(fetched)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{Level, Style};
+    use crate::source::recorded::block_on;
+
+    struct Failing(Error);
+
+    impl net::Api for Failing {
+        async fn get(&self, _url: &url::Url) -> Result<net::Response, Error> {
+            Err(self.0.clone())
+        }
+    }
+
+    fn context() -> crate::cli::Context {
+        let mut context = crate::cli::Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.offline = net::Offline::Flag;
+        context
+    }
+
+    #[test]
+    fn refresh_failures_keep_their_kind_help_and_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let net = context.net();
+        let resolved = "zenodo:3608990";
+        let job = Job {
+            fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
+            label: "iris/data.csv".to_owned(),
+            dataset: Some("iris".to_owned()),
+            again: Some(Again {
+                resolved: resolved.to_owned(),
+                path: "data.csv".to_owned(),
+                alone: true,
+            }),
+        };
+        for kind in [Kind::AuthRequired, Kind::SourceInvalid, Kind::Interrupted] {
+            let source = Failing(
+                Error::new(kind, "listing failed")
+                    .detail("source-specific detail")
+                    .help("source-specific recovery"),
+            );
+            block_on(async {
+                let listings = Listings::default();
+                assert!(listings.get(&source, resolved).await.is_err());
+                for _ in 0..2 {
+                    let error = recover(
+                        &net,
+                        &cache,
+                        &context.output,
+                        &listings,
+                        &job,
+                        Error::new(Kind::ReferenceUnresolved, "recorded URL returned 404"),
+                        &|_| Ok(()),
+                    )
+                    .await
+                    .unwrap_err();
+                    assert_eq!(error.kind, kind);
+                    assert_eq!(error.message, "listing failed");
+                    assert_eq!(error.help.as_deref(), Some("source-specific recovery"));
+                    assert!(error.details.iter().any(|line| line == "source-specific detail"));
+                    if kind == Kind::Interrupted {
+                        assert_eq!(error.kind.exit_code(), 130);
+                        assert_eq!(error.details, ["source-specific detail"]);
+                    }
+                }
+            });
+        }
+    }
+}
