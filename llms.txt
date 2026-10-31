@@ -8,3 +8,4 @@
 - [cli](docs/cli.md): every command, option and output, plus archives, cache and environment settings
 - [agents](docs/agents.md): --json recipes, error kinds, exit codes, the python helper and offline use
 - [formats](docs/formats.md): data.toml, data.lock, cache records, environment settings and the JSON contract
+- [scope](docs/scope.md): supported sources, platforms and limits

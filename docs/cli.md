@@ -40,7 +40,7 @@ fetchloom sync --force
 
 `sync` places the files pinned in `data.lock`. if the manifest changed or has no lock yet, it updates the lock first. unchanged entries keep their pins. it reuses local files and cached bytes, downloading what is missing when online.
 
-files are read-only by default. placement tries a reflink, then a hardlink, then a copy, depending on the filesystem. recognized synced folders skip hardlinks. for writable inputs, set `copy = true` on the dataset in `data.toml`, then sync. this uses a writable reflink or copy, never a hardlink. [placement](architecture.md#placing-files) explains sharing and cache trust.
+files are read-only by default. placement tries a reflink, then a hardlink, then a copy, depending on the filesystem. recognized synced folders skip hardlinks. for writable inputs, set `copy = true` on the dataset in `data.toml`, then sync. this uses a writable reflink or copy, never a hardlink. [placement](dev/architecture.md#place) explains sharing and cache trust.
 
 `--force` can replace edited or untracked files at locked paths. save anything you need first. it does not delete unrelated extras or edited files no longer needed. without it, sync keeps conflicts and reports them. see [status and hand edits](#status-and-hand-edits).
 
@@ -138,7 +138,7 @@ paths below are relative to the dataset or `get` folder:
 
 a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file keeps its name; otherwise members go under the archive's stem. the archive's parent path is retained. colliding destinations fail.
 
-an archive with no regular files creates no dataset folder in a project; `get` still creates an empty output folder. members enter the cache before placement. packed bytes can then be removed unless a registered project needs them packed. [archive limits](architecture.md#archives) and [tree hashes](formats.md#the-tree-hash) cover validation.
+an archive with no regular files creates no dataset folder in a project; `get` still creates an empty output folder. members enter the cache before placement. packed bytes can then be removed unless a registered project needs them packed. [archive limits](dev/architecture.md#archive) and [tree hashes](formats.md#the-tree-hash) cover validation.
 
 ## offline, recovery and approval
 

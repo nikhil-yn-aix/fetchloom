@@ -1,6 +1,6 @@
 # benchmark plans
 
-the plans the harness runs for the method in [benchmarks](../../docs/benchmarks.md). the tools and their versions are in [tools](../tools.md); the wrappers that give a tool more than one command are in `bench/tools/`, one python file for both systems, run with each system's bench venv.
+the plans the harness runs for the method in [benchmarks](../../docs/dev/benchmarks.md). the tools and their versions are in [tools](../tools.md); the wrappers that give a tool more than one command are in `bench/tools/`, one python file for both systems, run with each system's bench venv.
 
 ## lab
 
