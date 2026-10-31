@@ -537,3 +537,53 @@ fn get_reports_zero_byte_copies_in_a_synced_folder() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn data_file_links_warn_when_the_server_returns_html() -> Result {
+    for (path, warns) in [
+        ("/iris.csv", true),
+        ("/iris.CSV", true),
+        ("/index.html", false),
+        ("/index.HTM", false),
+        ("/index.xhtml", false),
+        ("/download", false),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let body = b"<html>not the data</html>";
+        let server = Server::start(
+            path,
+            vec![reply(
+                "200 OK",
+                &[("Content-Type", "text/html; charset=utf-8")],
+                body,
+            )],
+        )?;
+        let output = sandbox.run(&["get", &server.url])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let message = format!(
+            "{} came back as a web page, not a data file. the link may open a page instead of downloading; look for a download or raw link",
+            &path[1..]
+        );
+        assert_eq!(stderr.contains(&message), warns, "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn repository_file_pages_report_the_raw_link_before_downloading() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&[
+        "get",
+        "https://github.com/mwaskom/seaborn-data/blob/master/iris.csv",
+        "--offline",
+    ])?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success());
+    assert!(stderr.contains("Using raw file"), "{stderr}");
+    assert!(
+        stderr.contains("https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv"),
+        "{stderr}"
+    );
+    Ok(())
+}

@@ -127,6 +127,9 @@ pub(crate) enum Event {
         total: Option<u64>,
         resumed: u64,
     },
+    WebPage {
+        name: Option<String>,
+    },
     Bytes(u64),
 }
 
@@ -401,6 +404,9 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = server_name(&head)?;
+        if headers::is_html(&head) {
+            on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+        }
         let proven = pinned || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
         let body = Body {

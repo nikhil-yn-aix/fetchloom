@@ -465,6 +465,14 @@ fn cite_place(error: Error, entry: &Entry, key: &str) -> Error {
     }
 }
 
+pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
+    if let Reference::Url(raw) = parsed
+        && Url::parse(typed.trim()).is_ok_and(|typed| typed != *raw)
+    {
+        output.step("Using", &format!("raw file {}", crate::net::Shown(raw)));
+    }
+}
+
 /// prints what a reference resolved to, before any file of it downloads.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     // a plain link has nothing to tell before its bytes arrive

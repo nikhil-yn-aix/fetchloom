@@ -177,6 +177,21 @@ impl<'a> Watch<'a> {
                 bar.start(total, resumed);
                 self.overall.advance(resumed);
             }
+            Event::WebPage { ref name } => {
+                let given = name.as_deref().and_then(crate::name::sanitize);
+                let name = given.as_deref().unwrap_or(label);
+                if std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|extension| {
+                        !matches!(
+                            extension.to_string_lossy().to_ascii_lowercase().as_str(),
+                            "htm" | "html" | "xhtml" | ""
+                        )
+                    })
+                {
+                    self.output.warn(&format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading; look for a download or raw link"));
+                }
+            }
             Event::Bytes(bytes) => {
                 bar.advance(bytes);
                 self.overall.advance(bytes);

@@ -52,6 +52,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         args.link = super::search::pick(context, net.as_ref(), &args.link, "add").await?;
     }
     let parsed = Reference::parse(&args.link)?;
+    engine::tell_raw(&context.output, &args.link, &parsed.reference);
     parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
@@ -889,12 +890,10 @@ fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
     Ok(())
 }
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
-/// pasted for drive, dropbox and plain links, which people recognize by their link.
+/// pasted for drive and dropbox, and the raw endpoint for plain file links.
 fn stored_reference(typed: &str, parsed: &Parsed) -> String {
     match parsed.reference {
-        Reference::Url(_) | Reference::Drive(_) | Reference::Dropbox(_)
-            if typed.contains("://") =>
-        {
+        Reference::Drive(_) | Reference::Dropbox(_) if typed.contains("://") => {
             typed.trim().to_owned()
         }
         _ => parsed.reference.to_string(),
@@ -915,6 +914,16 @@ fn net(context: &Context, manifest: &Manifest) -> Net {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn raw_references_are_written_instead_of_repository_pages() {
+        let typed = "https://github.com/org/repo/blob/main/iris.csv";
+        let parsed = crate::source::Reference::parse(typed).unwrap();
+        assert_eq!(
+            super::stored_reference(typed, &parsed),
+            "https://raw.githubusercontent.com/org/repo/main/iris.csv"
+        );
+    }
+
     use super::*;
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;

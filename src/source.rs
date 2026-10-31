@@ -320,11 +320,43 @@ fn link(text: &str) -> Result<Parsed, Error> {
             .help("paste the link of the dataset's own page, or its id, as in `fetchloom add zenodo:3608990`"));
         }
         return Ok(Parsed {
-            reference: Reference::Url(url),
+            reference: Reference::Url(raw_link(&url).unwrap_or(url)),
             file: None,
         });
     };
     Ok(Parsed { reference, file })
+}
+
+/// repository file pages have a stable raw endpoint, unlike their HTML view.
+fn raw_link(url: &Url) -> Option<Url> {
+    let parts: Vec<_> = url.path_segments()?.collect();
+    if parts.last().is_none_or(|part| part.is_empty()) {
+        return None;
+    }
+    let mut raw = url.clone();
+    match url.host_str()? {
+        "github.com" if parts.len() >= 5 && matches!(parts[2], "blob" | "raw") => {
+            raw.set_scheme("https").ok()?;
+            raw.set_host(Some("raw.githubusercontent.com")).ok()?;
+            raw.set_path(&format!(
+                "/{}/{}/{}",
+                parts[0],
+                parts[1],
+                parts[3..].join("/")
+            ));
+        }
+        "gitlab.com" => {
+            let marker = parts.windows(2).position(|pair| pair == ["-", "blob"])?;
+            if marker < 2 || parts.len() < marker + 4 {
+                return None;
+            }
+            let mut parts = parts;
+            parts[marker + 1] = "raw";
+            raw.set_path(&format!("/{}", parts.join("/")));
+        }
+        _ => return None,
+    }
+    Some(raw)
 }
 
 /// the source a host belongs to, for links to its pages that are not datasets. downloading such a
@@ -456,6 +488,44 @@ mod tests {
 
     fn parse(text: &str) -> Parsed {
         Reference::parse(text).unwrap()
+    }
+
+    #[test]
+    fn repository_file_pages_resolve_to_raw_references() {
+        for (typed, raw) in [
+            (
+                "https://github.com/mwaskom/seaborn-data/blob/master/iris.csv",
+                "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv",
+            ),
+            (
+                "http://github.com/org/repo/raw/main/folder/data%20set.csv?download=1",
+                "https://raw.githubusercontent.com/org/repo/main/folder/data%20set.csv?download=1",
+            ),
+            (
+                "https://gitlab.com/group/sub/repo/-/blob/main/data.csv",
+                "https://gitlab.com/group/sub/repo/-/raw/main/data.csv",
+            ),
+        ] {
+            let parsed = parse(typed);
+            assert_eq!(parsed.reference.to_string(), raw);
+            assert!(parsed.file.is_none());
+            let Reference::Url(url) = parsed.reference else {
+                panic!("plain URL expected")
+            };
+            let listing = single(&url);
+            assert_eq!(listing.resolved.to_string(), raw);
+            assert_eq!(listing.files[0].url.as_str(), raw);
+        }
+        for unchanged in [
+            "https://github.com/org/repo/tree/main",
+            "https://github.com/org/repo/blob/main",
+            "https://github.com/org/repo/blob/main/",
+            "https://github.com.example.org/org/repo/blob/main/data.csv",
+            "https://gitlab.com/group/repo/-/blob/main",
+            "https://example.org/org/repo/blob/main/data.csv",
+        ] {
+            assert_eq!(parse(unchanged).reference.to_string(), unchanged);
+        }
     }
 
     #[test]

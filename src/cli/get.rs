@@ -58,6 +58,7 @@ pub(super) async fn run(context: &Context, mut args: Get) -> Result<Report, Erro
         args.link = super::search::pick(context, net.as_ref(), &args.link, "get").await?;
     }
     let parsed = Reference::parse(&args.link)?;
+    engine::tell_raw(&context.output, &args.link, &parsed.reference);
     let cache = open_cache()?;
     net.trust(parsed.reference.written_host());
     let listing = engine::resolve(&context.output, &parsed.reference, &net).await?;
