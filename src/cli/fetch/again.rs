@@ -23,7 +23,7 @@ pub(in crate::cli) struct Again {
     pub(in crate::cli) alone: bool,
 }
 
-type Asked = Result<Arc<Listing>, String>;
+type Asked = Result<Arc<Listing>, Error>;
 
 /// the listings asked for again in one run, so a dataset is resolved once however many of its
 /// links died.
@@ -37,13 +37,8 @@ impl Listings {
             return listing.clone();
         }
         let listing = match Reference::parse(resolved) {
-            Ok(parsed) => parsed
-                .reference
-                .resolve(net)
-                .await
-                .map(Arc::new)
-                .map_err(|err| err.message),
-            Err(err) => Err(err.message),
+            Ok(parsed) => parsed.reference.resolve(net).await.map(Arc::new),
+            Err(err) => Err(err),
         };
         known.insert(resolved.to_owned(), listing.clone());
         listing
@@ -51,8 +46,7 @@ impl Listings {
 }
 
 /// downloads `job`'s file from where its source lists it now, when `failed` says the recorded
-/// link is gone. any other failure, or one the source cannot help with, comes back as it was,
-/// with a line saying what asking again found.
+/// link is gone. lookup failures keep their own recovery advice; interruption stops the batch.
 pub(super) async fn recover(
     net: &Net,
     cache: &Cache,
@@ -70,8 +64,12 @@ pub(super) async fn recover(
     }
     let listing = match listings.get(net, &again.resolved).await {
         Ok(listing) => listing,
-        Err(reason) => {
-            return Err(failed.detail(format!("asking {} again failed: {reason}", again.resolved)));
+        Err(error) if error.kind == Kind::Interrupted => return Err(error),
+        Err(error) => {
+            return Err(error.detail(format!(
+                "asking {} again failed after: {}",
+                again.resolved, failed.message
+            )));
         }
     };
     let found = listing
@@ -100,6 +98,9 @@ pub(super) async fn recover(
         ..source::fetch_plan(&remote.url)
     };
     let fetched = net.download(&fetch, cache, on).await.map_err(|err| {
+        if err.kind == Kind::Interrupted {
+            return err;
+        }
         err.detail(format!(
             "its recorded link is gone, so this came from where {} lists it now",
             again.resolved
