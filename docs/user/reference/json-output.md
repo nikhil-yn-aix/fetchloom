@@ -40,7 +40,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
-| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
+| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: paths whose contents, metadata or directory entries could not be read |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
@@ -66,6 +66,8 @@ status arrays:
 status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
+
+`cache gc` keeps objects no project needs until they are a day old by modification time. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
 `cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` paths; the array length is the failed-path count. human output and JSON `warnings` name those paths. a path already absent is not a failed removal.
 

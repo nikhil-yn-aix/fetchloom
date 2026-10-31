@@ -27,8 +27,10 @@ stdout excerpt from `fetchloom --help`:
 ## inspect
 
 1. open the configured cache and inspect objects and registered project locks.
-2. print the cache root on stdout.
-3. report payload sizes and registered projects on stderr.
+2. report the cache path, payload sizes and registered projects in the story.
+3. print the bare cache path on stdout only when stdout is not a terminal or quiet mode hides the story.
+
+at a terminal, the story's cache line already shows the path. JSON returns it in `result.path`.
 
 byte totals exclude indexes and partial downloads. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 
@@ -37,6 +39,9 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 1. read registered project locks to find needed objects and unpacked members.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use.
 3. clean abandoned partial and temporary files, then report deleted counts and bytes.
+4. report unneeded objects kept because they are less than a day old.
+
+the kept-file summary gives the retained bytes and file count and says they become eligible when a day old. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
