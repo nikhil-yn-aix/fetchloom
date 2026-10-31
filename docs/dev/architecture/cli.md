@@ -16,6 +16,7 @@ command handlers order effects across modules. `Context` reads settings once and
 | [project.rs](../../../src/cli/project.rs) | project-changing commands and ready-path lookup | `Report`, `add`, `remove`, `sync`, `lock`, `path`, `sync_all` |
 | [get.rs](../../../src/cli/get.rs), [get/folder.rs](../../../src/cli/get/folder.rs) | one-off retrieval and destination checks | `Report`, `run`, `Outcome`, `check`, `put_all` |
 | [search.rs](../../../src/cli/search.rs) | catalog search, candidate rows and explicit selection | `Report`, `run`, `pick`, `find` |
+| [picker.rs](../../../src/output/picker.rs) | terminal candidate selection and cancellation | `choose`, `selection_key`, `row` |
 | [list.rs](../../../src/cli/list.rs) | manifest and lock listing without placement | `Report`, `Listed`, `run`, `listed` |
 | [status.rs](../../../src/cli/status.rs) | local comparison and summaries | `Status`, `run`, `brief` |
 | [cache.rs](../../../src/cli/cache.rs) | cache command reports and retained-project discovery | `Info`, `info`, `gc`, `verify`, `needed` |
@@ -50,6 +51,16 @@ plain-word `add` and `get` call `search::pick` before source resolution. an inte
 
 `fetch::all` queues only the allowed number of downloads. it shares progress and counters across them. a locked 404 or 410 may re-resolve its recorded source once per batch; replacement URLs must still produce the old pinned bytes.
 
+### adding a command
+
+1. add the argument type and `Command` variant in [args.rs](../../../src/cli/args.rs), including its `name()` match arm. put its copyable examples and on-disk effects in the `examples` constants and connect them with `after_help`.
+2. declare the handler module and add dispatch in [cli.rs](../../../src/cli.rs). pass shared settings through `Context`, render through `Output`, and return a serializable report through `finish` so errors and JSON keep the same envelope.
+3. check `fetchloom help <command>` and unknown-topic suggestions. [help.rs](../../../src/cli/help.rs) discovers command topics from clap; update its prose only when the concepts change.
+4. add argument tests and real-binary scenarios, declaring any new test module in [tests/cli/main.rs](../../../tests/cli/main.rs). snapshot help and human output and check JSON, exit codes, offline behavior, cancellation and disk effects where applicable.
+5. extend the command list in [unattended.rs](../../../tests/cli/unattended.rs) so a pipe left open on stdin cannot make it wait for input. cover choices separately if the command is interactive.
+6. add its page under [docs/user/commands](../../user/commands/README.md), link it from that index and the [user guide](../../user/README.md), and update [llms.txt](../../../llms.txt). document its result and failure payloads in the [JSON reference](../../user/reference/json-output.md).
+7. run the owning tests, [review snapshots](../engineering/building-and-testing.md#update-snapshots), then run the full gate.
+
 ### adding an option
 
 put parsing and conflicts in `args.rs`, then pass the value through `Context` or the command's argument type to its owner. keep presentation in `Output`. update the affected [command reference](../../user/commands/README.md) and [environment reference](../../user/reference/environment.md) when behavior changes.
@@ -69,7 +80,9 @@ put parsing and conflicts in `args.rs`, then pass the value through `Context` or
 | [args.rs](../../../src/cli/args.rs), [cli.rs](../../../src/cli.rs) | `cargo test --locked --lib cli::args::`; `cargo test --locked --lib cli::tests::` |
 | [basics.rs](../../../tests/cli/basics.rs), [caps.rs](../../../tests/cli/caps.rs) | `cargo test --locked --test cli basics::`; `cargo test --locked --test cli caps::` |
 | [project.rs](../../../tests/cli/project.rs), [get.rs](../../../tests/cli/get.rs) | `cargo test --locked --test cli project::`; `cargo test --locked --test cli get::` |
-| [search.rs](../../../tests/cli/search.rs) | `cargo test --locked --test cli search::` |
+| [search.rs](../../../tests/cli/search.rs), [source search tests](../../../src/source/search/tests.rs) | `cargo test --locked --test cli search::`; `cargo test --locked --lib source::search::` |
+| [list.rs](../../../src/cli/list.rs), [CLI project tests](../../../tests/cli/project.rs) | `cargo test --locked --lib cli::list::`; `cargo test --locked --test cli project::list_shows_each_dataset_with_its_source_and_size -- --exact` |
+| [picker.rs](../../../src/output/picker.rs) | `cargo test --locked --lib output::picker::` |
 | [unattended.rs](../../../tests/cli/unattended.rs), [hints.rs](../../../tests/cli/hints.rs) | `cargo test --locked --test cli unattended::`; `cargo test --locked --test cli hints::` |
 
 ## related

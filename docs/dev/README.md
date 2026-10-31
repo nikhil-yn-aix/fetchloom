@@ -20,7 +20,7 @@ cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers
 | test the python helper | [python tests](engineering/building-and-testing.md#python-and-live-tests) |
 | run ignored or live tests | [live checks](engineering/building-and-testing.md#python-and-live-tests) |
 | run the linux gate from windows | [WSL gate](engineering/building-and-testing.md#wsl-gate) |
-| debug a command | [profiling](engineering/profiling.md): `-v` details and counters, `-vv` debug logs, `FETCHLOOM_TRACE` timelines |
+| reproduce a reported problem | [debugging evidence](engineering/profiling.md#reproduce-a-reported-problem): verbose version, timed debug logs, JSON counters and per-file traces |
 | measure a performance change | [running benchmarks](engineering/benchmarks.md) |
 | prepare a change for review | [engineering loop](engineering/README.md#the-fast-loop) and [style](style.md) |
 

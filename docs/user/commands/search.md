@@ -14,7 +14,7 @@ fetchloom search iris --json
 fetchloom search [options] <words>...
 ```
 
-words may be quoted or separate arguments. there are no command-specific options; [global options](README.md#global-options) apply.
+words may be quoted or separate arguments. empty or whitespace-only words are a usage error, exit 2, before any catalog request. there are no command-specific options; [global options](README.md#global-options) apply.
 
 ## results
 
@@ -33,12 +33,14 @@ fetchloom add iris
 fetchloom get "fashion mnist"
 ```
 
+`add` and `get` take one reference argument, so quote a multi-word search. extra bare words produce a usage error with a quote hint.
+
 with interactive stdin and stderr, an arrow-key picker asks which dataset you mean. up/down or j/k moves; enter selects the current row; 1-9 selects a numbered row. q or esc cancels with exit 2 and `usage`; ctrl-c exits 130. `--yes` approves downloads but never selects a dataset.
 
 without an interactive terminal, or with `--json`, fetchloom refuses to choose even a single match. it exits 10 with `reference.ambiguous`, lists candidates in error details and preserves them in `result.candidates`. rerun with the intended canonical reference. a successful `add` stores that reference in `data.toml`, not the search words.
 
 ## offline and failures
 
-search needs the internet. `--offline` fails with `offline.missing`, exit 20, and a message explaining that search needs a connection. knowing an id does not make a new dataset available offline; follow [offline preparation](../concepts.md#offline).
+search needs the internet. `--offline` fails with `offline.missing`, exit 20, and a message explaining that search needs a connection. the recovery help says: "search again online. offline, `fetchloom sync --offline` places what a project already pinned". knowing an id does not make a new dataset available offline; follow [offline preparation](../concepts.md#offline).
 
 [exit codes](../reference/exit-codes.md) covers catalog and network failures.

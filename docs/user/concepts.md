@@ -91,7 +91,7 @@ fetchloom --offline path iris
 
 offline mode prevents fetchloom from making HTTP or DNS requests. a locked project can use unchanged placed files, cached objects and unpack records.
 
-search and entries needing resolution fail offline, even when you already know a source id or plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes.
+search and entries needing resolution fail offline, even when you already know a source id or plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes. an unpinned new link reports "offline, and a new link must be downloaded once to learn its fingerprint". the help names the flag or environment setting to change, followed by "to pin it. `fetchloom get <link> --offline` reuses a file fetched before".
 
 prepare the project online before disconnecting and keep its manifest and lock unchanged. `FETCHLOOM_OFFLINE=1` also enables offline mode. to reconnect, remove `--offline` and unset that variable if it is `1`.
 

@@ -2,6 +2,20 @@
 
 profile the largest measured cost of a release workload before changing its implementation.
 
+## reproduce a reported problem
+
+ask for the exact command, working directory, relevant manifest and lock entries, OS, filesystem and whether the cache was cold or already populated. record the exit code and what was expected. reproduce in a separate project and cache; do not ask someone to erase their cache or overwrite edits to gather evidence.
+
+| evidence | what it shows |
+|---|---|
+| `fetchloom --version -v` | package version, OS, architecture, embedded commit when available, and selected cache path; it does not report the compiler or build profile |
+| the same command with `-vv` | debug events on stderr with uptime timestamps in seconds since logging started, including request status, retries and phase context |
+| the same command with `--json` | structured errors, partial results, warnings and work counters: requests, downloaded bytes, retries, resumes, cache hits, objects written, reflinks, hardlinks and copies |
+| `FETCHLOOM_TRACE=run.json` | a timeline of spans and arguments, including one `download` span per file; compare overlapping downloads and long phases |
+| `FETCHLOOM_LOG=fetchloom::net=debug,fetchloom::cli=debug` | target-filtered events when the full debug log is too noisy; add a narrower module target to isolate a subsystem |
+
+capture stdout and stderr separately. help and version use their own output paths; collect the verbose version without `--json` to retain build and cache details. a repeat run may hit caches instead of reproducing the original work, so keep that state in the report. inspect local paths, source references and query values before sharing logs or traces; do not send credentials.
+
 ## establish the workload
 
 record the commit, machine, OS, filesystem, cache state, file count, byte count and network conditions. measure without a profiler first. use `-v` or `--json` to record [work counters](../../user/reference/json-output.md); extra requests or copies can explain a regression without a CPU profile.
@@ -35,11 +49,11 @@ Remove-Item Env:\FETCHLOOM_TRACE
 
 create the trace file's parent directory first and choose a writable destination. if opening the file fails, fetchloom warns and continues without a timeline; JSON retains the warning. a trace path is not created recursively.
 
-open the recording in [perfetto](https://ui.perfetto.dev). it contains local paths and source references, so review it before sharing. [cli/logs.rs](../../../src/cli/logs.rs) holds the flush guard until the command ends.
+open [perfetto](https://ui.perfetto.dev), choose "open trace file", and select `run.json` after fetchloom exits and flushes it. select a span to inspect its duration and arguments, and zoom into a slow interval to compare concurrent tracks. it contains local paths and source references, so review it before sharing. [cli/logs.rs](../../../src/cli/logs.rs) holds the flush guard until the command ends.
 
-spans cover command dispatch, source resolution and phases such as reading metadata, scanning, relocking, planning and placing. downloads and unpacking have no standalone spans of their own; CPU samples can explain work inside their surrounding phases. separate command duration from start-to-exit duration when process startup is noisy.
+spans cover command dispatch, source resolution and phases such as reading metadata, scanning, relocking, planning and placing. each file has a `download` span with its masked URL, including a cache-hit download call that returns without network work. unpacking has no standalone span; CPU samples can explain work inside its surrounding phase. separate command duration from start-to-exit duration when process startup is noisy.
 
-`-v` adds details, error kinds and work counters. `-vv` enables fetchloom debug events on stderr. `FETCHLOOM_LOG` accepts tracing target filters, for example `fetchloom=debug`, overriding that default when valid; an invalid filter falls back to the `-vv` default if requested. stderr logs suppress progress bars, including in quiet or JSON mode. a trace alone does not suppress bars.
+`-v` adds details, error kinds and work counters. `-vv` enables fetchloom debug events on stderr with uptime timestamps. `FETCHLOOM_LOG` accepts tracing target filters, for example `fetchloom=debug`, overriding that default when valid; an invalid filter falls back to the `-vv` default if requested. stderr logs suppress progress bars, including in quiet or JSON mode. a trace alone does not suppress bars.
 
 ## CPU and allocation profiles
 

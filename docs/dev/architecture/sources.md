@@ -37,7 +37,7 @@ DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's h
 
 ### catalog search
 
-`is_search` recognizes alphanumeric input without a colon, excluding bare DOIs. `search` uses `tokio::join!` for hugging face, kaggle and zenodo, takes up to three matches each and interleaves their rank order. `Candidate` carries a canonical reference and optional catalog facts. one failing catalog contributes a warning; all failing returns the first error. CLI selection is separate from source resolution.
+`is_search` recognizes alphanumeric input without a colon, excluding bare DOIs. `search` uses `tokio::join!` for hugging face, kaggle and zenodo, takes up to three matches each and interleaves their rank order: hugging face, kaggle, zenodo, then the next result from each. hugging face is requested with `sort=downloads` and descending direction, zenodo with `sort=mostviewed`, and kaggle with its default catalog ordering. fetchloom preserves each catalog's order; it computes no global score. `Candidate` carries a canonical reference and optional catalog facts. one failing catalog contributes a warning; all failing returns the first error. CLI selection is separate from source resolution.
 
 ### keep listing and transfer separate
 
@@ -49,11 +49,14 @@ listings accept at most 100,000 files per dataset before selection; OSF's walk a
 
 ### add an adapter
 
-1. implement parsing, display and listing resolution in a source module.
-2. add a `Reference` variant and register identifier parsing, pasted-link routing, display and resolution in `source.rs`.
-3. preserve unavailable entries, bound listing work and pin the source's version when it offers one.
-4. add credential discovery or a response handler only if the source needs it; keep origin policy in `Net`.
-5. cover listing success, paging, versioning and refusal with `Recorded`; add a real-binary case when download or command behavior changes.
+1. declare the adapter module and a `Reference` variant in `source.rs`. implement identifier parsing and display in the adapter, then wire `Reference::parse`, `Display`, pasted links in `link` and the relevant `known_host` cases. keep `Parsed.file` for file-specific links.
+2. wire `resolve_direct` and, for a DOI-capable repository, destination routing in [doi.rs](../../../src/source/doi.rs). return a checked `Listing`, preserve unavailable entries, bound pagination and pin the source's version when it offers one.
+3. update `fetch_plan` only if transfers need a page diversion or expired-link handler. keep credential origins and redirects in `Net`; add discovery through `source::credentials` when needed.
+4. choose existing [error kinds](../../../src/error.rs) for invalid references, refused access, unavailable data and malformed answers. update `source::token_for` and the adapter's access help to name credentials actually read. if a new kind is necessary, update its serialized name, exit mapping and [exit-code reference](../../user/reference/exit-codes.md).
+5. add recorded responses under [tests/fixtures/sources](../../../tests/fixtures/sources) and `Recorded` tests for parsing, display, paging, pins, missing files, access failures and malformed replies. cover command or transfer effects in [CLI tests](../../../tests/cli).
+6. add an ignored live test against a small public record, stating the host in its ignore reason. keep it separate from deterministic recorded coverage.
+7. if the source has a public search catalog, add its query and candidate mapping in [source/search.rs](../../../src/source/search.rs), recorded ranking/error tests in [search/tests.rs](../../../src/source/search/tests.rs), and update the documented catalog order and [CLI search tests](../../../tests/cli/search.rs).
+8. add a page under [docs/user/sources](../../user/sources/README.md) with accepted forms, pinning, limits and access rules. link it from that index, the [user guide](../../user/README.md) and [llms.txt](../../../llms.txt). update [environment settings](../../user/reference/environment.md) for credentials, relevant examples and help text in [cli/args.rs](../../../src/cli/args.rs) or [cli/help.rs](../../../src/cli/help.rs), and the affected help snapshots.
 
 ## invariants and traps
 
@@ -68,7 +71,7 @@ listings accept at most 100,000 files per dataset before selection; OSF's walk a
 | files | cargo filter |
 |---|---|
 | [source.rs](../../../src/source.rs), adapter module tests and [source fixtures](../../../tests/fixtures/sources) | `cargo test --locked --lib source::` |
-| [search/tests.rs](../../../src/source/search/tests.rs) | `cargo test --locked --lib source::search::` |
+| [search/tests.rs](../../../src/source/search/tests.rs), [CLI search tests](../../../tests/cli/search.rs) | `cargo test --locked --lib source::search::`; `cargo test --locked --test cli search::` |
 | [zenodo.rs](../../../src/source/zenodo.rs) | `cargo test --locked --lib source::zenodo::` |
 | [DOI tests](../../../src/source/doi/tests.rs), [dataverse tests](../../../src/source/dataverse/tests.rs) | `cargo test --locked --lib source::doi::`; `cargo test --locked --lib source::dataverse::` |
 | [drive folder tests](../../../src/source/drive/folder_tests.rs), [OSF walk tests](../../../src/source/osf/walk_tests.rs) | `cargo test --locked --lib source::drive::`; `cargo test --locked --lib source::osf::` |

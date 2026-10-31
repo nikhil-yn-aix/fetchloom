@@ -45,7 +45,7 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 fetchloom cache gc --now
 ```
 
-partial downloads and temporary files keep their one-day grace period even with `--now`. active partial-download locks are respected.
+`--now` ignores modification times for unneeded objects and unpack records, including future times that FAT timestamp rounding can produce. partial downloads and temporary files keep their one-day grace period even with `--now`. active partial-download locks are respected.
 
 the kept-file summary gives the retained bytes and file count and says they become eligible when a day old. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
 

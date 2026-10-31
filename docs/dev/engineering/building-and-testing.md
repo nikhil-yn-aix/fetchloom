@@ -6,7 +6,7 @@ one rust crate builds the library and executable, with module tests and real-bin
 
 [rust-toolchain.toml](../../../rust-toolchain.toml) pins rust 1.99.1 with rustfmt and clippy. [Cargo.toml](../../../Cargo.toml) uses edition 2024 and declares a minimum rust version of 1.99. native build tools are needed for compression dependencies and the crypto provider. keep `Cargo.lock` when building the application.
 
-install rust through [rustup](https://rustup.rs). on linux, provide a C compiler and linker through the distribution's build packages. on windows, x86_64 GNU and MSVC both build the crate. MSVC is the release target and the closest match to CI: install Visual Studio Build Tools with the C++ workload and Windows SDK. a GNU toolchain needs a matching MinGW-w64 compiler and linker on PATH. do not mix MSVC and GNU native dependencies. arm64 windows releases use MSVC.
+install rust through [rustup](https://rustup.rs). on linux, provide a C compiler and linker through the distribution's build packages. on windows, both `x86_64-pc-windows-msvc` and `x86_64-pc-windows-gnu` build the crate. `x86_64-pc-windows-msvc` is the x86_64 release target and the closest match to CI: install Visual Studio Build Tools with the C++ workload and Windows SDK. a GNU toolchain needs a matching MinGW-w64 compiler and linker on PATH. do not mix MSVC and GNU native dependencies. arm64 windows releases use MSVC. the toolchain file pins the rust version and components, not the host triple; no repository `.cargo` configuration overrides the target. use `rustup show` to check your selected host.
 
 ```sh
 git clone https://github.com/nikhil-yn-aix/fetchloom.git
@@ -15,6 +15,8 @@ rustup toolchain install
 cargo build --locked
 cargo run --locked -- --version
 ```
+
+the first cold build can take several minutes, especially while compiling native compression libraries and optimized development dependencies. subsequent focused test runs reuse those artifacts. python helper tests need python 3.9 or newer, matching `requires-python` in [pyproject.toml](../../../pyproject.toml).
 
 `publish = false` keeps the rust crate off crates.io. [pyproject.toml](../../../pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
 
@@ -75,11 +77,12 @@ review the updated text, then rerun without `INSTA_UPDATE`. do not accept a chan
 
 ```sh
 python3 -m unittest discover -s python
+cargo test --locked -- --list --ignored
 cargo test --locked --lib source::zenodo::tests::live_zenodo -- --ignored --exact
 cargo test --locked -- --ignored
 ```
 
-use `python` instead of `python3` on windows. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. ignored rust tests contact public services and include a 20,000-file archive test. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
+on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest discover -s python` when python 3.9+ is on PATH. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. seven ignored rust tests need working DNS, HTTPS and access to public records at zenodo, figshare, dataverse, OSF, hugging face, kaggle and doi.org. they construct clients without credentials and do not require tokens. allow time for real network retries and service rate limits; an unavailable or changed upstream record can fail them. the eighth ignored test writes 20,000 archive members and needs writable scratch storage and time for that filesystem workload. Cargo's `--offline` only disables dependency downloads; it does not make live tests offline. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
 
 ### code gates
 
