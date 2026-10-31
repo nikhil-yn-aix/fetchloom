@@ -1,4 +1,4 @@
-﻿# measurements
+# measurements
 
 these measurements record the workloads that changed implementation choices, including changes that were dropped.
 
@@ -6,7 +6,7 @@ these measurements record the workloads that changed implementation choices, inc
 
 W means windows 11 with defender real-time protection on. L means ubuntu 24.04 in WSL 2 on ext4. both use the same 11th gen intel i7-1185G7 laptop with 4 cores, 8 threads, 32 GB and nvme. unless a row says otherwise, these are release builds measured on 2026-10-30 or 2026-10-31.
 
-baseline f9bbda5 used at least ten runs after three warm-ups on an otherwise idle machine; its command measurements are in [budgets](budgets.md). later rows preserve their own counts. “not recorded” means no commit, count, median or range was retained for that field; a range's midpoint is not a measured median.
+baseline f9bbda5 used at least ten runs after three warm-ups on an otherwise idle machine; its command measurements are in [budgets](budgets.md). later rows preserve their own counts. "not recorded" means no commit, count, median or range was retained for that field; a range's midpoint is not a measured median.
 
 ## storage and memory
 
@@ -22,7 +22,7 @@ placement was 2 to 3 times slower than in the earlier quiet window. the no-readb
 
 ## network
 
-network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. “lan”, “home” and “far” are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
+network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
 
 ## results and rejected experiments
 

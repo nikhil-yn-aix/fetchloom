@@ -1,4 +1,4 @@
-﻿# windows defender
+# windows defender
 
 defender scanning can dominate the cost of writing many small random-looking files on windows.
 
