@@ -1,11 +1,40 @@
 # fetchloom
 
-> fetchloom puts the exact research data your project needs in `data/` on windows and linux. `data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry for reuse across projects.
+fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `data.toml` is the shopping list, `data.lock` is the receipt pinning files by SHA-256 and size, and the shared cache is the pantry. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
 
-## docs
+## using fetchloom
 
-- [README](README.md): install, quick start, sources, benchmarks and troubleshooting
-- [cli](docs/cli.md): every command, option and output, plus archives, cache and environment settings
-- [agents](docs/agents.md): --json recipes, error kinds, exit codes, the python helper and offline use
-- [formats](docs/formats.md): data.toml, data.lock, cache records, environment settings and the JSON contract
-- [scope](docs/scope.md): supported sources, platforms and limits
+- [front page](README.md): install and quick start
+- [user guide](docs/user/README.md): every user page and when to read it
+- [getting started](docs/user/getting-started.md): first project, cloned projects and files to commit
+- [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives and offline preparation
+- [commands](docs/user/commands/README.md): command table, global options and terminal output
+- [add](docs/user/commands/add.md): add and pin a dataset
+- [sync](docs/user/commands/sync.md): restore pins while preserving local edits
+- [lock](docs/user/commands/lock.md): check or upgrade pins without placement
+- [status](docs/user/commands/status.md): local differences and success-with-differences behavior
+- [path](docs/user/commands/path.md): absolute paths and implicit sync
+- [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
+- [get](docs/user/commands/get.md): one-off downloads and existing-folder rules
+- [cache](docs/user/commands/cache.md): inspection, garbage collection and verification
+- [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each family
+- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules and patterns
+- [data.lock](docs/user/reference/data-lock.md): lock fields, source records and hash encodings
+- [JSON output](docs/user/reference/json-output.md): schema, command results, partial cache failures and work counters
+- [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
+- [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior
+- [cache folder](docs/user/reference/cache-folder.md): cache layout, indexes and project state
+- [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
+- [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders and long paths
+- [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
+- [limits](docs/user/limits.md): excluded workflows and reproducibility boundaries
+
+## working on the code
+
+- [developer guide](docs/dev/README.md): contributor starting point
+- [architecture](docs/dev/architecture/README.md): code organization and data flow
+- [performance](docs/dev/performance/README.md): performance work and its conditions
+- [engineering](docs/dev/engineering/README.md): builds, tests and releases
+- [style](docs/dev/style.md): prose, code and commit conventions
+- [decisions](docs/dev/decisions.md): design choices
+- [roadmap](docs/dev/roadmap.md): future work
