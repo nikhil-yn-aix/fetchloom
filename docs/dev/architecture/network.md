@@ -29,10 +29,10 @@
 ```mermaid
 flowchart TD
     request["GET response"] --> body["async response chunks"]
-    body --> queue["bounded writer queue: 16 slots"]
+    body --> queue["bounded writer queue: 16 batches of 256 KiB"]
     queue --> writer["writer thread: offsets and pending bytes"]
     writer --> disk["partial file"]
-    writer --> hash["HashPipe: separate hash thread, 16 slots"]
+    writer --> hash["HashPipe: separate hash thread, 16 batches of 1 MiB"]
     disk -->|"read back joined ranges"| hash
     body --> slow{"eligible stream below 1 MB/s?"}
     slow -->|yes| handover["drain writer; retain response at written offset"]
@@ -45,7 +45,7 @@ flowchart TD
 
 `attempt` checks response status and resume offsets through `starting_offset`, then chooses a whole or split stream. `stream` owns the writer queue and joins it before reporting an error or a handover; `read_stream` owns the chunk loop and idle/rate deadlines. `split` opens and joins the range writer around `run_split`, which schedules streams and records why they stopped.
 
-`PartialWriter` shares `Bytes` chunks with `HashPipe`, so hashing can run beside disk writes without copying each response chunk. the prefix is the contiguous run of bytes from offset zero. out-of-order ranges have separate hashes; when the prefix reaches them, the writer flushes pending bytes before asking the hash worker to read those ranges back.
+`PartialWriter` shares `Bytes` chunks with `HashPipe`, so hashing can run beside disk writes without copying each response chunk. both handoffs carry batches, not single chunks: `read_stream` gathers chunks into a `Batch` of 256 KiB before waking the writer, and `HashPipe` gathers 1 MiB before waking the hash thread. waking a thread for every 16 KiB TLS record cost more than the download on a fast link; see [measurements](../performance/measurements.md#observations-and-rejected-experiments). a range, checkpoint or finish sends what is gathered first, so order holds, and every exit from the read loop flushes its batch, so a resume or split keeps every byte received. the prefix is the contiguous run of bytes from offset zero. out-of-order ranges have separate hashes; when the prefix reaches them, the writer flushes pending bytes before asking the hash worker to read those ranges back.
 
 checkpoint messages are FIFO barriers: every earlier chunk is hashed, later chunks are excluded, and the worker checks the requested prefix length. finishing joins the worker before truncating, flushing and publishing. dropping it also joins before the partial's ownership lock can be released. expected-size or checksum rejection happens after publication, so it can leave an unreferenced object for gc.
 
