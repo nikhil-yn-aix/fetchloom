@@ -29,4 +29,4 @@ an explicitly versioned reference keeps naming that version under `lock --upgrad
 
 embargoed and download-disabled articles are refused. obtain an accessible publication from the owner instead of trying to filter around the restriction.
 
-repository listings are not cached for offline resolution. prepare a project online, then use its unchanged manifest and lock for [offline sync](../concepts.md#offline).
+follow [offline preparation](../concepts.md#offline) before disconnecting.
