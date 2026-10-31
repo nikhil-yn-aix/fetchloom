@@ -14,17 +14,16 @@ use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Placement, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache};
-use crate::archive::{self, Packed};
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{Expect, Fetch, Net};
+use crate::net::Net;
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
-use crate::source::{self, Listing, Parsed, Reference};
+use crate::source::{Listing, Parsed, Reference};
 
 /// what a project command did, as `--json` prints it.
 #[derive(Default, Serialize)]
@@ -115,8 +114,9 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         None,
     )
     .await;
-    let (lock_changed, placement) =
-        synced.inspect_err(|_| restore(&project, existed.then_some(text.as_str())))?;
+    let (lock_changed, placement) = synced.map_err(|error| {
+        restore(&project, existed.then_some(text.as_str()), &name, error)
+    })?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -137,15 +137,27 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
 
 /// puts data.toml back as it was before `add`, or removes it when `add` created it, so a dataset
 /// that could not be fetched never stays behind.
-fn restore(project: &Project, before: Option<&str>) {
+fn restore(project: &Project, before: Option<&str>, name: &str, mut failure: Error) -> Error {
     let restored = match before {
         Some(text) => project.write(manifest::FILE, text.as_bytes()),
         None => std::fs::remove_file(project.manifest_path())
             .map_err(|err| Error::io("could not remove data.toml", &err)),
     };
     if let Err(err) = restored {
-        tracing::debug!(%err, "could not restore data.toml");
+        failure = failure.detail(format!("could not restore data.toml: {err}"));
+        if let Some(help) = err.help {
+            failure = failure.detail(help);
+        }
+        failure = match before {
+            Some(text) => failure
+                .detail("restore data.toml from this backup text (decode it as a JSON string):")
+                .detail(serde_json::Value::String(text.to_owned()).to_string()),
+            None => failure.detail(format!(
+                "remove the {name} dataset entry from data.toml, or remove data.toml if it holds nothing else"
+            )),
+        };
     }
+    failure
 }
 
 /// the dataset in data.toml that already pins what was just resolved, under any spelling of its
@@ -263,18 +275,14 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
+    let cache = open_cache()?;
+    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
-    let placement = place::Placing::new(
-        &project,
-        &new_manifest,
-        &lock,
-        &open_cache()?,
-        false,
-        survey,
-    )?
-    .remove_only(&context.output)?;
+    let placement = placing.remove_only(&context.output).map_err(|error| {
+        error.detail("data.toml and data.lock were updated; after fixing the error, `fetchloom sync` finishes the removal")
+    })?;
     context.output.done("Removed", &args.name);
     context.output.next(
         "commit data.toml and data.lock; after pulling, other clones remove unchanged files with `fetchloom sync`",
@@ -323,7 +331,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             .output
             .done("Ok", "all pinned files are in place, nothing to do");
     } else {
-        let datasets = units_datasets(manifest.datasets.len());
+        let datasets = crate::units::count(manifest.datasets.len() as u64, "dataset", "datasets");
         if placement.kept.is_empty() {
             context
                 .output
@@ -463,12 +471,14 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
+    check_member(&project, &manifest, name, file)?;
     if !ready(context, &project, &manifest, name)? {
         let _held = hold(context, &project, "path").await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
         manifest = project.manifest()?.1;
         known(&manifest, name, "path")?;
+        check_member(&project, &manifest, name, file)?;
         if !ready(context, &project, &manifest, name)? {
             let work = Loop::new(
                 context,
@@ -521,6 +531,50 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
     context.output.answer(&path.display().to_string());
     Ok(path)
+}
+
+/// rejects a member only when the current lock and cached trees prove it cannot exist.
+fn check_member(
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+    file: Option<&str>,
+) -> Result<(), Error> {
+    let Some(file) = file.filter(|file| !file.is_empty()) else {
+        return Ok(());
+    };
+    let Some(lock) = project.lock()? else {
+        return Ok(());
+    };
+    let Some(locked) = lock.get(name) else {
+        return Ok(());
+    };
+    if manifest
+        .datasets
+        .get(name)
+        .is_none_or(|entry| locked.spec != lock::spec(entry))
+    {
+        return Ok(());
+    }
+    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
+    if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
+        return Ok(());
+    }
+    let folder = plan::folder(manifest, name);
+    let wanted = format!("{folder}/{file}");
+    if planned.targets.iter().any(|target| {
+        target.dataset == name
+            && (target.path == wanted || target.path.starts_with(&format!("{wanted}/")))
+    }) {
+        return Ok(());
+    }
+    let inside: Vec<&str> = planned
+        .targets
+        .iter()
+        .filter(|target| target.dataset == name)
+        .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
+        .collect();
+    Err(not_in(name, file, &inside))
 }
 
 /// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to
@@ -741,21 +795,7 @@ async fn learn_name(
         return Ok(());
     }
 
-    let job = fetch::Job {
-        fetch: Fetch {
-            expect: Expect {
-                sha256: remote.sha256,
-                md5: remote.md5,
-                size: remote.size,
-            },
-            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-            unpack: extract && archive::by_name(&remote.path) == Some(Packed::Archive),
-            ..source::fetch_plan(&remote.url)
-        },
-        label: remote.path.clone(),
-        dataset: None,
-        again: None,
-    };
+    let job = fetch::listed_job(remote, &remote.path, extract);
     let started = std::time::Instant::now();
     let fetched = fetch::all(context, net, cache, vec![job]).await?;
     if let Some(fetched) = fetched.first() {
@@ -844,10 +884,6 @@ fn stored_reference(typed: &str, parsed: &Parsed) -> String {
         }
         _ => parsed.reference.to_string(),
     }
-}
-
-fn units_datasets(count: usize) -> String {
-    crate::units::count(count as u64, "dataset", "datasets")
 }
 
 /// the network, trusting every host data.toml names, since a person wrote them.

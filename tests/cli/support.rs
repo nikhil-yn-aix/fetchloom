@@ -275,6 +275,7 @@ fn literal(text: &str) -> String {
 pub(crate) enum Part {
     Bytes(Vec<u8>),
     Pause(Duration),
+    Action(Box<dyn FnOnce() + Send>),
 }
 
 /// a server on this machine that answers each new connection with the next scripted response,
@@ -307,6 +308,7 @@ impl Server {
                             let _ = stream.flush();
                         }
                         Part::Pause(pause) => std::thread::sleep(pause),
+                        Part::Action(action) => action(),
                     }
                 }
             }

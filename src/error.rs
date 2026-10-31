@@ -70,6 +70,16 @@ impl Kind {
     }
 }
 
+/// one failed download, kept whole for scripts when the human summary is shortened.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct FileFailure {
+    pub(crate) file: String,
+    pub(crate) kind: &'static str,
+    pub(crate) message: String,
+    pub(crate) details: Vec<String>,
+    pub(crate) help: Option<String>,
+}
+
 /// a failure: what happened in one sentence, supporting lines, and what to do next.
 #[derive(Clone, Debug)]
 pub(crate) struct Error {
@@ -78,6 +88,7 @@ pub(crate) struct Error {
     pub(crate) details: Vec<String>,
     pub(crate) help: Option<String>,
     pub(crate) result: Option<serde_json::Value>,
+    pub(crate) failures: Vec<FileFailure>,
 }
 
 impl Error {
@@ -87,6 +98,7 @@ impl Error {
             message: message.into(),
             details: Vec::new(),
             result: None,
+            failures: Vec::new(),
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
                     .to_owned()

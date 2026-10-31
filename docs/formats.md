@@ -295,7 +295,17 @@ invalid jobs and rate values fail a named command with kind `usage` and exit 2, 
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and the icloud drive folder on windows. system proxy settings and proxy environment variables are read by the HTTP stack.
 
-credentials are read from where each source already keeps them: `HF_TOKEN` or `~/.cache/huggingface/token`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
+hugging face credentials use this precedence, ignoring empty environment values:
+
+1. `HF_TOKEN`, used directly.
+2. the file named by `HF_TOKEN_PATH`.
+3. `token` inside `HF_HOME`.
+4. `huggingface/token` inside `XDG_CACHE_HOME`.
+5. `~/.cache/huggingface/token`.
+
+the chosen value or file contents are trimmed. an unreadable file or blank token yields no credential; fetchloom does not try lower-priority locations after choosing one.
+
+other credentials are read from where each source already keeps them: `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 `DATAVERSE_TOKEN` is not read. use public dataverse links; an access refusal needs a public copy from the dataset's owner.
 
@@ -315,9 +325,12 @@ credentials are read from where each source already keeps them: `HF_TOKEN` or `~
 | `errors[].message` | summary string |
 | `errors[].details` | array of supporting strings |
 | `errors[].help` | string or null |
+| `errors[].failures` | present for file download failures: every failed file, in job order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 
-there are no structured dataset or path fields in an error. SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
+batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
+
+SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
 
 bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0"}`. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
 
@@ -328,7 +341,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
 | `get` | `folder`: absolute path; `files`: file records below |
 | `path` | absolute path string, for a dataset, file or subfolder |
-| `status` | `project`: absolute path; eight arrays below |
+| `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: paths whose contents, metadata or directory entries could not be read |
@@ -344,6 +357,7 @@ status arrays:
 | field | entries |
 |---|---|
 | `unlocked` | dataset names missing from the lock or with a changed spec |
+| `removed` | dataset names in data.lock but no longer in data.toml |
 | `missing` | absent target paths |
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
@@ -352,7 +366,7 @@ status arrays:
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
-status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
+status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
 

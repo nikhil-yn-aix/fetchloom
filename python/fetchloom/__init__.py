@@ -49,24 +49,47 @@ class Error(Exception):
         return self.message if self.kind is None else f"{self.kind}: {self.message}"
 
 
-def path(name: str, project: str | os.PathLike[str] = ".") -> Path:
+def path(
+    name: str,
+    project: str | os.PathLike[str] = ".",
+    *,
+    yes: bool = False,
+    offline: bool = False,
+) -> Path:
     """return the absolute path of a dataset, or of a file or folder inside one.
 
     ``name`` is a dataset name such as ``iris``, or a path inside a dataset such as
     ``iris/iris.csv``. ``project`` is the project folder or any folder inside it. when the
-    dataset is not in place yet, fetchloom syncs the project first.
+    dataset is not in place yet, fetchloom syncs the project first and may download data.
+    ``yes=True`` approves large downloads; ``offline=True`` prevents network requests.
     """
-    return Path(_run(["path", name], project))
+    arguments = ["path", name]
+    if yes:
+        arguments.append("--yes")
+    if offline:
+        arguments.append("--offline")
+    return Path(_run(arguments, project))
 
 
-def sync(project: str | os.PathLike[str] = ".") -> Path:
+def sync(
+    project: str | os.PathLike[str] = ".",
+    *,
+    yes: bool = False,
+    offline: bool = False,
+) -> Path:
     """make the project's data folder match data.lock and return the project's path.
 
     ``project`` is the project folder or any folder inside it. files edited by hand stay,
     and each one fetchloom keeps is reported as a python warning. a download above 1 GiB
-    raises :class:`Error` with kind ``unconfirmed``; approve it with ``fetchloom sync --yes``.
+    raises :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
+    ``offline=True`` prevents network requests.
     """
-    return Path(_run(["sync"], project)["project"])
+    arguments = ["sync"]
+    if yes:
+        arguments.append("--yes")
+    if offline:
+        arguments.append("--offline")
+    return Path(_run(arguments, project)["project"])
 
 
 def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:

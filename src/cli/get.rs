@@ -24,12 +24,12 @@ use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Expect, Fetch, Fetched, Origin};
+use crate::net::{self, Fetched, Origin};
 use crate::place::Method;
 use crate::plan::{self, Patterns, Plan};
 use crate::project::lock::LockedFile;
 use crate::project::manifest::{self, Manifest};
-use crate::source::{self, Listing, Parsed, Reference, Remote};
+use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::units;
 
 /// what `get` did, as `--json` prints it.
@@ -69,19 +69,13 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         &folder_for(chosen, &listing, &parsed, &names),
         foreseen.as_deref(),
     )?;
-    let size: u64 = files.iter().filter_map(|remote| remote.size).sum();
-    super::confirm(
-        &context.output,
-        context.yes,
-        &units::count(files.len() as u64, "file", "files"),
-        size,
-    )?;
-    vet(&cache, &files, &names, extract)?;
-    let jobs = files
+    let jobs: Vec<Job> = files
         .iter()
         .zip(&names)
-        .map(|(remote, name)| job(remote, name, extract))
+        .map(|(remote, name)| fetch::listed_job(remote, name, extract))
         .collect();
+    vet(&cache, &files, &names, extract)?;
+    approve(context, &cache, &jobs)?;
     let started = Instant::now();
     let fetched = fetch::all(context, &net, &cache, jobs).await?;
     let paths: Vec<String> = files
@@ -151,6 +145,23 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
             })
             .collect(),
     })
+}
+
+fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
+    if context.offline.enabled() {
+        return Ok(());
+    }
+    let missing: Vec<&Job> = jobs
+        .iter()
+        .filter(|job| job.fetch.cached(cache).is_none())
+        .collect();
+    let size: u64 = missing.iter().filter_map(|job| job.fetch.expect.size).sum();
+    super::confirm(
+        &context.output,
+        context.yes,
+        &units::count(missing.len() as u64, "file", "files"),
+        size,
+    )
 }
 
 /// the names the files will have, and the paths they will take in the folder when the cache
@@ -370,27 +381,6 @@ fn folder_for(
     PathBuf::from(name)
 }
 
-/// the download of one listed file, which will be called `name`. a file no checksum pins is asked
-/// about again on later runs, so a changed file is noticed and an unchanged one moves no bytes. a
-/// file whose name unpacks may be found by the files it unpacked to, once its own bytes are gone.
-fn job(remote: &Remote, name: &str, extract: bool) -> Job {
-    Job {
-        fetch: Fetch {
-            expect: Expect {
-                sha256: remote.sha256,
-                md5: remote.md5,
-                size: remote.size,
-            },
-            revalidate: remote.sha256.is_none() && remote.md5.is_none(),
-            unpack: extract && archive::by_name(name) == Some(Packed::Archive),
-            ..source::fetch_plan(&remote.url)
-        },
-        label: remote.path.clone(),
-        dataset: None,
-        again: None,
-    }
-}
-
 fn tell_fetched(
     context: &Context,
     paths: &[String],
@@ -457,6 +447,73 @@ mod drive_docs_tests;
 mod tests {
     use super::*;
     use crate::cli::args::Filter;
+
+    fn approval_context() -> Context {
+        Context::new(crate::output::Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            crate::output::Level::Quiet,
+            true,
+            false,
+        ))
+    }
+
+    #[test]
+    fn get_approval_excludes_cached_archives_and_offline_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::digest::sha256(b"a previously unpacked archive");
+        cache.record_unpacked(&digest, &[]).unwrap();
+        let remote = Remote {
+            path: "large.zip".to_owned(),
+            size: Some(super::super::ASK_ABOVE + 1),
+            sha256: Some(digest),
+            md5: None,
+            url: url::Url::parse("https://example.org/large.zip").unwrap(),
+            named_by_server: false,
+        };
+        let mut context = approval_context();
+        let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
+        approve(&context, &cache, &jobs).unwrap();
+        jobs[0].fetch.unpack = false;
+        assert_eq!(
+            approve(&context, &cache, &jobs).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
+        context.offline = net::Offline::Flag;
+        approve(&context, &cache, &jobs).unwrap();
+    }
+
+    #[test]
+    fn get_approval_counts_only_missing_files_toward_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::digest::sha256(b"cached archive");
+        cache.record_unpacked(&digest, &[]).unwrap();
+        let mut remote = Remote {
+            path: "cached.zip".to_owned(),
+            size: Some(super::super::ASK_ABOVE),
+            sha256: Some(digest),
+            md5: None,
+            url: url::Url::parse("https://example.org/cached.zip").unwrap(),
+            named_by_server: false,
+        };
+        let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
+        remote.path = "missing.bin".to_owned();
+        remote.sha256 = Some(crate::digest::sha256(b"missing"));
+        jobs.push(fetch::listed_job(&remote, &remote.path, false));
+        let context = approval_context();
+        approve(&context, &cache, &jobs).unwrap();
+        jobs[1].fetch.expect.size = Some(super::super::ASK_ABOVE + 1);
+        assert_eq!(
+            approve(&context, &cache, &jobs).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
+    }
 
     #[test]
     fn the_pin_hint_keeps_filters_and_extraction_settings() {

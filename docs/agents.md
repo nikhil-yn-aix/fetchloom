@@ -11,7 +11,7 @@ use `--json` when a script or agent needs to read fetchloom's answer. branch on 
 - `-C <dir>` starts in that folder; project discovery searches it and its parents for `data.toml`.
 - `--offline` prevents HTTP and DNS requests by fetchloom.
 
-approval normally applies above 1 GiB. `get` counts known selected bytes, including cache hits; project commands count known bytes missing from the cache. [approval](cli.md#offline-recovery-and-approval) covers unknown sizes.
+approval normally applies above 1 GiB of known bytes needing download. cached checksummed files and unpacked archives do not count; offline runs never ask for download approval. [approval](cli.md#offline-recovery-and-approval) covers unknown sizes.
 
 ## the JSON document
 
@@ -22,7 +22,7 @@ approval normally applies above 1 GiB. `get` counts known selected bytes, includ
 | `status` | `ok` or `error` |
 | `result` | command result, or null on failure |
 | `warnings` | array of strings, including in quiet mode |
-| `errors` | empty on success; one object with `kind`, `message`, `details` and nullable `help` on failure |
+| `errors` | empty on success; one object with `kind`, `message`, `details` and nullable `help` on failure; file downloads also include `failures` |
 | `work` | counts for requests, downloaded bytes, retries, resumes, cached objects and placements, plus elapsed milliseconds |
 
 bare `fetchloom` inside a project reports command `status`. help prints text even with `--json`. a killed process may leave no valid JSON; treat a missing or invalid document as a failure too.
@@ -96,7 +96,7 @@ this stops on missing or invalid JSON as well. it does not check unrelated extra
 fetchloom --json status
 ```
 
-read `unlocked`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `extra` and `not_unpacked` under `result`. all eight arrays empty means status found no differences; status uses saved file metadata and selective hashing, not a full integrity scan. differences still exit 0.
+read `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `extra` and `not_unpacked` under `result`. all nine arrays empty means status found no differences; status uses saved file metadata and selective hashing, not a full integrity scan. differences still exit 0.
 
 ### find a path
 
@@ -140,7 +140,7 @@ unchanged placed files can be enough; restoring missing files needs cached objec
 | 50 | `local.io`, `local.not_empty`, `project.invalid` |
 | 130 | `interrupted` |
 
-read `errors[0].kind` before deciding whether to retry. `help`, when present, suggests a fix; it is human text, not an instruction to execute without checking. there are no structured dataset or path fields in errors. [exit codes](formats.md#exit-codes) is the format reference.
+read `errors[0].kind` before deciding whether to retry. `help`, when present, suggests a fix; it is human text, not an instruction to execute without checking. download errors include every failed file under `failures`, with its own kind, message, details and help. [exit codes](formats.md#exit-codes) is the format reference.
 
 | kind | next step |
 |---|---|
@@ -161,14 +161,14 @@ read `errors[0].kind` before deciding whether to retry. `help`, when present, su
 ```python
 import fetchloom
 
-project = fetchloom.sync(project=".")
-iris = fetchloom.path("iris/iris.csv", project=".")
+project = fetchloom.sync(project=".", yes=True)
+iris = fetchloom.path("iris/iris.csv", project=".", offline=True)
 ```
 
-both return `pathlib.Path`. `sync()` returns the absolute project root; `path()` returns a dataset, file or subfolder path, syncing the whole project first when needed. `project` can be a string or path-like object naming any folder in the project; it defaults to the current directory.
+both return `pathlib.Path`. `sync()` returns the absolute project root; `path()` returns a dataset, file or subfolder path, syncing the whole project first when needed, which may download data. `project` can be a string or path-like object naming any folder in the project; it defaults to the current directory.
 
 the helper runs the installed command with `--json` and forwards its warnings as python warnings. `sync()` preserves edited files. use the CLI result when you need to inspect `placement.kept` or status arrays.
 
 a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. a missing executable raises `FileNotFoundError`.
 
-the helpers accept no `--yes` or `--force` argument. approve a large download first with `fetchloom sync --yes`; otherwise the helper can raise `unconfirmed`. they inherit environment settings, including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
+both helpers accept keyword-only `yes: bool = False` and `offline: bool = False`, forwarding `--yes` and `--offline` when true. use `yes=True` only when you approve downloads; otherwise a large download can raise `unconfirmed`. use `offline=True` to forbid network requests, including an implicit sync from `path()`. neither helper accepts `--force`. they inherit environment settings, including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.

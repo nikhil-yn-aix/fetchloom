@@ -157,3 +157,84 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
     assert_eq!(text(&after.stderr)?, "         Ok everything matches data.lock\n");
     Ok(())
 }
+
+#[test]
+fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
+    let sandbox = Sandbox::new()?;
+    let original = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
+    assert!(sandbox.run(&["add", &original.url])?.status.success());
+    let locked = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let (_, dataset) = locked.split_once("[[dataset]]").ok_or("missing dataset")?;
+    let parsed: toml::Value = toml::from_str(&locked)?;
+    let digest = parsed["dataset"][0]["files"][0]["sha256"]
+        .as_str()
+        .ok_or("missing file hash")?;
+    let clone = sandbox.folder("batch")?;
+    let cache = sandbox.folder("batch-cache")?;
+    let mut manifest = String::new();
+    let mut lock = "version = 1\n".to_owned();
+    let mut servers = Vec::new();
+    for index in 0..12 {
+        let response = || {
+            if index % 2 == 0 {
+                crate::support::reply("403 Forbidden", &[], b"denied")
+            } else {
+                file(b"wrong", "\"bad\"")
+            }
+        };
+        let server = Server::start("/iris.csv", vec![response(), response()])?;
+        let name = format!("d{index:02}");
+        manifest.push_str(&format!("[datasets.{name}]\nref = \"{}\"\n", original.url));
+        let entry = dataset
+            .replace("name = \"iris\"", &format!("name = \"{name}\""))
+            .replace(
+                &format!("sha256 = \"{digest}\""),
+                &format!("sha256 = \"{index:064x}\""),
+            )
+            .replace(
+                &format!("url = \"{}\"", original.url),
+                &format!("url = \"{}\"", server.url),
+            );
+        lock.push_str(&format!("\n[[dataset]]{entry}"));
+        servers.push(server);
+    }
+    fs::write(clone.join("data.toml"), manifest)?;
+    fs::write(clone.join("data.lock"), lock)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let output = run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(40));
+    let report = crate::support::json(&output)?;
+    assert_eq!(report["errors"][0]["kind"], "auth.required");
+    let failures = report["errors"][0]["failures"]
+        .as_array()
+        .ok_or("missing failed files")?;
+    assert_eq!(failures.len(), 12);
+    for (index, failure) in failures.iter().enumerate() {
+        assert_eq!(failure["file"], format!("d{index:02}/iris.csv"));
+        let kind = if index % 2 == 0 {
+            "auth.required"
+        } else {
+            "integrity.mismatch"
+        };
+        assert_eq!(failure["kind"], kind);
+        assert!(
+            !failure["message"]
+                .as_str()
+                .ok_or("missing message")?
+                .is_empty()
+        );
+    }
+    let output = run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(stderr.contains("d09/iris.csv"), "{stderr}");
+    assert!(!stderr.contains("d10/iris.csv"), "{stderr}");
+    assert!(!stderr.contains("d11/iris.csv"), "{stderr}");
+    assert!(stderr.contains("and 2 more"), "{stderr}");
+    assert!(servers.iter().all(|server| server.requests().len() == 2));
+    Ok(())
+}

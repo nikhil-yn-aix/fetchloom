@@ -26,9 +26,9 @@ quote patterns so your shell passes them unchanged. they match source paths befo
 
 adding an existing reference with the same filters and extraction setting syncs it without another entry. different settings fail unless you supply an unused `--as` name. to change an existing entry, edit `data.toml`.
 
-`remove <name>` removes one dataset from the manifest and lock, then deletes its unchanged managed files. it downloads nothing. edited files stay with a warning; unrelated extra files stay too. an existing file adopted because it matched the lock counts as managed.
+`remove <name>` opens the cache and plans removal before changing the manifest or lock, then removes the dataset and deletes its unchanged managed files. if deleting files fails after metadata is written, fix the reported error and run `fetchloom sync` to finish removal. it downloads nothing. edited files stay with a warning; unrelated extra files stay too. an existing file adopted because it matched the lock counts as managed.
 
-if a new addition fails to sync, `add` attempts to restore the previous manifest. it does not roll back every cache, lock or placement change.
+if a new addition fails to sync, `add` attempts to restore the previous manifest. if restoration also fails, error details include a backup as a JSON string to decode into `data.toml`, or tell you which dataset entry to remove. it does not roll back every cache, lock or placement change.
 
 ### sync
 
@@ -79,9 +79,9 @@ if `iris.csv` is missing and `notes.txt` is an extra file, stderr shows:
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
 ```
 
-`status` downloads nothing and changes no project files. it compares saved sizes and modification times, hashing files when those records need checking. it reports changed manifest entries, missing, edited, untracked, outdated and extra paths, changed shared hardlinks, and archives not yet unpacked here. it is not a full integrity check. [status fields](formats.md#command-results) define the categories and [state records](formats.md#the-fetchloom-folder) explain the checks.
+`status` downloads nothing and changes no project files. it compares saved sizes and modification times, hashing files when those records need checking. it reports changed or removed manifest entries, missing, edited, untracked, outdated and extra paths, changed shared hardlinks, and archives not yet unpacked here. it is not a full integrity check. [status fields](formats.md#command-results) define the categories and [state records](formats.md#the-fetchloom-folder) explain the checks.
 
-human output shows at most 20 paths per file category. unlocked datasets and not-unpacked archives are not truncated. `--json` includes every difference.
+human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. `--json` includes every difference.
 
 `status` finding differences and `sync` keeping conflicts still exit 0. scripts must inspect status arrays or `result.placement.kept`. sync restores hardlinks found changed through another project, reports a warning and lists them in `result.placement.restored`.
 
@@ -98,7 +98,7 @@ fetchloom path iris/iris.csv
 
 if the requested dataset is not ready, `path` syncs the whole project first. a ready dataset needs no project lock. it returns a location, not proof of intact bytes: sync may have kept an edited file there.
 
-an unknown name or path exits 2 with a usage error. a dataset whose archives contain no regular files also exits 2; set `extract = false` in its manifest entry and sync to keep the packed archive.
+an unknown name or path exits 2 with a usage error. when the current lock or cached archive tree rules out a member, `path` rejects it before syncing; an unknown archive tree still requires a sync. a dataset whose archives contain no regular files also exits 2; set `extract = false` in its manifest entry and sync to keep the packed archive.
 
 ## get without a project
 
@@ -155,7 +155,7 @@ successful downloads stay cached when another file fails. retries can reuse save
 
 approval is required above 1 GiB, not at exactly 1 GiB:
 
-- `get` checks the total known selected size, including cache hits.
+- `get` checks known bytes that still need downloading. cached checksummed files and unpacked archives do not count. offline runs never ask for download approval.
 - project downloads check known bytes still missing from the cache.
 - when the source gives no size, a server's length is checked against the remaining download. without either size, the question comes after a file passes 1 GiB. unknown sizes are checked per file, with at most one such question per batch.
 
