@@ -1,4 +1,4 @@
-﻿# style
+# style
 
 prose, comments and commits use plain language and claims a reader can check.
 
@@ -18,9 +18,9 @@ write for a researcher retrieving data or a contributor opening the code for the
 | em dashes, dramatic fragments and repeated closing lines | a sentence that adds a fact |
 | forced contrasts and lists of three by habit | the actual distinction or number of items |
 | delve, leverage, seamless, robust, crucial, pivotal, comprehensive, streamline, empower, utilize, showcase, foster, underscore, testament, tapestry, vibrant, powerful | a concrete verb or noun |
-| “serves as”, “stands as”, “acts as” | “is” |
+| "serves as", "stands as", "acts as" | "is" |
 | simply, just, easily, obviously | the instruction without judging its difficulty |
-| “this document describes”, “in this section”, “in conclusion” | the subject itself |
+| "this document describes", "in this section", "in conclusion" | the subject itself |
 | bold labels, decorative headings, emoji and exclamation marks | plain text |
 | filler, speculative qualifiers, placeholders and unfinished notes | supported detail or an explicit limit of the evidence |
 

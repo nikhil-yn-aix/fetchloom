@@ -1,4 +1,4 @@
-﻿# decisions
+# decisions
 
 these choices keep byte identity, recoverable storage and the command interface consistent across platforms.
 
