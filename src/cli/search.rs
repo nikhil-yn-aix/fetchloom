@@ -29,7 +29,7 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         output.step(&(number + 1).to_string(), row);
     }
     for candidate in &report.candidates {
-        output.answer(&candidate.reference.to_string());
+        output.answer_untold(&candidate.reference.to_string());
     }
     Ok(report)
 }
@@ -97,20 +97,20 @@ fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
         .zip(references)
         .map(|(candidate, reference)| {
             // hugging face titles are the repository id the reference already shows
-            let title = if reference.ends_with(&candidate.title) {
-                String::new()
-            } else {
-                output.clip(&candidate.title, 52)
-            };
-            let mut parts = vec![format!("{reference:width$}  {title}").trim_end().to_owned()];
-            parts.extend(candidate.size.map(units::size));
-            parts.extend(
+            let mut facts: Vec<String> = Vec::new();
+            if !reference.ends_with(&candidate.title) {
+                facts.push(output.clip(&candidate.title, 52));
+            }
+            facts.extend(candidate.size.map(units::size));
+            facts.extend(
                 candidate
                     .downloads
                     .map(|count| format!("{} downloads", units::compact(count))),
             );
-            parts.extend(candidate.note.iter().cloned());
-            parts.join(" \u{b7} ")
+            facts.extend(candidate.note.iter().cloned());
+            format!("{reference:width$}  {}", facts.join(" \u{b7} "))
+                .trim_end()
+                .to_owned()
         })
         .collect()
 }
@@ -151,12 +151,21 @@ mod tests {
                 downloads: None,
                 note: Some("needs access".to_owned()),
             },
+            Candidate {
+                reference: Reference::parse("hf:datasets/a/b").unwrap().reference,
+                title: "a/b".to_owned(),
+                source: "hugging face",
+                size: None,
+                downloads: Some(950),
+                note: None,
+            },
         ];
         assert_eq!(
             rows(&output, &candidates),
             [
                 "kaggle:uciml/iris  Iris Species \u{b7} 3.6 KiB \u{b7} 12k downloads",
                 "zenodo:1           Iris \u{b7} needs access",
+                "hf:datasets/a/b    950 downloads",
             ]
         );
     }
