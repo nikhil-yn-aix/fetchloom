@@ -15,6 +15,8 @@ fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
     writer.hasher = HashPipe {
         sender: Some(sender),
         worker: Some(worker),
+        gathered: Vec::new(),
+        gathered_bytes: 0,
     };
     release
 }
@@ -70,6 +72,8 @@ fn a_hash_worker_failure_preserves_its_io_error() {
             let mut pipe = HashPipe {
                 sender: Some(sender),
                 worker: Some(worker),
+                gathered: Vec::new(),
+                gathered_bytes: 0,
             };
             let error = if checkpoint {
                 pipe.sha256_so_far(0).unwrap_err()
@@ -92,6 +96,8 @@ fn a_panicked_hash_worker_is_an_io_error() {
     let pipe = HashPipe {
         sender: Some(sender),
         worker: Some(worker),
+        gathered: Vec::new(),
+        gathered_bytes: 0,
     };
     assert_eq!(pipe.finish(0).unwrap_err().kind(), io::ErrorKind::Other);
 }
@@ -107,9 +113,11 @@ fn a_slow_hasher_bounds_the_number_of_in_flight_chunks() {
         .unwrap();
     let release = pause_hashing(&mut writer);
     let (progress, received) = mpsc::sync_channel(QUEUED + 1);
+    // each chunk fills a whole batch, so each one is a message to the paused worker
+    let chunk = Bytes::from(vec![b'x'; BATCH]);
     let background = thread::spawn(move || {
         for _ in 0..=QUEUED {
-            let result = writer.write_chunk(writer.written(), &Bytes::from_static(b"x"));
+            let result = writer.write_chunk(writer.written(), &chunk);
             progress.send(result).unwrap();
         }
         writer
@@ -134,7 +142,7 @@ fn a_slow_hasher_bounds_the_number_of_in_flight_chunks() {
     received.recv().unwrap().unwrap();
     assert_eq!(
         writer.finish().unwrap().digest,
-        crate::digest::sha256(&[b'x'; QUEUED + 1])
+        crate::digest::sha256(&vec![b'x'; (QUEUED + 1) * BATCH])
     );
 }
 

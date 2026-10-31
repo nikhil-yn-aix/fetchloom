@@ -12,8 +12,12 @@ use crate::digest::{Hasher, Md5, Sha256};
 
 const QUEUED: usize = 16;
 
+/// how much the pipe gathers before waking the worker. a message per 16 KiB response chunk spent
+/// more time waking threads than hashing.
+const BATCH: usize = 1024 * 1024;
+
 enum Message {
-    Chunk(Bytes),
+    Chunks(Vec<Bytes>),
     Range {
         start: u64,
         end: u64,
@@ -27,6 +31,9 @@ enum Message {
 pub(super) struct HashPipe {
     sender: Option<SyncSender<Message>>,
     worker: Option<JoinHandle<io::Result<(Hasher, u64)>>>,
+    /// chunks not sent yet. every other message sends them first, so order holds.
+    gathered: Vec<Bytes>,
+    gathered_bytes: usize,
 }
 
 impl HashPipe {
@@ -38,27 +45,46 @@ impl HashPipe {
         Ok(Self {
             sender: Some(sender),
             worker: Some(worker),
+            gathered: Vec::new(),
+            gathered_bytes: 0,
         })
     }
 
     pub(super) fn update(&mut self, bytes: Bytes) -> io::Result<()> {
-        self.send(Message::Chunk(bytes))
+        self.gathered_bytes += bytes.len();
+        self.gathered.push(bytes);
+        if self.gathered_bytes >= BATCH {
+            self.send_gathered()?;
+        }
+        Ok(())
     }
 
     pub(super) fn range(&mut self, start: u64, end: u64) -> io::Result<()> {
+        self.send_gathered()?;
         self.send(Message::Range { start, end })
     }
 
     pub(super) fn sha256_so_far(&mut self, received: u64) -> io::Result<Sha256> {
+        self.send_gathered()?;
         let (reply, result) = mpsc::sync_channel(1);
         self.send(Message::Checkpoint { received, reply })?;
         result.recv().map_err(|_| self.stopped())
     }
 
     pub(super) fn finish(mut self, received: u64) -> io::Result<(Sha256, Option<Md5>)> {
+        self.send_gathered()?;
         let (hasher, reached) = self.join()?;
         same_prefix(reached, received)?;
         Ok(hasher.finish())
+    }
+
+    fn send_gathered(&mut self) -> io::Result<()> {
+        if self.gathered.is_empty() {
+            return Ok(());
+        }
+        self.gathered_bytes = 0;
+        let chunks = std::mem::take(&mut self.gathered);
+        self.send(Message::Chunks(chunks))
     }
 
     fn send(&mut self, message: Message) -> io::Result<()> {
@@ -119,9 +145,11 @@ fn hash(
 ) -> io::Result<(Hasher, u64)> {
     while let Ok(message) = inbox.recv() {
         match message {
-            Message::Chunk(bytes) => {
-                hasher.update(&bytes);
-                received += bytes.len() as u64;
+            Message::Chunks(chunks) => {
+                for bytes in chunks {
+                    hasher.update(&bytes);
+                    received += bytes.len() as u64;
+                }
             }
             Message::Range { start, end } => {
                 same_prefix(received, start)?;
