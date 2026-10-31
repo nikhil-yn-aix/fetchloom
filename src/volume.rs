@@ -69,7 +69,13 @@ impl Volume {
             if self.rename(from, to).is_ok() {
                 return Ok(());
             }
-            (self.remove_file)(to)?;
+            if let Err(err) = (self.remove_file)(to) {
+                // the old file stays, as sealed as it was
+                if let Ok(file) = open_attributes(to) {
+                    let _ = file.set_permissions(before);
+                }
+                return Err(err);
+            }
             return self.rename(from, to);
         }
         // a hardlink placed in a project may still name the old file, so it gets its flag back
