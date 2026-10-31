@@ -21,11 +21,24 @@ apt-get install -y \
 
 use an Ubuntu package snapshot if a pin has left the mirror. python clients share the pinned environment below; each measured command has its own empty home and cache. `pathspec` is pinned for DVC's gitignore parser, and `chardet` for requests compatibility. DVC includes HTTP support without an extra. the runner itself imports only the standard library; matplotlib is used only by the renderer.
 
-## setup
+## build the measured executable
 
-from the repository root, as root:
+from the repository root in a linux shell with the [build prerequisites](../docs/dev/engineering/building-and-testing.md#build-requirements), build as your normal user:
 
 ```sh
+cargo build --locked --release --target-dir target
+target/release/fetchloom --version
+```
+
+in WSL, open that shell from powershell at the repository root with `wsl --cd $PWD.Path`. build a linux executable there, not a windows executable from powershell. the source may be on a windows mount; measured state must stay on the linux filesystem.
+
+## setup
+
+use a root shell in the same checkout for setup and runs. from powershell at the repository root, `wsl --cd $PWD.Path --user root` opens one in the default WSL distribution. on native linux, enter the same checkout after switching to your root shell. set the binary path in that shell:
+
+```sh
+benchmark_binary="$(realpath target/release/fetchloom)"
+"$benchmark_binary" --version
 python3 bench/lab.py setup
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
@@ -40,43 +53,35 @@ set `FL_BENCH_LIVE_CHECKS=1` on the test command to also check that the hugging 
 
 setup creates `flb-srv`, `flb-client` and `flb-server`, adds `lab.flb` to `/etc/hosts`, installs a disposable CA, starts nginx and mounts two 12 GiB sparse images. setup replaces only a lab with its ownership marker. it refuses conflicting unowned resources. setup also checks that HTTPS is responsive.
 
-in WSL, enter the existing worktree with:
-
-```powershell
-wsl -d Ubuntu-24.04 -u root -- bash -lc 'cd /mnt/c/Users/t-nikhilyn/AppData/Local/fetchloom-work/wt/bench; exec bash'
-```
-
-run the shell blocks above and below there. the source may be on `/mnt/c`; the measured state must not be.
-
 ## run
 
 full lab and live runs. ext4 runs every scenario on every profile it applies to. xfs adds the two scenarios where reflinks change the result, the second project and the no-op:
 
 ```sh
-python3 bench/run.py --fetchloom /home/fl/bin/fetchloom \
+python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7 \
   --fs ext4 --seed 1729 --out /srv/fl-bench/results/full/lab-ext4
-python3 bench/run.py --fetchloom /home/fl/bin/fetchloom \
+python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan --scenarios s5,s6 \
   --fs xfs --seed 1729 --out /srv/fl-bench/results/full/lab-xfs
-python3 bench/live.py --fetchloom /home/fl/bin/fetchloom \
+python3 bench/live.py --fetchloom "$benchmark_binary" \
   --seed 1729 --out /srv/fl-bench/results/full/live
 ```
 
-there are 10 measured rounds on lan and 5 on shaped links, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the two lab commands above take about five hours on an 8-thread laptop.
+there are 10 measured rounds on lan and 5 on shaped links, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
 smoke tests use 12 files per set, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
 
 ```sh
-python3 bench/run.py --fetchloom /home/fl/bin/fetchloom --quick \
+python3 bench/run.py --fetchloom "$benchmark_binary" --quick \
   --profiles lan,home --fs ext4 --out /srv/fl-bench/results/quick/lab
-python3 bench/live.py --fetchloom /home/fl/bin/fetchloom --quick \
+python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
   --out /srv/fl-bench/results/quick/live
 ```
 
 `--only-tools fetchloom,curl` narrows the lab adapters. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
 
-s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory; datalad's second project clones the first project; pooch returns its shared cached paths. those setup operations are outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
+s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad clones the first project inside the timed second-project command. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
 
 live runs check a separately downloaded reference against the public manifest, then compare the clients' file SHA-256s and layouts. quick inputs are zenodo's iris record, one hugging face iris CSV, kaggle's iris dataset, the two sub-KiB figshare files and the sub-KiB dataverse file. inaccessible services and anonymous kaggle refusals have recorded skip reasons. the hugging face and kaggle commands include the expected SHA-256 check because their download APIs have no such option. live results have no speed ratios.
 

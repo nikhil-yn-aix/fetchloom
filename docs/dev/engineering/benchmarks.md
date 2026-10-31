@@ -8,15 +8,15 @@ follow [bench requirements and setup](../../../bench/README.md#requirements) for
 
 use a dedicated machine with at least 30 GiB free. setup changes namespaces, mounts, the hosts file and system certificate trust. dropping page caches affects the whole machine. teardown deletes all lab state, including results, under `/srv/fl-bench`; copy wanted records out first.
 
-build fetchloom in release mode and pass its absolute linux path to `--fetchloom`. keep measured files, caches and logs under `/srv/fl-bench`, not a windows mount. the repository itself may be on a windows mount.
+[build the measured executable](../../../bench/README.md#build-the-measured-executable), then follow setup in the same checkout. setup defines `benchmark_binary` as its absolute linux path; keep that variable in the root shell used for the commands below. keep measured files, caches and logs under `/srv/fl-bench`, not a windows mount. the repository itself may be on a windows mount.
 
 ## choose a run
 
 | goal | command or route |
 |---|---|
 | check runner changes without downloads | `/opt/fl-bench/venv/bin/python -m unittest discover -s bench -p 'test_*.py'` |
-| small lab smoke | `python3 bench/run.py --fetchloom /home/fl/bin/fetchloom --quick --profiles lan --fs ext4 --out /srv/fl-bench/results/quick/lab` |
-| small service smoke | `python3 bench/live.py --fetchloom /home/fl/bin/fetchloom --quick --out /srv/fl-bench/results/quick/live` |
+| small lab smoke | `python3 bench/run.py --fetchloom "$benchmark_binary" --quick --profiles lan --fs ext4 --out /srv/fl-bench/results/quick/lab` |
+| small service smoke | `python3 bench/live.py --fetchloom "$benchmark_binary" --quick --out /srv/fl-bench/results/quick/live` |
 | full comparison | [full run commands](../../../bench/README.md#run): ext4 for all scenarios, then xfs for s5 and s6 on lan, then live services |
 | publish tables and figures | [render and keep results](../../../bench/README.md#render-and-keep-results) |
 
