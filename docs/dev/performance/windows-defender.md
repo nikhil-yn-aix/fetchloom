@@ -4,6 +4,8 @@ defender scanning can dominate the cost of writing many small random-looking fil
 
 ## recorded workload
 
+these are historical observations with no retained raw report or complete reproduction script. they share the [measurement evidence limits](measurements.md#evidence-limits), not the current benchmark suite's reproducibility guarantees.
+
 on windows 11 with real-time protection on, defender's performance recorder traced unpacking `files-10k.tar.zst`: 10,000 files of 4 KiB random bytes. the machine was the [baseline laptop](budgets.md#baseline-conditions). `Get-MpPerformanceReport` showed that every staged member was scanned on close.
 
 | probe | commit and runs | measured result | median and range limits |
