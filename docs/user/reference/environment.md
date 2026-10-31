@@ -16,8 +16,8 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
-| `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/README.md), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
-| `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](../../dev/architecture/README.md). a `FETCHLOOM_RATE` cap prevents splitting, including forced splitting |
+| `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
+| `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](../../dev/architecture/network.md#adaptive-split-downloads). a `FETCHLOOM_RATE` cap prevents splitting, including forced splitting |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |
@@ -27,7 +27,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `CI` | nonempty value disables automatic color and interactivity |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
 
-explicit `--color always` or `--color never` overrides color variables, not interactivity. automatic color first requires the destination stream to be a terminal: stderr for the story, stdout for welcome and help. on a terminal the color order is `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0`, `TERM=dumb`, then `CI`. only `--color always` forces ANSI color into a pipe or file.
+[terminal output](../../dev/architecture/output.md#terminal-capabilities) owns color precedence, stream detection and unicode fallbacks.
 
 the shared rate limit permits a burst of one second's bytes or 1 MiB, whichever is larger. `2.5M` allows 2,621,440 bytes per second.
 
@@ -54,7 +54,3 @@ the chosen value or file contents are trimmed. an unreadable file or blank token
 other credentials are read from where each source already keeps them: `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 `DATAVERSE_TOKEN` is not read. use public dataverse links; an access refusal needs a public copy from the dataset's owner.
-
-## installer version
-
-`FETCHLOOM_VERSION` selects a release when running an installer. a version passed as the installer's first argument also selects a release. see [installation](../getting-started.md#install).
