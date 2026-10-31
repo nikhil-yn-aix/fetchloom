@@ -1,4 +1,4 @@
-﻿# network
+# network
 
 `net` turns source requests into bounded HTTP work and verified cache objects.
 

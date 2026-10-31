@@ -1,4 +1,4 @@
-﻿# cache
+# cache
 
 `cache` stores reusable bytes by SHA-256 and keeps the records needed to resume, verify and retain them.
 
