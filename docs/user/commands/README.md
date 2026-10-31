@@ -51,7 +51,7 @@ project commands find the nearest `data.toml` at or above the working directory.
 
 ## output
 
-stdout carries paths from `get`, `path` and `cache`, plus version, welcome, help or JSON. stderr carries progress, warnings, summaries and errors. a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested.
+stdout carries paths from `get` and `path`, plus version, welcome, help or JSON. `cache` prints its bare path on stdout only when stdout is not a terminal or quiet mode hides the story. at a terminal, the story already shows the cache path. stderr carries progress, warnings, summaries and errors. a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested.
 
 interactive stderr shows a verb, filename and bar during downloads and unpacking. counters show bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. waits show elapsed time without a spinner.
 
