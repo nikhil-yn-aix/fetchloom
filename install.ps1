@@ -1,4 +1,4 @@
-# installs fetchloom and fl from a github release into %LOCALAPPDATA%\Programs\fetchloom\bin, and
+# installs fetchloom from a github release into %LOCALAPPDATA%\Programs\fetchloom\bin, and
 # adds that folder to your user PATH when it lacks it.
 #
 #   powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
@@ -95,10 +95,10 @@ function Install-Fetchloom([string]$Version) {
 
         Expand-Archive -Path $archive -DestinationPath $work
         $folder = Join-Path $work ($asset -replace '\.zip$', '')
-        foreach ($name in 'fetchloom.exe', 'fl.exe') {
+        foreach ($name in 'fetchloom.exe') {
             if (-not (Test-Path (Join-Path $folder $name))) { throw "$asset holds no $name. nothing was installed" }
         }
-        foreach ($name in 'fetchloom.exe', 'fl.exe') {
+        foreach ($name in 'fetchloom.exe') {
             Move-Item -Force (Join-Path $folder $name) (Join-Path $bin $name)
         }
     } finally {
@@ -106,12 +106,12 @@ function Install-Fetchloom([string]$Version) {
     }
 
     $installed = & (Join-Path $bin 'fetchloom.exe') --version
-    Write-Host "installed $installed and fl in $bin"
+    Write-Host "installed $installed in $bin"
     if (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $bin) { $env:Path = "$env:Path;$bin" }
     if (Add-UserPath $bin) {
         Write-Host "added $bin to your user PATH. open a new terminal to use it"
     }
-    Write-Host 'next: run fetchloom to see the first steps. in powershell type fetchloom, since fl means Format-List there'
+    Write-Host 'next: run fetchloom to see the first steps'
 }
 
 Install-Fetchloom $Version

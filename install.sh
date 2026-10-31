@@ -1,5 +1,5 @@
 #!/bin/sh
-# installs fetchloom and fl from a github release into ~/.local/bin, and adds that folder to
+# installs fetchloom from a github release into ~/.local/bin, and adds that folder to
 # PATH in your shell profiles when PATH lacks it.
 #
 #   curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
@@ -98,14 +98,14 @@ fi
 
 tar -xzf "$work/$asset" -C "$work"
 folder=$work/${asset%.tar.gz}
-for name in fetchloom fl; do
+for name in fetchloom; do
     [ -f "$folder/$name" ] || fail "$asset holds no $name. nothing was installed"
 done
-for name in fetchloom fl; do
+for name in fetchloom; do
     mv -f "$folder/$name" "$bin_dir/$name"
 done
 installed=$("$bin_dir/fetchloom" --version)
-echo "installed $installed and fl in $bin_dir"
+echo "installed $installed in $bin_dir"
 
 case ":$PATH:" in
     *":$bin_dir:"* | *":$bin_dir/:"*)

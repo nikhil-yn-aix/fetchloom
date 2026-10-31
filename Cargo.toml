@@ -14,10 +14,6 @@ default-run = "fetchloom"
 name = "fetchloom"
 path = "src/main.rs"
 
-[[bin]]
-name = "fl"
-path = "src/bin/fl.rs"
-
 [dependencies]
 anstream = "1.0"
 anstyle = "1.0"

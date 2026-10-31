@@ -16,19 +16,6 @@ fn version() -> Result {
 }
 
 #[test]
-fn fl_is_the_same_program() -> Result {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fl"))
-        .arg("--version")
-        .output()?;
-    assert!(output.status.success());
-    assert_eq!(
-        text(&output.stdout)?,
-        format!("fetchloom {}\n", env!("CARGO_PKG_VERSION"))
-    );
-    Ok(())
-}
-
-#[test]
 fn help_is_lowercase() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
     assert!(output.status.success());
