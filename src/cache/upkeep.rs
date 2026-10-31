@@ -491,7 +491,7 @@ mod tests {
             };
             assert_eq!(checked.unreadable, [unreadable]);
             assert_eq!(checked.objects, 0);
-            assert!(checked.changed.is_empty());
+            assert_eq!(checked.changed, []);
             assert!(object.exists());
         }
     }

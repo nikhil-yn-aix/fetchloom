@@ -278,7 +278,7 @@ fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
             _ => sandbox.work().join(broken),
         };
         let before = fs::metadata(&path)?.permissions();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0))?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000))?;
         let output = sandbox
             .command_in(&sandbox.folder("elsewhere")?, &["--json", "cache", "gc"])
             .output();
