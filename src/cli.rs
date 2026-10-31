@@ -5,6 +5,7 @@ mod cache;
 mod fetch;
 mod get;
 mod help;
+mod list;
 mod logs;
 mod project;
 mod search;
@@ -299,6 +300,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Cache(args::Cache { action: None }) => {
             let outcome = cache::info(context);
+            finish(context, name, outcome, started)
+        }
+        args::Command::List => {
+            let outcome = list::run(context);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

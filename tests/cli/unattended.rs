@@ -42,6 +42,7 @@ fn no_command_waits_for_input_when_stdin_is_not_a_terminal() -> Result {
         (&["lock"], 0),
         (&["lock", "--check"], 0),
         (&["status"], 0),
+        (&["list"], 0),
         (&["path", "iris"], 0),
         (&[], 0),
         (&["add", large.url.as_str()], 1),

@@ -41,6 +41,26 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
 }
 
 #[test]
+fn list_shows_each_dataset_with_its_source_and_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let listed = sandbox.run(&["list"])?;
+    assert_eq!(listed.status.code(), Some(0));
+    let stdout = text(&listed.stdout)?;
+    assert!(stdout.starts_with("iris  "), "{stdout}");
+    assert!(stdout.contains("1 file · 32 B  data/iris"), "{stdout}");
+    let document = json(&sandbox.run(&["--json", "list"])?)?;
+    let dataset = &document["result"]["datasets"][0];
+    assert_eq!(dataset["name"], "iris");
+    assert_eq!(dataset["ref"], server.url.as_str());
+    assert_eq!(dataset["files"], 1);
+    assert_eq!(dataset["bytes"], IRIS.len());
+    assert_eq!(dataset["folder"], "data/iris");
+    Ok(())
+}
+
+#[test]
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

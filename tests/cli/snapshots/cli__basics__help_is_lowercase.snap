@@ -26,6 +26,7 @@ commands:
   sync    place the files pinned in data.lock on this machine
   lock    update data.lock from data.toml without placing files in the data folder
   status  list files that are missing, changed locally or extra
+  list    list the project's datasets: where each comes from, its size and its folder
   path    print where a dataset or a file in it is, syncing first if needed
   cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project

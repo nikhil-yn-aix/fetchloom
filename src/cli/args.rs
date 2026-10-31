@@ -46,6 +46,12 @@ on disk: writes data.lock and may add files to the cache. --check writes nothing
 
 on disk: nothing. it reads data.toml, data.lock and data/";
 
+    pub(super) const LIST: &str = "examples:
+  fetchloom list
+  fetchloom list --json
+
+on disk: nothing. it reads data.toml and data.lock";
+
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
   fetchloom path iris/iris.csv
@@ -246,6 +252,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status,
 
+    /// list the project's datasets: where each comes from, its size and its folder
+    #[command(override_usage = "fetchloom list [options]", help_template = TEMPLATE, after_help = examples::LIST)]
+    List,
+
     /// print where a dataset or a file in it is, syncing first if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
@@ -276,6 +286,7 @@ impl Command {
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Status => "status",
+            Command::List => "list",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
