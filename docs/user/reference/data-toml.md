@@ -30,7 +30,17 @@ path = "measurements"
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir` | the dataset name |
 
-names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit. generated names are at most 40 characters.
+names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit.
+
+without `--as`, fetchloom chooses a name in this order:
+
+| available information | generated name |
+|---|---|
+| one file | its filename, limited to 40 characters |
+| a title | at most its first four words and 32 characters, dropping trailing words such as `and`, `of` and `the` |
+| a reference | its last part containing a letter; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
+
+if the generated name is taken, fetchloom appends `-2`, `-3` and so on. an explicitly supplied `--as` name that is taken is refused.
 
 `data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused. trailing `/` is stripped. the data folder and its child folders must be real directories; see [placement](../../dev/architecture/README.md).
 

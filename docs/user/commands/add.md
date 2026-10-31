@@ -45,6 +45,14 @@ adding an existing reference with identical filters and extraction settings sync
 
 if a new addition fails to sync, fetchloom attempts to restore the previous manifest. if restoration fails too, the error includes a backup as a JSON string to decode into `data.toml`, or names the entry to remove. cache, lock and placement changes are not all rolled back.
 
+## generated names
+
+without `--as`, a single file supplies a name of at most 40 characters. otherwise a title supplies at most its first four words and 32 characters, dropping trailing words such as `and`, `of` and `the`.
+
+when neither supplies a name, fetchloom uses the reference's last part containing a letter: `hf:datasets/scikit-learn/iris` gives `iris`, while `zenodo:123` gives `zenodo-123`.
+
+a taken generated name gets `-2`, `-3` and so on. a taken explicit `--as` name is refused.
+
 ## exit codes
 
 0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means download approval was missing; 2 means invalid usage. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
