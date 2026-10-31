@@ -36,7 +36,7 @@ flowchart TD
     exists -->|yes| tracked{"tracked?"}
     tracked -->|yes| unchanged{"unchanged and same pin and mode?"}
     unchanged -->|yes| keep["keep or vouch"]
-    unchanged -->|no| safe{"unchanged old pin or damaged shared link?"}
+    unchanged -->|no| safe{"unchanged old pin or marked unchanged alias?"}
     safe -->|yes| replace["replace"]
     safe -->|no| equal{"holds wanted bytes?"}
     tracked -->|no| equal
@@ -52,7 +52,7 @@ flowchart TD
 | vouch | a doubtful hardlink was hashed and found intact; keep it and record the scan's start |
 | adopt | existing bytes match the target; record them as managed without rewriting them |
 | place | no file occupies the target |
-| replace | old managed data is superseded, a shared link is damaged, a tracked mode must change, or force permits replacement |
+| replace | old managed data is superseded, an unchanged alias is proven damaged, a tracked mode must change, or force permits replacement |
 | leave | preserve an edited or foreign file and report why it stayed |
 
 untracked equal files are adopted. a tracked changed file holding the target bytes recovers an interruption between placement and state writing; if writable mode is required but the file is read-only, that tracked file is replaced. adoption detects when the existing file is the cache object under another name and records it as a hardlink.
@@ -75,7 +75,7 @@ on linux 5.8 and later, `batches_copies` opens the destination root before the f
 
 ### changed hardlinks and aliases
 
-a hardlink edit can damage the cached object. the survey audits changed links and writes cache marks; other projects hash affected links even when directory metadata still looks unchanged. windows directory listings can retain stale size and time after an edit through another name. `sync --force` reads each hardlink through its own name. linux commonly shows the edit through every name and preserves it as a hand edit until force is requested.
+a hardlink edit can damage the cached object. the survey audits changed links and writes cache marks; other projects hash affected links even when directory metadata still looks unchanged. windows directory listings can retain stale size and time after an edit through another name. `sync --force` reads each hardlink through its own name. linux commonly shows the edit through every name. `Reason::Shared` preserves a visibly changed hardlink because the survey cannot identify which project edited it; force is needed to restore it. an unchanged listing with a later change mark can instead establish an `elsewhere` repair after hashing.
 
 when a recorded spelling is absent, scans consider exactly one folded alias and verify the recorded path resolves to the same plain file. unix also compares device and inode. ambiguous aliases and distinct case-sensitive files remain separate. retargeting carries edits and hardlink doubts to the wanted spelling.
 
