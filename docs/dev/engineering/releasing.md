@@ -1,6 +1,8 @@
 # releasing
 
-releases package one executable for linux and windows on x86_64 and arm64, then attach checksums and provenance.
+the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance.
+
+no release or PyPI package has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
 
 ## workflow
 
@@ -23,7 +25,7 @@ build jobs have a 60-minute timeout. attestation and release each have 15 minute
 
 ## artifacts
 
-for the current Cargo version, 0.1.0, the release contains four archives, four wheels, two installers and a checksum file.
+for the current Cargo version, 0.1.0, the workflow will produce four archives, four wheels, two installers and a checksum file.
 
 | artifact | contents |
 |---|---|
@@ -66,9 +68,9 @@ to exercise build jobs without a tag, temporarily add a branch trigger for `rele
 
 ## installers
 
-[install.sh](../../../install.sh) detects x86_64 or arm64 linux and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. [install.ps1](../../../install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
+the planned release will include [install.sh](../../../install.sh), which detects x86_64 or arm64 linux and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. [install.ps1](../../../install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
-both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. explicit versions and latest releases are supported. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
+both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
 ## local fake-release test
 
