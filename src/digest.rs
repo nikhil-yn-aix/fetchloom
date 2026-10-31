@@ -41,11 +41,15 @@ impl Sha256 {
 
     /// hashes a whole file, reading it once.
     pub(crate) fn of_file(path: &Path) -> io::Result<Sha256> {
-        let mut file = File::open(path)?;
+        Self::of_reader(File::open(path)?)
+    }
+
+    /// hashes an opened reader so cache checks never reopen a checked path.
+    pub(crate) fn of_reader(mut reader: impl Read) -> io::Result<Sha256> {
         let mut hasher = Hasher::default();
         let mut buffer = vec![0; 1024 * 1024];
         loop {
-            let read = file.read(&mut buffer)?;
+            let read = reader.read(&mut buffer)?;
             if read == 0 {
                 return Ok(hasher.finish().0);
             }

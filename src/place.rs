@@ -13,8 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cache::read_unfollowed;
 use crate::threads::Threads;
-use crate::volume::{Volume, crosses_volumes, refuses_links};
+use crate::volume::{Volume, crosses_volumes, is_plain, refuses_links};
 
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
@@ -202,6 +203,7 @@ impl Placer {
     /// tries each method the filesystem may allow, best first.
     fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
         if self.can_reflink.load(Ordering::Relaxed) {
+            check_object(object)?;
             match reflink_copy::reflink(object, destination) {
                 Ok(()) => {
                     seal(destination, writable)?;
@@ -212,6 +214,7 @@ impl Placer {
         }
         // sync clients break hardlinks or upload every link as a full file.
         if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
+            check_object(object)?;
             match fs::hard_link(object, destination) {
                 Ok(()) => return Ok(Method::Hardlink),
                 Err(error) => self.learn(Method::Hardlink, error)?,
@@ -452,6 +455,19 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     Err(io::Error::new(kind, message))
 }
 
+fn check_object(object: &Path) -> io::Result<()> {
+    if is_plain(&fs::symlink_metadata(object)?) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} is a link or a special file, which fetchloom never places",
+            object.display()
+        ),
+    ))
+}
+
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
 fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> io::Result<()> {
@@ -494,7 +510,7 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
 fn fill(object: &Path, mut output: &File, writable: bool, threads: Threads) -> io::Result<()> {
-    let mut input = File::open(object)?;
+    let mut input = read_unfollowed(object)?;
     if threads.is_limited() {
         // a reader per copy would multiply the placement worker cap.
         io::copy(&mut input, &mut output)?;
