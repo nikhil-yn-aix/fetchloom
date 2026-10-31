@@ -292,7 +292,7 @@ def main():
     parser.add_argument("--reps", type=int)
     parser.add_argument("--only", help="comma-separated tools to run")
     parser.add_argument("--results", type=Path, default=BENCH / "results",
-                        help="where the block's folder goes; published blocks live in bench/results")
+                        help="where the block's folder goes; git ignores bench/results")
     args = parser.parse_args()
     plan = tomllib.loads(Path(args.plan).read_text(encoding="utf-8-sig"))
     reps = args.reps or plan.get("repetitions", 3)

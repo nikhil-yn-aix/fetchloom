@@ -45,7 +45,7 @@ hashing in memory on this CPU, best of three over 1 GiB: sha2's SHA-256 1.70 to 
 
 ### many small downloads
 
-1,000 URLs of 100 KiB each, one dataset per URL, `sync` into an empty cache from the lab server on the same machine (lan profile, linux): each file cost three flushes, its object, its resume checkpoint and its URL record, about 3.3 ms each on WSL's ext4 with four requests per host. a checkpoint or URL record lost in a power cut costs only a resume or a conditional request, and a torn one reads as absent, so those two and the MD5 index entries are now renamed into place without a flush. objects, change marks, unpack records and project registrations keep theirs. ten interleaved pairs at 0533392: 4.46 s (4.27 to 6.31) before, 2.18 s (2.09 to 3.87) after, 51% faster. results are in `bench/results/ab/noflush-index-m1k-linux.csv`.
+1,000 URLs of 100 KiB each, one dataset per URL, `sync` into an empty cache from the lab server on the same machine (lan profile, linux): each file cost three flushes, its object, its resume checkpoint and its URL record, about 3.3 ms each on WSL's ext4 with four requests per host. a checkpoint or URL record lost in a power cut costs only a resume or a conditional request, and a torn one reads as absent, so those two and the MD5 index entries are now renamed into place without a flush. objects, change marks, unpack records and project registrations keep theirs. ten interleaved pairs at 0533392: 4.46 s (4.27 to 6.31) before, 2.18 s (2.09 to 3.87) after, 51% faster.
 
 ### small files on windows
 
@@ -164,7 +164,7 @@ the difference is within noise, so HTTP/2 stays. an earlier single HTTP/2 run to
 
 ## against other tools
 
-the method is [benchmarks](benchmarks.md). on 2026-10-31 a reduced run used 3 blocks instead of 5, on linux only, with release build 240f17a, which predates the flush change above. the windows lab did not fit: the harness alone needs about 12 minutes after each run that leaves 10,000 files on windows, as [the plans](../bench/plans/README.md) explain. the far and poor profiles and the live subset were not run in this pass. raw rows and summaries are in `bench/results/20261030-201504-lab-lan-linux`, `20261030-202035-lab-lan-linux-urls` and `20261030-202121-lab-home-linux-urls`. medians, wall time:
+the method is [benchmarks](benchmarks.md). on 2026-10-31 a reduced run used 3 blocks instead of 5, on linux only, with release build 240f17a, which predates the flush change above. the windows lab did not fit: the harness alone needs about 12 minutes after each run that leaves 10,000 files on windows, as [the plans](../bench/plans/README.md) explain. the far and poor profiles and the live subset were not run in this pass. medians, wall time:
 
 | workload, profile | fetchloom | others |
 |---|---|---|

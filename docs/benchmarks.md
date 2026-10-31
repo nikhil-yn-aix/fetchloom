@@ -1,6 +1,6 @@
 # benchmarks
 
-this is the method for comparing fetchloom with other tools. it was fixed before any comparison ran: the tools, versions, commands, settings and timeouts sit in `bench/plans/`, committed before the runs they describe. changes are listed at the end with their reason. results live in `bench/results/`, one folder per block of runs, with every attempt kept, failures included.
+this is the method for comparing fetchloom with other tools. it was fixed before any comparison ran: the tools, versions, commands, settings and timeouts sit in `bench/plans/`, committed before the runs they describe. changes are listed at the end with their reason. each run writes `bench/results/`, one folder per block, with every attempt kept, failures included. git ignores that folder; [performance](performance.md#against-other-tools) records the numbers with their conditions.
 
 ## questions
 
