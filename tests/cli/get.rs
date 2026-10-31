@@ -587,3 +587,58 @@ fn repository_file_pages_report_the_raw_link_before_downloading() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn extensionless_links_use_redirect_names_and_prefer_final_names() -> Result {
+    for final_name in [None, Some("final.mat")] {
+        let sandbox = Sandbox::new()?;
+        let mut headers = vec![("Content-Type", "application/octet-stream")];
+        let disposition = final_name.map(|name| format!("attachment; filename={name}"));
+        if let Some(value) = disposition.as_deref() {
+            headers.push(("Content-Disposition", value));
+        }
+        let server = Server::start(
+            "/files/9778519",
+            vec![
+                reply(
+                    "302 Found",
+                    &[
+                        ("Location", "/storage"),
+                        ("Content-Disposition", "attachment;filename=dir.mat"),
+                    ],
+                    b"",
+                ),
+                reply("200 OK", &headers, IRIS),
+            ],
+        )?;
+        let output = sandbox.run(&["get", &server.url])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let (folder, name) = if final_name.is_some() {
+            ("final", "final.mat")
+        } else {
+            ("dir", "dir.mat")
+        };
+        assert_eq!(fs::read(sandbox.work().join(folder).join(name))?, IRIS);
+        let offline = sandbox.run(&["get", &server.url, "--offline", "-o", "cached"])?;
+        assert!(offline.status.success(), "{}", text(&offline.stderr)?);
+        assert_eq!(fs::read(sandbox.work().join("cached").join(name))?, IRIS);
+        assert_eq!(server.requests().len(), 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn unnamed_numeric_links_keep_the_number_and_suggest_an_article_or_doi() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/9778519", vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(sandbox.work().join("9778519").join("9778519"))?,
+        IRIS
+    );
+    assert!(stderr.contains("article or DOI link"), "{stderr}");
+    Ok(())
+}

@@ -303,6 +303,7 @@ impl Net {
         let client = wire.lane(lane).map_err(Failure::Final)?;
         let mut hop = url.clone();
         let mut redirects = 0;
+        let mut name = None;
         let mut first_origin = true;
         loop {
             wire.proxies
@@ -312,7 +313,7 @@ impl Net {
             first_origin &= hop.origin() == url.origin();
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = shape(self.request(client, &hop, first_origin));
-            let response = tokio::select! {
+            let mut response = tokio::select! {
                 sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
                     Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
                     Ok(Err(err)) => return Err(failure::classify(&hop, &err, self.offline)),
@@ -323,8 +324,12 @@ impl Net {
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, Instant::now());
             let Some(next) = redirect_target(&hop, &response) else {
+                if let Some(name) = name {
+                    response.extensions_mut().insert(RedirectName(name));
+                }
                 return Ok(response);
             };
+            name = headers::file_name(response.headers()).or(name);
             redirects += 1;
             if redirects > REDIRECTS {
                 let reason = address::Refused(format!("more than {REDIRECTS} redirects"));
@@ -422,6 +427,10 @@ impl Net {
             .clone()
     }
 }
+
+/// a redirect may name the download even when the final storage response does not.
+#[derive(Clone, Debug)]
+struct RedirectName(String);
 
 /// the host of a URL as people say it, for messages.
 pub(crate) fn host(url: &Url) -> &str {

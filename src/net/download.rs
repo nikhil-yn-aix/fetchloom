@@ -403,7 +403,7 @@ impl Net {
             status => return Err(failure::refusal(from, status, &head)),
         };
         let total = headers::total_length(&head, status);
-        let name = server_name(&head)?;
+        let name = server_name(&response, &fetch.url)?;
         if headers::is_html(&head) {
             on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
         }
@@ -732,8 +732,17 @@ impl Net {
     }
 }
 
-fn server_name(head: &header::HeaderMap) -> Result<Option<String>, Failure> {
-    let name = headers::file_name(head);
+fn server_name(response: &reqwest::Response, url: &Url) -> Result<Option<String>, Failure> {
+    let name = headers::file_name(response.headers()).or_else(|| {
+        let path = crate::name::from_url(url).unwrap_or_default();
+        if std::path::Path::new(&path).extension().is_some() {
+            return None;
+        }
+        response
+            .extensions()
+            .get::<super::RedirectName>()
+            .map(|name| name.0.clone())
+    });
     if let Some(given) = name.as_deref()
         && given.contains(crate::name::is_bidi_control)
     {

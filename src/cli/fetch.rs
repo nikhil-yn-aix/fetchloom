@@ -256,6 +256,14 @@ pub(super) async fn all(
                     }
                     fetched => fetched,
                 };
+                if let Ok(found) = &fetched
+                    && found.name.as_deref().and_then(crate::name::sanitize).is_none()
+                    && let Some(name) = std::path::Path::new(&job.label).file_name().and_then(|name| name.to_str())
+                    && !name.is_empty()
+                    && name.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    output.warn(&format!("the server did not name {name}; try the article or DOI link, which names its files"));
+                }
                 (index, fetched.map_err(|err| explain(err, &job)))
             });
         }
