@@ -281,13 +281,13 @@ there is no config file. [CLI options](cli.md#options) set per-run behavior.
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace; relative to the starting directory, before `-C` |
 | `NO_COLOR` | nonempty value disables automatic color |
-| `CLICOLOR_FORCE` | nonempty value other than `0` forces automatic color unless `NO_COLOR` wins |
+| `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color on a terminal unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
 
-explicit `--color always` or `--color never` overrides color variables, not interactivity. in automatic mode the color order is `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0`, `TERM=dumb`, `CI`, then whether stderr is a terminal.
+explicit `--color always` or `--color never` overrides color variables, not interactivity. automatic color first requires the destination stream to be a terminal: stderr for the story, stdout for welcome and help. on a terminal the color order is `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0`, `TERM=dumb`, then `CI`. only `--color always` forces ANSI color into a pipe or file.
 
 rate values accept surrounding whitespace and a decimal fraction with digits on both sides of the point. suffixes multiply by powers of 1024; fractions round down to whole bytes per second. the resulting rate must be from 1 to 18,446,744,073,709,551,615. signs, exponent notation, lowercase suffixes and suffixes such as `MB` are refused.
 

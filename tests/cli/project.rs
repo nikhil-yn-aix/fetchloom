@@ -104,7 +104,7 @@ fn adding_the_same_dataset_again_changes_nothing() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "✓ iris is already in data.toml. its files are in data/iris\n"
+        "         Ok iris is already in data.toml, its files are in data/iris\n"
     );
     assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before);
     assert_eq!(server.requests().len(), 1, "nothing is downloaded twice");
@@ -133,7 +133,7 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         text(&output.stderr)?,
-        "✓ all pinned files are in place. nothing to do\n"
+        "         Ok all pinned files are in place, nothing to do\n"
     );
     let quiet = json(&sandbox.run(&["--json", "sync"])?)?;
     assert_eq!(quiet["work"]["requests"], 0);
@@ -400,7 +400,7 @@ fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "✓ data.lock was already up to date. nothing to do\n"
+        "         Ok data.lock is already up to date, nothing to do\n"
     );
     assert_eq!(
         fs::read_to_string(&path)?,
@@ -549,7 +549,7 @@ fn status_lists_what_differs() -> Result {
     let folder = sandbox.work().join("data").join("iris");
     assert_eq!(
         text(&sandbox.run(&["status"])?.stderr)?,
-        "✓ everything matches data.lock\n"
+        "         Ok everything matches data.lock\n"
     );
     delete(&folder.join("iris.csv"))?;
     fs::write(folder.join("notes.txt"), "mine")?;
@@ -569,12 +569,12 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     let calm = sandbox.command_in(&inner, &[]).output()?;
     assert_eq!(calm.status.code(), Some(0));
     assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
-    assert_eq!(text(&calm.stderr)?, "✓ everything matches data.lock\n");
+    assert_eq!(text(&calm.stderr)?, "         Ok everything matches data.lock\n");
     delete(&inner.join("iris.csv"))?;
     let missing = sandbox.run(&[])?;
     assert_eq!(
         text(&missing.stderr)?,
-        "✓ found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs\n"
+        "      Found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs\n"
     );
     let document = json(&sandbox.run(&["--json"])?)?;
     assert_eq!(document["command"], "status");
@@ -610,13 +610,13 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let gc = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&gc.stderr)?,
-        "✓ no cached data files or download leftovers were removed\n"
+        "         Ok no cached data files or download leftovers were removed\n"
     );
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(0));
     assert_eq!(
         text(&verify.stderr)?,
-        "✓ verified 1 file · 32 B. every one is intact\n"
+        "   Verified 1 file · 32 B, every one is intact\n"
     );
     fs::remove_file(sandbox.work().join("data.toml"))?;
     let forgotten = json(&sandbox.run(&["--json", "cache"])?)?;
@@ -781,7 +781,7 @@ fn duplicate_add_chooses_the_entry_with_matching_settings() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "✓ z-packed is already in data.toml. its files are in data/z-packed\n"
+        "         Ok z-packed is already in data.toml, its files are in data/z-packed\n"
     );
     assert_eq!(
         fs::read_to_string(sandbox.work().join("data.toml"))?,

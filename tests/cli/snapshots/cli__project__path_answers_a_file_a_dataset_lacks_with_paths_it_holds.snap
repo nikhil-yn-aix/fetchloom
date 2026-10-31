@@ -3,6 +3,6 @@ source: tests/cli/project.rs
 assertion_line: 423
 expression: stderr
 ---
-✗ dataset has no file or folder called not-a-file.csv
+error: dataset has no file or folder called not-a-file.csv
   dataset holds 5 files, such as data/café.csv, data/train.csv and data/empty.txt
   help: name a path it holds, such as `fetchloom path dataset/data/café.csv`

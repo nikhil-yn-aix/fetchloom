@@ -144,7 +144,7 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
     fs::write(&state, before)?;
 
     let status = sandbox.run(&["status"])?;
-    assert_eq!(text(&status.stderr)?, "✓ everything matches data.lock\n");
+    assert_eq!(text(&status.stderr)?, "         Ok everything matches data.lock\n");
     let synced = sandbox.run(&["--json", "sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     let report: Value = serde_json::from_slice(&synced.stdout)?;
@@ -154,6 +154,6 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
         b"iris, again\n"
     );
     let after = sandbox.run(&["status"])?;
-    assert_eq!(text(&after.stderr)?, "✓ everything matches data.lock\n");
+    assert_eq!(text(&after.stderr)?, "         Ok everything matches data.lock\n");
     Ok(())
 }

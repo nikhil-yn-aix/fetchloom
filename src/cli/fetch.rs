@@ -39,7 +39,9 @@ impl Overall {
         let count = jobs.len();
         let sizes = || jobs.iter().map(|job| job.fetch.expect.size);
         let bar = (count > 1).then(|| {
-            let bar = context.output.bar(format!("downloading {count} files"));
+            let bar = context
+                .output
+                .bar("Downloading", units::count(count as u64, "file", "files"));
             bar.start(sizes().sum(), 0);
             bar
         });
@@ -103,7 +105,7 @@ impl<'a> Watch<'a> {
     /// the download's bar, made when it is first needed.
     fn bar(&self) -> &Bar {
         self.bar
-            .get_or_init(|| self.output.bar(self.job.label.clone()))
+            .get_or_init(|| self.output.bar("Downloading", self.job.label.clone()))
     }
 
     fn approve(&self, size: &str) -> Result<(), Error> {
@@ -130,7 +132,10 @@ impl<'a> Watch<'a> {
         let bar = self.bar();
         match *event {
             Event::Waiting => {
-                bar.message(format!("waiting for another fetchloom to download {label}"));
+                bar.message(
+                    "Waiting",
+                    format!("{label} · another fetchloom is downloading it"),
+                );
             }
             Event::Started { total, resumed, .. } => {
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
@@ -146,6 +151,7 @@ impl<'a> Watch<'a> {
                     self.unbounded.store(total.is_none(), Ordering::Relaxed);
                     self.received.store(resumed, Ordering::Relaxed);
                 }
+                bar.message("Downloading", label.clone());
                 bar.start(total, resumed);
                 self.overall.advance(resumed);
             }
@@ -224,7 +230,7 @@ pub(super) async fn all(
                 results[index] = Some(fetched);
                 done += 1;
                 if let Some(bar) = &overall.bar {
-                    bar.message(format!("downloaded {done} of {count} files"));
+                    bar.message("Downloading", format!("{done} of {count} files"));
                 }
             }
             Ok((index, Err(err))) if on_its_own(&err) => failed.push((index, err)),

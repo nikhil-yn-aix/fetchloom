@@ -302,7 +302,10 @@ struct About {
 
 /// prints `text` for a person, or the version in the document `--json` asked for.
 fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
-    context.output.answer(text);
+    context.output.answer(&crate::output::help_text(
+        text,
+        Style::stdout_color(args::color()),
+    ));
     let about = About {
         version: env!("CARGO_PKG_VERSION"),
     };

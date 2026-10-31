@@ -74,6 +74,16 @@ fetchloom add zenodo:3608990
 
 you now have `data/iris/iris.csv`, a `data.toml` entry called `iris`, and its exact file hash and size in `data.lock`. commit `data.toml` and `data.lock` to git. `add` puts the data folder in `.gitignore` when you are in a git repository.
 
+when the filesystem can link files, stderr includes:
+
+```text
+     Placed data/iris · 1 file linked from the cache
+      Added iris, its files are in data/iris
+  hint: scripts can find it with `fetchloom path iris`
+```
+
+verbs and labels carry the meaning without status symbols. terminals add color; `--color never` keeps it plain. [output and errors](docs/cli.md#output-and-errors) describes progress bars and color settings.
+
 anyone who clones the project runs:
 
 ```sh

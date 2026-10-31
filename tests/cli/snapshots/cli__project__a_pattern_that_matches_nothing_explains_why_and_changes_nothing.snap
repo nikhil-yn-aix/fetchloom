@@ -2,6 +2,6 @@
 source: tests/cli/project.rs
 expression: stderr
 ---
-✗ the pattern "*.txt" matched no file in http://127.0.0.1:[port]/files/iris.csv
+error: the pattern "*.txt" matched no file in http://127.0.0.1:[port]/files/iris.csv
   1 file was considered, for example iris.csv
   help: compare the pattern with the paths above, then fix --select or select in data.toml

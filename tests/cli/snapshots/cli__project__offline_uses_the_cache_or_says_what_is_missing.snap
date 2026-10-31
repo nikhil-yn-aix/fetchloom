@@ -2,6 +2,6 @@
 source: tests/cli/project.rs
 expression: stderr
 ---
-✗ offline, and 1 file the lock names is not in the cache
+error: offline, and 1 file the lock names is not in the cache
   iris/iris.csv
   help: run it again without --offline to download them

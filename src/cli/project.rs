@@ -216,7 +216,7 @@ async fn again(
     };
     work.context
         .output
-        .done(&format!("{name} is already in data.toml. {contents}"));
+        .done("Ok", &format!("{name} is already in data.toml, {contents}"));
     Ok(Report {
         project: work.project.root.clone(),
         datasets: Vec::new(),
@@ -230,14 +230,15 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
         let folder = plan::folder(manifest, name);
         work.context
             .output
-            .done(&format!("added {name}. its files are in {folder}"));
+            .done("Added", &format!("{name}, its files are in {folder}"));
         work.context
             .output
             .hint(&format!("scripts can find it with `fetchloom path {name}`"));
     } else {
-        work.context.output.done(&format!(
-            "added {name}. its archives contain no regular files"
-        ));
+        work.context.output.done(
+            "Added",
+            &format!("{name}, its archives contain no regular files"),
+        );
     }
     work.context
         .output
@@ -274,7 +275,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         survey,
     )?
     .remove_only(&context.output)?;
-    context.output.done(&format!("removed {}", args.name));
+    context.output.done("Removed", &args.name);
     context.output.next(
         "commit data.toml and data.lock; after pulling, other clones remove unchanged files with `fetchloom sync`",
     );
@@ -320,23 +321,26 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     {
         context
             .output
-            .done("all pinned files are in place. nothing to do");
+            .done("Ok", "all pinned files are in place, nothing to do");
     } else {
         let datasets = units_datasets(manifest.datasets.len());
         if placement.kept.is_empty() {
             context
                 .output
-                .done(&format!("synced {datasets} into {}", manifest.data_dir));
+                .done("Synced", &format!("{datasets} into {}", manifest.data_dir));
         } else {
             let kept = crate::units::count(
                 placement.kept.len() as u64,
                 "file left unchanged",
                 "files left unchanged",
             );
-            context.output.done(&format!(
-                "finished syncing {datasets} into {}. {kept}; see the warnings above",
-                manifest.data_dir
-            ));
+            context.output.done(
+                "Synced",
+                &format!(
+                    "{datasets} into {}, {kept}; see the warnings above",
+                    manifest.data_dir
+                ),
+            );
         }
         if lock_changed {
             context
@@ -398,7 +402,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if changed {
         context
             .output
-            .done("data.lock is up to date with data.toml");
+            .done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
             "run `fetchloom sync` to update {}/, then commit data.toml and data.lock",
             manifest.data_dir
@@ -406,7 +410,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     } else {
         context
             .output
-            .done("data.lock was already up to date. nothing to do");
+            .done("Ok", "data.lock is already up to date, nothing to do");
     }
     Ok(Report {
         project: project.root,

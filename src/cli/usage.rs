@@ -15,7 +15,7 @@ use crate::output::{ColorChoice, Level, Output, Style};
 /// document `--json` asks for, or with the detail and colors the options clap read ask for.
 pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
-        let _ = err.print();
+        crate::output::help(&err.render().to_string(), args::color());
         return ExitCode::SUCCESS;
     }
     let read = args::Args::command()

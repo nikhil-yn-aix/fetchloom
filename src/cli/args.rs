@@ -140,8 +140,16 @@ pub(super) fn read() -> Result<Args, clap::Error> {
     Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
 }
 
-/// clap can print help before it parses --color, including flags after --help.
 pub(super) fn command() -> clap::Command {
+    Args::command().color(if Style::stdout_color(color()) {
+        clap::ColorChoice::Always
+    } else {
+        clap::ColorChoice::Never
+    })
+}
+
+/// help can arrive before clap parses --color, including flags after --help.
+pub(super) fn color() -> ColorChoice {
     let mut choice = ColorChoice::Auto;
     let mut arguments = std::env::args_os().skip(1).take_while(|arg| arg != "--");
     while let Some(argument) = arguments.next() {
@@ -154,11 +162,7 @@ pub(super) fn command() -> clap::Command {
             choice = value;
         }
     }
-    Args::command().color(if Style::detect(choice).color {
-        clap::ColorChoice::Always
-    } else {
-        clap::ColorChoice::Never
-    })
+    choice
 }
 
 /// options every command takes.

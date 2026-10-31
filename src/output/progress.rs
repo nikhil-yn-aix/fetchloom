@@ -22,57 +22,41 @@ const EVERY: Duration = Duration::from_secs(10);
 /// one download's bar, or nothing when bars are off. it clears itself when dropped.
 pub(crate) struct Bar {
     bar: Option<ProgressBar>,
-    unicode: bool,
+    color: bool,
 }
 
 impl Bar {
     pub(super) fn hidden() -> Bar {
         Bar {
             bar: None,
-            unicode: false,
+            color: false,
         }
     }
 
-    pub(super) fn add(bars: &MultiProgress, message: String, unicode: bool) -> Bar {
+    pub(super) fn add(
+        bars: &MultiProgress,
+        verb: &'static str,
+        message: String,
+        color: bool,
+    ) -> Bar {
         let bar = bars.add(ProgressBar::no_length().with_message(message));
-        bar.set_style(style(unicode, false, &bar.message()));
+        bar.set_style(style(verb, color, &bar.message()));
         bar.enable_steady_tick(TICK);
         Bar {
             bar: Some(bar),
-            unicode,
+            color,
         }
     }
 
-    /// a spinner and its message, with the time taken once that passes 2 seconds.
-    pub(super) fn spin(bars: &MultiProgress, message: String, unicode: bool) -> Bar {
-        let bar = bars.add(ProgressBar::new_spinner().with_message(message));
-        let spinning = ProgressStyle::with_template("{spinner:.cyan} {msg}{waited}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner())
-            .tick_chars(ticks(unicode))
-            .with_key(
-                "waited",
-                |state: &ProgressState, out: &mut dyn fmt::Write| {
-                    let _ = out.write_str(&waited(state.elapsed()));
-                },
-            );
-        bar.set_style(spinning);
-        bar.enable_steady_tick(TICK);
-        Bar {
-            bar: Some(bar),
-            unicode,
-        }
-    }
-
-    pub(crate) fn message(&self, text: String) {
+    pub(crate) fn message(&self, verb: &'static str, text: String) {
         if let Some(bar) = &self.bar {
-            bar.set_style(style(self.unicode, bar.length().is_some(), &text));
+            bar.set_style(style(verb, self.color, &text));
             bar.set_message(text);
         }
     }
 
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.bar {
-            bar.set_style(style(self.unicode, total.is_some(), &bar.message()));
             if let Some(total) = total {
                 bar.set_length(total);
             }
@@ -96,23 +80,20 @@ impl Drop for Bar {
     }
 }
 
-fn style(unicode: bool, sized: bool, message: &str) -> ProgressStyle {
-    let spinner = ProgressStyle::default_spinner().tick_chars(ticks(unicode));
+fn style(verb: &'static str, color: bool, message: &str) -> ProgressStyle {
     let name = super::plain(message).into_owned();
+    let cyan = super::paint(color, super::ACCENT.bold());
+    let heading = format!("{cyan}{verb:>11}{cyan:#}");
     ProgressStyle::with_template("{line}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
         .with_key(
             "line",
             move |state: &ProgressState, out: &mut dyn fmt::Write| {
-                let elapsed = state.elapsed();
-                let tick =
-                    u64::try_from(elapsed.as_millis() / TICK.as_millis()).unwrap_or(u64::MAX);
-                let spinner = console::style(spinner.get_tick_str(tick))
-                    .for_stderr()
-                    .cyan()
-                    .to_string();
-                let bar = if sized {
-                    meter(state.pos(), state.len().unwrap_or(0), unicode)
+                let bar = if matches!(verb, "Downloading" | "Unpacking" | "Checking") {
+                    state.len().map_or_else(
+                        || meter(0, 1, color),
+                        |total| meter(state.pos(), total, color),
+                    )
                 } else {
                     String::new()
                 };
@@ -120,40 +101,41 @@ fn style(unicode: bool, sized: bool, message: &str) -> ProgressStyle {
                     state.pos(),
                     state.len(),
                     state.per_sec(),
-                    elapsed,
+                    state.elapsed(),
                     state.eta(),
                 );
                 let width = usize::from(console::Term::stderr().size().1);
-                let _ = out.write_str(&render(&name, &spinner, &bar, &amount, width));
+                let _ = out.write_str(&render(&name, &heading, &bar, &amount, width, color));
             },
         )
 }
 
-fn meter(done: u64, total: u64, unicode: bool) -> String {
+fn meter(done: u64, total: u64, color: bool) -> String {
     let filled = if total == 0 {
         20
     } else {
         usize::try_from(u128::from(done.min(total)) * 20 / u128::from(total)).unwrap_or(20)
     };
-    let (fill, head, empty) = if unicode {
-        ("━", "╸", "─")
-    } else {
-        ("=", ">", " ")
-    };
-    let head = if filled < 20 { head } else { "" };
-    let filled_text = format!("{}{head}", fill.repeat(filled));
-    let rest = empty.repeat(20 - filled - usize::from(filled < 20));
+    let (fill, empty) = if color { ("━", "━") } else { ("#", "-") };
+    let cyan = super::paint(color, super::ACCENT);
+    let dim = super::paint(color, anstyle::Style::new().dimmed());
     format!(
-        "{}{}",
-        console::style(filled_text).for_stderr().cyan(),
-        console::style(rest).for_stderr().dim()
+        "{cyan}{}{cyan:#}{dim}{}{dim:#}",
+        fill.repeat(filled),
+        empty.repeat(20 - filled),
     )
 }
 
-/// counters and bar space give way before the name, including the spinner when only the name fits.
-fn render(name: &str, spinner: &str, bar: &str, amount: &str, width: usize) -> String {
+/// counters and bar space give way before the name, including the verb when only the name fits.
+fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: bool) -> String {
+    let dim = super::paint(color, anstyle::Style::new().dimmed());
     let line = |bar: &str, amount: &str| {
-        [spinner, name, bar, amount]
+        let amount = if amount.is_empty() {
+            String::new()
+        } else {
+            format!("{dim}{amount}{dim:#}")
+        };
+        [verb, name, bar, &amount]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -170,7 +152,7 @@ fn render(name: &str, spinner: &str, bar: &str, amount: &str, width: usize) -> S
         }
         kept = kept
             .rsplit_once(" · ")
-            .or_else(|| kept.split_once(" / "))
+            .or_else(|| kept.split_once('/'))
             .map_or("", |(head, _)| head);
     }
     let shown = line("", "");
@@ -200,24 +182,11 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
-fn ticks(unicode: bool) -> &'static str {
-    if unicode {
-        "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "
-    } else {
-        "-\\|/ "
-    }
-}
-
-/// `1.2 MiB / 4.1 MiB · 3.4 MiB/s · 1 s left`, in the units the rest of fetchloom prints, and
-/// the time taken once that passes 2 seconds, so a wait for the first byte shows too.
+/// elapsed time stays visible until a settled rate can estimate the time left.
 fn measure(done: u64, total: Option<u64>, rate: f64, elapsed: Duration, left: Duration) -> String {
     let mut parts = Vec::new();
     if done > 0 {
-        let done = units::size(done);
-        parts.push(match total {
-            Some(total) => format!("{done} / {}", units::size(total)),
-            None => done,
-        });
+        parts.push(total.map_or_else(|| units::size(done), |total| fraction(done, total)));
         if rate > 0.0 && elapsed >= SETTLE {
             parts.push(units::speed(rate));
             if total.is_some() {
@@ -225,24 +194,26 @@ fn measure(done: u64, total: Option<u64>, rate: f64, elapsed: Duration, left: Du
             }
         }
     }
-    if elapsed >= MOMENT {
+    if elapsed >= MOMENT && !(done > 0 && rate > 0.0 && elapsed >= SETTLE && total.is_some()) {
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
 }
 
-/// ` · 12 s` after a spinner's message, once its wait passes 2 seconds.
-fn waited(elapsed: Duration) -> String {
-    if elapsed >= MOMENT {
-        format!(" · {}", units::seconds(elapsed))
-    } else {
-        String::new()
+fn fraction(done: u64, total: u64) -> String {
+    let done = units::size(done);
+    let total = units::size(total);
+    match (done.rsplit_once(' '), total.rsplit_once(' ')) {
+        (Some((value, unit)), Some((_, total_unit))) if unit == total_unit => {
+            format!("{value}/{total}")
+        }
+        _ => format!("{done}/{total}"),
     }
 }
 
-/// a step that waits, shown until dropped: a spinner on a terminal, plain lines off one.
+/// keeps a wait visible until its owner finishes.
 pub(crate) struct Wait {
-    pub(super) _spinner: Bar,
+    pub(super) _bar: Bar,
     pub(super) _ticker: Ticker,
 }
 
@@ -424,19 +395,69 @@ mod tests {
     }
 
     #[test]
+    fn bars_show_zero_partial_full_and_clamped_fractions() {
+        for (done, total, expected) in [
+            (0, 100, "--------------------"),
+            (25, 100, "#####---------------"),
+            (50, 100, "##########----------"),
+            (100, 100, "####################"),
+            (150, 100, "####################"),
+            (0, 0, "####################"),
+            (u64::MAX, u64::MAX, "####################"),
+        ] {
+            let bar = meter(done, total, false);
+            assert_eq!(bar, expected);
+            assert!(!bar.contains('\u{1b}'));
+        }
+        assert_eq!(
+            meter(25, 100, true),
+            "\u{1b}[36m━━━━━\u{1b}[0m\u{1b}[2m━━━━━━━━━━━━━━━\u{1b}[0m"
+        );
+    }
+
+    #[test]
+    fn bars_keep_the_name_and_fit_at_every_fraction() {
+        for color in [false, true] {
+            for done in [0, 1, 25, 50, 99, 100, 150] {
+                let bar = meter(done, 100, color);
+                for width in [0, 1, 7, 8, 12, 20, 40, 60, 80, 120] {
+                    let line = render(
+                        "iris.csv",
+                        "Downloading",
+                        &bar,
+                        "12.3/39.4 MiB · 4.1 MiB/s · 7 s left",
+                        width,
+                        color,
+                    );
+                    assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+                    if width >= 8 {
+                        assert!(line.contains("iris.csv"), "{width}: {line}");
+                    }
+                    if !color {
+                        assert!(!line.contains('\u{1b}'));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn narrow_progress_keeps_the_file_name() {
-        let amount = "1.0 MiB / 4.0 MiB · 512 KiB/s · 6 s left · 12 s";
-        let bar = "====>               ";
+        let amount = "1.0/4.0 MiB · 512 KiB/s · 6 s left · 12 s";
+        let bar = "#####---------------";
         for width in [128, 100, 80, 60, 40, 20, 12, 8] {
-            let line = render("iris.csv", "-", bar, amount, width);
+            let line = render("iris.csv", "Downloading", bar, amount, width, false);
             assert!(line.contains("iris.csv"), "{width}: {line}");
             assert!(
                 console::measure_text_width(&line) <= width,
                 "{width}: {line}"
             );
         }
-        assert_eq!(render("iris.csv", "-", bar, amount, 8), "iris.csv");
-        let wide = render("iris.csv", "-", bar, amount, 128);
+        assert_eq!(
+            render("iris.csv", "Downloading", bar, amount, 8, false),
+            "iris.csv"
+        );
+        let wide = render("iris.csv", "Downloading", bar, amount, 128, false);
         assert!(wide.contains("512 KiB/s"), "{wide}");
         assert!(wide.contains("6 s left"), "{wide}");
     }
@@ -452,10 +473,11 @@ mod tests {
         ] {
             let line = render(
                 "specimen_replicate_01.fastq.gz",
-                "-",
-                "====>               ",
-                "1.0 MiB / 4.0 MiB · 512 KiB/s · 6 s left",
+                "Downloading",
+                "#####---------------",
+                "1.0/4.0 MiB · 512 KiB/s · 6 s left",
                 width,
+                false,
             );
             assert_eq!(line, expected, "{width}");
             assert!(
@@ -473,14 +495,21 @@ mod tests {
         ] {
             for (bar, amount) in [
                 (
-                    "\x1b[36m━━╸─────────────────\x1b[0m",
-                    "1.0 MiB / 4.0 MiB · 12 s",
+                    "\x1b[36m━━━━━━━━━━━━━━━━━━━━\x1b[0m",
+                    "1.0/4.0 MiB · 12 s",
                 ),
                 ("", "1.0 MiB · 12 s"),
                 ("", ""),
             ] {
                 for width in 0..=100 {
-                    let line = render(name, "\x1b[36m⠋\x1b[0m", bar, amount, width);
+                    let line = render(
+                        name,
+                        "\x1b[36mDownloading\x1b[0m",
+                        bar,
+                        amount,
+                        width,
+                        true,
+                    );
                     assert!(
                         console::measure_text_width(&line) <= width,
                         "{width}: {line}"
@@ -532,23 +561,33 @@ mod tests {
     }
 
     #[test]
+    fn counters_share_units_only_when_the_units_match() {
+        assert_eq!(fraction(1024, 4096), "1.0/4.0 KiB");
+        assert_eq!(fraction(512, 4096), "512 B/4.0 KiB");
+        assert_eq!(fraction(1, 4), "1/4 B");
+        assert_eq!(fraction(0, 0), "0/0 B");
+    }
+
+    #[test]
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
         assert_eq!(measure(0, None, 0.0, second, Duration::ZERO), "");
+        assert_eq!(
+            measure(1024, None, 512.0, 12 * second, Duration::ZERO),
+            "1.0 KiB · 512 B/s · 12 s"
+        );
         assert_eq!(
             measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO),
             "12 s"
         );
         assert_eq!(
             measure(1024, Some(4096), 0.0, second, Duration::ZERO),
-            "1.0 KiB / 4.0 KiB"
+            "1.0/4.0 KiB"
         );
         assert_eq!(
             measure(1024, Some(4096), 512.0, 12 * second, 6 * second),
-            "1.0 KiB / 4.0 KiB · 512 B/s · 6 s left · 12 s"
+            "1.0/4.0 KiB · 512 B/s · 6 s left"
         );
-        assert_eq!(waited(Duration::from_millis(1999)), "");
-        assert_eq!(waited(12 * second), " · 12 s");
     }
 
     #[test]

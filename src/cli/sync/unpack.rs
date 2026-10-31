@@ -66,7 +66,7 @@ pub(in crate::cli) async fn unpack_all(
             let stop = context.stop.clone();
             let failed = failed.clone();
             let ticker = ticker.clone();
-            let bar = context.output.bar(format!("unpacking {}", unpack.label));
+            let bar = context.output.bar("Unpacking", unpack.label.clone());
             bar.start(Some(unpack.size), 0);
             tasks.spawn_blocking(move || {
                 let started = Instant::now();

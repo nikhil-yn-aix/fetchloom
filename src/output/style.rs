@@ -40,12 +40,10 @@ impl Style {
         }
     }
 
-    pub(crate) fn failed(self) -> &'static str {
-        if self.unicode { "✗" } else { "[x]" }
-    }
-
-    pub(crate) fn done(self) -> &'static str {
-        if self.unicode { "✓" } else { "[ok]" }
+    pub(crate) fn stdout_color(choice: ColorChoice) -> bool {
+        wants_color(choice, std::io::stdout().is_terminal(), &|name| {
+            std::env::var_os(name)
+        })
     }
 
     /// what ends text that was cut short.
@@ -67,6 +65,9 @@ fn wants_color(
         ColorChoice::Always => return true,
         ColorChoice::Never => return false,
         ColorChoice::Auto => {}
+    }
+    if !terminal {
+        return false;
     }
     let is = |name: &str, value: &str| var(name).is_some_and(|v| v == value);
     let non_empty = |name: &str| var(name).is_some_and(|v| !v.is_empty());
@@ -133,7 +134,8 @@ mod tests {
             auto(&[("NO_COLOR", "")], true),
             "an empty NO_COLOR is ignored"
         );
-        assert!(auto(&[("CLICOLOR_FORCE", "1")], false));
+        assert!(auto(&[("CLICOLOR_FORCE", "1")], true));
+        assert!(!auto(&[("CLICOLOR_FORCE", "1")], false));
         assert!(!auto(&[("CLICOLOR_FORCE", "0")], false));
         assert!(!auto(&[("CLICOLOR", "0")], true));
         assert!(!auto(&[("TERM", "dumb")], true));

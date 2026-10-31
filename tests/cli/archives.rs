@@ -81,11 +81,11 @@ fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     ok(&again)?;
     assert_eq!(
         text(&again.stderr)?,
-        "✓ all pinned files are in place. nothing to do\n"
+        "         Ok all pinned files are in place, nothing to do\n"
     );
     assert_eq!(server.requests().len(), 1);
     let status = sandbox.run(&["status"])?;
-    assert_eq!(text(&status.stderr)?, "✓ everything matches data.lock\n");
+    assert_eq!(text(&status.stderr)?, "         Ok everything matches data.lock\n");
     Ok(())
 }
 
@@ -379,7 +379,7 @@ fn add_of_an_empty_archive_does_not_offer_a_path() -> Result {
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("added empty. its archives contain no regular files"),
+        stderr.contains("Added empty, its archives contain no regular files"),
         "{stderr}"
     );
     assert!(!stderr.contains("fetchloom path"), "{stderr}");
@@ -388,7 +388,7 @@ fn add_of_an_empty_archive_does_not_offer_a_path() -> Result {
     ok(&again)?;
     let stderr = text(&again.stderr)?;
     assert!(
-        stderr.contains("empty is already in data.toml. its archives contain no regular files"),
+        stderr.contains("empty is already in data.toml, its archives contain no regular files"),
         "{stderr}"
     );
     assert!(!stderr.contains("its files are in"), "{stderr}");

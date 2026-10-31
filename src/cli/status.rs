@@ -198,12 +198,15 @@ fn sum_up(output: &Output, status: &Status) -> bool {
             .map(|(_, paths)| paths.len())
             .sum::<usize>();
     if differences == 0 {
-        output.done("everything matches data.lock");
+        output.done("Ok", "everything matches data.lock");
         return false;
     }
-    output.done(&format!(
-        "found {} from data.lock",
-        units::count(differences as u64, "difference", "differences")
-    ));
+    output.done(
+        "Found",
+        &format!(
+            "{} from data.lock",
+            units::count(differences as u64, "difference", "differences")
+        ),
+    );
     true
 }

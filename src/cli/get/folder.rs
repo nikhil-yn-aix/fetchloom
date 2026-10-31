@@ -187,7 +187,7 @@ fn tell_placed(
                 [only] => folder.join(&only.path).display().to_string(),
                 _ => folder.display().to_string(),
             };
-            output.done(&format!("{shown} is already up to date"));
+            output.done("Ok", &format!("{shown} is already up to date"));
             return;
         }
         ([only], [outcome]) => {
@@ -223,7 +223,7 @@ fn tell_placed(
         [only] => only.path.clone(),
         _ => units::count(targets.len() as u64, "file", "files"),
     };
-    output.done(&format!("fetched {what} into {}", folder.display()));
+    output.done("Fetched", &format!("{what} into {}", folder.display()));
     if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
         output.hint(&why.copied_because(folder.display(), things));
     }

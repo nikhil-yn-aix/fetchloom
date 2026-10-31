@@ -4,5 +4,5 @@ expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
    Replaced iris/iris.csv · copied, 32 B
-✓ fetched iris.csv into iris
+    Fetched iris.csv into iris
   hint: the drive holding iris cannot link files, so the file was copied
