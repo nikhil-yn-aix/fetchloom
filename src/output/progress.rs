@@ -561,9 +561,21 @@ mod tests {
     }
 
     #[test]
+    fn counters_share_units_only_when_the_units_match() {
+        assert_eq!(fraction(1024, 4096), "1.0/4.0 KiB");
+        assert_eq!(fraction(512, 4096), "512 B/4.0 KiB");
+        assert_eq!(fraction(1, 4), "1/4 B");
+        assert_eq!(fraction(0, 0), "0/0 B");
+    }
+
+    #[test]
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
         assert_eq!(measure(0, None, 0.0, second, Duration::ZERO), "");
+        assert_eq!(
+            measure(1024, None, 512.0, 12 * second, Duration::ZERO),
+            "1.0 KiB · 512 B/s · 12 s"
+        );
         assert_eq!(
             measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO),
             "12 s"

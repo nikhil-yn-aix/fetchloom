@@ -3,5 +3,5 @@ source: tests/cli/basics.rs
 assertion_line: 103
 expression: text(&output.stderr)?
 ---
-✗ unexpected argument "--verison"
+error: unexpected argument "--verison"
   help: did you mean `--version`?

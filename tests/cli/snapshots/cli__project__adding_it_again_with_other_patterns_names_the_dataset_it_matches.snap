@@ -3,5 +3,5 @@ source: tests/cli/project.rs
 assertion_line: 87
 expression: stderr
 ---
-✗ http://127.0.0.1:[port]/files/iris.csv is already in data.toml as iris, with other patterns
+error: http://127.0.0.1:[port]/files/iris.csv is already in data.toml as iris, with other patterns
   help: change the patterns of iris in data.toml, or pass --as <name> to add it a second time

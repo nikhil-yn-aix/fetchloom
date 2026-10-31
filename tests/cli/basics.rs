@@ -65,7 +65,7 @@ fn help_follows_color_flags_anywhere() -> Result {
         );
         let stdout = text(&output.stdout)?;
         assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
-        assert!(stdout.contains("usage: "), "{arguments:?}: {stdout}");
+        assert!(stdout.contains("usage:"), "{arguments:?}: {stdout}");
         assert!(output.stderr.is_empty(), "{arguments:?}");
     }
     Ok(())
@@ -81,7 +81,7 @@ fn help_follows_color_environment() -> Result {
         &["cache", "gc", "--help"],
         &["help", "cache", "gc"],
     ] {
-        for (no_color, force, colored) in [("1", "1", false), ("", "1", true), ("", "0", false)] {
+        for (no_color, force, colored) in [("1", "1", false), ("", "1", false), ("", "0", false)] {
             let output = sandbox
                 .command(arguments)
                 .env("NO_COLOR", no_color)
@@ -98,6 +98,37 @@ fn help_follows_color_environment() -> Result {
                 colored,
                 "{arguments:?}, NO_COLOR={no_color}, CLICOLOR_FORCE={force}: {stdout}"
             );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (arguments, colored) in [
+        (&["--color", "always"][..], true),
+        (&["--color", "never"][..], false),
+        (&[][..], false),
+        (&["help", "concepts", "--color", "always"][..], true),
+        (&["help", "concepts", "--color", "never"][..], false),
+        (&["help", "concepts", "--json"][..], false),
+    ] {
+        let output = sandbox
+            .command(arguments)
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR_FORCE", "1")
+            .output()?;
+        assert!(output.status.success(), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+        let stdout = text(&output.stdout)?;
+        assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
+        for analogy in ["the shopping list", "the receipt", "the pantry", "restocking"] {
+            assert!(stdout.contains(analogy), "{arguments:?}: {stdout}");
+        }
+        if colored {
+            assert!(stdout.contains("\x1b[1mfetchloom\x1b[0m"), "{stdout}");
+            assert!(stdout.contains("\x1b[36m"), "{stdout}");
         }
     }
     Ok(())
@@ -289,20 +320,21 @@ fn a_usage_error_follows_verbose_and_color() -> Result {
 }
 
 #[test]
-fn color_marks_meaning_with_a_symbol_and_stays_off_when_asked() -> Result {
+fn color_marks_meaning_with_labels_and_stays_off_when_asked() -> Result {
     let sandbox = Sandbox::new()?;
     let colored = text(&sandbox.run(&["--color", "always", "sycn"])?.stderr)?;
     assert!(
-        colored.contains("31m✗"),
-        "an error is red and marked: {colored}"
+        colored.contains("31merror:"),
+        "an error has a red label: {colored}"
     );
     assert!(
-        colored.contains("\u{1b}[36m`fetchloom sync`\u{1b}[0m"),
+        colored.contains("\u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m"),
         "a command takes the accent: {colored}"
     );
     for (flag, variables) in [
         (&["--color", "never"][..], &[("CLICOLOR_FORCE", "1")][..]),
         (&[], &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]),
+        (&[], &[("CLICOLOR_FORCE", "1")]),
         (&[], &[]),
     ] {
         let mut command = sandbox.command(&[flag, &["sycn"]].concat());
@@ -312,7 +344,7 @@ fn color_marks_meaning_with_a_symbol_and_stays_off_when_asked() -> Result {
             !stderr.contains('\u{1b}'),
             "{flag:?} {variables:?}: {stderr}"
         );
-        assert!(stderr.starts_with('✗'), "{stderr}");
+        assert!(stderr.starts_with("error: "), "{stderr}");
     }
     Ok(())
 }

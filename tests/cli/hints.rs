@@ -112,7 +112,7 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     let stderr = text(&wide.stderr)?;
     assert_eq!(
         stderr,
-        "✗ data.toml is not UTF-8 text\n  help: save it as UTF-8, then run `fetchloom status` again\n"
+        "error: data.toml is not UTF-8 text\n  help: save it as UTF-8, then run `fetchloom status` again\n"
     );
     Ok(())
 }
@@ -125,9 +125,9 @@ fn a_name_add_cannot_use_is_refused_before_any_request() -> Result {
     for (name, message) in [
         (
             "flowers",
-            "✗ data.toml already has a dataset called flowers\n",
+            "error: data.toml already has a dataset called flowers\n",
         ),
-        ("Flowers", "✗ \"Flowers\" is not a valid dataset name\n"),
+        ("Flowers", "error: \"Flowers\" is not a valid dataset name\n"),
     ] {
         // offline, resolving the link first would fail with exit 20 instead
         let output = sandbox.run(&["--offline", "add", "zenodo:3608990", "--as", name])?;

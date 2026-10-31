@@ -132,6 +132,9 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
         assert_eq!(output.status.code(), Some(30));
         let stderr = text(&output.stderr)?;
         assert!(stderr.contains("warning:"), "{stderr}");
+        if colored {
+            assert!(stderr.contains("\x1b[1m\x1b[33mwarning:"), "{stderr}");
+        }
         assert!(
             stderr.contains("changed and was marked for replacement"),
             "{stderr}"

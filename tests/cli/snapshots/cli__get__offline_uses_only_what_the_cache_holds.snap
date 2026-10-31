@@ -2,5 +2,5 @@
 source: tests/cli/get.rs
 expression: stderr
 ---
-✗ offline, and http://127.0.0.1:[port]/records/3608990/files/iris.csv is not in the cache
+error: offline, and http://127.0.0.1:[port]/records/3608990/files/iris.csv is not in the cache
   help: run it again without --offline to download it

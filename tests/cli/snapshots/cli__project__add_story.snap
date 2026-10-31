@@ -6,5 +6,5 @@ expression: stderr
  Downloaded iris.csv · 32 B in [time]
      Locked iris · 1 file in data.lock
      Placed data/iris · 1 file linked from the cache
-✓ added iris. its files are in data/iris
+      Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
