@@ -23,7 +23,7 @@ exit codes group failures, while error kinds identify the cause.
 | `unconfirmed` | check the download size and pass `--yes` only if you approve |
 | `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock |
 | `usage` | check arguments and [environment settings](environment.md) |
-| `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid` | check the reference and the source's supported access rules |
+| `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules |
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |
 | `network.unreachable`, `network.status` | check connectivity and the link before retrying |
 | `network.rate_limited`, `network.refused` | respect the source's wait or access requirement |

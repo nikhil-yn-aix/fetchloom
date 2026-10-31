@@ -17,7 +17,7 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 | `10.5281/zenodo.3608990` | accept a bare DOI |
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
 
-github `/blob/` file links and gitlab `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
+`github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
 
 for direct downloads, a safe `Content-Disposition` filename, including one received after redirects, can replace the name guessed from the URL. selection patterns match the source path before that replacement. recognized archive names [unpack by default](../concepts.md#archives).
 
