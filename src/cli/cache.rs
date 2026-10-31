@@ -48,17 +48,17 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         output.step("Used by", &project.display().to_string());
     }
     if objects.is_empty() {
-        output.done("the cache has no data files");
+        output.done("Ok", "the cache has no data files");
     } else if objects
         .iter()
         .all(|object| needed.objects.contains(&object.digest))
     {
-        output.done("every cached file is needed by a project");
+        output.done("Ok", "every cached file is needed by a project");
     } else {
-        output.done(&format!(
-            "{} of it is needed by a project",
-            units::size(kept)
-        ));
+        output.done(
+            "Ok",
+            &format!("{} of it is needed by a project", units::size(kept)),
+        );
         output.hint("`fetchloom cache gc` frees the rest, once it is a day old");
     }
     output.answer(&cache.root().display().to_string());
@@ -77,7 +77,7 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
     let freed = cache.sweep(&needed, SystemTime::now());
     let output = &context.output;
     if freed.objects == 0 && freed.leftovers == 0 {
-        output.done("no cached data files or download leftovers were removed");
+        output.done("Ok", "no cached data files or download leftovers were removed");
         return Ok(freed);
     }
     if freed.objects > 0 {
@@ -96,10 +96,13 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
             &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
     }
-    output.done(&format!(
-        "kept cached files needed by {}",
-        units::count(projects.len() as u64, "project", "projects")
-    ));
+    output.done(
+        "Cleaned",
+        &format!(
+            "the cache, keeping files needed by {}",
+            units::count(projects.len() as u64, "project", "projects")
+        ),
+    );
     Ok(freed)
 }
 
@@ -132,7 +135,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     }
     if checked.changed.is_empty() {
         if checked.unreadable.is_empty() {
-            output.done(&format!("verified {what}. every one is intact"));
+            output.done("Verified", &format!("{what}, every one is intact"));
             return Ok(checked);
         }
         return Err(Error::new(

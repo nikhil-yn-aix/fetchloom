@@ -85,22 +85,14 @@ impl Output {
     /// a finished step: a right-aligned verb, then the facts.
     pub(crate) fn step(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            let green = Paint::new().fg_color(Some(AnsiColor::Green.into())).bold();
-            self.line(&format!(
-                "{green}{verb:>11}{green:#} {}",
-                subject(&plain(text))
-            ));
+            self.line(&verb_line(verb, text, verb_color(verb), self.style.color));
         }
     }
 
     /// a difference found, in the same rhythm as steps but in the warning color.
     pub(crate) fn mark(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
-            self.line(&format!(
-                "{yellow}{verb:>11}{yellow:#} {}",
-                subject(&plain(text))
-            ));
+            self.line(&verb_line(verb, text, AnsiColor::Yellow, self.style.color));
         }
     }
 
@@ -121,20 +113,15 @@ impl Output {
             let yellow = Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold();
             self.line(&format!(
                 "{yellow}warning:{yellow:#} {}",
-                accented(&plain(text), Paint::new())
+                accented(&plain(text), Paint::new(), self.style.color)
             ));
         }
     }
 
     /// the closing line of a run that worked.
-    pub(crate) fn done(&self, text: &str) {
+    pub(crate) fn done(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            let green = Paint::new().fg_color(Some(AnsiColor::Green.into())).bold();
-            self.line(&format!(
-                "{green}{}{green:#} {}",
-                self.style.done(),
-                accented(&plain(text), Paint::new())
-            ));
+            self.line(&verb_line(verb, text, AnsiColor::Green, self.style.color));
         }
     }
 
@@ -143,7 +130,7 @@ impl Output {
             let bold = Paint::new().bold();
             self.line(&format!(
                 "  {bold}hint:{bold:#} {}",
-                accented(&plain(text), Paint::new())
+                accented(&plain(text), Paint::new(), self.style.color)
             ));
         }
     }
@@ -154,7 +141,7 @@ impl Output {
             let dim = Paint::new().dimmed();
             self.line(&format!(
                 "  {dim}next: {}{dim:#}",
-                accented(&plain(text), dim)
+                accented(&plain(text), dim, self.style.color)
             ));
         }
     }
@@ -188,16 +175,16 @@ impl Output {
         let mut text = format!(
             "{red}{}{red:#} {}",
             self.style.failed(),
-            accented(&plain(&error.message), Paint::new())
+            accented(&plain(&error.message), Paint::new(), self.style.color)
         );
         for line in &error.details {
-            let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim));
+            let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim, self.style.color));
         }
         if let Some(help) = &error.help {
             let _ = write!(
                 text,
                 "\n  {bold}help:{bold:#} {}",
-                accented(&plain(help), Paint::new())
+                accented(&plain(help), Paint::new(), self.style.color)
             );
         }
         if self.level >= Level::Verbose {
@@ -365,13 +352,32 @@ impl Output {
     }
 }
 
+fn paint(color: bool, style: Paint) -> Paint {
+    if color { style } else { Paint::new() }
+}
+
+fn verb_color(verb: &str) -> AnsiColor {
+    match verb {
+        "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" => AnsiColor::Cyan,
+        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" => AnsiColor::Yellow,
+        "Failed" => AnsiColor::Red,
+        _ => AnsiColor::Green,
+    }
+}
+
+fn verb_line(verb: &str, text: &str, tone: AnsiColor, color: bool) -> String {
+    let style = paint(color, Paint::new().fg_color(Some(tone.into())).bold());
+    format!("{style}{verb:>11}{style:#} {}", subject(&plain(text), color))
+}
+
 /// the one color for names and commands, wherever they appear. the stream drops it, like every
 /// color, when color is off.
 const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
 /// `text` with each command in backticks in the accent, then back to `around`. the backticks
 /// stay, so a command still stands out without color.
-fn accented(text: &str, around: Paint) -> String {
+fn accented(text: &str, around: Paint, color: bool) -> String {
+    let accent = paint(color, ACCENT);
     let mut shown = String::with_capacity(text.len() + 16);
     let mut rest = text;
     while let Some(start) = rest.find('`') {
@@ -381,7 +387,7 @@ fn accented(text: &str, around: Paint) -> String {
         let end = start + length + 2;
         let _ = write!(
             shown,
-            "{}{ACCENT}{}{ACCENT:#}{around}",
+            "{}{accent}{}{accent:#}{around}",
             &rest[..start],
             &rest[start..end]
         );
@@ -393,11 +399,13 @@ fn accented(text: &str, around: Paint) -> String {
 
 /// a step's facts with what it is about, such as a file or a dataset, in the accent: the text
 /// before the first `·`, or the whole text when it is one word.
-fn subject(text: &str) -> String {
+fn subject(text: &str, color: bool) -> String {
+    let accent = paint(color, ACCENT);
+    let dim = paint(color, Paint::new().dimmed());
     match text.split_once(" · ") {
-        Some((name, facts)) => format!("{ACCENT}{name}{ACCENT:#} · {facts}"),
-        None if !text.is_empty() && !text.contains(' ') => format!("{ACCENT}{text}{ACCENT:#}"),
-        None => accented(text, Paint::new()),
+        Some((name, facts)) => format!("{accent}{name}{accent:#}{dim} · {facts}{dim:#}"),
+        None if !text.is_empty() && !text.contains(' ') => format!("{accent}{text}{accent:#}"),
+        None => accented(text, Paint::new(), color),
     }
 }
 
@@ -450,6 +458,64 @@ mod tests {
     use super::{Level, Output, Style, accented, plain, subject};
 
     #[test]
+    fn final_lines_share_the_verb_column_without_status_symbols() {
+        for (verb, text, expected) in [
+            (
+                "Added",
+                "iris, its files are in data/iris",
+                "      Added iris, its files are in data/iris",
+            ),
+            (
+                "Fetched",
+                "iris.csv into iris",
+                "    Fetched iris.csv into iris",
+            ),
+            (
+                "Synced",
+                "1,000 datasets into data",
+                "     Synced 1,000 datasets into data",
+            ),
+            (
+                "Ok",
+                "everything matches data.lock",
+                "         Ok everything matches data.lock",
+            ),
+        ] {
+            let shown = super::verb_line(verb, text, anstyle::AnsiColor::Green, false);
+            assert_eq!(shown, expected);
+            assert!(!shown.contains('\u{1b}'));
+        }
+        assert_eq!(
+            super::verb_line(
+                "Added",
+                "iris, its files are in data/iris",
+                anstyle::AnsiColor::Green,
+                true,
+            ),
+            "\u{1b}[1m\u{1b}[32m      Added\u{1b}[0m iris, its files are in data/iris"
+        );
+    }
+
+    #[test]
+    fn step_colors_follow_the_work_being_reported() {
+        use anstyle::AnsiColor::{Cyan, Green, Red, Yellow};
+
+        for (verbs, expected) in [
+            (
+                &["Downloaded", "Unpacked", "Locked", "Placed", "Removed"][..],
+                Green,
+            ),
+            (&["Downloading", "Unpacking", "Waiting"][..], Cyan),
+            (&["Missing", "Extra", "Kept", "Edited"][..], Yellow),
+            (&["Failed"][..], Red),
+        ] {
+            for verb in verbs {
+                assert_eq!(super::verb_color(verb), expected, "{verb}");
+            }
+        }
+    }
+
+    #[test]
     fn the_first_ctrl_c_at_a_question_is_interrupted() {
         for key in [
             Ok(console::Key::CtrlC),
@@ -484,28 +550,28 @@ mod tests {
     fn commands_in_backticks_take_the_accent_and_keep_their_backticks() {
         let dim = Paint::new().dimmed();
         assert_eq!(
-            accented("run `fetchloom sync` again", Paint::new()),
+            accented("run `fetchloom sync` again", Paint::new(), true),
             "run \u{1b}[36m`fetchloom sync`\u{1b}[0m again"
         );
         assert_eq!(
-            accented("commit it; then `fetchloom sync`", dim),
+            accented("commit it; then `fetchloom sync`", dim, true),
             "commit it; then \u{1b}[36m`fetchloom sync`\u{1b}[0m\u{1b}[2m"
         );
-        assert_eq!(accented("an odd ` mark", Paint::new()), "an odd ` mark");
+        assert_eq!(accented("an odd ` mark", Paint::new(), true), "an odd ` mark");
     }
 
     #[test]
     fn a_step_names_its_subject_in_the_accent() {
         assert_eq!(
-            subject("iris · 1 file in data.lock"),
-            "\u{1b}[36miris\u{1b}[0m · 1 file in data.lock"
+            subject("iris · 1 file in data.lock", true),
+            "\u{1b}[36miris\u{1b}[0m\u{1b}[2m · 1 file in data.lock\u{1b}[0m"
         );
         assert_eq!(
-            subject("data/iris/iris.csv"),
+            subject("data/iris/iris.csv", true),
             "\u{1b}[36mdata/iris/iris.csv\u{1b}[0m"
         );
         assert_eq!(
-            subject("for another fetchloom working in this project"),
+            subject("for another fetchloom working in this project", true),
             "for another fetchloom working in this project"
         );
     }
