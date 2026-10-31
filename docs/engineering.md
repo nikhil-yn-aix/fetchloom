@@ -52,6 +52,22 @@ cargo test --locked
 
 after a dependency change, also run `cargo deny --locked check advisories licenses bans sources`. install it with `cargo install --locked cargo-deny` if it is missing.
 
+from windows, the same gate runs on linux in WSL with the repository as the clone's origin, so no push is needed. inside the distro, with `~/fetchloom` cloned from this repository:
+
+```sh
+git -C ~/fetchloom fetch origin main
+git -C ~/fetchloom worktree add --detach ~/wt/main origin/main
+cd ~/wt/main && CARGO_TARGET_DIR=~/target/main cargo test --locked
+```
+
+CI also runs every test with its folders on refs, exfat and fat32 on windows and on btrfs and xfs on linux. to reproduce a reflink case locally, mount an xfs image as root and point `TMPDIR` at it:
+
+```sh
+truncate -s 4G /var/tmp/xfs.img && mkfs.xfs -q /var/tmp/xfs.img
+mkdir -p /mnt/xfs && mount -o loop /var/tmp/xfs.img /mnt/xfs && chown "$SUDO_USER" /mnt/xfs
+TMPDIR=/mnt/xfs cargo test --locked --test cli placing::
+```
+
 ## test layers
 
 | location | checks |
@@ -121,6 +137,16 @@ use this order for a memory investigation: measure peak RSS without the profiler
 ## benchmarks
 
 [benchmarks](benchmarks.md) defines fixtures, network profiles, run order and comparison rules. [bench/](../bench/) holds the harness and live source matrix. keep the cache state, build, machine load and repetitions with each result; interleave compared builds when the machine or live service varies. [performance](performance.md#budgets) holds the budgets and measurements.
+
+to compare two builds, `bench/ab.ps1` runs them in interleaved pairs, a then b, then b then a, each into an empty cache, and appends one row per run to `bench/results/ab/<name>.csv`; `bench/ab_summary.py` prints each side's median and range and the change. `{work}` in the arguments becomes the run's folder, and `-EnvB` sets variables for one side, so one build can also be compared with itself under a setting:
+
+```powershell
+& ([scriptblock]::Create((Get-Content -Raw bench\ab.ps1))) -Name lan-1g -A old.exe -B new.exe `
+    -Arguments @('-C', '{work}', '--yes', '-v', 'get', 'https://172.31.233.169:8443/file-1g.bin') -Runs 10 -Profile lan
+python bench\ab_summary.py bench\results\ab\lan-1g.csv
+```
+
+the script block form runs it where script execution is disabled by policy. keep a change only when it wins at least 10% on one workload or network profile and loses on none, and record both sides in [performance](performance.md).
 
 ## fuzzing
 
