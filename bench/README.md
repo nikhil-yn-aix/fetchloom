@@ -49,7 +49,7 @@ python3 -m venv /opt/fl-bench/venv
 /opt/fl-bench/venv/bin/python -m unittest discover -s bench -p 'test_*.py'
 ```
 
-set `FL_BENCH_LIVE_CHECKS=1` on the test command to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files.
+set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
 
 setup creates `flb-srv`, `flb-client` and `flb-server`, adds `lab.flb` to `/etc/hosts`, installs a disposable CA, starts nginx and mounts two 12 GiB sparse images. setup replaces only a lab with its ownership marker. it refuses conflicting unowned resources. setup also checks that HTTPS is responsive.
 

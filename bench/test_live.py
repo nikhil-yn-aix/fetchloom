@@ -42,9 +42,10 @@ class NativeIntegrityTests(unittest.TestCase):
         try:
             for name in ("home", "cache", "scratch"):
                 (work / name).mkdir()
-            env = tools.Tool("/home/fl/bin/fetchloom").env(work)
+            binary = os.environ.get("FL_BENCH_FETCHLOOM", "/home/fl/bin/fetchloom")
+            env = tools.Tool(binary).env(work)
             env["KAGGLEHUB_CACHE"] = str(work / "cache" / "kaggle")
-            result = run.measure(live.command(dataset["tool"], dataset, work, Path("/home/fl/bin/fetchloom")),
+            result = run.measure(live.command(dataset["tool"], dataset, work, Path(binary)),
                                  work, env, work / "log", 120)
             self.assertFalse(result["timeout"])
             self.assertEqual(result["exit_code"], 1)

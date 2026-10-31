@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# one run at a time, so a manual run never doubles the load on the services
+concurrency:
+  group: live
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
