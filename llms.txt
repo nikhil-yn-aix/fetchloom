@@ -1,10 +1,10 @@
 # fetchloom
 
-> fetchloom is uv for research data on windows and linux. data.toml is the shopping list, data.lock is the receipt pinning every file by SHA-256 and size, and the shared content-addressed cache is the pantry. `fetchloom sync` places those files in data/ by reflink, then hardlink, then copy where supported.
+> fetchloom puts the exact research data your project needs in `data/` on windows and linux. `data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry for reuse across projects.
 
 ## docs
 
-- [README](README.md): install, quick start, source examples, everyday commands and troubleshooting
+- [README](README.md): install, quick start, sources, benchmarks and troubleshooting
 - [cli](docs/cli.md): every command, option and output, plus archives, cache and environment settings
 - [agents](docs/agents.md): --json recipes, error kinds, exit codes, the python helper and offline use
 - [formats](docs/formats.md): data.toml, data.lock, cache records, environment settings and the JSON contract
