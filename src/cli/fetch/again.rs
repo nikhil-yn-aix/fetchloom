@@ -31,7 +31,7 @@ type Asked = Result<Arc<Listing>, String>;
 pub(super) struct Listings(Arc<Mutex<HashMap<String, Asked>>>);
 
 impl Listings {
-    async fn get(&self, net: &Net, resolved: &str) -> Asked {
+    async fn get(&self, net: &impl net::Api, resolved: &str) -> Asked {
         let mut known = self.0.lock().await;
         if let Some(listing) = known.get(resolved) {
             return listing.clone();

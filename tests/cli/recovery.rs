@@ -193,14 +193,14 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
         sandbox.command_in(&clone, args).env("FETCHLOOM_CACHE", &cache).output()
     };
     let output = run(&["--json", "sync"])?;
-    assert_eq!(output.status.code(), Some(20));
+    assert_eq!(output.status.code(), Some(40));
     let report = crate::support::json(&output)?;
-    assert_eq!(report["errors"][0]["kind"], "network.refused");
+    assert_eq!(report["errors"][0]["kind"], "auth.required");
     let failures = report["errors"][0]["failures"].as_array().ok_or("missing failed files")?;
     assert_eq!(failures.len(), 12);
     for (index, failure) in failures.iter().enumerate() {
         assert_eq!(failure["file"], format!("d{index:02}/iris.csv"));
-        assert_eq!(failure["kind"], if index % 2 == 0 { "network.refused" } else { "integrity.mismatch" });
+        assert_eq!(failure["kind"], if index % 2 == 0 { "auth.required" } else { "integrity.mismatch" });
         assert!(!failure["message"].as_str().ok_or("missing message")?.is_empty());
     }
     let output = run(&["sync"])?;
