@@ -1,4 +1,4 @@
-﻿# placing
+# placing
 
 placement protects existing files while turning locked data and cached archive trees into checked filesystem operations.
 
@@ -65,7 +65,7 @@ new placements try reflink, hardlink, then copy. a reflink shares disk blocks un
 
 `Placer` remembers refused methods. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`.
 
-copy input opens through `read_unfollowed`. data is written to a hidden `.fetchloom-<16 hex digits>.copy` file in the destination folder and published without overwriting an existing name. replacement removes the old destination first, so an interruption can leave it missing or leave a hidden copy file, but cannot expose a half-written destination. `get` ignores those reserved temporary names.
+copy input opens through `read_unfollowed`. data is written to a hidden file whose name matches `.fetchloom-[0-9a-f]{16}.copy` in the destination folder and published without overwriting an existing name. replacement removes the old destination first, so an interruption can leave it missing or leave a hidden copy file, but cannot expose a half-written destination. `get` ignores those reserved temporary names.
 
 ### copy durability
 

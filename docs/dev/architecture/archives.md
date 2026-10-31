@@ -1,4 +1,4 @@
-﻿# archives
+# archives
 
 `archive` validates and decodes archive members into unpublished cache objects before making them reusable.
 
