@@ -36,7 +36,7 @@ interactive bars and questions require terminal stderr outside CI and outside a 
 
 JSON is one completed document, not a stream of progress events. it holds schema, command, status, result, warnings, errors and work. an error can carry a partial result and per-file failures. warning collection remains independent of whether human warnings are visible.
 
-`Counts` snapshots atomic counters for requests, network bytes, cached bytes, object writes, placements and other measured work. [JSON output](../../user/reference/json-output.md) defines the fields and counting contract. elapsed time is reported, but tests use deterministic counts rather than wall-time assertions.
+`Counts` snapshots atomic counters for requests, downloaded bytes, retries, resumes, object writes, cache hits, reflinks, hardlinks and copies. [JSON output](../../user/reference/json-output.md) defines the fields and counting contract. elapsed time is reported, but tests use deterministic counts rather than wall-time assertions.
 
 `-v` prints work summaries; `-vv` enables debug events. `FETCHLOOM_TRACE` writes a Chrome trace through a guard that must live until command work ends. trace output is separate from the JSON contract.
 
