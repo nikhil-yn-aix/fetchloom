@@ -467,12 +467,14 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
+    check_member(&project, &manifest, name, file)?;
     if !ready(context, &project, &manifest, name)? {
         let _held = hold(context, &project, "path").await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
         manifest = project.manifest()?.1;
         known(&manifest, name, "path")?;
+        check_member(&project, &manifest, name, file)?;
         if !ready(context, &project, &manifest, name)? {
             let work = Loop::new(
                 context,
@@ -525,6 +527,46 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
     context.output.answer(&path.display().to_string());
     Ok(path)
+}
+
+/// rejects a member only when the current lock and cached trees prove it cannot exist.
+fn check_member(
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+    file: Option<&str>,
+) -> Result<(), Error> {
+    let Some(file) = file.filter(|file| !file.is_empty()) else {
+        return Ok(());
+    };
+    let Some(lock) = project.lock()? else {
+        return Ok(());
+    };
+    let Some(locked) = lock.get(name) else {
+        return Ok(());
+    };
+    if manifest.datasets.get(name).is_none_or(|entry| locked.spec != lock::spec(entry)) {
+        return Ok(());
+    }
+    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
+    if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
+        return Ok(());
+    }
+    let folder = plan::folder(manifest, name);
+    let wanted = format!("{folder}/{file}");
+    if planned.targets.iter().any(|target| {
+        target.dataset == name
+            && (target.path == wanted || target.path.starts_with(&format!("{wanted}/")))
+    }) {
+        return Ok(());
+    }
+    let inside: Vec<&str> = planned
+        .targets
+        .iter()
+        .filter(|target| target.dataset == name)
+        .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
+        .collect();
+    Err(not_in(name, file, &inside))
 }
 
 /// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to
