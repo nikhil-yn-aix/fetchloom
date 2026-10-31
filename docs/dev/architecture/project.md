@@ -23,7 +23,7 @@
 | record | establishes | failure behavior |
 |---|---|---|
 | `data.toml` | requested sources, filters, extraction and destinations | invalid input stops the command with a location and explanation |
-| `data.lock` | resolved references, SHA-256, size and optional archive tree hash | malformed or unsupported locks fail; silently resolving anew could pin different bytes |
+| `data.lock` | resolved references, SHA-256, size and optional archive tree hash | malformed, duplicate-name or unsupported locks fail; silently resolving anew could pin different bytes |
 | `.fetchloom/state` | what this machine placed and how it looked | unreadable or unsupported state counts as empty; matching files must then be checked before adoption |
 
 `Manifest` uses `toml_edit` so add and remove can preserve human formatting. unknown keys fail. the lock writer sorts datasets and files for stable diffs. `canonical::read` accepts the writer's narrow format quickly; other valid TOML falls back to the general parser and the same path checks.
@@ -36,7 +36,7 @@ mutating commands acquire the OS file lock on `.fetchloom/lock`, then publish `.
 
 waiting commands poll every 200 ms, report the holder once and remain cancellable. a same-OS owner can be reclaimed after the OS lock is acquired; an owner from another OS needs conservative handling. an empty reservation becomes stale only after 10 s. stale removal rereads the owner before deleting it.
 
-`status`, a ready `path` and `lock --check` need no mutation hold. a `path` that waits must reread the manifest and check readiness again because the preceding command may have completed the work.
+`status`, `list`, a ready `path` and `lock --check` need no mutation hold. a `path` that waits must reread the manifest and check readiness again because the preceding command may have completed the work.
 
 ### publication
 
@@ -62,4 +62,4 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 ## related
 
-[sync loop](sync-loop.md), [placing](placing.md), [data.toml](../../user/reference/data-toml.md), [data.lock](../../user/reference/data-lock.md).
+[sync loop](sync-loop.md), [placing](placing.md), [data.toml](../../user/reference/data-toml.md), [data.lock](../../user/reference/data-lock.md), [project-folder records](../../user/reference/project-folder.md).
