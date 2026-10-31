@@ -6,7 +6,7 @@
 
 ## 2. keep the project loop small
 
-add, remove, sync, lock, status, path, get and cache cover fetching published inputs. preprocessing, publishing and workflow execution stay outside the command set. [scope](scope.md) sets those boundaries.
+add, remove, sync, lock, status, path, get and cache cover fetching published inputs. preprocessing, publishing and workflow execution stay outside the command set. [scope](../scope.md) sets those boundaries.
 
 ## 3. SHA-256 is a file's identity
 
@@ -70,7 +70,7 @@ a connection has 45 seconds to connect, each request hop has 75 seconds to produ
 
 ## 17. use flags and environment variables
 
-there is no config file or config-file precedence to maintain. flags cover invocation choices; environment variables cover the cache, concurrency and logging. the exceptions to simple flag precedence are explicit in [settings](formats.md#settings).
+there is no config file or config-file precedence to maintain. flags cover invocation choices; environment variables cover the cache, concurrency and logging. the exceptions to simple flag precedence are explicit in [settings](../formats.md#settings).
 
 ## 18. give errors stable kinds
 
@@ -106,7 +106,7 @@ format and behavior changes need matching documentation in the same change. keep
 
 ## 26. apache-2.0
 
-[LICENSE](../LICENSE) grants use, modification and redistribution under apache-2.0, including its patent terms. [NOTICE](../NOTICE) names Nikhil Y N and KairosLab India Private Limited and preserves the notice about the project names. the license grants no trademark rights beyond describing origin.
+[LICENSE](../../LICENSE) grants use, modification and redistribution under apache-2.0, including its patent terms. [NOTICE](../../NOTICE) names Nikhil Y N and KairosLab India Private Limited and preserves the notice about the project names. the license grants no trademark rights beyond describing origin.
 
 ## 27. reuse resolved references for filter edits
 

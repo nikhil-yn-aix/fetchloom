@@ -72,7 +72,7 @@ the state also records the SHA-256 of `data.toml` and `data.lock` as `sync` leav
 
 planning produces target paths, not a serialized dry-run action plan. JSON contains the completed command's report. resolving, downloading unknown hashes and writing the lock can precede detection of a destination clash.
 
-`get` builds temporary locked-file values and uses the same archive expansion, but writes no project metadata. `status`, `path` and cache commands have their own read paths. see [CLI](cli.md) for their effects.
+`get` builds temporary locked-file values and uses the same archive expansion, but writes no project metadata. `status`, `path` and cache commands have their own read paths. see [CLI](../cli.md) for their effects.
 
 ## concurrency
 
@@ -90,7 +90,7 @@ placement, project metadata and many cache-index operations run synchronously on
 
 DOIs use `https://doi.org/api/handles/<doi>`. the JSON handle's URL value selects a source. an unknown host or another DOI is refused; the landing page is not downloaded to discover its type.
 
-source tests implement `Api` with in-memory recorded responses from `tests/fixtures/sources`. they are source-specific tests, not a shared conformance suite. current adapter coverage is in [scope](scope.md#sources), and recorded references are in [formats](formats.md#what-each-source-records).
+source tests implement `Api` with in-memory recorded responses from `tests/fixtures/sources`. they are source-specific tests, not a shared conformance suite. current adapter coverage is in [scope](../scope.md#sources), and recorded references are in [formats](../formats.md#what-each-source-records).
 
 ## the cache
 
@@ -107,7 +107,7 @@ flowchart LR
     root --> projects[projects: registrations]
 ```
 
-[formats](formats.md#the-cache) defines the paths and records.
+[formats](../formats.md#the-cache) defines the paths and records.
 
 objects are read-only files named by SHA-256. an ordinary download writes to a partial file, computes its hash, flushes and seals it, then publishes under that hash. the caller checks expected size and checksums after publication; a rejected transfer can leave an unreferenced object for gc.
 
@@ -139,11 +139,11 @@ when a recorded path is absent from a listing, the scan looks for exactly one li
 
 manifest and locked paths reject traversal. the project validates the `data_dir` chain. placement checks child directories and refuses links or junctions; a project's data folder is checked again, while the folder `get` writes into may itself be a link. deletion rechecks its parent chain the same way. these are path checks, not a sandbox against another process swapping directories during a run. scans skip links rather than following or reporting them.
 
-metadata files other than the [owner record](formats.md#the-fetchloom-folder) stage in `.fetchloom/` when it exists, otherwise beside their destination; they are flushed and renamed into place. data-file replacement removes the old file first. copies are written to hidden `.fetchloom-<16 hex digits>.copy` files in the destination folder, then published without overwriting an existing name. the copy path does not flush those bytes before the state write; [plan](plan.md#pending-code) tracks that gap. a hard interruption can leave a missing destination or a hidden copy temporary, but never partial bytes at the destination name. `get` ignores these copy temporaries on its next run. an interruption after the new file is placed and before the state is written leaves the locked bytes recorded as the old file. a changed file of the locked size is therefore hashed, and one that holds the locked bytes is adopted with its new size and time. if `copy = true` asks for a writable file, a read-only match is replaced instead.
+metadata files other than the [owner record](../formats.md#the-fetchloom-folder) stage in `.fetchloom/` when it exists, otherwise beside their destination; they are flushed and renamed into place. data-file replacement removes the old file first. copies are written to hidden `.fetchloom-<16 hex digits>.copy` files in the destination folder, then published without overwriting an existing name. the copy path does not flush those bytes before the state write; [plan](plan.md#pending-code) tracks that gap. a hard interruption can leave a missing destination or a hidden copy temporary, but never partial bytes at the destination name. `get` ignores these copy temporaries on its next run. an interruption after the new file is placed and before the state is written leaves the locked bytes recorded as the old file. a changed file of the locked size is therefore hashed, and one that holds the locked bytes is adopted with its new size and time. if `copy = true` asks for a writable file, a read-only match is replaced instead.
 
 sync reads a file's size and modification time again right before removing or replacing it, and keeps the file when either changed since the scan. an edit made while downloads ran therefore stays. state records each placed file's size and time as read right after that file is placed, so an edit made while later files are placed shows as an edit too.
 
-a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. an adopted file that is the cached object under another name, as a run cut off before its state write leaves one, is recorded as a hardlink, so the audit covers it. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](formats.md#the-fetchloom-folder) records these fields and [CLI](cli.md#status-and-hand-edits) explains force.
+a file recorded no older than the state file itself is hashed before its size and time are trusted, as git does with racily clean index entries; on a clock as coarse as FAT's, an edit in the tick a file was placed leaves both unchanged. an identical untracked file can be adopted and later removed as managed data. an adopted file that is the cached object under another name, as a run cut off before its state write leaves one, is recorded as a hardlink, so the audit covers it. removing an edited unneeded file from state leaves its bytes as an extra file. [formats](../formats.md#the-fetchloom-folder) records these fields and [CLI](../cli.md#status-and-hand-edits) explains force.
 
 ## the network
 
@@ -168,7 +168,7 @@ reqwest uses tokio, HTTP/2 and rustls with the platform verifier. ring is select
 
 | control | value |
 |---|---|
-| active network operations | 8 by default; [settings](formats.md#settings) defines the override |
+| active network operations | 8 by default; [settings](../formats.md#settings) defines the override |
 | per-host slots | 4, keyed by the initial hostname, including while following redirects |
 | connect timeout | 45 s |
 | send and response-header deadline | 75 s per hop, combining connect and response allowances |
@@ -194,7 +194,7 @@ a 429 uses up the limits it names, or all it states, for at least its `Retry-Aft
 
 ### split downloads
 
-a download of at least 64 MiB may run over several streams when the server answers ranges, by a `206` or `Accept-Ranges: bytes`, and something proves the pieces belong to one version: a pinned SHA-256, an MD5 the source states, or a validator for `If-Range`. it still starts as one stream, written in order like any other, and measures what that stream moves in each 2 s window. once a window moved less than 1 MB/s while at least 16 MiB are left, the stream hands over: its writer, and the rest of its answer, read exactly up to the bytes the writer holds, go on as the first stream of the split. a stream that keeps up never enters the split path. [performance](performance.md#adaptive-splitting) records the trigger measurements; [settings](formats.md#settings) defines the overrides. a bandwidth-capped stream is not judged slow. with no bandwidth cap and splitting enabled, a resumed download whose checkpoint holds ranges past its prefix goes to the split path at once, since only it skips those saved ranges.
+a download of at least 64 MiB may run over several streams when the server answers ranges, by a `206` or `Accept-Ranges: bytes`, and something proves the pieces belong to one version: a pinned SHA-256, an MD5 the source states, or a validator for `If-Range`. it still starts as one stream, written in order like any other, and measures what that stream moves in each 2 s window. once a window moved less than 1 MB/s while at least 16 MiB are left, the stream hands over: its writer, and the rest of its answer, read exactly up to the bytes the writer holds, go on as the first stream of the split. a stream that keeps up never enters the split path. [performance](performance.md#adaptive-splitting) records the trigger measurements; [settings](../formats.md#settings) defines the overrides. a bandwidth-capped stream is not judged slow. with no bandwidth cap and splitting enabled, a resumed download whose checkpoint holds ranges past its prefix goes to the split path at once, since only it skips those saved ranges.
 
 the split path adds a second stream at once when the one stream's rate is known, and otherwise after one window. every 250 ms it checks its rate over 2 s windows, and adds a stream while each added stream raised the total by at least 15%, up to 8 and only when the host and the overall limit have a slot that nothing else waits for. added streams use HTTP/1.1 connections of their own, since streams of one HTTP/2 connection share its window, and each asks for its range with `If-Range`. a stream that finishes takes the upper half of the largest range left when that half is at least 8 MiB. a `200` answer to a range, or three failed streams, stop the splitting for that file, and the rest comes over one stream. a range answer from another version restarts the download. a split download whose hash does not match is restarted once as one stream before it fails, as a resumed one is.
 
@@ -218,7 +218,7 @@ a shared writable cache trusts every writer. partial-download handles refuse lin
 
 ## archives
 
-the CLI chooses candidates by filename; byte inspection chooses the decoder. names and placement rules are in [CLI](cli.md#archives). zip uses its central directory to check entries first; tar is read sequentially. both feed the same name and byte guard.
+the CLI chooses candidates by filename; byte inspection chooses the decoder. names and placement rules are in [CLI](../cli.md#archives). zip uses its central directory to check entries first; tar is read sequentially. both feed the same name and byte guard.
 
 | limit | counts |
 |---|---|
@@ -238,13 +238,13 @@ unpacking records a sorted member tree under the archive hash, unless data.lock 
 
 ## project coordination and observability
 
-commands that modify the project acquire the OS lock on `.fetchloom/lock`, then claim `.fetchloom/owner`. windows and WSL honor the same owner record even though their OS locks do not see each other. waiting commands poll every 200 ms, report the holder once and accept ctrl-c. the guard removes the owner before releasing the OS lock, including on error. [formats](formats.md#the-fetchloom-folder) defines the owner record and recovery rules.
+commands that modify the project acquire the OS lock on `.fetchloom/lock`, then claim `.fetchloom/owner`. windows and WSL honor the same owner record even though their OS locks do not see each other. waiting commands poll every 200 ms, report the holder once and accept ctrl-c. the guard removes the owner before releasing the OS lock, including on error. [formats](../formats.md#the-fetchloom-folder) defines the owner record and recovery rules.
 
 `status`, a ready `path` and `lock --check` read without either lock, since they change nothing. `path` rereads after waiting to sync.
 
 human steps are printed directly. warnings are collected, and the JSON document combines the final result, warnings, one optional error and counters. it is not a rendering of the progress-event stream.
 
-there is no custom panic report. [engineering](engineering.md#profiling) covers traces and profilers. [formats](formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
+there is no custom panic report. [engineering](engineering.md#profiling) covers traces and profilers. [formats](../formats.md#the-json-document) defines error kinds and counters; [performance](performance.md) holds measurements.
 
 ## adding a source
 

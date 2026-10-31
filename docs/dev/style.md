@@ -12,7 +12,7 @@ the reader is a researcher who wants their data, or a contributor opening the co
 - describe current behavior. mark unbuilt work as pending and put its status in [plan](plan.md).
 - replace a vague promise with an exact example, a number with its measurement conditions, or a link to the implementation.
 - keep each fact in the doc that owns it. link from the others.
-- links name their destination: [formats](formats.md), never "click here".
+- links name their destination: [formats](../formats.md), never "click here".
 
 ## what we cut
 

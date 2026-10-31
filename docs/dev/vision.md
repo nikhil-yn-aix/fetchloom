@@ -38,6 +38,6 @@ checks ran on 2026-10-29 on windows 11 with NTFS, without admin rights or symlin
 
 ## boundaries
 
-fetchloom retrieves inputs. it does not run preprocessing, publish datasets or reproduce an analysis by itself. a workflow can ask `fetchloom path` for a location and then run its own work. [scope](scope.md#outside-the-project) keeps those boundaries separate from unfinished release work.
+fetchloom retrieves inputs. it does not run preprocessing, publish datasets or reproduce an analysis by itself. a workflow can ask `fetchloom path` for a location and then run its own work. [scope](../scope.md#outside-the-project) keeps those boundaries separate from unfinished release work.
 
 one-off `get` serves a different need: fetch what a link serves now without creating a project. reproducible inputs use `data.toml` and `data.lock`. [plan](plan.md) records what is built and what still stands between that loop and a release.

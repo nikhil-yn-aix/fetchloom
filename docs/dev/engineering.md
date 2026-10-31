@@ -9,13 +9,13 @@ cargo build --locked
 cargo run --locked -- --version
 ```
 
-the compression dependencies need native build tools. keep `Cargo.lock` when building this application. [README](../README.md#install) covers source installation.
+the compression dependencies need native build tools. keep `Cargo.lock` when building this application. [README](../../README.md#install) covers source installation.
 
 ## code boundaries
 
 parsers, digest types, glob matching and destination expansion can be tested as functions over data. project and cache modules own disk records. the CLI orders their effects; the HTTP layer also writes through the cache. [architecture](architecture.md#modules) maps the modules.
 
-the cache writes no `layout` marker; [formats](formats.md#the-cache) defines its records.
+the cache writes no `layout` marker; [formats](../formats.md#the-cache) defines its records.
 
 `Api` is the source-listing test seam. tests also inject environment readers and archive limits. retry timing still uses the real clock and randomness. dependencies are not all hidden behind private adapters: `url::Url`, for example, crosses module boundaries.
 
@@ -95,7 +95,7 @@ use a release build for timings:
 cargo build --locked --release
 ```
 
-`-v` prints work counters; `--json` includes them in the `work` field. [formats](formats.md#work-counters) defines what each counter counts. `-vv` enables debug events.
+`-v` prints work counters; `--json` includes them in the `work` field. [formats](../formats.md#work-counters) defines what each counter counts. `-vv` enables debug events.
 
 on linux, record a timeline with:
 
@@ -136,7 +136,7 @@ use this order for a memory investigation: measure peak RSS without the profiler
 
 ## benchmarks
 
-[benchmarks](benchmarks.md) defines fixtures, network profiles, run order and comparison rules. [bench/](../bench/) holds the harness and live source matrix. keep the cache state, build, machine load and repetitions with each result; interleave compared builds when the machine or live service varies. [performance](performance.md#budgets) holds the budgets and measurements.
+[benchmarks](benchmarks.md) defines fixtures, network profiles, run order and comparison rules. [bench/](../../bench) holds the harness and live source matrix. keep the cache state, build, machine load and repetitions with each result; interleave compared builds when the machine or live service varies. [performance](performance.md#budgets) holds the budgets and measurements.
 
 to compare two builds, `bench/ab.ps1` runs them in interleaved pairs, a then b, then b then a, each into an empty cache, and appends one row per run to `bench/results/ab/<name>.csv`; `bench/ab_summary.py` prints each side's median and range and the change. `{work}` in the arguments becomes the run's folder, and `-EnvB` sets variables for one side, so one build can also be compared with itself under a setting:
 
@@ -172,7 +172,7 @@ cargo bolero builds with the `fuzz` profile in `Cargo.toml`. without the two fol
 
 ## automation
 
-[ci.yml](../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks. [release.yml](../.github/workflows/release.yml) builds a release from a version tag, as [releases](#releases) describes.
+[ci.yml](../../.github/workflows/ci.yml) runs the three checks above on linux and windows. on linux it also runs `cargo deny check`, which fails on a crate with an open security advisory, a license [deny.toml](../../deny.toml) does not list or a source other than crates.io, and warns when two versions of a crate are built. it then runs every test again with its folders on other filesystems, all required: refs, exfat and fat32 volumes on windows, and btrfs and xfs on linux. there are no nightly live-source checks. [release.yml](../../.github/workflows/release.yml) builds a release from a version tag, as [releases](#releases) describes.
 
 nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured in this repository. fuzzing uses bolero, described above. add tooling with the job it will run; do not document it as an existing gate first.
 
@@ -180,7 +180,7 @@ nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale
 
 `Cargo.toml` holds the version, and `pyproject.toml` takes it from there. `publish = false` keeps the crate off crates.io.
 
-[release.yml](../.github/workflows/release.yml) runs when a tag such as `v0.1.0` is pushed. each job has only the permissions it needs:
+[release.yml](../../.github/workflows/release.yml) runs when a tag such as `v0.1.0` is pushed. each job has only the permissions it needs:
 
 | job | permissions | work |
 |---|---|---|
@@ -196,7 +196,7 @@ a release holds:
 | `fetchloom-<version>-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, `fl` and the same three files |
 | `fetchloom-<version>-py3-none-win_amd64.whl` | both executables and the `fetchloom` python module |
 | `fetchloom-<version>-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | the same for linux. the binaries are static, so the wheel carries the glibc and musl tags |
-| `install.sh`, `install.ps1` | the installers the [README](../README.md#install) runs |
+| `install.sh`, `install.ps1` | the installers the [README](../../README.md#install) runs |
 | `SHA256SUMS` | the SHA-256 of every other file, which the installers check |
 
 maturin packs every `[[bin]]` target, so each wheel holds `fl` as well as `fetchloom`.
@@ -242,8 +242,8 @@ FETCHLOOM_DOWNLOAD_URL=http://127.0.0.1:8000 sh install.sh
 
 on windows, set `$env:FETCHLOOM_DOWNLOAD_URL` and run `.\install.ps1`. to keep your own install apart, set `HOME` on linux or `LOCALAPPDATA` on windows to a scratch folder; the windows installer still adds that folder to your user PATH.
 
-check format changes against the readers and recovery behavior in [formats](formats.md).
+check format changes against the readers and recovery behavior in [formats](../formats.md).
 
 ## license
 
-contributions use apache-2.0. keep [LICENSE](../LICENSE) and [NOTICE](../NOTICE) with distributions. NOTICE names Nikhil Y N and KairosLab India Private Limited. the [license decision](decisions.md#26-apache-20) records why.
+contributions use apache-2.0. keep [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE) with distributions. NOTICE names Nikhil Y N and KairosLab India Private Limited. the [license decision](decisions.md#26-apache-20) records why.

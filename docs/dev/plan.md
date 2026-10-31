@@ -33,4 +33,4 @@ every source was checked against the live service, and CI runs every test on lin
 - binaries, installers and wheels are installed and exercised from their built artifacts.
 - format changes, command output and known limits agree with the docs.
 
-new commands and source families outside that work stay in [scope](scope.md#outside-the-project) until a user's project needs them.
+new commands and source families outside that work stay in [scope](../scope.md#outside-the-project) until a user's project needs them.

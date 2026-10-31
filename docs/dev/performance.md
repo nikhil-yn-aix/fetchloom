@@ -68,7 +68,7 @@ the floor is defender scanning random-looking content written by a program it do
 
 publishing each member by rename instead of hardlink plus remove would save about 1 s of a 34 s unpack. that is below the 10% bar, so the change was not made.
 
-on linux, one flush per file cost 0.7 ms on ext4. flushing the batch took unpacking from 8.5 to 10.2 s down to about half a second at 26a3dbc, three runs each. [architecture](architecture.md#concurrency) describes the worker budgets; [archive storage](../src/archive/store.rs) owns the batch flush.
+on linux, one flush per file cost 0.7 ms on ext4. flushing the batch took unpacking from 8.5 to 10.2 s down to about half a second at 26a3dbc, three runs each. [architecture](architecture.md#concurrency) describes the worker budgets; [archive storage](../../src/archive/store.rs) owns the batch flush.
 
 ### memory
 
@@ -164,7 +164,7 @@ the difference is within noise, so HTTP/2 stays. an earlier single HTTP/2 run to
 
 ## against other tools
 
-the method is [benchmarks](benchmarks.md). on 2026-10-31 a reduced run used 3 blocks instead of 5, on linux only, with release build 240f17a, which predates the flush change above. the windows lab did not fit: the harness alone needs about 12 minutes after each run that leaves 10,000 files on windows, as [the plans](../bench/plans/README.md) explain. the far and poor profiles and the live subset were not run in this pass. medians, wall time:
+the method is [benchmarks](benchmarks.md). on 2026-10-31 a reduced run used 3 blocks instead of 5, on linux only, with release build 240f17a, which predates the flush change above. the windows lab did not fit: the harness alone needs about 12 minutes after each run that leaves 10,000 files on windows, as [the plans](../../bench/plans/README.md) explain. the far and poor profiles and the live subset were not run in this pass. medians, wall time:
 
 | workload, profile | fetchloom | others |
 |---|---|---|
@@ -179,10 +179,10 @@ every run of every tool fetched the expected bytes. fetchloom also hashes, pins 
 
 ## regression checks
 
-[work counters](formats.md#work-counters) let tests catch extra requests, downloads and copies on controlled workloads. elapsed time is not a CI assertion. shared runners and laptop load vary too much for a wall-clock gate.
+[work counters](../formats.md#work-counters) let tests catch extra requests, downloads and copies on controlled workloads. elapsed time is not a CI assertion. shared runners and laptop load vary too much for a wall-clock gate.
 
 for a slow command, measure a release build, use the [profiling workflow](engineering.md#profiling) to find its largest cost, then repeat the same workload. keep before and after results with their conditions. a budget change needs the measurement that showed the old budget was wrong.
 
 ## build profile
 
-[Cargo.toml](../Cargo.toml) sets `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` and `strip = true` for release builds. the earlier version measured fat LTO as 7% smaller than thin at the same speed. the allocator stays the system one until a measurement shows a gain worth a dependency; mimalloc was within noise in the earlier version.
+[Cargo.toml](../../Cargo.toml) sets `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` and `strip = true` for release builds. the earlier version measured fat LTO as 7% smaller than thin at the same speed. the allocator stays the system one until a measurement shows a gain worth a dependency; mimalloc was within noise in the earlier version.

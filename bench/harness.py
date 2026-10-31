@@ -6,7 +6,7 @@
 
 usage: uv run bench/harness.py bench/plans/<plan>.toml [--reps N] [--only tool,tool] [--results DIR]
 
-the method is docs/benchmarks.md. every first fetch gets a new, empty home for the tool's
+the method is docs/dev/benchmarks.md. every first fetch gets a new, empty home for the tool's
 caches and a new output folder; the second project reuses that home with another new folder.
 each block runs every tool once in a random order from a recorded seed. a run counts only
 when its files hash to what the workload expects; failures stay in the results.
@@ -384,7 +384,7 @@ def summarize(rows, plan, reps, out_dir):
     floor doing the same work, and, for a primary lab comparison only, a paired verdict."""
     lines = [f"# {plan['name']}", ""]
     if plan["layer"] == "live":
-        lines += ["live timings are description only; see docs/benchmarks.md.", ""]
+        lines += ["live timings are description only; see docs/dev/benchmarks.md.", ""]
     for workload in plan["workload"]:
         lines += [f"## {workload['id']}", ""]
         lines.append("| tool | phase | correct | wall median s | wall range s | x floor | "

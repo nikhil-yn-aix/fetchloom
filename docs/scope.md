@@ -13,7 +13,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 - offline sync uses local placements, cache objects and unpack records. resolving a changed entry still needs an online run.
 - stdout answers and versioned JSON support scripts. the python module's `fetchloom.path()` and `fetchloom.sync()` run the installed command with `--json`; there is no R wrapper.
 
-these are not guarantees that a host keeps a file forever, that every resume can continue, or that cached objects are rehashed on every use. [architecture](architecture.md) defines the limits and trust assumptions.
+these are not guarantees that a host keeps a file forever, that every resume can continue, or that cached objects are rehashed on every use. [architecture](dev/architecture.md) defines the limits and trust assumptions.
 
 ## sources
 
@@ -36,9 +36,9 @@ the adapters, credentials and release status are separate from accepting a refer
 
 ## platforms and release
 
-fetchloom runs on windows and linux, and [CI](../.github/workflows/ci.yml) runs the checks on both. macos is not supported. releases carry static x86_64 binaries, installers and wheels for both; other machines build the executables [from source](../README.md#install). source completion remains in [plan](plan.md).
+fetchloom runs on windows and linux, and [CI](../.github/workflows/ci.yml) runs the checks on both. macos is not supported. releases carry static x86_64 binaries, installers and wheels for both; other machines build the executables [from source](../README.md#install). source completion remains in [plan](dev/plan.md).
 
-one user's processes can share a cache. a cache writable by several people trusts all of them; no group-permission or cross-user administration feature is provided. recognized synced folders skip hardlinks but can use reflinks. placement details belong in [architecture](architecture.md#placing-files).
+one user's processes can share a cache. a cache writable by several people trusts all of them; no group-permission or cross-user administration feature is provided. recognized synced folders skip hardlinks but can use reflinks. placement details belong in [architecture](dev/architecture.md#placing-files).
 
 ## outside the project
 
@@ -54,4 +54,4 @@ one user's processes can share a cache. a cache writable by several people trust
 | controlled-data access approval | access is granted by the institution or data owner |
 | 7z and rar extraction | decoders are not included; the packed file remains usable elsewhere |
 
-`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the python module are not implemented. add them when a concrete project needs them. downloads run several files at once; a file of at least 64 MiB splits into parallel range requests once its one stream moves less than 1 MB/s, as [architecture](architecture.md#split-downloads) describes.
+`cite`, archive-service fallbacks, object-storage protocols, lab administration, shell completions and language or workflow wrappers beyond the python module are not implemented. add them when a concrete project needs them. downloads run several files at once; a file of at least 64 MiB splits into parallel range requests once its one stream moves less than 1 MB/s, as [architecture](dev/architecture.md#split-downloads) describes.

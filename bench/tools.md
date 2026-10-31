@@ -1,6 +1,6 @@
 # benchmark tools
 
-the comparison tools and their versions, installed on 2026-10-30 for the method in [benchmarks](../docs/benchmarks.md). the harness also records each tool's `version` command with every block.
+the comparison tools and their versions, installed on 2026-10-30 for the method in [benchmarks](../docs/dev/benchmarks.md). the harness also records each tool's `version` command with every block.
 
 | tool | windows | linux (WSL) |
 |---|---|---|
