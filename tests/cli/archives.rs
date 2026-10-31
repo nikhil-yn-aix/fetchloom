@@ -495,3 +495,29 @@ fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn path_checks_known_archive_members_before_syncing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    for known in [true, false] {
+        let clone = sandbox.folder(if known { "known-clone" } else { "unknown-clone" })?;
+        for name in ["data.toml", "data.lock"] {
+            fs::copy(sandbox.work().join(name), clone.join(name))?;
+        }
+        let mut command = sandbox.command_in(&clone, &["--json", "path", "dataset/no.csv"]);
+        if !known {
+            command.env("FETCHLOOM_CACHE", sandbox.folder("cold-cache")?);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        assert_eq!(clone.join("data").exists(), !known);
+        if !known {
+            holds_the_archive(&clone.join("data").join("dataset"))?;
+        }
+    }
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}

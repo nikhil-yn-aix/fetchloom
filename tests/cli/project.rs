@@ -937,3 +937,25 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     assert_eq!(fs::read(clone.join("data.lock"))?, before);
     Ok(())
 }
+
+#[test]
+fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    for cold in [false, true] {
+        let clone = clone(&sandbox, if cold { "cold-clone" } else { "warm-clone" })?;
+        let mut command = sandbox.command_in(&clone, &["--json", "--offline", "path", "iris/no.csv"]);
+        if cold {
+            command.env("FETCHLOOM_CACHE", sandbox.folder("cold-cache")?);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        let report = json(&output)?;
+        assert_eq!(report["errors"][0]["kind"], "usage");
+        assert_eq!(report["work"]["requests"], 0);
+        assert!(!clone.join("data").exists(), "an impossible member must not place data");
+        assert!(!clone.join(".fetchloom").exists(), "an impossible member must not sync");
+    }
+    Ok(())
+}
