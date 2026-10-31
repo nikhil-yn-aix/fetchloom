@@ -1,6 +1,8 @@
 # benchmark design
 
-how fetchloom is compared with the tools people use today, and the rules that keep the comparison fair. [bench/](../../../bench/README.md) implements it.
+the benchmark suite compares the time and resources needed to retrieve checked research files.
+
+[bench/](../../../bench/README.md) implements the suite; [running benchmarks](../engineering/benchmarks.md) gives the contributor route.
 
 ## what it answers
 
@@ -13,10 +15,10 @@ how fetchloom is compared with the tools people use today, and the rules that ke
 ## fairness rules
 
 1. same job. every tool starts from the same inputs (the URLs or the project, and the expected SHA-256 of each file) and must end with the same files on disk. a run counts only when a checker finds every expected file with the right SHA-256; a run with a missing or wrong file is reported as failed, never as fast.
-2. same checking. each client uses its native integrity check on downloaded bytes (aria2c `--checksum`, pooch `known_hash`, DVC remote verification and git-annex SHA-256 keys). fetchloom hashes downloaded bytes but may trust metadata for warm cache hits and unchanged outputs. native warm checks are part of what s5 and s6 measure. a client without a hash option, such as curl or wget, runs `sha256sum -c` in the same timed command. every run also gets the independent SHA-256 checker outside the clock.
+2. same checking. each client uses its native integrity check on downloaded bytes (aria2c `--checksum`, pooch `known_hash`, DVC remote verification and git-annex SHA-256 keys). fetchloom verifies every downloaded byte. on a no-op it trusts recorded size and modification time, like git, unless a racy timestamp or change mark requires hashing; pooch rehashes its cached file. this difference is part of what s5 and s6 measure. a client without a hash option, such as curl or wget, runs `sha256sum -c` in the same timed command. every run also gets the independent SHA-256 checker outside the clock.
 3. each tool's own way. a tool runs the workflow its documentation recommends for the job, not an imitation of fetchloom: DVC pulls a tracked folder from an HTTP remote, datalad clones a dataset and gets its files, pooch retrieves files by known hash.
-4. each tool's own speed settings. a tool runs with the parallelism its documentation offers (curl `--parallel --parallel-max 4`, aria2c `-j 4 -x 4`, DVC and datalad `-J 4`) and defaults for everything else. wget and pooch have no parallel mode and run as they are. every flag is in the results.
-5. same machine, same network. all tools run one at a time on the same idle machine, against the same local server, through the same shaped link.
+4. each tool's own speed settings. a tool runs with the parallelism its documentation offers (curl `--parallel --parallel-max 4`, aria2c `-j 4 -x 4`, DVC `-j 4` and datalad `-J 4`) and defaults for everything else. wget and pooch have no parallel mode and run as they are. every flag is in the results.
+5. same machine, same network. all tools run one at a time on a dedicated idle machine, against the same local server, through the same shaped link.
 6. no ordering luck. each round runs the tools in a new random order (seed recorded), so a slow minute on the machine hits every tool alike. one untimed warmup round per case loads binaries and python bytecode first.
 7. whole command. the clock covers process start to exit, including interpreter startup, resolution and verification, because that is what a person waits for.
 8. pinned and recorded. clients have pinned versions; python clients share the requested virtual environment, with its full package list recorded. every run has a separate home and cache. versions, commands, kernel, filesystem and CPU are written into the results.
@@ -31,9 +33,9 @@ how fetchloom is compared with the tools people use today, and the rules that ke
 | s4 | one zip of 10,000 members | empty caches | download plus unpacking |
 | s5 | s2 again in a second project | the tool's cache filled by s2 | reuse on one machine |
 | s6 | the same command again | everything in place | the cost of a no-op, paid by a notebook on every run |
-| s7 | s1 interrupted halfway, then run again | a partial download | bytes downloaded twice |
+| s7 | s1 interrupted after 10 s, then run again | a partial download | bytes downloaded twice |
 
-cold runs empty every tool's cache and drop the client's page cache; the server's files are read once after the drop, so the server is warm like a real one. warm runs keep caches and page cache.
+cold runs empty every tool's cache and drop the machine's page cache; the server's files are read once after the drop, so the server is warm like a real one. warm runs keep caches and page cache. s5 and s6 first populate each client using s2 outside the clock. s5 gives fetchloom and DVC a new project; pooch returns paths in its shared cache. datalad clones the first project inside the timed command, then gets its files.
 
 in s7 every tool gets ctrl-c (SIGINT) at the same moment, 10 seconds into a download on the home profile; tools still running after 5 more seconds get SIGKILL. the metric is the bytes the server sent for that file across both runs, divided by its size. curl and wget use their documented resume switches; wget otherwise writes a second filename and leaves the required output partial. quick mode keeps the 256 MiB home file for this case, since a tiny file would finish before the signal.
 
@@ -79,7 +81,7 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 
 ## network profiles
 
-`tc netem` shapes the link between the client and the server namespace. sizes shrink on slower profiles so every case stays under about a minute per run.
+`tc netem` shapes the link between the client and the server namespace. sizes shrink on slower profiles to bound run time; lossy links and client failures can still exceed a minute.
 
 | profile | delay | loss | bandwidth | s1 size | s2 files |
 |---|---|---|---|---|---|
@@ -88,13 +90,13 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 | far | 150 ms | 1% | 50 Mbit/s | 128 MiB | 300 |
 | poor | 300 ms | 3% | 10 Mbit/s | 32 MiB | 100 |
 
-s1 and s2 run on every profile. s3 to s6 run on lan, where local costs dominate. s7 runs on home.
+ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the published xfs comparison runs only s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](../../../bench/README.md#run).
 
 ## platforms
 
 | machine | filesystems |
 |---|---|
-| linux x86_64 | ext4 and xfs, each a fresh loop-mounted image |
+| linux x86_64 | ext4 for every scenario; xfs for s5 and s6 on lan; each uses a dedicated loop-mounted image |
 
 the harness does not produce windows numbers. namespaces, `tc`, loop mounts and `wait4` require linux; WSL results describe its linux filesystem, not NTFS or defender. a windows comparison needs a separate native runner.
 
@@ -103,7 +105,7 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 | metric | how |
 |---|---|
 | wall time | monotonic clock around the whole command |
-| CPU time, user and system | `getrusage` of the finished command and its children |
+| CPU time, user and system | the resource-usage result from `os.wait4` for the finished command and its children |
 | peak memory | the largest resident set among the command's processes |
 | bytes and requests | the server's access log for that run |
 | disk used | free-space change of the dedicated filesystem, so links and reflinks count once |
@@ -115,7 +117,9 @@ lab cases run 10 rounds on lan and 5 on shaped profiles, after one warmup round.
 
 ## results and presentation
 
-each run writes `meta.json` and `runs.jsonl` under `/srv/fl-bench/results/` on the linux filesystem. copy wanted results into the ignored `bench/results/` before teardown. measuring on a windows-mounted worktree would mix filesystem overhead into the lab. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables in [benchmark results](benchmarks.md), so every published number traces back to a results file.
+the full comparison has not been published. do not use quick smoke timings as performance results or create the generated results page by hand.
+
+each run writes `meta.json` and `runs.jsonl` under `/srv/fl-bench/results/` on the linux filesystem. copy wanted results into the ignored `bench/results/` before teardown. measuring on a windows-mounted worktree would mix filesystem overhead into the lab. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables in [results, once published](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/dev/performance/benchmarks.md), so every published number traces back to a results file.
 
 ## not measured
 
