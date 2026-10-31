@@ -62,16 +62,20 @@ impl Volume {
             return Err(refused);
         }
         file.set_permissions(writable(before.clone()))?;
-        match self.rename(from, to) {
-            // those volumes can rename over no file at all. they cannot hardlink either, so the
-            // old file has no other name and goes first, with its handle closed so its name frees
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                drop(file);
-                (self.remove_file)(to)?;
-                self.rename(from, to)
+        if self.can_hardlink() == Some(false) {
+            // FAT and exFAT: an open handle blocks renaming over the old file, and some refuse to
+            // rename over a file at all. the old file has no other name, so it may go first
+            drop(file);
+            if self.rename(from, to).is_ok() {
+                return Ok(());
             }
-            renamed => renamed.and(file.set_permissions(before)),
+            (self.remove_file)(to)?;
+            return self.rename(from, to);
         }
+        // a hardlink placed in a project may still name the old file, so it gets its flag back
+        let renamed = self.rename(from, to);
+        let restored = file.set_permissions(before);
+        renamed.and(restored)
     }
 
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
