@@ -35,7 +35,7 @@ how fetchloom is compared with the tools people use today, and the rules that ke
 
 cold runs empty every tool's cache and drop the client's page cache; the server's files are read once after the drop, so the server is warm like a real one. warm runs keep caches and page cache.
 
-in s7 every tool gets ctrl-c (SIGINT) at the same moment, 10 seconds into a download on the home profile; tools still running after 5 more seconds get SIGKILL. the metric is the bytes the server sent for that file across both runs, divided by its size.
+in s7 every tool gets ctrl-c (SIGINT) at the same moment, 10 seconds into a download on the home profile; tools still running after 5 more seconds get SIGKILL. the metric is the bytes the server sent for that file across both runs, divided by its size. curl and wget use their documented resume switches; wget otherwise writes a second filename and leaves the required output partial. quick mode keeps the 256 MiB home file for this case, since a tiny file would finish before the signal.
 
 ## tools
 
@@ -44,9 +44,9 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | tool | how it runs | scenarios |
 |---|---|---|
 | fetchloom | `fetchloom sync` in a project with `data.toml` and `data.lock` | all |
-| curl | `curl --parallel --parallel-max 4`, then `sha256sum -c` | s1 to s4, s6, s7 |
+| curl | `curl --parallel --parallel-max 4`, then `sha256sum -c`; `-C -` in s7 | s1 to s4, s6, s7 |
 | aria2c | `aria2c -j 4 -x 4` with `--checksum` per file | s1 to s4, s6, s7 |
-| wget | `wget -i list`, then `sha256sum -c` | s1 to s4, s6, s7 |
+| wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6, s7 |
 | pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |
 | DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
 | datalad | `datalad clone`, then `datalad get -J 4` from URLs registered with git-annex | s1 to s3, s5 to s7 |
@@ -57,13 +57,15 @@ live runs fetch real public datasets, 5 interleaved rounds each with empty cache
 
 | service | dataset | other tool |
 |---|---|---|
-| zenodo | a dataset of about 100 MB | zenodo_get |
-| hugging face | a parquet dataset of about 100 MB | `hf download` with hf_xet |
-| kaggle | a dataset of about 50 MB | kagglehub |
-| figshare | 10.6084/m9.figshare.5616403 | datahugger |
-| dataverse | doi:10.7910/DVN/TJCLKP, 175 files | datahugger |
+| zenodo | [8164711](https://zenodo.org/records/8164711), `pbmc.RData`, 106,968,050 bytes | zenodo_get |
+| hugging face | [stanfordnlp/imdb](https://huggingface.co/datasets/stanfordnlp/imdb), three `plain_text/*.parquet` files, 83,446,840 bytes, revision `e6281661ce1c48d982bc483cf8a173c1bbeb5d31` | `hf download` with hf_xet |
+| kaggle | [zynicide/wine-reviews](https://www.kaggle.com/datasets/zynicide/wine-reviews), version 4, `winemag-data-130k-v2.csv`, 52,908,706 bytes | kagglehub |
+| figshare | [10.6084/m9.figshare.5616403](https://api.figshare.com/v2/articles/5616403), three files, 7,425,546 bytes | datahugger |
+| dataverse | [doi:10.7910/DVN/TJCLKP](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP), version recorded at preparation, three raw files in version 5.0 | datahugger |
 
-live numbers vary with the service, so they show ranges and no ratios.
+the public APIs confirmed these inputs on 2026-10-31. dataverse now exposes three raw files, including an archive, rather than 175 separate downloads. live runs keep archives packed in both clients, compare an independently hashed reference, and report layout differences separately from content differences. the selected zenodo and kaggle files keep each job near the stated size. metadata, exact selections and hashes are recorded again for each run.
+
+live numbers vary with the service, so they show ranges and no ratios. quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files below 1 KiB in the figshare and dataverse datasets. unreachable public inputs are skipped with their errors; no credentials are required by the harness.
 
 ## network profiles
 
