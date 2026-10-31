@@ -481,6 +481,10 @@ mod tests {
             #[cfg(not(unix))]
             {
                 let mut permissions = fs::metadata(&object).unwrap().permissions();
+                #[expect(
+                    clippy::permissions_set_readonly_false,
+                    reason = "the test edits a cached object as a writable hardlink would"
+                )]
                 permissions.set_readonly(false);
                 fs::set_permissions(&object, permissions).unwrap();
             }

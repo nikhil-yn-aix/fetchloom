@@ -389,7 +389,10 @@ fn pipelined_chunks_resume_with_sha256_and_md5() {
     hashes.update(&expected);
     let stored = writer.finish().unwrap();
     assert_eq!((stored.digest, stored.md5), hashes.finish());
-    assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), expected);
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        expected
+    );
 }
 
 #[test]

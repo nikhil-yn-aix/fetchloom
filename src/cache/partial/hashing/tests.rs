@@ -31,26 +31,26 @@ fn writing_can_run_ahead_of_hashing_but_a_checkpoint_waits() {
     let release = pause_hashing(&mut writer);
     let chunk = Bytes::from(vec![b'x'; super::super::BUFFER]);
     let expected = crate::digest::sha256(&chunk);
-    let (written, writes) = mpsc::sync_channel(1);
-    let (saved, saves) = mpsc::sync_channel(1);
-    let writing = thread::spawn(move || {
+    let (written, write_done) = mpsc::sync_channel(1);
+    let (saved, save_done) = mpsc::sync_channel(1);
+    let background = thread::spawn(move || {
         let result = writer.write_chunk(0, &chunk);
         written.send(result).unwrap();
         let result = writer.save();
         saved.send(result).unwrap();
         writer
     });
-    let written = writes.recv_timeout(Duration::from_secs(5));
-    let before_hashing = saves.recv_timeout(Duration::from_millis(100));
+    let written = write_done.recv_timeout(Duration::from_secs(5));
+    let before_hashing = save_done.recv_timeout(Duration::from_millis(100));
     let bytes = std::fs::read(&partial.bytes).unwrap();
     release.send(()).unwrap();
-    let writer = writing.join().unwrap();
+    let writer = background.join().unwrap();
     written.unwrap().unwrap();
     assert!(matches!(
         before_hashing,
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
-    saves.recv().unwrap().unwrap();
+    save_done.recv().unwrap().unwrap();
     assert_eq!(crate::digest::sha256(&bytes), expected);
     let record = partial.recorded().unwrap();
     assert_eq!(record.received, u64::try_from(bytes.len()).unwrap());
@@ -107,7 +107,7 @@ fn a_slow_hasher_bounds_the_number_of_in_flight_chunks() {
         .unwrap();
     let release = pause_hashing(&mut writer);
     let (progress, received) = mpsc::sync_channel(QUEUED + 1);
-    let writing = thread::spawn(move || {
+    let background = thread::spawn(move || {
         for _ in 0..=QUEUED {
             let result = writer.write_chunk(writer.written(), &Bytes::from_static(b"x"));
             progress.send(result).unwrap();
@@ -125,7 +125,7 @@ fn a_slow_hasher_bounds_the_number_of_in_flight_chunks() {
     }
     let excess = received.recv_timeout(Duration::from_millis(100));
     release.send(()).unwrap();
-    let writer = writing.join().unwrap();
+    let writer = background.join().unwrap();
     assert_eq!(first.len(), QUEUED);
     for result in first {
         result.unwrap().unwrap();

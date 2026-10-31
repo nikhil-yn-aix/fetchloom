@@ -31,10 +31,10 @@ pub(super) struct HashPipe {
 
 impl HashPipe {
     pub(super) fn new(hasher: Hasher, file: File, received: u64) -> io::Result<Self> {
-        let (sender, receiver) = mpsc::sync_channel(QUEUED);
+        let (sender, inbox) = mpsc::sync_channel(QUEUED);
         let worker = thread::Builder::new()
             .name("fetchloom-hash".to_owned())
-            .spawn(move || hash(&file, hasher, received, &receiver))?;
+            .spawn(move || hash(&file, hasher, received, &inbox))?;
         Ok(Self {
             sender: Some(sender),
             worker: Some(worker),
@@ -56,8 +56,8 @@ impl HashPipe {
     }
 
     pub(super) fn finish(mut self, received: u64) -> io::Result<(Sha256, Option<Md5>)> {
-        let (hasher, hashed) = self.join()?;
-        same_prefix(hashed, received)?;
+        let (hasher, reached) = self.join()?;
+        same_prefix(reached, received)?;
         Ok(hasher.finish())
     }
 
@@ -115,9 +115,9 @@ fn hash(
     file: &File,
     mut hasher: Hasher,
     mut received: u64,
-    receiver: &Receiver<Message>,
+    inbox: &Receiver<Message>,
 ) -> io::Result<(Hasher, u64)> {
-    while let Ok(message) = receiver.recv() {
+    while let Ok(message) = inbox.recv() {
         match message {
             Message::Chunk(bytes) => {
                 hasher.update(&bytes);
