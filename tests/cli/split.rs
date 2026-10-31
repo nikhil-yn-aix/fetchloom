@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::support::{Ranged, Result, Sandbox, text};
+use crate::support::{Ranged, Result, Sandbox, text, wait_until};
 
 /// the smallest file that may split, 64 MiB.
 const LARGE: u64 = 64 * 1024 * 1024;
@@ -31,7 +31,21 @@ fn a_slow_large_download_splits_across_streams() -> Result {
     let body = large();
     let server = Ranged::start("/large.bin", body.clone(), SLOW)?;
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["--json", "get", &server.url])?;
+    let mut child = sandbox
+        .command(&["--json", "get", &server.url])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let split = wait_until("concurrent range requests", || {
+        if child.try_wait()?.is_some() {
+            return Err("the download ended before splitting".into());
+        }
+        Ok(server.most() >= 2 && !server.parts().is_empty())
+    });
+    // only the adaptive handover needs a slow stream; verify the remaining bytes at full speed.
+    server.pace(0);
+    let output = child.wait_with_output()?;
+    split?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = &json(&output)?["work"];
     let requests = server.requests();

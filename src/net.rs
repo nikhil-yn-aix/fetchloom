@@ -141,6 +141,7 @@ pub(crate) struct Net {
     paces: pace::Paces,
     rate: Option<Arc<Rate>>,
     split: Split,
+    idle: Duration,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
@@ -231,6 +232,7 @@ impl Net {
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
             rate: None,
+            idle: IDLE,
             split: Split {
                 when: options.split,
                 above: download::SPLIT_ABOVE,

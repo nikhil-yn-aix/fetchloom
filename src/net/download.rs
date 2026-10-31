@@ -564,7 +564,7 @@ impl Net {
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
-        let mut idle = tokio::time::Instant::now() + IDLE;
+        let mut idle = tokio::time::Instant::now() + self.idle;
         let body = loop {
             let next = tokio::select! {
                 next = tokio::time::timeout_at(idle, response.chunk()) => next,
@@ -592,7 +592,7 @@ impl Net {
                     break Err(failure::transient(format!(
                         "{} sent nothing for {} s",
                         host(url),
-                        IDLE.as_secs()
+                        self.idle.as_secs()
                     )));
                 }
                 Ok(Err(err)) => {
@@ -603,7 +603,7 @@ impl Net {
                 }
                 Ok(Ok(None)) => break Ok(None),
                 Ok(Ok(Some(chunk))) => {
-                    idle = tokio::time::Instant::now() + IDLE;
+                    idle = tokio::time::Instant::now() + self.idle;
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }

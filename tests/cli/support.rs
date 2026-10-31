@@ -613,3 +613,15 @@ pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
         body,
     )
 }
+
+/// waits for an observable test condition, with a deadline that names what never happened.
+pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) -> Result {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready()? {
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
