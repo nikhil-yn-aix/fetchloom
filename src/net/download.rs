@@ -398,6 +398,15 @@ impl Net {
         loop {
             match cache.claim(url.as_str()) {
                 Ok(Claim::Owned(partial)) => return Ok((partial, waited)),
+                // this run may hold the link itself, finished and waiting for its batch flush
+                Ok(Claim::Busy)
+                    if cache
+                        .publish_download_of(url.as_str())
+                        .map_err(|err| local(&err))? =>
+                {
+                    waited = true;
+                    continue;
+                }
                 Ok(Claim::Busy) if !waited => {
                     on(Event::Waiting)?;
                     waited = true;

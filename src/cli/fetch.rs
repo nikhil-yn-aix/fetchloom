@@ -208,8 +208,30 @@ impl<'a> Watch<'a> {
 }
 
 /// downloads every job within the network's limits and returns what each fetched, in the jobs'
-/// order.
+/// order. on linux the finished downloads are flushed together once at the end, then put in
+/// place, whether or not every job succeeded.
 pub(super) async fn all(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    jobs: Vec<Job>,
+) -> Result<Vec<Fetched>, Error> {
+    // without a batch each download flushes on its own, which is only slower
+    let batched = cache.defer_downloads().unwrap_or(false);
+    let fetched = each(context, net, cache, jobs).await;
+    let published = if batched {
+        cache
+            .publish_downloads()
+            .map_err(|err| Error::io("could not put finished downloads into the cache", &err))
+    } else {
+        Ok(())
+    };
+    let fetched = fetched?;
+    published?;
+    Ok(fetched)
+}
+
+async fn each(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,

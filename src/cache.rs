@@ -1,6 +1,7 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
 mod changed;
+mod deferred;
 mod object;
 mod partial;
 mod staging;
@@ -14,8 +15,8 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,8 @@ pub(crate) struct Cache {
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
     volume: Arc<Volume>,
+    /// downloads waiting for one flush of the whole batch, shared by every clone.
+    pending: Arc<Mutex<Option<deferred::Pending>>>,
 }
 
 #[derive(Debug)]
@@ -105,6 +108,7 @@ impl Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
+            pending: Arc::new(Mutex::new(None)),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use super::deferred::Finished;
 use super::{Cache, Stored, Validators};
 use crate::digest::{self, Hasher, Sha256};
 use crate::place::{FolderUse, real_folder};
@@ -502,7 +503,8 @@ impl PartialWriter {
             prefix,
             bytes,
             record_path,
-            _lock,
+            record,
+            _lock: lock,
             ..
         } = self;
         // read-back must finish before resizing could hide a short read.
@@ -511,16 +513,29 @@ impl PartialWriter {
         if file.metadata()?.len() != prefix {
             file.set_len(prefix)?;
         }
-        file.sync_all()?;
         // sealed through the handle that wrote it: by name, a link swapped in since would be
         // sealed in its place
         let mut permissions = file.metadata()?.permissions();
         permissions.set_readonly(true);
         file.set_permissions(permissions)?;
-        drop(file);
-        let stored = cache.link_object(&bytes, digest, prefix, md5)?;
-        let _ = fs::remove_file(&record_path);
-        Ok(stored)
+        let finished = Finished {
+            url: record.url,
+            bytes,
+            record: record_path,
+            digest,
+            size: prefix,
+            md5,
+            lock,
+        };
+        // in a batch, one flush covers every download before any takes its name
+        match cache.defer(finished) {
+            Ok(stored) => Ok(stored),
+            Err(finished) => {
+                file.sync_all()?;
+                drop(file);
+                (*finished).publish(&cache)
+            }
+        }
     }
 }
 
