@@ -315,9 +315,12 @@ credentials are read from where each source already keeps them: `HF_TOKEN` or `~
 | `errors[].message` | summary string |
 | `errors[].details` | array of supporting strings |
 | `errors[].help` | string or null |
+| `errors[].failures` | present for file download failures: every failed file, in job order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 
-there are no structured dataset or path fields in an error. SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
+batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
+
+SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
 
 bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0"}`. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
 
@@ -328,7 +331,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
 | `get` | `folder`: absolute path; `files`: file records below |
 | `path` | absolute path string, for a dataset, file or subfolder |
-| `status` | `project`: absolute path; eight arrays below |
+| `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `leftovers`: deleted partial or temporary file count |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: hash array |
@@ -344,6 +347,7 @@ status arrays:
 | field | entries |
 |---|---|
 | `unlocked` | dataset names missing from the lock or with a changed spec |
+| `removed` | dataset names in data.lock but no longer in data.toml |
 | `missing` | absent target paths |
 | `edited` | managed paths whose size or modification time changed |
 | `untracked` | existing target paths without state records |
@@ -352,7 +356,7 @@ status arrays:
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
-status lists all differences in JSON. human output limits each file category to 20 paths; unlocked datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
+status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object could not be read, it returns `local.io` and exit 50. either error has a null `result`. unreadable objects are named separately in `warnings` and are neither marked nor removed. successful `changed`, `stuck` and `unreadable` arrays are empty.
 

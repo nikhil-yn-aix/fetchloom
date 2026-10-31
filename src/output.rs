@@ -57,6 +57,8 @@ struct Problem<'a> {
     message: &'a str,
     details: &'a [String],
     help: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failures: Option<&'a [crate::error::FileFailure]>,
 }
 
 #[derive(Serialize)]
@@ -330,6 +332,7 @@ impl Output {
                 message: &error.message,
                 details: &error.details,
                 help: error.help.as_deref(),
+                failures: (!error.failures.is_empty()).then_some(error.failures.as_slice()),
             }],
         };
         let document = Document {

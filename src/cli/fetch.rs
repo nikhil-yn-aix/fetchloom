@@ -13,7 +13,7 @@ pub(super) use self::again::Again;
 use super::Context;
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
-use crate::error::{Error, Kind};
+use crate::error::{Error, FileFailure, Kind};
 use crate::net::{Event, Expect, Fetch, Fetched, Net};
 use crate::output::{Bar, Output, Ticker};
 use crate::source::{self, Remote};
@@ -289,10 +289,23 @@ fn on_its_own(error: &Error) -> bool {
 /// one error for the files that failed on their own: the failure itself when it is the only
 /// one, else a line naming each file and what happened to it, in the jobs' order.
 fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error> {
-    if failed.len() <= 1 {
-        return failed.pop().map(|(_, error)| error);
-    }
     failed.sort_by_key(|(index, _)| *index);
+    let failures = failed
+        .iter()
+        .map(|(index, error)| FileFailure {
+            file: labels.get(*index).cloned().unwrap_or_default(),
+            kind: error.kind.name(),
+            message: error.message.clone(),
+            details: error.details.clone(),
+            help: error.help.clone(),
+        })
+        .collect();
+    if failed.len() <= 1 {
+        return failed.pop().map(|(_, mut error)| {
+            error.failures = failures;
+            error
+        });
+    }
     let (_, first) = failed.first()?;
     let shared_help = failed
         .iter()
@@ -303,6 +316,7 @@ fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error>
         first.kind,
         format!("{} files could not be downloaded", failed.len()),
     );
+    error.failures = failures;
     for (index, failure) in failed.iter().take(NAMED) {
         let label = labels.get(*index).map_or("", String::as_str);
         error = error.detail(if failure.message.starts_with(label) {
