@@ -1,4 +1,4 @@
-﻿# fuzzing
+# fuzzing
 
 bolero exercises five parsers inside their modules without exposing a separate public fuzzing API.
 

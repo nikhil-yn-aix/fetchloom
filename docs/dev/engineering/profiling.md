@@ -1,4 +1,4 @@
-﻿# profiling
+# profiling
 
 profile the largest measured cost of a release workload before changing its implementation.
 
