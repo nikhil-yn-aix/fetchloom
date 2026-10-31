@@ -4,7 +4,7 @@ pending work concerns remaining performance costs and publishing tested releases
 
 ## pending code
 
-1. close the remaining [budget misses](performance/budgets.md): warm-cache placement on windows under load and large-project memory on linux.
+1. close the remaining [budget miss](performance/budgets.md): warm-cache placement on windows, where NTFS hardlink creation dominates. the [measurements](performance/measurements.md) rule out readback, folder checks and thread count as the cause.
 2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). use the [recorded experiments](performance/measurements.md) and [defender study](performance/windows-defender.md) to avoid repeating discarded changes without new evidence.
 3. build and run the [benchmark suite](performance/benchmark-design.md), then publish its results.
 
