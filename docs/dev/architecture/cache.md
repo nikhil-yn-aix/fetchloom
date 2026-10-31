@@ -12,6 +12,7 @@ objects are read-only files named by their content digest. the cache owns public
 |---|---|---|
 | [cache.rs](../../../src/cache.rs) | root layout, object lookup, URL and MD5 records | `Cache`, `Stored`, `Validators`, `UrlRecord`, `find`, `verify`, `write_hint`, `link_object` |
 | [object.rs](../../../src/cache/object.rs) | staged object sealing and batch durability | `NewObject`, `Sealed`, `Batch`, `seal`, `publish`, `syncfs_reports_errors` |
+| [deferred.rs](../../../src/cache/deferred.rs) | downloads waiting for one batch flush before they take their names | `Finished`, `defer_downloads`, `publish_downloads`, `publish_download_of` |
 | [partial.rs](../../../src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
 | [partial/hashing.rs](../../../src/cache/partial/hashing.rs) | ordered prefix hashing on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
 | [staging.rs](../../../src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
