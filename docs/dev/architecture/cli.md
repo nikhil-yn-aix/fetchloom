@@ -1,4 +1,4 @@
-﻿# CLI
+# CLI
 
 `cli` turns arguments and environment settings into commands with one output policy and one cancellation signal.
 

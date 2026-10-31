@@ -1,4 +1,4 @@
-﻿# sync loop
+# sync loop
 
 `sync` reconciles requested datasets, pinned bytes and observed files before it decides what to download or replace.
 
