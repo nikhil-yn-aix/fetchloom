@@ -7,7 +7,7 @@ exit codes group failures, while error kinds identify the cause.
 | 0 | success |
 | 1 | `unconfirmed`, `lock.outdated` |
 | 2 | `usage` |
-| 10 | `reference.invalid`, `reference.unresolved`, `source.invalid` |
+| 10 | `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid` |
 | 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
 | 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
@@ -23,7 +23,8 @@ exit codes group failures, while error kinds identify the cause.
 | `unconfirmed` | check the download size and pass `--yes` only if you approve |
 | `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock |
 | `usage` | check arguments and [environment settings](environment.md) |
-| `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules |
+| `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid` | check the reference and the source's supported access rules |
+| `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |
 | `network.unreachable`, `network.status` | check connectivity and the link before retrying |
 | `network.rate_limited`, `network.refused` | respect the source's wait or access requirement |
 | `offline.missing` | prepare the missing data online |
@@ -35,6 +36,8 @@ exit codes group failures, while error kinds identify the cause.
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
 ## success with differences
+
+the python helper also has a helper-only `conflict.kept` error with no process exit code; see [strict sync](../scripting.md#python-helper).
 
 `status` exits 0 when it finds differences. `sync` exits 0 when it preserves conflicts. inspect status arrays and `result.placement.kept` before using the data. a cache registration warning also leaves sync successful.
 
