@@ -14,6 +14,7 @@ env:
   # links the C runtime into the windows binaries, for the C dependencies too, so they need no
   # visual c++ redistributable
   CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+  CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
 
 jobs:
   build:
@@ -32,12 +33,24 @@ jobs:
             python: python
             scripts: Scripts
             wheel-tags: ''
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            exe: .exe
+            python: python
+            scripts: Scripts
+            wheel-tags: ''
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             exe: ''
             python: python3
             scripts: bin
             # the binaries are static, so the wheel runs on glibc systems too
+            wheel-tags: --compatibility manylinux2014 musllinux_1_2
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            exe: ''
+            python: python3
+            scripts: bin
             wheel-tags: --compatibility manylinux2014 musllinux_1_2
     defaults:
       run:
@@ -90,9 +103,22 @@ jobs:
         shell: pwsh
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $paths = @("$vs\VC\Tools\MSVC\*\bin\Hostx64\*\dumpbin.exe")
+          if ($env:RUNNER_ARCH -eq 'ARM64') {
+            $paths = @("$vs\VC\Tools\MSVC\*\bin\Hostarm64\*\dumpbin.exe") + $paths
+          }
+          $dumpbin = Get-ChildItem $paths -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) {
+            if ($env:RUNNER_ARCH -eq 'ARM64') {
+              # the arm image may omit dumpbin; the other binary and wheel checks still run
+              Write-Output '::notice::dumpbin is unavailable on this arm64 runner; skipping the C runtime check'
+              exit 0
+            }
+            throw 'could not find dumpbin to check the C runtime'
+          }
           foreach ($name in 'fetchloom') {
             $dlls = & $dumpbin /nologo /dependents "target\${{ matrix.target }}\release\$name.exe"
+            if ($LASTEXITCODE) { throw "dumpbin could not inspect $name.exe" }
             $dlls
             if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw "$name.exe loads the C runtime from a DLL" }
           }
@@ -111,11 +137,13 @@ jobs:
       - name: build the wheel
         run: |
           "${{ matrix.python }}" -m venv .release/maturin
-          # the linux and windows wheels of maturin 1.16.0 on pypi
+          # the x86_64 and arm64 linux and windows wheels of maturin 1.16.0 on pypi
           cat > .release/maturin.txt <<'EOF'
           maturin==1.16.0 \
             --hash=sha256:837db2f4d93d4899c3ac393fb3cc9eebf35b6002336e5d574f4a4fb6c49fe283 \
-            --hash=sha256:9d43a2adf51a2794e907a8f7dbad06eb114d5edb0909c73c1fa9040f15e584e9
+            --hash=sha256:9d43a2adf51a2794e907a8f7dbad06eb114d5edb0909c73c1fa9040f15e584e9 \
+            --hash=sha256:e285ec9eb10243d45d10417178cb2eb76e0cbb184d0aa4378b503489fa12ee78 \
+            --hash=sha256:95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f
           EOF
           .release/maturin/${{ matrix.scripts }}/python -m pip install --quiet --disable-pip-version-check \
             --require-hashes --only-binary :all: -r .release/maturin.txt
