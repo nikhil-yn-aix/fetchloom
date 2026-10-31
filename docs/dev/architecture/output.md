@@ -1,4 +1,4 @@
-﻿# output
+# output
 
 `Output` keeps human progress on stderr and machine-readable answers on stdout.
 

@@ -1,4 +1,4 @@
-﻿# primitives
+# primitives
 
 shared primitives keep byte identity, path rules, failure handling and worker limits consistent across components.
 
