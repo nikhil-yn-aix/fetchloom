@@ -441,6 +441,67 @@ mod tests {
     use super::*;
     use crate::cli::args::Filter;
 
+    fn approval_context() -> Context {
+        Context::new(crate::output::Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            crate::output::Level::Quiet,
+            true,
+            false,
+        ))
+    }
+
+    #[test]
+    fn get_approval_excludes_cached_archives_and_offline_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::digest::sha256(b"a previously unpacked archive");
+        cache.record_unpacked(&digest, &[]).unwrap();
+        let remote = Remote {
+            path: "large.zip".to_owned(),
+            size: Some(super::super::ASK_ABOVE + 1),
+            sha256: Some(digest),
+            md5: None,
+            url: url::Url::parse("https://example.org/large.zip").unwrap(),
+            named_by_server: false,
+        };
+        let mut context = approval_context();
+        let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
+        approve(&context, &cache, &jobs).unwrap();
+        jobs[0].fetch.unpack = false;
+        assert_eq!(approve(&context, &cache, &jobs).unwrap_err().kind, Kind::Unconfirmed);
+        context.offline = net::Offline::Flag;
+        approve(&context, &cache, &jobs).unwrap();
+    }
+
+    #[test]
+    fn get_approval_counts_only_missing_files_toward_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::digest::sha256(b"cached archive");
+        cache.record_unpacked(&digest, &[]).unwrap();
+        let mut remote = Remote {
+            path: "cached.zip".to_owned(),
+            size: Some(super::super::ASK_ABOVE),
+            sha256: Some(digest),
+            md5: None,
+            url: url::Url::parse("https://example.org/cached.zip").unwrap(),
+            named_by_server: false,
+        };
+        let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
+        remote.path = "missing.bin".to_owned();
+        remote.sha256 = Some(crate::digest::sha256(b"missing"));
+        jobs.push(fetch::listed_job(&remote, &remote.path, false));
+        let context = approval_context();
+        approve(&context, &cache, &jobs).unwrap();
+        jobs[1].fetch.expect.size = Some(super::super::ASK_ABOVE + 1);
+        assert_eq!(approve(&context, &cache, &jobs).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
     #[test]
     fn the_pin_hint_keeps_filters_and_extraction_settings() {
         let mut args = Get {
