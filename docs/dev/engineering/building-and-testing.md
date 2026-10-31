@@ -6,7 +6,12 @@ one rust crate builds the library and executable, with module tests and real-bin
 
 [rust-toolchain.toml](../../../rust-toolchain.toml) pins rust 1.99.1 with rustfmt and clippy. [Cargo.toml](../../../Cargo.toml) uses edition 2024 and declares a minimum rust version of 1.99. native build tools are needed for compression dependencies and the crypto provider. keep `Cargo.lock` when building the application.
 
+install rust through [rustup](https://rustup.rs). on linux, provide a C compiler and linker through the distribution's build packages. on windows, x86_64 GNU and MSVC both build the crate. MSVC is the release target and the closest match to CI: install Visual Studio Build Tools with the C++ workload and Windows SDK. a GNU toolchain needs a matching MinGW-w64 compiler and linker on PATH. do not mix MSVC and GNU native dependencies. arm64 windows releases use MSVC.
+
 ```sh
+git clone https://github.com/nikhil-yn-aix/fetchloom.git
+cd fetchloom
+rustup toolchain install
 cargo build --locked
 cargo run --locked -- --version
 ```
@@ -24,7 +29,7 @@ cargo run --locked -- --version
 | [snapshots](../../../tests/cli/snapshots) | human output and selected JSON or lock text | run the owning CLI module |
 | [python tests](../../../python/test_helper.py) | wrapper arguments, paths and structured errors | `python3 -m unittest discover -s python` |
 
-`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. tests use local servers or recorded answers, not live repositories.
+`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. default tests use local servers or recorded answers. ignored tests cover live repositories and a larger archive workload.
 
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 
@@ -36,6 +41,41 @@ cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_
 ```
 
 the second test checks a documentation option sentence against `add` and `get` help. other markdown transcripts are not executed. use `-- --list` with a filter when checking the test's exact name; a zero-test run is not coverage.
+
+### update snapshots
+
+run the owning test first and inspect the difference. if `cargo insta` is installed, review pending snapshots with `cargo insta review`. install it only when needed with `cargo install --locked cargo-insta`.
+
+to update a focused test without that command, on linux:
+
+```sh
+INSTA_UPDATE=always cargo test --locked --test cli basics::get_has_its_own_help -- --exact
+git diff -- tests/cli/snapshots
+```
+
+on powershell:
+
+```powershell
+$env:INSTA_UPDATE = 'always'
+try {
+    cargo test --locked --test cli basics::get_has_its_own_help -- --exact
+} finally {
+    Remove-Item Env:\INSTA_UPDATE
+}
+git diff -- tests/cli/snapshots
+```
+
+review the updated text, then rerun without `INSTA_UPDATE`. do not accept a changed snapshot merely to make a test pass.
+
+### python and live tests
+
+```sh
+python3 -m unittest discover -s python
+cargo test --locked --lib source::zenodo::tests::live_zenodo -- --ignored --exact
+cargo test --locked -- --ignored
+```
+
+use `python` instead of `python3` on windows. helper tests use the standard library and a fake executable; they do not need a package install or a live dataset. ignored rust tests contact public services and include a 20,000-file archive test. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
 
 ### code gates
 

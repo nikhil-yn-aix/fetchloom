@@ -4,7 +4,7 @@ CI checks the same crate across processor architectures and filesystems that exp
 
 ## triggers and permissions
 
-[ci.yml](../../../.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. a last job named `ci` passes only when every platform passed; it is the one check `main`'s branch protection requires, so adding or renaming a platform never changes the protection rule.
+[ci.yml](../../../.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: test` and `if: always()`. it passes only when the matrix result is `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
 
 ## test job
 
@@ -39,6 +39,16 @@ linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop
 
 [building and testing](building-and-testing.md#xfs-loop-mount) gives a focused xfs reproduction. its [WSL gate](building-and-testing.md#wsl-gate) verifies a local branch without a push.
 
-there are no nightly live-source checks or wall-clock performance gates. tests use recorded metadata and local servers; work counters catch extra requests and copies. action references are pinned to commits in the workflow.
+## live-source checks
+
+[live.yml](../../../.github/workflows/live.yml) runs every monday at 04:17 UTC and through manual dispatch. its linux x86_64 and windows x86_64 jobs run:
+
+```sh
+cargo test --locked -- --ignored
+```
+
+this exercises the ignored live source tests and the larger archive test. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
+
+default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in both workflows.
 
 related: [engineering loop](README.md), [releasing](releasing.md), [performance](../performance/README.md), [placing](../architecture/placing.md).
