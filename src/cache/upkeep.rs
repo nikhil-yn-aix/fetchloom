@@ -216,8 +216,7 @@ impl Cache {
             stop.check()?;
             let stale = entry
                 .metadata()
-                .ok()
-                .is_some_and(|metadata| metadata.is_file() && metadata.modified().is_ok_and(old));
+                .is_ok_and(|metadata| metadata.is_file() && metadata.modified().is_ok_and(old));
             if stale
                 && removed(
                     &entry.path(),

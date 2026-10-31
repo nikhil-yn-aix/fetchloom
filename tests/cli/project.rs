@@ -569,7 +569,10 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     let calm = sandbox.command_in(&inner, &[]).output()?;
     assert_eq!(calm.status.code(), Some(0));
     assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
-    assert_eq!(text(&calm.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&calm.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     delete(&inner.join("iris.csv"))?;
     let missing = sandbox.run(&[])?;
     assert_eq!(
@@ -855,9 +858,15 @@ fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
                     details.contains("restore data.toml from this backup text"),
                     "{details}"
                 );
-                assert!(details.contains(&serde_json::to_string(before)?), "{details}");
+                assert!(
+                    details.contains(&serde_json::to_string(before)?),
+                    "{details}"
+                );
             } else {
-                assert!(details.contains("remove the iris dataset entry"), "{details}");
+                assert!(
+                    details.contains("remove the iris dataset entry"),
+                    "{details}"
+                );
             }
         }
     }
@@ -913,9 +922,7 @@ fn remove_explains_how_to_finish_after_placement_fails() -> Result {
     let details = error["errors"][0]["details"].to_string();
     assert!(details.contains("fetchloom sync"), "{details}");
     assert!(details.contains("finishes the removal"), "{details}");
-    assert!(
-        !fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris")
-    );
+    assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris"));
     drop(held);
     let synced = sandbox.run(&["sync"])?;
     assert!(synced.status.success(), "{}", text(&synced.stderr)?);
@@ -956,8 +963,8 @@ fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
     added(&sandbox, &server)?;
     for cold in [false, true] {
         let clone = clone(&sandbox, if cold { "cold-clone" } else { "warm-clone" })?;
-        let mut command = sandbox
-            .command_in(&clone, &["--json", "--offline", "path", "iris/no.csv"]);
+        let mut command =
+            sandbox.command_in(&clone, &["--json", "--offline", "path", "iris/no.csv"]);
         if cold {
             command.env("FETCHLOOM_CACHE", sandbox.folder("cold-cache")?);
         }

@@ -429,7 +429,10 @@ mod tests {
                         width,
                         color,
                     );
-                    assert!(console::measure_text_width(&line) <= width, "{width}: {line}");
+                    assert!(
+                        console::measure_text_width(&line) <= width,
+                        "{width}: {line}"
+                    );
                     if width >= 8 {
                         assert!(line.contains("iris.csv"), "{width}: {line}");
                     }
@@ -494,22 +497,12 @@ mod tests {
             "mesures_e\u{301}chantillon.csv",
         ] {
             for (bar, amount) in [
-                (
-                    "\x1b[36m━━━━━━━━━━━━━━━━━━━━\x1b[0m",
-                    "1.0/4.0 MiB · 12 s",
-                ),
+                ("\x1b[36m━━━━━━━━━━━━━━━━━━━━\x1b[0m", "1.0/4.0 MiB · 12 s"),
                 ("", "1.0 MiB · 12 s"),
                 ("", ""),
             ] {
                 for width in 0..=100 {
-                    let line = render(
-                        name,
-                        "\x1b[36mDownloading\x1b[0m",
-                        bar,
-                        amount,
-                        width,
-                        true,
-                    );
+                    let line = render(name, "\x1b[36mDownloading\x1b[0m", bar, amount, width, true);
                     assert!(
                         console::measure_text_width(&line) <= width,
                         "{width}: {line}"

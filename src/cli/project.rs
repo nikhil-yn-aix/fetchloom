@@ -114,9 +114,8 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         None,
     )
     .await;
-    let (lock_changed, placement) = synced.map_err(|error| {
-        restore(&project, existed.then_some(text.as_str()), &name, error)
-    })?;
+    let (lock_changed, placement) = synced
+        .map_err(|error| restore(&project, existed.then_some(text.as_str()), &name, error))?;
     if project.ignore_in_git(&new_manifest.data_dir)? {
         context.output.step(
             "Ignored",
@@ -408,9 +407,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     work.drop_unpacked(&lock);
     let moved = engine::tell_upgrades(&context.output, old.as_ref().unwrap_or(&empty), &lock);
     if changed {
-        context
-            .output
-            .done("Locked", "data.toml into data.lock");
+        context.output.done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
             "run `fetchloom sync` to update {}/, then commit data.toml and data.lock",
             manifest.data_dir
@@ -574,6 +571,10 @@ fn check_member(
         .filter(|target| target.dataset == name)
         .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
         .collect();
+    // a dataset with no files at all gets the fuller answer that explains why
+    if inside.is_empty() {
+        return Ok(());
+    }
     Err(not_in(name, file, &inside))
 }
 

@@ -110,7 +110,12 @@ fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
         assert!(output.stderr.is_empty(), "{arguments:?}");
         let stdout = text(&output.stdout)?;
         assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
-        for analogy in ["the shopping list", "the receipt", "the pantry", "restocking"] {
+        for analogy in [
+            "the shopping list",
+            "the receipt",
+            "the pantry",
+            "restocking",
+        ] {
             assert!(stdout.contains(analogy), "{arguments:?}: {stdout}");
         }
         if colored {

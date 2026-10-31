@@ -127,7 +127,10 @@ fn a_name_add_cannot_use_is_refused_before_any_request() -> Result {
             "flowers",
             "error: data.toml already has a dataset called flowers\n",
         ),
-        ("Flowers", "error: \"Flowers\" is not a valid dataset name\n"),
+        (
+            "Flowers",
+            "error: \"Flowers\" is not a valid dataset name\n",
+        ),
     ] {
         // offline, resolving the link first would fail with exit 20 instead
         let output = sandbox.run(&["--offline", "add", "zenodo:3608990", "--as", name])?;

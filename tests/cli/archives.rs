@@ -85,7 +85,10 @@ fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     );
     assert_eq!(server.requests().len(), 1);
     let status = sandbox.run(&["status"])?;
-    assert_eq!(text(&status.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     Ok(())
 }
 
@@ -503,7 +506,11 @@ fn path_checks_known_archive_members_before_syncing() -> Result {
     let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
     ok(&sandbox.run(&["add", &server.url])?)?;
     for known in [true, false] {
-        let clone = sandbox.folder(if known { "known-clone" } else { "unknown-clone" })?;
+        let clone = sandbox.folder(if known {
+            "known-clone"
+        } else {
+            "unknown-clone"
+        })?;
         for name in ["data.toml", "data.lock"] {
             fs::copy(sandbox.work().join(name), clone.join(name))?;
         }

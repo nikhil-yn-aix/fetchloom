@@ -87,7 +87,8 @@ pub(crate) struct Error {
     pub(crate) message: String,
     pub(crate) details: Vec<String>,
     pub(crate) help: Option<String>,
-    pub(crate) result: Option<serde_json::Value>,
+    /// a command's partial result, kept beside the error. boxed, since most errors carry none
+    pub(crate) result: Option<Box<serde_json::Value>>,
     pub(crate) failures: Vec<FileFailure>,
 }
 
@@ -117,7 +118,7 @@ impl Error {
     }
 
     pub(crate) fn with_result(mut self, result: serde_json::Value) -> Error {
-        self.result = Some(result);
+        self.result = Some(Box::new(result));
         self
     }
 

@@ -435,6 +435,8 @@ fn a_fast_stream_is_never_split() {
     );
     let mut net = net(&server.url, 8);
     net.split.when = Splitting::WhenSlow;
+    // a loaded test machine can slow a local stream below the usual rate, so only a stall counts
+    net.split.slow = 1024;
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));

@@ -302,7 +302,7 @@ impl Output {
             status: if outcome.is_ok() { "ok" } else { "error" },
             result: match outcome {
                 Ok(result) => Some(DocumentResult::Complete(result)),
-                Err(error) => error.result.as_ref().map(DocumentResult::Partial),
+                Err(error) => error.result.as_deref().map(DocumentResult::Partial),
             },
             warnings: std::mem::take(
                 &mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner),
@@ -349,7 +349,12 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                 commands = line == "commands:";
             }
             for heading in [
-                "usage:", "commands:", "arguments:", "options:", "examples:", "on disk:",
+                "usage:",
+                "commands:",
+                "arguments:",
+                "options:",
+                "examples:",
+                "on disk:",
             ] {
                 if let Some(rest) = line.strip_prefix(heading) {
                     let rest = if heading == "usage:" {
@@ -362,18 +367,13 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
             }
             if let Some(command) = line.strip_prefix("  ") {
                 if command.starts_with("fetchloom ") {
-                    let (command, description) =
-                        command.split_once("  ").unwrap_or((command, ""));
+                    let (command, description) = command.split_once("  ").unwrap_or((command, ""));
                     let gap = if description.is_empty() { "" } else { "  " };
                     return format!("  {ACCENT}{command}{ACCENT:#}{gap}{description}");
                 }
                 if commands {
                     let end = command.find(' ').unwrap_or(command.len());
-                    return format!(
-                        "  {ACCENT}{}{ACCENT:#}{}",
-                        &command[..end],
-                        &command[end..]
-                    );
+                    return format!("  {ACCENT}{}{ACCENT:#}{}", &command[..end], &command[end..]);
                 }
                 if let Some((name, analogy)) = command.split_once(", ")
                     && matches!(name, "data.toml" | "data.lock" | "the cache" | "sync")
@@ -411,11 +411,17 @@ fn verb_color(verb: &str) -> AnsiColor {
 
 fn verb_line(verb: &str, text: &str, tone: AnsiColor, color: bool) -> String {
     let style = paint(color, Paint::new().fg_color(Some(tone.into())).bold());
-    format!("{style}{verb:>11}{style:#} {}", subject(&plain(text), color))
+    format!(
+        "{style}{verb:>11}{style:#} {}",
+        subject(&plain(text), color)
+    )
 }
 
 fn error_text(error: &Error, level: Level, color: bool) -> String {
-    let red = paint(color, Paint::new().fg_color(Some(AnsiColor::Red.into())).bold());
+    let red = paint(
+        color,
+        Paint::new().fg_color(Some(AnsiColor::Red.into())).bold(),
+    );
     let cyan = paint(color, ACCENT.bold());
     let dim = paint(color, Paint::new().dimmed());
     let mut text = format!(
@@ -423,7 +429,11 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         accented(&plain(&error.message), Paint::new(), color)
     );
     for line in &error.details {
-        let _ = write!(text, "\n  {dim}{}{dim:#}", accented(&plain(line), dim, color));
+        let _ = write!(
+            text,
+            "\n  {dim}{}{dim:#}",
+            accented(&plain(line), dim, color)
+        );
     }
     if let Some(help) = &error.help {
         let _ = write!(
@@ -623,7 +633,10 @@ mod tests {
     #[test]
     fn hints_are_dim_with_commands_in_bold_cyan() {
         let text = "try `fetchloom path iris` next";
-        assert_eq!(super::hint_line(text, false), "  hint: try `fetchloom path iris` next");
+        assert_eq!(
+            super::hint_line(text, false),
+            "  hint: try `fetchloom path iris` next"
+        );
         assert_eq!(
             super::hint_line(text, true),
             concat!(
@@ -691,7 +704,10 @@ mod tests {
             accented("commit it; then `fetchloom sync`", dim, true),
             "commit it; then \u{1b}[0m\u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m\u{1b}[2m"
         );
-        assert_eq!(accented("an odd ` mark", Paint::new(), true), "an odd ` mark");
+        assert_eq!(
+            accented("an odd ` mark", Paint::new(), true),
+            "an odd ` mark"
+        );
     }
 
     #[test]

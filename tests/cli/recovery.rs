@@ -1,5 +1,6 @@
 //! a data.lock fetchloom cannot use: the advice each error gives, and that following it works.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::process::Output;
 
@@ -144,7 +145,10 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
     fs::write(&state, before)?;
 
     let status = sandbox.run(&["status"])?;
-    assert_eq!(text(&status.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     let synced = sandbox.run(&["--json", "sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     let report: Value = serde_json::from_slice(&synced.stdout)?;
@@ -154,7 +158,10 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
         b"iris, again\n"
     );
     let after = sandbox.run(&["status"])?;
-    assert_eq!(text(&after.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&after.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     Ok(())
 }
 
@@ -184,7 +191,7 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
         };
         let server = Server::start("/iris.csv", vec![response(), response()])?;
         let name = format!("d{index:02}");
-        manifest.push_str(&format!("[datasets.{name}]\nref = \"{}\"\n", original.url));
+        write!(manifest, "[datasets.{name}]\nref = \"{}\"\n", original.url)?;
         let entry = dataset
             .replace("name = \"iris\"", &format!("name = \"{name}\""))
             .replace(
@@ -195,7 +202,7 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
                 &format!("url = \"{}\"", original.url),
                 &format!("url = \"{}\"", server.url),
             );
-        lock.push_str(&format!("\n[[dataset]]{entry}"));
+        write!(lock, "\n[[dataset]]{entry}")?;
         servers.push(server);
     }
     fs::write(clone.join("data.toml"), manifest)?;
@@ -222,12 +229,7 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
             "integrity.mismatch"
         };
         assert_eq!(failure["kind"], kind);
-        assert!(
-            !failure["message"]
-                .as_str()
-                .ok_or("missing message")?
-                .is_empty()
-        );
+        assert_ne!(failure["message"].as_str().ok_or("missing message")?, "");
     }
     let output = run(&["sync"])?;
     let stderr = text(&output.stderr)?;

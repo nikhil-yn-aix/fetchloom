@@ -90,7 +90,10 @@ pub(super) fn gc(context: &Context) -> Result<Freed, Error> {
         output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
     }
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
-        output.done("Ok", "no cached data files or download leftovers were removed");
+        output.done(
+            "Ok",
+            "no cached data files or download leftovers were removed",
+        );
         return Ok(freed);
     }
     if freed.objects > 0 {

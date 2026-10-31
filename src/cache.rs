@@ -462,7 +462,7 @@ pub(crate) mod tests {
         assert_eq!(checked.bytes, 3);
         assert_eq!(checked.changed, []);
         assert_eq!(checked.stuck, []);
-        assert_eq!(checked.unreadable, []);
+        assert_eq!(checked.unreadable, Vec::<PathBuf>::new());
         assert_eq!(cache.projects(), Vec::<PathBuf>::new());
 
         let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);

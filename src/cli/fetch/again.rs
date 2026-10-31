@@ -124,8 +124,11 @@ mod tests {
     struct Failing(Error);
 
     impl net::Api for Failing {
-        async fn get(&self, _url: &url::Url) -> Result<net::Response, Error> {
-            Err(self.0.clone())
+        fn get(
+            &self,
+            _url: &url::Url,
+        ) -> impl Future<Output = Result<net::Response, Error>> + Send {
+            std::future::ready(Err(self.0.clone()))
         }
     }
 
@@ -187,7 +190,10 @@ mod tests {
                     assert_eq!(error.message, "listing failed");
                     assert_eq!(error.help.as_deref(), Some("source-specific recovery"));
                     assert!(
-                        error.details.iter().any(|line| line == "source-specific detail")
+                        error
+                            .details
+                            .iter()
+                            .any(|line| line == "source-specific detail")
                     );
                     if kind == Kind::Interrupted {
                         assert_eq!(error.kind.exit_code(), 130);

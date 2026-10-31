@@ -920,7 +920,10 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
         "{stderr}"
     );
     let after = sandbox.command_in(&other, &["status"]).output()?;
-    assert_eq!(text(&after.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&after.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     // a ready dataset answers without taking the project lock
     let lock = other.join(".fetchloom").join("lock");
     fs::remove_file(&lock)?;
@@ -1033,7 +1036,10 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     );
     assert_eq!(fs::read(&placed)?, V1);
     let after = sandbox.run(&["status"])?;
-    assert_eq!(text(&after.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&after.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     Ok(())
 }
 
@@ -1382,7 +1388,10 @@ fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
         "{stderr}"
     );
     let status = sandbox.command_in(&other, &["status"]).output()?;
-    assert_eq!(text(&status.stderr)?, "         Ok everything matches data.lock\n");
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
     Ok(())
 }
 
