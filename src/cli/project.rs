@@ -274,18 +274,14 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
+    let cache = open_cache()?;
+    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
-    let placement = place::Placing::new(
-        &project,
-        &new_manifest,
-        &lock,
-        &open_cache()?,
-        false,
-        survey,
-    )?
-    .remove_only(&context.output)?;
+    let placement = placing.remove_only(&context.output).map_err(|error| {
+        error.detail("data.toml and data.lock were updated; after fixing the error, `fetchloom sync` finishes the removal")
+    })?;
     context.output.done(&format!("removed {}", args.name));
     context.output.next(
         "commit data.toml and data.lock; after pulling, other clones remove unchanged files with `fetchloom sync`",
