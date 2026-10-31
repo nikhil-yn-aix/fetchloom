@@ -473,6 +473,7 @@ fn copy(object: &Path, destination: &Path, writable: bool, threads: Threads) -> 
     #[cfg(not(windows))]
     let staged_writable = writable;
     fill(object, &claimed, staged_writable, threads)?;
+    claimed.sync_all()?;
     temporary
         .persist_noclobber(&destination)
         .map_err(|error| error.error)?;
