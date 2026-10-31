@@ -1,4 +1,4 @@
-﻿# roadmap
+# roadmap
 
 pending work concerns remaining performance costs and publishing tested releases.
 
