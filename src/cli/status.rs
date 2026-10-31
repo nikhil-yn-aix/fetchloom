@@ -226,3 +226,65 @@ fn sum_up(output: &Output, status: &Status) -> bool {
     );
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{Level, Style};
+
+    #[test]
+    fn sync_is_suggested_for_repairable_differences_but_not_for_personal_edits() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let clean = Status::default();
+        assert!(!clean.needs_sync());
+        assert!(!sum_up(&output, &clean));
+        for category in 0..9 {
+            let mut status = Status::default();
+            let paths = match category {
+                0 => &mut status.removed,
+                1 => &mut status.unlocked,
+                2 => &mut status.missing,
+                3 => &mut status.not_unpacked,
+                4 => &mut status.outdated,
+                5 => &mut status.untracked,
+                6 => &mut status.edited_elsewhere,
+                7 => &mut status.edited,
+                _ => &mut status.extra,
+            };
+            paths.push("data/set/file.csv".to_owned());
+            assert_eq!(status.needs_sync(), category < 7, "category {category}");
+            assert!(sum_up(&output, &status), "category {category}");
+        }
+    }
+
+    #[test]
+    fn json_status_keeps_every_path_including_link_edits_and_unknown_archives() {
+        let status = Status {
+            edited_elsewhere: (0..25)
+                .map(|index| format!("data/set/{index}.csv"))
+                .collect(),
+            not_unpacked: vec!["data/set/archive.zip".to_owned()],
+            removed: vec!["old".to_owned()],
+            ..Status::default()
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["edited_elsewhere"].as_array().unwrap().len(), 25);
+        assert_eq!(value["edited_elsewhere"][24], "data/set/24.csv");
+        assert_eq!(
+            value["not_unpacked"],
+            serde_json::json!(["data/set/archive.zip"])
+        );
+        assert_eq!(value["removed"], serde_json::json!(["old"]));
+        assert_eq!(value["edited"], serde_json::json!([]));
+    }
+}

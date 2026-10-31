@@ -984,3 +984,80 @@ fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
+    use std::fmt::Write as _;
+
+    let sandbox = Sandbox::new()?;
+    let manifest = "[datasets.new]\nref = 'zenodo:1'\n[datasets.set]\nref = 'zenodo:2'\n";
+    fs::write(sandbox.work().join("data.toml"), manifest)?;
+    let mut lock = String::from("version = 1\n");
+    for (name, reference) in [("old", "zenodo:1"), ("set", "zenodo:2")] {
+        writeln!(
+            lock,
+            "\n[[dataset]]\nname = '{name}'\nref = '{reference}'\nspec = ''\nresolved = '{reference}'\nlocked = '2026-01-01T00:00:00Z'"
+        )?;
+        if name == "set" {
+            for index in 0..25 {
+                writeln!(
+                    lock,
+                    "\n[[dataset.files]]\npath = 'file{index:02}.csv'\nsize = 1\nsha256 = '{}'\nurl = 'https://example.org/{index}.csv'",
+                    "0".repeat(64)
+                )?;
+            }
+        } else {
+            writeln!(lock, "files = []")?;
+        }
+    }
+    fs::write(sandbox.work().join("data.lock"), &lock)?;
+    fs::create_dir(sandbox.work().join("data"))?;
+    for index in 0..25 {
+        fs::write(
+            sandbox
+                .work()
+                .join("data")
+                .join(format!("extra{index:02}.txt")),
+            b"keep",
+        )?;
+    }
+    let output = sandbox.run(&["--offline", "status"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Unlocked new"), "{stderr}");
+    assert!(stderr.contains("Removed old from data.toml"), "{stderr}");
+    assert!(stderr.contains("Missing data/set/file19.csv"), "{stderr}");
+    assert!(!stderr.contains("file20.csv"), "{stderr}");
+    assert!(stderr.contains("Extra data/extra19.txt"), "{stderr}");
+    assert!(!stderr.contains("extra20.txt"), "{stderr}");
+    assert_eq!(stderr.matches("and 5 more").count(), 2);
+    assert!(stderr.contains("53 differences from data.lock"), "{stderr}");
+    let output = sandbox.run(&["--offline", "--json", "status"])?;
+    assert_eq!(output.status.code(), Some(0));
+    let document = json(&output)?;
+    assert_eq!(
+        document["result"]["missing"]
+            .as_array()
+            .ok_or("missing is not an array")?
+            .len(),
+        25
+    );
+    assert_eq!(document["result"]["missing"][24], "data/set/file24.csv");
+    assert_eq!(
+        document["result"]["extra"]
+            .as_array()
+            .ok_or("extra is not an array")?
+            .len(),
+        25
+    );
+    assert_eq!(document["result"]["removed"], serde_json::json!(["old"]));
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        manifest
+    );
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+    assert!(!sandbox.work().join(".fetchloom").exists());
+    assert_eq!(fs::read(sandbox.work().join("data/extra24.txt"))?, b"keep");
+    Ok(())
+}
