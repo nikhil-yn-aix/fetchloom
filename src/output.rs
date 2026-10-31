@@ -396,6 +396,17 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                     let gap = if description.is_empty() { "" } else { "  " };
                     return format!("  {ACCENT}{command}{ACCENT:#}{gap}{description}");
                 }
+                // an option or an argument: its spelling is what a person types
+                if command.trim_start().starts_with(['-', '<']) {
+                    let indent = &command[..command.len() - command.trim_start().len()];
+                    let entry = command.trim_start();
+                    let (flag, description) = entry.split_once("  ").unwrap_or((entry, ""));
+                    let gap = &entry[flag.len()..entry.len() - description.trim_start().len()];
+                    return format!(
+                        "  {indent}{ACCENT}{flag}{ACCENT:#}{gap}{}",
+                        description.trim_start()
+                    );
+                }
                 if commands {
                     let end = command.find(' ').unwrap_or(command.len());
                     return format!("  {ACCENT}{}{ACCENT:#}{}", &command[..end], &command[end..]);
@@ -425,11 +436,20 @@ fn paint(color: bool, style: Paint) -> Paint {
     if color { style } else { Paint::new() }
 }
 
+/// the palette: green for what finished, cyan for work under way and for anything a person
+/// types, yellow for what needs attention, red for what failed. a line's subject is bold and its
+/// facts are dim, so color always means the same thing.
 fn verb_color(verb: &str) -> AnsiColor {
     match verb {
-        "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" => AnsiColor::Cyan,
-        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" => AnsiColor::Yellow,
+        "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" | "Searching" => {
+            AnsiColor::Cyan
+        }
+        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Untracked" | "Outdated" => {
+            AnsiColor::Yellow
+        }
         "Failed" => AnsiColor::Red,
+        // the numbers of a list to choose from
+        verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => AnsiColor::Cyan,
         _ => AnsiColor::Green,
     }
 }
@@ -478,8 +498,8 @@ fn hint_line(text: &str, color: bool) -> String {
     format!("  {dim}hint: {}{dim:#}", accented(&plain(text), dim, color))
 }
 
-/// the one color for names and commands, wherever they appear. the stream drops it, like every
-/// color, when color is off.
+/// the one color for what a person types, commands and options, wherever they appear. the stream
+/// drops it, like every color, when color is off.
 const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
 /// `text` with each command in backticks in the accent, then back to `around`. the backticks
@@ -505,14 +525,17 @@ fn accented(text: &str, around: Paint, color: bool) -> String {
     shown
 }
 
-/// a step's facts with what it is about, such as a file or a dataset, in the accent: the text
-/// before the first `·`, or the whole text when it is one word.
+/// a step's facts with what it is about, such as a file or a dataset, in bold: the text before
+/// the first `·`, or the whole text when it is one word. the facts after it are dim.
 fn subject(text: &str, color: bool) -> String {
-    let accent = paint(color, ACCENT);
+    let bold = paint(color, Paint::new().bold());
     let dim = paint(color, Paint::new().dimmed());
     match text.split_once(" · ") {
-        Some((name, facts)) => format!("{accent}{name}{accent:#}{dim} · {facts}{dim:#}"),
-        None if !text.is_empty() && !text.contains(' ') => format!("{accent}{text}{accent:#}"),
+        Some((name, facts)) => format!(
+            "{bold}{name}{bold:#}{dim} · {}{dim:#}",
+            accented(facts, dim, color)
+        ),
+        None if !text.is_empty() && !text.contains(' ') => format!("{bold}{text}{bold:#}"),
         None => accented(text, Paint::new(), color),
     }
 }
@@ -613,8 +636,28 @@ mod tests {
                 &["Downloaded", "Unpacked", "Locked", "Placed", "Removed"][..],
                 Green,
             ),
-            (&["Downloading", "Unpacking", "Waiting"][..], Cyan),
-            (&["Missing", "Extra", "Kept", "Edited"][..], Yellow),
+            (
+                &[
+                    "Downloading",
+                    "Unpacking",
+                    "Waiting",
+                    "Searching",
+                    "1",
+                    "12",
+                ][..],
+                Cyan,
+            ),
+            (
+                &[
+                    "Missing",
+                    "Extra",
+                    "Kept",
+                    "Edited",
+                    "Untracked",
+                    "Outdated",
+                ][..],
+                Yellow,
+            ),
             (&["Failed"][..], Red),
         ] {
             for verb in verbs {
@@ -736,14 +779,14 @@ mod tests {
     }
 
     #[test]
-    fn a_step_names_its_subject_in_the_accent() {
+    fn a_step_names_its_subject_in_bold() {
         assert_eq!(
             subject("iris · 1 file in data.lock", true),
-            "\u{1b}[36miris\u{1b}[0m\u{1b}[2m · 1 file in data.lock\u{1b}[0m"
+            "\u{1b}[1miris\u{1b}[0m\u{1b}[2m · 1 file in data.lock\u{1b}[0m"
         );
         assert_eq!(
             subject("data/iris/iris.csv", true),
-            "\u{1b}[36mdata/iris/iris.csv\u{1b}[0m"
+            "\u{1b}[1mdata/iris/iris.csv\u{1b}[0m"
         );
         assert_eq!(
             subject("for another fetchloom working in this project", true),

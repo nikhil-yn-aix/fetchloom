@@ -50,17 +50,20 @@ run the shell blocks above and below there. the source may be on `/mnt/c`; the m
 
 ## run
 
-full lab and live runs:
+full lab and live runs. ext4 runs every scenario on every profile it applies to. xfs adds the two scenarios where reflinks change the result, the second project and the no-op:
 
 ```sh
 python3 bench/run.py --fetchloom /home/fl/bin/fetchloom \
   --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7 \
-  --fs ext4,xfs --seed 1729 --out /srv/fl-bench/results/full/lab
+  --fs ext4 --seed 1729 --out /srv/fl-bench/results/full/lab-ext4
+python3 bench/run.py --fetchloom /home/fl/bin/fetchloom \
+  --profiles lan --scenarios s5,s6 \
+  --fs xfs --seed 1729 --out /srv/fl-bench/results/full/lab-xfs
 python3 bench/live.py --fetchloom /home/fl/bin/fetchloom \
   --seed 1729 --out /srv/fl-bench/results/full/live
 ```
 
-there are 10 measured rounds on lan and 5 on shaped links, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation; the full matrix budgets about 23 hours of command time and warmups, plus preparation and live runs. this is an estimate, not a measured result.
+there are 10 measured rounds on lan and 5 on shaped links, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the two lab commands above take about five hours on an 8-thread laptop.
 
 smoke tests use 12 files per set, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
 

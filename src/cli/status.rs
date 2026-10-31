@@ -234,7 +234,7 @@ fn sum_up(output: &Output, status: &Status) -> bool {
         output.done("Ok", "everything matches data.lock");
         return false;
     }
-    output.done(
+    output.mark(
         "Found",
         &format!(
             "{} from data.lock",

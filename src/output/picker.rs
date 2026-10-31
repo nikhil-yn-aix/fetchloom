@@ -30,23 +30,22 @@ pub(super) fn choose(
         }
     };
     clear(&terminal, options.len() + 1);
-    if let Ok(Some(index)) = &answer {
-        let _ = terminal.write_line(&format!("{} {}", plain(question), plain(&options[*index])));
-    }
     answer
 }
 
 fn draw(terminal: &Term, question: &str, options: &[String], cursor: usize, style: Style) {
     let width = usize::from(terminal.size().1);
-    let heading = format!(
-        "{} (arrows or j/k, 1-9, enter; q to cancel)",
-        plain(question)
-    );
-    let _ = terminal.write_line(&console::truncate_str(
-        &heading,
-        width.saturating_sub(1),
-        "",
-    ));
+    let keys = if style.unicode {
+        "\u{2191}\u{2193} move \u{b7} 1-9 or enter choose \u{b7} q cancel"
+    } else {
+        "up/down move, 1-9 or enter choose, q cancel"
+    };
+    let bold = paint(style.color, Paint::new().bold());
+    let dim = paint(style.color, Paint::new().dimmed());
+    let question = plain(question);
+    let room = width.saturating_sub(question.len() + 4);
+    let keys = console::truncate_str(keys, room, "");
+    let _ = terminal.write_line(&format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}"));
     for (index, option) in options.iter().enumerate() {
         let _ = terminal.write_line(&row(option, index, cursor, style, width));
     }
@@ -86,20 +85,27 @@ fn selection_key(
 
 fn cancelled() -> Error {
     Error::new(Kind::Usage, "nothing was chosen")
-        .help("run it again with the reference you want, such as `fetchloom add hf:datasets/...`")
+        .help("run it again with one of the references above, or with a link or an id")
 }
 
+/// one option: the reference, then its title and facts, dim unless the cursor is on it.
 fn row(option: &str, index: usize, cursor: usize, style: Style, width: usize) -> String {
     let text = plain(option);
-    let text = console::truncate_str(&text, width.saturating_sub(7), "");
+    let text = console::truncate_str(&text, width.saturating_sub(7), "\u{2026}");
+    let (reference, rest) = text.split_once("  ").unwrap_or((&text, ""));
     let number = index + 1;
+    let bold = paint(style.color, Paint::new().bold());
+    let dim = paint(style.color, Paint::new().dimmed());
     if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
-        let cyan = paint(style.color, ACCENT);
-        let bold = paint(style.color, Paint::new().bold());
-        format!("  {cyan}{marker}{cyan:#} {number} {bold}{text}{bold:#}")
+        let cyan = paint(style.color, ACCENT.bold());
+        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}  {rest}")
+            .trim_end()
+            .to_owned()
     } else {
-        format!("    {number} {text}")
+        format!("    {dim}{number}{dim:#} {reference}  {dim}{rest}{dim:#}")
+            .trim_end()
+            .to_owned()
     }
 }
 
@@ -170,7 +176,7 @@ mod tests {
             let error = selection_key(key, &mut 0, 3).unwrap_err();
             assert_eq!(error.kind, Kind::Usage);
             assert_eq!(error.message, "nothing was chosen");
-            assert!(error.help.unwrap().contains("fetchloom add hf:datasets/"));
+            assert!(error.help.unwrap().contains("references above"));
         }
     }
 
