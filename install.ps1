@@ -54,6 +54,12 @@ function Install-Fetchloom([string]$Version) {
     if (-not [Environment]::Is64BitOperatingSystem) {
         throw "there is no fetchloom build for 32-bit windows. build it from source: $repository#install"
     }
+    if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or
+        $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64' -or
+        (('System.Runtime.InteropServices.RuntimeInformation' -as [type]) -and
+            [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64')) {
+        $target = 'aarch64-pc-windows-msvc'
+    }
     $Version = "$Version".Trim().TrimStart('v')
     if ($Version -and $Version -notmatch '^\d') { throw "$Version is not a version. give one such as 0.1.0" }
 

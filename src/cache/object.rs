@@ -210,8 +210,10 @@ mod tests {
         assert!(syncfs_reports_errors("6.6.87.2-microsoft-standard-WSL2"));
         assert!(syncfs_reports_errors("5.8.0"));
         assert!(syncfs_reports_errors("5.15.0-122-generic"));
+        assert!(syncfs_reports_errors("5.14.0-503.el9.aarch64"));
         assert!(!syncfs_reports_errors("5.7.19"));
         assert!(!syncfs_reports_errors("4.18.0-553.el8_10.x86_64"));
+        assert!(!syncfs_reports_errors("4.18.0-553.el8_10.aarch64"));
         assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
         assert!(!syncfs_reports_errors(""));
         assert!(!syncfs_reports_errors("unknown"));
