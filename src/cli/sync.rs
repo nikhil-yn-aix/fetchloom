@@ -542,3 +542,266 @@ pub(super) fn tell_upgrades(output: &Output, old: &Lock, new: &Lock) -> Vec<Stri
     }
     moved
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::tests::store;
+    use crate::digest::{self, Md5};
+    use crate::net::Offline;
+    use crate::output::{Level, Style};
+    use crate::source::recorded::block_on;
+
+    fn context() -> Context {
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.offline = Offline::Flag;
+        context
+    }
+
+    fn locked(name: &str) -> Locked {
+        Locked {
+            name: name.to_owned(),
+            reference: "zenodo:1".to_owned(),
+            spec: String::new(),
+            resolved: "zenodo:2".to_owned(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            files: vec![LockedFile {
+                path: "data.csv".to_owned(),
+                size: 4,
+                sha256: digest::sha256(b"data"),
+                md5: Md5::from_hex("8d777f385d3dfec8815d20f7496026dc"),
+                url: "https://example.org/data.csv".to_owned(),
+                unpacks_to: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn filter_changes_keep_the_locked_revision_unless_upgrading() {
+        let manifest =
+            Manifest::parse("[datasets.set]\nref = 'zenodo:1'\nselect = '*.csv'\n").unwrap();
+        let entry = &manifest.datasets["set"];
+        let before = locked("set");
+        assert_eq!(pinned(entry, Some(&before), false), "zenodo:2");
+        assert_eq!(pinned(entry, Some(&before), true), "zenodo:1");
+        assert_eq!(pinned(entry, None, false), "zenodo:1");
+        let mut changed = entry.clone();
+        changed.reference = "zenodo:3".to_owned();
+        assert_eq!(pinned(&changed, Some(&before), false), "zenodo:3");
+        let selected = Upgrade::Only(BTreeSet::from(["set".to_owned()]));
+        assert!(selected.includes("set"));
+        assert!(!selected.includes("other"));
+        assert!(Upgrade::All.includes("other"));
+        assert!(!Upgrade::Nothing.includes("set"));
+    }
+
+    #[test]
+    fn jobs_pin_hashes_and_refresh_dead_links_at_the_locked_revision() {
+        let lock = Lock {
+            datasets: vec![locked("set")],
+        };
+        let file = &lock.datasets[0].files[0];
+        let download = job(&lock, "set", file).unwrap();
+        assert_eq!(download.label, "set/data.csv");
+        assert_eq!(download.dataset.as_deref(), Some("set"));
+        assert_eq!(download.fetch.expect.sha256, Some(file.sha256));
+        assert_eq!(download.fetch.expect.md5, file.md5);
+        assert_eq!(download.fetch.expect.size, Some(4));
+        assert!(!download.fetch.revalidate);
+        assert!(!download.fetch.unpack);
+        let again = download.again.unwrap();
+        assert_eq!(again.resolved, "zenodo:2");
+        assert_eq!(again.path, "data.csv");
+        assert!(again.alone);
+        let mut broken = file.clone();
+        broken.url = "not a URL".to_owned();
+        let error = job(&lock, "set", &broken).err().unwrap();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(error.message.contains("set/data.csv"));
+        assert!(error.help.unwrap().contains("lock --upgrade set"));
+    }
+
+    #[test]
+    fn cache_checks_require_real_objects_not_just_md5_hints() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = store(&cache, b"data");
+        let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc").unwrap();
+        assert!(!in_cache(&cache, &Expect::default()));
+        let sha = Expect {
+            sha256: Some(stored.digest),
+            size: Some(4),
+            ..Expect::default()
+        };
+        assert!(in_cache(&cache, &sha));
+        assert!(!in_cache(
+            &cache,
+            &Expect {
+                size: Some(5),
+                ..sha
+            }
+        ));
+        let md5_only = Expect {
+            md5: Some(md5),
+            ..Expect::default()
+        };
+        assert!(!in_cache(&cache, &md5_only));
+        cache.save_stated_md5(&md5, &stored.digest, 4).unwrap();
+        assert!(in_cache(&cache, &md5_only));
+        cache.drop_object(&stored.digest).unwrap();
+        assert!(!in_cache(&cache, &md5_only));
+        assert!(!in_cache(&cache, &sha));
+    }
+
+    #[test]
+    fn offline_download_errors_list_missing_files_without_network_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let lock = Lock {
+            datasets: vec![locked("set")],
+        };
+        let jobs = (0..7)
+            .map(|index| {
+                let mut download = job(&lock, "set", &lock.datasets[0].files[0]).unwrap();
+                download.label = format!("set/{index}.csv");
+                download
+            })
+            .collect();
+        let error = block_on(runner.download(jobs)).unwrap_err();
+        assert_eq!(error.kind, Kind::OfflineMissing);
+        assert!(error.message.contains("7 files"));
+        assert_eq!(
+            error.details,
+            [
+                "set/0.csv",
+                "set/1.csv",
+                "set/2.csv",
+                "set/3.csv",
+                "set/4.csv",
+                "and 2 more"
+            ]
+        );
+        assert!(error.help.unwrap().contains("without --offline"));
+        assert_eq!(context.work.counts().requests, 0);
+        store(&runner.cache, b"data");
+        let fetched =
+            block_on(runner.download(vec![job(&lock, "set", &lock.datasets[0].files[0]).unwrap()]))
+                .unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0].origin, Origin::Cache);
+        assert_eq!(fetched[0].digest, digest::sha256(b"data"));
+        assert_eq!(context.work.counts().requests, 0);
+    }
+
+    #[test]
+    fn resolving_reports_manifest_locations_without_echoing_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let mut context = context();
+        context.offline = Offline::No;
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        for (reference, detail) in [
+            ("not-a-reference", "data.toml:2   ref = 'not-a-reference'"),
+            (
+                "https://example.org/data?token=private-value",
+                "data.toml:2",
+            ),
+        ] {
+            let manifest =
+                Manifest::parse(&format!("[datasets.set]\nref = '{reference}'\n")).unwrap();
+            let error = block_on(runner.resolve_all(
+                &manifest,
+                vec![("set".to_owned(), reference.to_owned())],
+                None,
+            ))
+            .unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid);
+            assert_eq!(error.details, [detail]);
+            assert!(!error.message.contains("private-value"));
+            assert_eq!(context.work.counts().requests, 0);
+        }
+    }
+
+    #[test]
+    fn unchanged_locks_are_not_rewritten_and_removed_datasets_leave_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let lock = Lock {
+            datasets: vec![locked("set")],
+        };
+        assert!(runner.write_lock(None, &lock).unwrap());
+        let path = project.root.join(lock::FILE);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000))
+            .unwrap();
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(!runner.write_lock(Some(&lock), &lock).unwrap());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+        assert_eq!(project.lock().unwrap(), Some(lock.clone()));
+        assert!(runner.write_lock(Some(&lock), &Lock::default()).unwrap());
+        assert_eq!(project.lock().unwrap(), Some(Lock::default()));
+    }
+
+    #[test]
+    fn upgrade_reports_ignore_metadata_only_changes_and_new_datasets() {
+        let context = context();
+        let old = Lock {
+            datasets: vec![locked("changed"), locked("metadata"), locked("revision")],
+        };
+        let mut new = old.clone();
+        new.datasets[0].files[0].sha256 = digest::sha256(b"changed");
+        new.datasets[1].timestamp = "2026-02-01T00:00:00Z".to_owned();
+        new.datasets[2].resolved = "zenodo:3".to_owned();
+        new.datasets.push(locked("new"));
+        assert_eq!(
+            tell_upgrades(&context.output, &old, &new),
+            ["changed", "revision"]
+        );
+        assert_eq!(
+            tell_upgrades(&context.output, &old, &old),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn license_restrictions_are_case_insensitive_and_do_not_warn_for_open_licenses() {
+        assert_eq!(restriction("cc-by-nc-sa-4.0"), Some("commercial use"));
+        assert_eq!(restriction("CC-BY-ND-4.0"), Some("changed copies"));
+        assert_eq!(restriction("CC-BY-NC-ND-4.0"), Some("commercial use"));
+        for license in ["MIT", "Apache-2.0", "CC-BY-4.0", "CC0-1.0"] {
+            assert_eq!(restriction(license), None);
+        }
+    }
+}

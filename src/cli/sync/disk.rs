@@ -400,4 +400,231 @@ mod tests {
             &mut listings
         ));
     }
+
+    fn record(
+        root: &Path,
+        path: &str,
+        bytes: &[u8],
+        method: Method,
+    ) -> crate::project::state::Placed {
+        crate::project::state::Placed {
+            dataset: "set".to_owned(),
+            sha256: crate::digest::sha256(bytes),
+            method,
+            look: Look::of(&fs::metadata(root.join(path)).unwrap()),
+            writable: method == Method::Copy,
+            checked: 0,
+        }
+    }
+
+    #[test]
+    fn racy_edits_are_hashed_and_smudged_without_distrusting_unchanged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        for path in ["data/changed", "data/intact"] {
+            fs::write(project.root.join(path), b"original").unwrap();
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        for path in ["data/changed", "data/intact"] {
+            survey.state.files.insert(
+                path.to_owned(),
+                record(&project.root, path, b"original", Method::Copy),
+            );
+        }
+        let path = project.root.join("data/changed");
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, b"modified").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(
+            Look::of(&fs::metadata(&path).unwrap()),
+            survey.disk["data/changed"]
+        );
+        survey.hash_racy(&project.root, 0);
+        assert_eq!(survey.edited, HashSet::from(["data/changed".to_owned()]));
+        assert!(survey.needs_writing);
+        survey.smudge_edited();
+        assert_eq!(survey.state.files["data/changed"].look.size, u64::MAX);
+        assert_eq!(survey.state.files["data/intact"].look.size, 8);
+        assert_eq!(fs::read(path).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn change_marks_hash_old_links_and_refresh_their_listing_metadata() {
+        use crate::cache::tests::{hardlinks, store};
+
+        let dir = tempfile::tempdir().unwrap();
+        if !hardlinks(dir.path()) {
+            return;
+        }
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let good = store(&cache, b"intact");
+        let bad = store(&cache, b"before");
+        for (name, stored) in [("intact", &good), ("changed", &bad)] {
+            let object = cache.object_path(&stored.digest);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            #[cfg(not(unix))]
+            {
+                let mut permissions = fs::metadata(&object).unwrap().permissions();
+                permissions.set_readonly(false);
+                fs::set_permissions(&object, permissions).unwrap();
+            }
+            fs::File::options()
+                .write(true)
+                .open(&object)
+                .unwrap()
+                .set_modified(
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+                )
+                .unwrap();
+            fs::hard_link(object, project.root.join("data").join(name)).unwrap();
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        survey.state.files.insert(
+            "data/intact".to_owned(),
+            record(&project.root, "data/intact", b"intact", Method::Hardlink),
+        );
+        survey.state.files.insert(
+            "data/changed".to_owned(),
+            record(&project.root, "data/changed", b"before", Method::Hardlink),
+        );
+        fs::write(
+            cache.object_path(&bad.digest),
+            b"changed through another link",
+        )
+        .unwrap();
+        cache.mark_changed(&good.digest).unwrap();
+        cache.mark_changed(&bad.digest).unwrap();
+        assert_eq!(survey.doubted(&cache).len(), 2);
+        survey.look_again(&project.root, &cache, false).unwrap();
+        assert_eq!(survey.elsewhere, HashSet::from(["data/changed".to_owned()]));
+        assert_eq!(survey.vouched, HashSet::from(["data/intact".to_owned()]));
+        assert_eq!(survey.disk["data/changed"].size, 28);
+        assert_eq!(survey.disk["data/intact"].size, 6);
+        assert_eq!(
+            fs::read(project.root.join("data/changed")).unwrap(),
+            b"changed through another link"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_doubted_link_is_not_silently_vouched_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/file"), b"bytes").unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
+        placed.look.modified = 0;
+        survey.disk.insert("data/file".to_owned(), placed.look);
+        cache.mark_changed(&placed.sha256).unwrap();
+        survey.state.files.insert("data/file".to_owned(), placed);
+        fs::remove_file(project.root.join("data/file")).unwrap();
+        let error = survey.check_doubted(&project.root, &cache).unwrap_err();
+        assert_eq!(error.kind, crate::error::Kind::LocalIo);
+        assert!(error.message.contains("data/file"));
+        assert_eq!(survey.vouched.len(), 0);
+        assert_eq!(survey.elsewhere.len(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alias_retargeting_carries_edits_and_the_original_listed_spelling() {
+        use crate::project::lock::LockedFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/A.txt"), b"a").unwrap();
+        if !project.root.join("data/a.txt").is_file() {
+            return;
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let placed = record(&project.root, "data/a.txt", b"a", Method::Copy);
+        survey
+            .state
+            .files
+            .insert("data/a.txt".to_owned(), placed.clone());
+        survey.hash_racy(&project.root, 0);
+        assert_eq!(survey.disk.len(), 1);
+        assert_eq!(survey.disk["data/a.txt"], placed.look);
+        assert_eq!(survey.listed["data/a.txt"], "data/A.txt");
+        for paths in [
+            &mut survey.edited,
+            &mut survey.elsewhere,
+            &mut survey.vouched,
+        ] {
+            paths.insert("data/a.txt".to_owned());
+        }
+        let locked = LockedFile {
+            path: "A.txt".to_owned(),
+            size: 1,
+            sha256: placed.sha256,
+            md5: None,
+            url: "https://example.org/a".to_owned(),
+            unpacks_to: None,
+        };
+        let target = Target {
+            dataset: "set".to_owned(),
+            path: "data/A.txt".to_owned(),
+            sha256: placed.sha256,
+            size: 1,
+            copy: true,
+            locked: &locked,
+        };
+        survey.retarget(&project.root, &[target]);
+        assert_eq!(survey.state.files.len(), 1);
+        assert_eq!(survey.state.files["data/A.txt"], placed);
+        assert_eq!(survey.listed["data/A.txt"], "data/A.txt");
+        for paths in [&survey.edited, &survey.elsewhere, &survey.vouched] {
+            assert_eq!(paths, &HashSet::from(["data/A.txt".to_owned()]));
+        }
+        assert!(survey.needs_writing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("data/nested")).unwrap();
+        fs::create_dir(dir.path().join("outside")).unwrap();
+        fs::write(dir.path().join("outside/private"), b"outside").unwrap();
+        fs::write(dir.path().join("data/nested/kept"), b"inside").unwrap();
+        symlink(
+            dir.path().join("outside"),
+            dir.path().join("data/folder-link"),
+        )
+        .unwrap();
+        symlink(
+            dir.path().join("outside/private"),
+            dir.path().join("data/file-link"),
+        )
+        .unwrap();
+        let files = scan(dir.path(), "data");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files["data/nested/kept"].size, 6);
+        assert_eq!(scan(dir.path(), "missing").len(), 0);
+    }
 }

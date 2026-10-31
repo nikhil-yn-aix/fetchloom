@@ -643,4 +643,172 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn unknown_keys_are_rejected_at_each_table_level() {
+        for (text, citation, help) in [
+            (
+                "datsets = {}\n",
+                "data.toml:1   datsets = {}",
+                "did you mean `datasets`?",
+            ),
+            (
+                "[project]\ndata_dr = 'inputs'\n",
+                "data.toml:2   data_dr = 'inputs'",
+                "did you mean `data_dir`?",
+            ),
+            (
+                "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
+                "data.toml:3   unknown_setting = true",
+                "the keys here are ref, select, exclude, extract, copy, path",
+            ),
+        ] {
+            let error = fails(text);
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(error.details, [citation]);
+            assert_eq!(error.help.as_deref(), Some(help));
+        }
+    }
+
+    #[test]
+    fn wrong_table_and_pattern_types_point_to_the_bad_value() {
+        for (text, message, line) in [
+            ("project = 7\n", "must be a table", "data.toml:1"),
+            ("datasets = []\n", "must be a table", "data.toml:1"),
+            (
+                "[datasets]\nx = false\n",
+                "must be a table with a ref",
+                "data.toml:2",
+            ),
+            (
+                "[datasets.x]\nref = 'zenodo:1'\nselect = 1\n",
+                "must be a pattern or a list",
+                "data.toml:3",
+            ),
+            (
+                "[datasets.x]\nref = 'zenodo:1'\nexclude = ['*.tmp', 7]\n",
+                "every pattern in exclude must be a string",
+                "data.toml:3",
+            ),
+            (
+                "[datasets.x]\nref = 'zenodo:1'\nextract = 'yes'\n",
+                "must be true or false",
+                "data.toml:3",
+            ),
+            (
+                "[project]\ndata_dir = false\n",
+                "must be a string",
+                "data.toml:2",
+            ),
+        ] {
+            let error = fails(text);
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
+            assert!(error.message.contains(message), "{}", error.message);
+            assert_eq!(error.details.len(), 1);
+            assert!(error.details[0].starts_with(line), "{:?}", error.details);
+        }
+    }
+
+    #[test]
+    fn duplicate_datasets_and_duplicate_refs_are_not_silently_overwritten() {
+        for text in [
+            "[datasets.x]\nref = 'zenodo:1'\n[datasets.x]\nref = 'zenodo:2'\n",
+            "[datasets.x]\nref = 'zenodo:1'\nref = 'zenodo:2'\n",
+            "datasets = { x = { ref = 'zenodo:1' }, x = { ref = 'zenodo:2' } }\n",
+        ] {
+            let error = fails(text);
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert!(error.message.contains("not valid TOML"));
+            assert_eq!(error.details.len(), 1);
+            assert!(error.help.unwrap().contains("fix that line"));
+        }
+    }
+
+    #[test]
+    fn data_directories_must_stay_inside_the_project() {
+        for directory in [
+            "",
+            " ",
+            "../outside",
+            "data/../outside",
+            "/absolute",
+            "C:/outside",
+            r"data\files",
+            "data//files",
+        ] {
+            let text = format!("[project]\ndata_dir = '{directory}'\n");
+            let error = fails(&text);
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{directory}");
+            assert!(error.message.contains("data_dir"));
+            assert_eq!(
+                error.details,
+                [format!("data.toml:2   data_dir = '{directory}'")]
+            );
+            assert!(error.help.unwrap().contains("inside the project"));
+        }
+        assert_eq!(parse("[project]\n").data_dir, "data");
+        assert_eq!(
+            parse("[project]\ndata_dir = '  inputs/raw///  '\n").data_dir,
+            "inputs/raw"
+        );
+    }
+
+    #[test]
+    fn an_unusable_dataset_name_still_explains_how_to_rename_it() {
+        let error = fails("[datasets.'!!!']\nref = 'zenodo:1'\n");
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(error.message.contains("not a valid dataset name"));
+        assert!(error.help.unwrap().contains("lowercase letters"));
+    }
+
+    #[test]
+    fn removing_and_readding_preserves_other_datasets_and_all_requested_options() {
+        let text = "# research inputs\n[project]\ndata_dir = 'inputs'\n\n[datasets.keep]\nref = 'zenodo:2' # leave this\ncopy = true\npath = 'raw/keep'\n\n[datasets.replace]\nref = 'zenodo:1'\n";
+        let removed = without_dataset(text, "replace").unwrap();
+        let mut expected = stated(&parse(text));
+        expected.1.remove("replace");
+        assert_eq!(stated(&parse(&removed)), expected);
+        assert!(removed.contains("ref = 'zenodo:2' # leave this"));
+        let added = with_dataset(
+            &removed,
+            "replace",
+            "zenodo:3",
+            &["**/*.csv".to_owned()],
+            &["**/old/**".to_owned()],
+            false,
+        )
+        .unwrap();
+        let manifest = parse(&added);
+        let replacement = &manifest.datasets["replace"];
+        assert_eq!(manifest.data_dir, "inputs");
+        assert_eq!(manifest.datasets.len(), 2);
+        assert_eq!(replacement.reference, "zenodo:3");
+        assert_eq!(patterns(&replacement.select), ["**/*.csv"]);
+        assert_eq!(patterns(&replacement.exclude), ["**/old/**"]);
+        assert!(!replacement.extract);
+        assert_eq!(
+            stated(&parse(&without_dataset(&added, "replace").unwrap())),
+            expected
+        );
+        assert_eq!(without_dataset(&added, "missing").unwrap(), added);
+        assert_eq!(
+            without_dataset("# no datasets\n[project]\n", "missing").unwrap(),
+            "# no datasets\n[project]\n"
+        );
+    }
+
+    #[test]
+    fn removing_an_inline_entry_and_editing_bom_text_round_trip() {
+        let text = "\u{feff}datasets = { a = { ref = 'zenodo:1' }, b = { ref = 'zenodo:2' } }\n";
+        let removed = without_dataset(text, "a").unwrap();
+        let manifest = parse(&removed);
+        assert_eq!(manifest.datasets.len(), 1);
+        assert_eq!(manifest.datasets["b"].reference, "zenodo:2");
+        let removed = without_dataset(&removed, "b").unwrap();
+        assert_eq!(parse(&removed).datasets.len(), 0);
+        let added = with_dataset("\u{feff}# notes\n", "a", "zenodo:1", &[], &[], true).unwrap();
+        assert!(!added.starts_with('\u{feff}'));
+        assert!(added.contains("# notes"));
+        assert_eq!(parse(&added).datasets["a"].reference, "zenodo:1");
+    }
 }

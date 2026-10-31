@@ -290,3 +290,195 @@ fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Dur
         ),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::tests::store;
+    use crate::digest;
+    use crate::net::Offline;
+    use crate::output::{Level, Style};
+    use crate::project::Project;
+    use crate::project::lock::Locked;
+    use crate::source::recorded::block_on;
+
+    fn context() -> Context {
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.offline = Offline::Flag;
+        context.threads = crate::threads::Threads::read(&|_| Some("1".into())).unwrap();
+        context
+    }
+
+    fn tar(bytes: &[u8]) -> Vec<u8> {
+        let mut builder = ::tar::Builder::new(Vec::new());
+        let mut header = ::tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "member.txt", bytes)
+            .unwrap();
+        builder.into_inner().unwrap()
+    }
+
+    fn lock_for(file: LockedFile) -> Lock {
+        Lock {
+            datasets: vec![Locked {
+                name: "set".to_owned(),
+                reference: "https://example.org/set.tar".to_owned(),
+                spec: String::new(),
+                resolved: "https://example.org/set.tar".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                files: vec![file],
+            }],
+        }
+    }
+
+    #[test]
+    fn mixed_batches_keep_input_order_and_store_only_real_archive_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let plain = store(&cache, b"not an archive");
+        let first = store(&cache, &tar(b"first"));
+        let second = store(&cache, &tar(b"second"));
+        let archives = [
+            ("plain.zip", &plain),
+            ("first.tar", &first),
+            ("second.tar", &second),
+        ]
+        .into_iter()
+        .map(|(label, stored)| Unpack {
+            archive: stored.digest,
+            size: stored.size,
+            label: label.to_owned(),
+            tree: None,
+        })
+        .collect();
+        let unpacked = block_on(unpack_all(&context, &cache, archives)).unwrap();
+        assert_eq!(unpacked.len(), 3);
+        assert!(unpacked[0].is_none());
+        for (index, bytes) in [(1, b"first".as_slice()), (2, b"second")] {
+            let unpacked = unpacked[index].as_ref().unwrap();
+            assert_eq!(unpacked.members.len(), 1);
+            assert_eq!(unpacked.members[0].path, "member.txt");
+            assert_eq!(unpacked.members[0].sha256, digest::sha256(bytes));
+            assert_eq!(
+                std::fs::read(cache.object_path(&unpacked.members[0].sha256)).unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(context.work.counts().objects_written, 2);
+        assert!(cache.unpacked(&plain.digest, None).is_none());
+        assert_eq!(
+            cache.unpacked(&first.digest, None).unwrap()[0].sha256,
+            digest::sha256(b"first")
+        );
+    }
+
+    #[test]
+    fn a_missing_archive_reports_which_batch_item_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let error = block_on(unpack_all(
+            &context,
+            &cache,
+            vec![Unpack {
+                archive: digest::sha256(b"missing"),
+                size: 7,
+                label: "set/missing.tar".to_owned(),
+                tree: None,
+            }],
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert_eq!(error.details, ["in set/missing.tar"]);
+        assert!(error.help.unwrap().contains("download"));
+        assert_eq!(context.work.counts().objects_written, 0);
+    }
+
+    #[test]
+    fn intact_archives_with_a_different_pinned_tree_require_an_explicit_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = store(&cache, &tar(b"actual member"));
+        let lock = lock_for(LockedFile {
+            path: "set.tar".to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/set.tar".to_owned(),
+            unpacks_to: Some(digest::sha256(b"a different tree")),
+        });
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let error = block_on(
+            runner.unpack_locked(&lock, &[("set".to_owned(), &lock.datasets[0].files[0])]),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::IntegrityMismatch);
+        assert!(error.message.contains("set/set.tar"));
+        assert!(error.help.unwrap().contains("lock --upgrade set"));
+        assert!(runner.cache.verify(&stored.digest).unwrap());
+        assert!(runner.cache.unpacked(&stored.digest, None).is_none());
+        assert_eq!(context.work.counts().requests, 0);
+    }
+
+    #[test]
+    fn dropping_archives_keeps_bytes_needed_by_the_current_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let kept = store(&cache, b"still needed as a file");
+        let removed = store(&cache, b"already unpacked");
+        let lock = lock_for(LockedFile {
+            path: "set.tar".to_owned(),
+            size: kept.size,
+            sha256: kept.digest,
+            md5: None,
+            url: "https://example.org/set.tar".to_owned(),
+            unpacks_to: None,
+        });
+        drop_archives(&cache, &[kept.digest, removed.digest], Some(&lock));
+        assert_eq!(
+            std::fs::read(cache.object_path(&kept.digest)).unwrap(),
+            b"still needed as a file"
+        );
+        assert!(cache.find(&removed.digest, None).is_none());
+        drop_archives(&cache, &[kept.digest], Some(&Lock::default()));
+        assert!(cache.find(&kept.digest, None).is_none());
+    }
+
+    #[test]
+    fn an_unreadable_registered_lock_keeps_all_unpacked_archives() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("data.toml"), b"").unwrap();
+        std::fs::write(root.join("data.lock"), b"not a lock").unwrap();
+        cache.register(&root).unwrap();
+        let archive = store(&cache, b"keep me until the lock can be read");
+        drop_archives(&cache, &[archive.digest], None);
+        assert_eq!(
+            std::fs::read(cache.object_path(&archive.digest)).unwrap(),
+            b"keep me until the lock can be read"
+        );
+    }
+}
