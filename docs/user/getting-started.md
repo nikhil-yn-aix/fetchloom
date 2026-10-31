@@ -42,7 +42,7 @@ fetchloom path iris/iris.csv
 
 ## sharing a project
 
-send `data.toml` and `data.lock` with your project. git is optional. if you use it, run `git init` before `add` so fetchloom can update `.gitignore`.
+send `data.toml` and `data.lock` with your project. git is optional. to start tracking the project with git after the example above, initialize it and repeat `add`; the existing dataset is reused and `.gitignore` is updated.
 
 | path | keep in git? | reason |
 |---|---|---|
@@ -53,6 +53,8 @@ send `data.toml` and `data.lock` with your project. git is optional. if you use 
 | `.gitignore` | yes | it keeps downloaded files out of commits |
 
 ```sh
+git init
+fetchloom add zenodo:3608990
 git add data.toml data.lock .gitignore
 git commit -m "pin iris inputs"
 ```
