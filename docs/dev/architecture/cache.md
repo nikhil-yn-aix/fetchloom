@@ -17,7 +17,7 @@ objects are read-only files named by their content digest. the cache owns public
 | [staging.rs](../../../src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
 | [unpacked.rs](../../../src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `unpacked`, `holds_unpacked` |
 | [changed.rs](../../../src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
-| [upkeep.rs](../../../src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `sweep_with_stop`, `verify_all` |
+| [upkeep.rs](../../../src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `sweep_with_stop`, `verify_with_stop` |
 
 ## how it works
 

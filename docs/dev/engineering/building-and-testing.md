@@ -75,7 +75,7 @@ cargo test --locked --lib source::zenodo::tests::live_zenodo -- --ignored --exac
 cargo test --locked -- --ignored
 ```
 
-use `python` instead of `python3` on windows. helper tests use the standard library and a fake executable; they do not need a package install or a live dataset. ignored rust tests contact public services and include a 20,000-file archive test. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
+use `python` instead of `python3` on windows. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. ignored rust tests contact public services and include a 20,000-file archive test. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
 
 ### code gates
 
