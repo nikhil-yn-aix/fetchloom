@@ -41,7 +41,7 @@ cargo install --path . --locked
 fetchloom --version
 ```
 
-each method installs `fetchloom` and `fl`, the same program under two names. use `fetchloom` in powershell, where `fl` already means `Format-List`.
+each method installs one program, `fetchloom`. for a shorter name, add a shell alias.
 
 ## quick start
 

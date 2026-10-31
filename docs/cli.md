@@ -209,7 +209,7 @@ fetchloom help add
 fetchloom help cache gc
 ```
 
-`help concepts` explains the manifest, lock, cache and sync. `help <command>` matches `<command> --help`. help stays text with `--json`. `fl` runs the same program; powershell's `fl` means `Format-List`, so use `fetchloom` there.
+`help concepts` explains the manifest, lock, cache and sync. `help <command>` matches `<command> --help`. help stays text with `--json`. for a shorter name, add a shell alias, such as `alias flm=fetchloom` in bash or `Set-Alias flm fetchloom` in your powershell profile.
 
 ## environment variables
 

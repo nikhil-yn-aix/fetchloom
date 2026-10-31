@@ -2,7 +2,7 @@
 
 ## build
 
-`rust-toolchain.toml` pins rust 1.99.1 with rustfmt and clippy. `Cargo.toml` uses edition 2024 and declares a minimum rust version of 1.99. one crate builds a library and two executables, `fetchloom` and `fl`.
+`rust-toolchain.toml` pins rust 1.99.1 with rustfmt and clippy. `Cargo.toml` uses edition 2024 and declares a minimum rust version of 1.99. one crate builds a library and the `fetchloom` executable.
 
 ```sh
 cargo build --locked
@@ -142,7 +142,7 @@ to compare two builds, `bench/ab.ps1` runs them in interleaved pairs, a then b, 
 
 ```powershell
 & ([scriptblock]::Create((Get-Content -Raw bench\ab.ps1))) -Name lan-1g -A old.exe -B new.exe `
-    -Arguments @('-C', '{work}', '--yes', '-v', 'get', 'https://172.31.233.169:8443/file-1g.bin') -Runs 10 -Profile lan
+    -Arguments @('-C', '{work}', '--yes', '-v', 'get', "$env:FETCHLOOM_LAB/file-1g.bin") -Runs 10 -Profile lan
 python bench\ab_summary.py bench\results\ab\lan-1g.csv
 ```
 
@@ -192,14 +192,13 @@ a release holds:
 
 | file | contents |
 |---|---|
-| `fetchloom-<version>-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, `fl.exe`, LICENSE, NOTICE and README.md, in a folder named like the archive |
-| `fetchloom-<version>-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, `fl` and the same three files |
+| `fetchloom-<version>-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE and README.md, in a folder named like the archive |
+| `fetchloom-<version>-x86_64-unknown-linux-musl.tar.gz` | `fetchloom` and the same three files |
 | `fetchloom-<version>-py3-none-win_amd64.whl` | both executables and the `fetchloom` python module |
 | `fetchloom-<version>-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | the same for linux. the binaries are static, so the wheel carries the glibc and musl tags |
 | `install.sh`, `install.ps1` | the installers the [README](../../README.md#install) runs |
 | `SHA256SUMS` | the SHA-256 of every other file, which the installers check |
 
-maturin packs every `[[bin]]` target, so each wheel holds `fl` as well as `fetchloom`.
 
 to make a release:
 

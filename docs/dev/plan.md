@@ -9,4 +9,4 @@
 
 1. check that a source install from the default branch builds the release. exercise the built binaries, installers and wheels with the maintainer and two or three researchers on real projects before publishing 0.1.0 through [releases](engineering.md#releases).
 2. upload the first wheels to PyPI by hand, then configure a trusted publisher for [release.yml](../../.github/workflows/release.yml).
-3. sign the windows binaries. on a managed windows machine, defender's ransomware rule blocked an unsigned release `fl.exe` while `fetchloom.exe` ran.
+3. sign the windows binaries. on a managed windows machine, defender's ransomware rule blocked an unsigned release executable.

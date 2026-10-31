@@ -2,9 +2,9 @@
 
 ## built
 
-the command set is `get`, `add`, `remove`, `sync`, `lock`, `status`, `path`, `cache`, `cache gc` and `cache verify`. `fl` calls the same implementation. [CLI](cli.md) defines their effects and output.
+the command set is `get`, `add`, `remove`, `sync`, `lock`, `status`, `path`, `cache`, `cache gc` and `cache verify`. [CLI](cli.md) defines their effects and output.
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder. `fl` is a short name for the same program. powershell already uses `fl` for `Format-List`, so use `fetchloom` there.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder.
 
 - project manifests select published inputs. locks record source files by SHA-256 and size, plus stated MD5 when available.
 - a local content-addressed cache serves multiple projects. placements use reflinks, hardlinks or copies without creating symlinks.

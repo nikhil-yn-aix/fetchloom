@@ -1,6 +1,6 @@
 # agents
 
-use `--json` when a script or agent needs to read fetchloom's answer. branch on fields and exit codes, not progress messages. use the full `fetchloom` name: powershell already uses `fl` for `Format-List`.
+use `--json` when a script or agent needs to read fetchloom's answer. branch on fields and exit codes, not progress messages.
 
 ## without a terminal
 

@@ -1,12 +1,12 @@
 # architecture
 
-fetchloom resolves research-data references, pins selected files by SHA-256 and size, and fills a project's data folder from a shared content-addressed cache. one rust crate builds `fetchloom` and `fl`; both call `lib::main`, which dispatches the CLI. the [python helper](../../python/fetchloom/__init__.py) runs the executable with `--json` and has no rust bindings.
+fetchloom resolves research-data references, pins selected files by SHA-256 and size, and fills a project's data folder from a shared content-addressed cache. one rust crate builds the `fetchloom` executable, which calls `lib::main`, which dispatches the CLI. the [python helper](../../python/fetchloom/__init__.py) runs the executable with `--json` and has no rust bindings.
 
 ## module map
 
 ```mermaid
 flowchart TD
-    entry["main.rs and bin/fl.rs"] --> lib["lib.rs"]
+    entry["main.rs"] --> lib["lib.rs"]
     lib --> cli["cli"]
     cli --> sync["cli/project and cli/sync"]
     cli --> output["output"]
@@ -28,7 +28,7 @@ flowchart TD
 
 | module | owns | key files and types | tests |
 |---|---|---|---|
-| entry points | executable dispatch | [main.rs](../../src/main.rs), [bin/fl.rs](../../src/bin/fl.rs), [lib.rs](../../src/lib.rs): `main` | [CLI basics](../../tests/cli/basics.rs) |
+| entry points | executable dispatch | [main.rs](../../src/main.rs), [lib.rs](../../src/lib.rs): `main` | [CLI basics](../../tests/cli/basics.rs) |
 | `cli` | arguments, settings and commands | [cli.rs](../../src/cli.rs): `Context`; [args.rs](../../src/cli/args.rs): `Args`, `Command` | inline tests; [basics](../../tests/cli/basics.rs), [caps](../../tests/cli/caps.rs) |
 | `cli::sync` | relocking, scans and placement decisions | [sync.rs](../../src/cli/sync.rs): `Loop`; [draft.rs](../../src/cli/sync/draft.rs): `Draft`; [disk.rs](../../src/cli/sync/disk.rs): `Survey`; [place.rs](../../src/cli/sync/place.rs): `Placing` | [draft tests](../../src/cli/sync/draft.rs), [placement tests](../../src/cli/sync/place.rs), [put tests](../../src/cli/sync/place/put.rs), [project](../../tests/cli/project.rs), [recovery](../../tests/cli/recovery.rs) |
 | `project` | discovery, records and locking | [project.rs](../../src/project.rs): `Project`, `Held`; [manifest.rs](../../src/project/manifest.rs): `Manifest`; [lock.rs](../../src/project/lock.rs): `Lock`, `LockedFile`; [state.rs](../../src/project/state.rs): `State`, `Look`, `Synced` | inline tests; [concurrent](../../tests/cli/concurrent.rs), [moved](../../tests/cli/moved.rs) |

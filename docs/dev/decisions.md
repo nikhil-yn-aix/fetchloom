@@ -5,7 +5,7 @@
 | decision | reason | implementation |
 |---|---|---|
 | keep one rust crate | installed binaries need no language environment; modules provide boundaries without separate package versions. split a crate when an independent consumer needs it | [code map](architecture.md#code-map) |
-| keep `fetchloom` and `fl` on one entry point | two executable names do not need two CLIs to maintain | [entry points](architecture.md) |
+| ship one executable, `fetchloom` | powershell already uses `fl` for `Format-List`, and defender's ransomware rule blocked an unsigned `fl.exe` on a managed machine; a shell alias gives a short name | [entry points](architecture.md) |
 | keep source adapters in the crate | version, checksum and paging rules stay beside their tests; a plugin protocol has no current consumer | [source adapters](architecture.md#source-adapters) |
 | route DOIs through the handle URL | a registered destination avoids guessing from DOI prefixes or landing-page redirects | [DOI resolution](architecture.md#source-adapters) |
 | include shared-link sources | the first users fetch from hugging face, kaggle, drive and dropbox as well as repositories | [source scope](../scope.md#sources) |
