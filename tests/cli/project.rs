@@ -814,3 +814,49 @@ fn status_and_sync_explain_untracked_conflicts() -> Result {
     assert_eq!(fs::read(placed)?, b"my work");
     Ok(())
 }
+
+#[test]
+fn failed_add_reports_manifest_rollback_and_recovery() -> Result {
+    for before in [None, Some("# keep this comment\n[datasets]\n")] {
+        for machine in [false, true] {
+            let sandbox = Sandbox::new()?;
+            let manifest = sandbox.work().join("data.toml");
+            if let Some(before) = before {
+                fs::write(&manifest, before)?;
+            }
+            let blocked = manifest.clone();
+            let mut response = vec![crate::support::Part::Action(Box::new(move || {
+                fs::remove_file(&blocked).unwrap();
+                fs::create_dir(&blocked).unwrap();
+            }))];
+            response.extend(reply("403 Forbidden", &[], b"denied"));
+            let server = Server::start(PATH, vec![response])?;
+            let mut args = vec!["add", server.url.as_str(), "--as", "iris"];
+            if machine {
+                args.push("--json");
+            }
+            let output = sandbox.run(&args)?;
+            assert!(!output.status.success());
+            let details = if machine {
+                let document = json(&output)?;
+                document["errors"][0]["details"]
+                    .as_array()
+                    .ok_or("missing error details")?
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                text(&output.stderr)?
+            };
+            assert!(details.contains("could not restore data.toml"), "{details}");
+            if let Some(before) = before {
+                assert!(details.contains("restore data.toml from this backup text"), "{details}");
+                assert!(details.contains(before.trim_end()), "{details}");
+            } else {
+                assert!(details.contains("remove the iris dataset entry"), "{details}");
+            }
+        }
+    }
+    Ok(())
+}
