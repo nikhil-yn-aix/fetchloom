@@ -296,7 +296,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
     Search(Search),
 
-    /// sign in to sources for private and gated data, with one key shared with their own tools
+    /// sign in to sources for private and gated data
     #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
     Auth(Auth),
 

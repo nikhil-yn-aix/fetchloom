@@ -31,6 +31,7 @@ commands:
   cache   show the cache, free what no project needs, or check every file in it
   get     fetch something once, without a project
   search  find datasets on hugging face, kaggle and zenodo
+  auth    sign in to sources for private and gated data
   help    explain the ideas behind fetchloom, or one command
 
 options:
