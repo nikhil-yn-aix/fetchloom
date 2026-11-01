@@ -571,7 +571,7 @@ fn malformed_gcs_pages_are_invalid_listings() {
 #[test]
 fn no_credential_is_kept_for_a_storage_host() {
     let every = |_: &str| Some(std::ffi::OsString::from("secret"));
-    for credential in crate::source::credentials(&every) {
+    for credential in crate::auth::credentials(&every) {
         let host = credential.host;
         assert!(
             !host.ends_with("amazonaws.com") && !host.ends_with("googleapis.com"),
