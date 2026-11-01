@@ -37,7 +37,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [cache folder](reference/cache-folder.md) | inspect shared cache objects and indexes |
 | [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |
-| [AI agents](agents.md) | let a coding agent find and fetch data safely |
+| [AI agents](ai-agents.md) | let a coding agent find and fetch data safely |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |
 | [troubleshooting](troubleshooting.md) | match a symptom to its cause and fix |
 | [limits](limits.md) | check what fetchloom does not do |
