@@ -378,6 +378,18 @@ fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
     added(&sandbox, &server)?;
     let settled = sandbox.run(&["sync"])?;
     assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    // on a clock as coarse as hfs+ or fat, files placed within the state's own second stay
+    // racy and are hashed again, so the state is written once more past that second
+    let state = sandbox.work().join(".fetchloom").join("state");
+    let written = fs::metadata(&state)?.modified()?;
+    if written
+        .duration_since(std::time::UNIX_EPOCH)?
+        .subsec_nanos()
+        == 0
+    {
+        std::thread::sleep(std::time::Duration::from_millis(2100));
+        fs::write(&state, fs::read(&state)?)?;
+    }
     let cold = sandbox.cache().with_file_name("cold");
     let project = tree(&sandbox.work())?;
     for args in [
