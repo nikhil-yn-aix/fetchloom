@@ -120,6 +120,30 @@ impl Cache {
         Ok(cache)
     }
 
+    /// the cache at `root` as it is, with nothing created, for a dry run that only reads it. a
+    /// cache that does not exist yet holds nothing.
+    pub(crate) fn unopened(root: PathBuf) -> Cache {
+        Cache {
+            volume: Arc::new(Volume::new(root.join("tmp"))),
+            root,
+            checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
+            pending: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// this cache, with every removal recorded instead of made, so gc can say what it would free.
+    pub(crate) fn pretending(&self) -> Cache {
+        Cache {
+            volume: Arc::new(Volume::pretend(self.root.join("tmp"))),
+            ..self.clone()
+        }
+    }
+
+    /// what a [`Cache::pretending`] cache would have removed, in order.
+    pub(crate) fn pretended(&self) -> Vec<PathBuf> {
+        self.volume.pretended()
+    }
+
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

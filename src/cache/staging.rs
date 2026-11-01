@@ -150,7 +150,7 @@ impl Cache {
                 let path = folder.join(name);
                 super::upkeep::removed(&path, self.volume.remove(&path), not_removed);
             }
-            super::upkeep::removed(folder, fs::remove_dir(folder), not_removed);
+            super::upkeep::removed(folder, self.volume.remove_folder(folder), not_removed);
         }
         removed
     }

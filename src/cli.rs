@@ -167,16 +167,31 @@ fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error
 
 /// the cache this machine uses, created on first use.
 fn open_cache() -> Result<Cache, Error> {
-    let root = Cache::locate(&|name| std::env::var_os(name)).ok_or_else(|| {
-        Error::new(Kind::LocalIo, "could not find a folder for the cache")
-            .help("set FETCHLOOM_CACHE to a folder fetchloom may use")
-    })?;
+    let root = cache_root()?;
     Cache::open(root.clone()).map_err(|err| {
         Error::io(
             format_args!("could not open the cache at {}", root.display()),
             &err,
         )
         .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    })
+}
+
+/// the cache this machine uses, for a dry run: opened when it exists, and otherwise not created,
+/// standing for an empty cache.
+fn peek_cache() -> Result<Cache, Error> {
+    let root = cache_root()?;
+    if root.exists() {
+        open_cache()
+    } else {
+        Ok(Cache::unopened(root))
+    }
+}
+
+fn cache_root() -> Result<std::path::PathBuf, Error> {
+    Cache::locate(&|name| std::env::var_os(name)).ok_or_else(|| {
+        Error::new(Kind::LocalIo, "could not find a folder for the cache")
+            .help("set FETCHLOOM_CACHE to a folder fetchloom may use")
     })
 }
 
@@ -351,7 +366,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Gc(gc)),
         }) => {
-            let outcome = cache::gc(context, gc.now);
+            let outcome = cache::gc(context, gc.now, gc.dry.dry_run);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

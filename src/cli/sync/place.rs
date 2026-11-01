@@ -7,12 +7,13 @@ mod tell;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
+pub(crate) use self::tell::tell_preview;
 use super::disk::Survey;
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
@@ -42,6 +43,61 @@ pub(crate) struct Placement {
 pub(crate) struct Kept {
     pub(crate) path: String,
     pub(crate) reason: Reason,
+}
+
+/// what a dry run would change, path by path, as `--json` prints it.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct Changes {
+    pub(crate) place: Vec<String>,
+    pub(crate) replace: Vec<String>,
+    pub(crate) remove: Vec<String>,
+    /// files that would download first, by dataset and path.
+    pub(crate) download: Vec<Download>,
+    /// archives that would unpack first, whose files a dry run cannot list.
+    pub(crate) unpack: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct Download {
+    pub(crate) path: String,
+    /// none when only the download tells.
+    pub(crate) size: Option<u64>,
+}
+
+/// what applying a placing would do, decided without touching the data folder.
+#[derive(Debug, Default)]
+pub(crate) struct Preview {
+    pub(crate) placement: Placement,
+    pub(crate) changes: Changes,
+    /// files to place and to replace, by dataset.
+    pub(crate) by_dataset: BTreeMap<String, Planned>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Planned {
+    pub(crate) place: Vec<String>,
+    pub(crate) replace: Vec<String>,
+}
+
+impl Preview {
+    /// whether applying it would leave everything as it is, with nothing to report.
+    pub(crate) fn changes_nothing(&self) -> bool {
+        let placement = &self.placement;
+        placement.placed + placement.replaced + placement.removed == 0
+            && placement.kept.is_empty()
+            && self.changes.download.is_empty()
+            && self.changes.unpack.is_empty()
+    }
+}
+
+/// what becomes of a file fetchloom placed that no dataset needs now.
+enum Unwanted {
+    /// it still looks as placed, so it goes.
+    Remove(Look),
+    /// someone changed it, so it stays.
+    Keep,
+    /// it is gone already.
+    Gone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -77,14 +133,14 @@ pub(crate) struct Placing<'a> {
     targets: Vec<Target<'a>>,
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
-    data_dir: PathBuf,
     survey: Survey,
 }
 
 impl<'a> Placing<'a> {
     /// compares the data folder, as `survey` saw it, with `lock`, with each archive standing for
     /// the files the cache records it unpacked to. only files fetchloom did not place are hashed,
-    /// to see whether they already hold the locked bytes.
+    /// to see whether they already hold the locked bytes. nothing is written, so a dry run can
+    /// show what applying it would do.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
@@ -94,7 +150,7 @@ impl<'a> Placing<'a> {
         mut survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
-        let data_dir = project.data_dir(manifest)?;
+        project.planned_data_dir(manifest)?;
         survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();
         let actions = plan
@@ -108,7 +164,6 @@ impl<'a> Placing<'a> {
             targets: plan.targets,
             unknown: plan.unknown,
             actions,
-            data_dir,
             survey,
         })
     }
@@ -131,6 +186,28 @@ impl<'a> Placing<'a> {
     /// object a mark puts in doubt is hashed first, and changed bytes are listed for replacement.
     /// a failed read, seal or change mark stops the run.
     pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+        let marks = cache.changed();
+        self.lacking(|digest, size| {
+            cache
+                .trusted(digest, Some(size), &marks)
+                .map(|found| found.is_some())
+                .map_err(|doubt| doubtful(&doubt))
+        })
+    }
+
+    /// what [`Placing::missing`] lists, found without sealing or marking any cached object, for
+    /// a dry run.
+    pub(crate) fn missing_as_is(
+        &self,
+        cache: &Cache,
+    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+        self.lacking(|digest, size| Ok(cache.find(digest, Some(size)).is_some()))
+    }
+
+    fn lacking(
+        &self,
+        holds: impl Fn(&Sha256, u64) -> Result<bool, Error> + Sync,
+    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -145,13 +222,12 @@ impl<'a> Placing<'a> {
             .map(|target| (target.sha256, target.size))
             .collect();
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
-        let marks = cache.changed();
         let found = place::run_all(&objects, self.survey.threads, |(digest, size)| {
-            cache.trusted(digest, Some(*size), &marks)
+            holds(digest, *size)
         });
         let mut present = HashSet::new();
         for ((digest, _), found) in objects.iter().zip(found) {
-            if found.map_err(|doubt| doubtful(&doubt))?.is_some() {
+            if found? {
                 present.insert(*digest);
             }
         }
@@ -162,6 +238,75 @@ impl<'a> Placing<'a> {
             .filter(|target| seen.insert(target.locked.sha256))
             .map(|target| (target.dataset.clone(), target.locked))
             .collect())
+    }
+
+    /// what [`Placing::apply`] would do, decided as it decides and with nothing written. a file
+    /// that changes between this look and placing is still left alone when it is placed for real.
+    pub(crate) fn preview(&self) -> Preview {
+        let mut preview = Preview::default();
+        self.preview_unwanted(&mut preview);
+        let placement = &mut preview.placement;
+        for (target, action) in self.targets.iter().zip(&self.actions) {
+            match action {
+                Action::Keep | Action::Adopt(_) | Action::Vouch(_) => placement.unchanged += 1,
+                Action::Leave(reason) => placement.kept.push(Kept {
+                    path: target.path.clone(),
+                    reason: *reason,
+                }),
+                Action::Replace => {
+                    if self.survey.elsewhere.contains(&target.path) {
+                        placement.restored.push(target.path.clone());
+                    }
+                    placement.replaced += 1;
+                    preview.changes.replace.push(target.path.clone());
+                    preview
+                        .by_dataset
+                        .entry(target.dataset.clone())
+                        .or_default()
+                        .replace
+                        .push(target.path.clone());
+                }
+                Action::Place => {
+                    placement.placed += 1;
+                    preview.changes.place.push(target.path.clone());
+                    preview
+                        .by_dataset
+                        .entry(target.dataset.clone())
+                        .or_default()
+                        .place
+                        .push(target.path.clone());
+                }
+            }
+        }
+        preview
+    }
+
+    /// what [`Placing::remove_only`] would do, with nothing written.
+    pub(crate) fn preview_removal(&self) -> Preview {
+        let mut preview = Preview::default();
+        self.preview_unwanted(&mut preview);
+        preview
+    }
+
+    fn preview_unwanted(&self, preview: &mut Preview) {
+        let wanted: HashSet<&str> = self
+            .targets
+            .iter()
+            .map(|target| target.path.as_str())
+            .collect();
+        for (path, fate) in unwanted(&self.survey, &wanted, &self.unknown) {
+            match fate {
+                Unwanted::Remove(_) => {
+                    preview.placement.removed += 1;
+                    preview.changes.remove.push(path);
+                }
+                Unwanted::Keep => preview.placement.kept.push(Kept {
+                    path,
+                    reason: Reason::Unneeded,
+                }),
+                Unwanted::Gone => {}
+            }
+        }
     }
 
     /// removes what no dataset needs, places what is missing or outdated, and records it, with
@@ -179,10 +324,10 @@ impl<'a> Placing<'a> {
             manifest,
             targets,
             actions,
-            data_dir,
             mut survey,
             unknown,
         } = self;
+        let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
@@ -234,11 +379,11 @@ impl<'a> Placing<'a> {
             project,
             manifest,
             targets,
-            data_dir,
             mut survey,
             unknown,
             ..
         } = self;
+        let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
@@ -443,9 +588,8 @@ fn decide(
     }
 }
 
-/// deletes files fetchloom placed that no dataset needs now, unless someone changed them. the
-/// files of a dataset with an archive this machine never unpacked stay, since nothing tells which
-/// of them it still needs. says whether the state lost a file.
+/// deletes files fetchloom placed that no dataset needs now, unless someone changed them. says
+/// whether the state lost a file.
 fn remove_unwanted(
     project: &Project,
     placer: &mut Placer,
@@ -454,27 +598,18 @@ fn remove_unwanted(
     unknown: &[(&str, &LockedFile)],
     placement: &mut Placement,
 ) -> Result<bool, Error> {
-    let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
-    let unwanted: Vec<String> = survey
-        .state
-        .files
-        .iter()
-        .filter(|(path, placed)| {
-            !wanted.contains(path.as_str()) && !unsure.contains(placed.dataset.as_str())
-        })
-        .map(|(path, _)| path.clone())
-        .collect();
+    let unwanted = unwanted(survey, wanted, unknown);
     let changed = !unwanted.is_empty();
-    for path in unwanted {
+    for (path, fate) in unwanted {
         let Some(before) = survey.state.files.remove(&path) else {
             continue;
         };
-        match survey.disk.get(&path) {
-            None => {}
-            Some(look) if *look == before.look && !survey.edited.contains(&path) => {
+        match fate {
+            Unwanted::Gone => {}
+            Unwanted::Remove(look) => {
                 let file = project.root.join(survey.listed.get(&path).unwrap_or(&path));
                 match now(&file) {
-                    Some(current) if current == *look => {
+                    Some(current) if current == look => {
                         placer
                             .remove(&file, true, Some(before.method))
                             .map_err(|err| local(&file, &err))?;
@@ -487,13 +622,42 @@ fn remove_unwanted(
                     None => {}
                 }
             }
-            Some(_) => placement.kept.push(Kept {
+            Unwanted::Keep => placement.kept.push(Kept {
                 path,
                 reason: Reason::Unneeded,
             }),
         }
     }
     Ok(changed)
+}
+
+/// what becomes of each file fetchloom placed that no dataset needs now. the files of a dataset
+/// with an archive this machine never unpacked stay, since nothing tells which of them it still
+/// needs.
+fn unwanted(
+    survey: &Survey,
+    wanted: &HashSet<&str>,
+    unknown: &[(&str, &LockedFile)],
+) -> Vec<(String, Unwanted)> {
+    let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
+    survey
+        .state
+        .files
+        .iter()
+        .filter(|(path, placed)| {
+            !wanted.contains(path.as_str()) && !unsure.contains(placed.dataset.as_str())
+        })
+        .map(|(path, placed)| {
+            let fate = match survey.disk.get(path) {
+                None => Unwanted::Gone,
+                Some(look) if *look == placed.look && !survey.edited.contains(path) => {
+                    Unwanted::Remove(*look)
+                }
+                Some(_) => Unwanted::Keep,
+            };
+            (path.clone(), fate)
+        })
+        .collect()
 }
 
 /// how the file at `path` looks right now. a file is read again right before it is deleted,
@@ -641,7 +805,6 @@ mod tests {
             targets,
             unknown: Vec::new(),
             actions,
-            data_dir: project.root.join("data"),
             survey,
         };
         let output = Output::new(

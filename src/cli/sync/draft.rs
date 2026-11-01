@@ -220,6 +220,26 @@ impl Draft {
         self.extract && archive::by_name(&file.path) == Some(Packed::Archive)
     }
 
+    /// the entry a dry run plans with: [`Draft::finish`], with a stand-in for each hash only a
+    /// download can learn and for what each archive not yet unpacked unpacks to. a stand-in
+    /// matches no cached object, so planning treats its file as missing and its archive as never
+    /// unpacked here. it is never written.
+    pub(super) fn stand_in(mut self, now: &str) -> Locked {
+        let extract = self.extract;
+        for file in &mut self.files {
+            let label = format!("{}/{}", self.name, file.path);
+            if file.known.is_none() {
+                let size = file.remote.size.unwrap_or_default();
+                file.known = Some((stand_in(&label), size));
+            }
+            let unpacks = extract && archive::by_name(&file.path) == Some(Packed::Archive);
+            if unpacks && file.unpacks_to.is_none() {
+                file.unpacks_to = Some(stand_in(&format!("{label} unpacked")));
+            }
+        }
+        self.finish(now)
+    }
+
     pub(super) fn finish(self, now: &str) -> Locked {
         let mut files: Vec<LockedFile> = self
             .files
@@ -249,6 +269,11 @@ impl Draft {
             files,
         }
     }
+}
+
+/// a hash no bytes have, standing for one a dry run cannot learn without downloading.
+fn stand_in(what: &str) -> Sha256 {
+    crate::digest::sha256(format!("fetchloom dry run stand-in for {what}").as_bytes())
 }
 
 /// the hash and size of the bytes an earlier download proved match the MD5 a source states.

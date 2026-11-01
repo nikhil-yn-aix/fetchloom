@@ -1,0 +1,334 @@
+//! `--dry-run` on add, remove, sync and cache gc: the plan is told and nothing on disk changes.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::support::{Result, Sandbox, Server, file, json, text};
+
+const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
+const PATH: &str = "/files/iris.csv";
+
+/// every file and folder under `root` with its bytes, or nothing when `root` does not exist.
+fn tree(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
+    let mut found = BTreeMap::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_dir() {
+                found.insert(path.clone(), None);
+                folders.push(path);
+            } else {
+                found.insert(path.clone(), Some(fs::read(&path)?));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// a project with iris added from `server`, whose first response serves it.
+fn added(sandbox: &Sandbox, server: &Server) -> Result {
+    let output = sandbox.run(&["add", &server.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+#[test]
+fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let (project, cache) = (tree(&clone)?, tree(&sandbox.cache())?);
+    let output = sandbox
+        .command_in(&clone, &["sync", "--dry-run"])
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "Would place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+    );
+    let document = json(
+        &sandbox
+            .command_in(&clone, &["--json", "sync", "-n"])
+            .output()?,
+    )?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["lock_changed"], false);
+    assert_eq!(result["placement"]["placed"], 1);
+    assert_eq!(result["placement"]["unchanged"], 0);
+    assert_eq!(
+        result["changes"],
+        serde_json::json!({
+            "place": ["data/iris/iris.csv"],
+            "replace": [],
+            "remove": [],
+            "download": [],
+            "unpack": [],
+        })
+    );
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(tree(&clone)?, project, "the clone is as it was");
+    assert_eq!(tree(&sandbox.cache())?, cache, "the cache is as it was");
+    assert_eq!(server.requests().len(), 1, "only add downloaded");
+    Ok(())
+}
+
+#[test]
+fn sync_dry_run_lists_downloads_with_their_sizes_and_fetches_none() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    crate::support::delete(&placed)?;
+    let cold = sandbox.cache().with_file_name("cold");
+    let project = tree(&sandbox.work())?;
+    let output = sandbox
+        .command(&["sync", "--dry-run"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "Would download iris/iris.csv · 32 B\nWould place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+    );
+    let document = json(
+        &sandbox
+            .command(&["--json", "sync", "--dry-run"])
+            .env("FETCHLOOM_CACHE", &cold)
+            .output()?,
+    )?;
+    assert_eq!(
+        document["result"]["changes"]["download"],
+        serde_json::json!([{ "path": "iris/iris.csv", "size": IRIS.len() }])
+    );
+    assert!(!cold.exists(), "a dry run creates no cache");
+    assert_eq!(tree(&sandbox.work())?, project);
+    assert_eq!(server.requests().len(), 1, "nothing was downloaded");
+
+    let offline = sandbox
+        .command(&["--offline", "sync", "--dry-run"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    assert_eq!(
+        offline.status.code(),
+        Some(20),
+        "offline, the run would stop"
+    );
+    Ok(())
+}
+
+#[test]
+fn sync_dry_run_tells_the_lock_a_new_dataset_would_get() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let other = Server::start("/files/cows.csv", vec![file(b"cow\nbess\n", "\"c1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let updated = format!(
+        "{}\n[datasets.cows]\nref = \"{}\"\n",
+        fs::read_to_string(&manifest)?,
+        other.url
+    );
+    fs::write(&manifest, updated)?;
+    let (project, cache) = (tree(&sandbox.work())?, tree(&sandbox.cache())?);
+    let output = sandbox.run(&["sync", "-n"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        " Would lock cows · 1 file in data.lock\nWould download cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n"
+    );
+    let document = json(&sandbox.run(&["--json", "sync", "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["lock_changed"], true);
+    assert_eq!(result["placement"]["placed"], 1);
+    assert_eq!(result["placement"]["unchanged"], 1);
+    assert_eq!(
+        result["changes"]["download"],
+        serde_json::json!([{ "path": "cows/cows.csv", "size": null }])
+    );
+    assert_eq!(other.requests().len(), 0, "a plain link is not asked");
+    assert_eq!(tree(&sandbox.work())?, project, "data.lock is as it was");
+    assert_eq!(tree(&sandbox.cache())?, cache);
+    Ok(())
+}
+
+#[test]
+fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    crate::support::delete(&placed)?;
+    fs::write(&placed, b"mine\n")?;
+    let (project, cache) = (tree(&sandbox.work())?, tree(&sandbox.cache())?);
+    let kept = sandbox.run(&["sync", "-n"])?;
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.starts_with("warning: data/iris/iris.csv "),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("         Ok dry run, nothing was changed\n"),
+        "{stderr}"
+    );
+    let output = sandbox.run(&["sync", "--force", "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "Would replace data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+    );
+    let document = json(&sandbox.run(&["--json", "sync", "--force", "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["lock_changed"], false);
+    assert_eq!(result["placement"]["replaced"], 1);
+    assert_eq!(
+        result["changes"]["replace"],
+        serde_json::json!(["data/iris/iris.csv"])
+    );
+    assert_eq!(result["changes"]["download"], serde_json::json!([]));
+    assert_eq!(tree(&sandbox.work())?, project, "the edit is still there");
+    assert_eq!(tree(&sandbox.cache())?, cache);
+    Ok(())
+}
+
+#[test]
+fn remove_dry_run_tells_what_it_would_remove() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start("/a.csv", vec![file(b"a\n", "\"a\"")])?;
+    let second = Server::start("/b.csv", vec![file(b"b\n", "\"b\"")])?;
+    added(&sandbox, &first)?;
+    added(&sandbox, &second)?;
+    let (project, cache) = (tree(&sandbox.work())?, tree(&sandbox.cache())?);
+    let output = sandbox.run(&["remove", "a", "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    sandbox
+        .filters()
+        .bind(|| insta::assert_snapshot!("remove_dry_run", stderr));
+    let verbose = text(&sandbox.run(&["-v", "remove", "a", "-n"])?.stderr)?;
+    assert!(
+        verbose.contains("\n            data/a/a.csv\n"),
+        "-v names each file\n{verbose}"
+    );
+    let document = json(&sandbox.run(&["--json", "remove", "a", "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["datasets"], serde_json::json!(["a"]));
+    assert_eq!(result["lock_changed"], true);
+    assert_eq!(result["placement"]["removed"], 1);
+    assert_eq!(
+        result["changes"]["remove"],
+        serde_json::json!(["data/a/a.csv"])
+    );
+    assert_eq!(tree(&sandbox.work())?, project, "the project is as it was");
+    assert_eq!(tree(&sandbox.cache())?, cache);
+    Ok(())
+}
+
+#[test]
+fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    fs::remove_file(sandbox.work().join("data.toml"))?;
+    let cache = tree(&sandbox.cache())?;
+    let output = sandbox.run(&["cache", "gc", "--now", "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        " Would free 32 B · 1 file from the cache\n         Ok dry run, nothing was changed\n"
+    );
+    let young = text(&sandbox.run(&["cache", "gc", "-n"])?.stderr)?;
+    assert_eq!(
+        young,
+        " Would keep 32 B in 1 file no project needs, gc frees it once it is a day old, or now with --now\n         Ok nothing to free; dry run, nothing was changed\n"
+    );
+    let document = json(&sandbox.run(&["--json", "cache", "gc", "--now", "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["objects"], 1);
+    assert_eq!(result["bytes"], IRIS.len());
+    let removed: Vec<&str> = result["changes"]["remove"]
+        .as_array()
+        .ok_or("no paths")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(
+        removed.iter().any(|path| path.contains("objects")),
+        "{removed:?}"
+    );
+    assert!(
+        removed.iter().any(|path| path.contains("projects")),
+        "the forgotten project's record: {removed:?}"
+    );
+    assert_eq!(tree(&sandbox.cache())?, cache, "the cache is as it was");
+    let real = json(&sandbox.run(&["--json", "cache", "gc", "--now"])?)?;
+    assert_eq!(
+        real["result"]["objects"], 1,
+        "gc frees what it said it would"
+    );
+    assert!(real["result"].get("dry_run").is_none());
+    Ok(())
+}
+
+#[test]
+fn add_dry_run_writes_nothing_and_downloads_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    fs::create_dir(sandbox.work().join(".git"))?;
+    let project = tree(&sandbox.work())?;
+    let output = sandbox.run(&["add", &server.url, "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    sandbox
+        .filters()
+        .bind(|| insta::assert_snapshot!("add_dry_run", stderr));
+    let document = json(&sandbox.run(&["--json", "add", &server.url, "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["datasets"], serde_json::json!(["iris"]));
+    assert_eq!(result["lock_changed"], true);
+    assert_eq!(result["placement"]["placed"], 1);
+    assert_eq!(
+        result["changes"]["place"],
+        serde_json::json!(["data/iris/iris.csv"])
+    );
+    assert_eq!(
+        result["changes"]["download"],
+        serde_json::json!([{ "path": "iris/iris.csv", "size": null }])
+    );
+    assert_eq!(
+        tree(&sandbox.work())?,
+        project,
+        "no data.toml, lock or data/"
+    );
+    assert!(!sandbox.cache().exists(), "no cache");
+    assert_eq!(server.requests().len(), 0);
+
+    added(&sandbox, &server)?;
+    let project = tree(&sandbox.work())?;
+    let again = sandbox.run(&["add", &server.url, "-n"])?;
+    assert_eq!(
+        text(&again.stderr)?,
+        "         Ok iris is already in data.toml; dry run, nothing was changed\n"
+    );
+    assert_eq!(tree(&sandbox.work())?, project);
+    Ok(())
+}

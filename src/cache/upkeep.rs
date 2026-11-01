@@ -109,7 +109,7 @@ impl Cache {
     }
 
     pub(crate) fn forget(&self, root: &Path) {
-        let _ = fs::remove_file(self.registration(root));
+        let _ = self.volume.remove(&self.registration(root));
     }
 
     /// checks an archive member without letting a large writable object delay cancellation.

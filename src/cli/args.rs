@@ -16,23 +16,24 @@ mod examples {
   fetchloom add iris
   fetchloom add zenodo:3608990
   fetchloom add doi:10.5281/zenodo.3608990 --as flowers
-  fetchloom add zenodo:3608990 --as measurements --select \"*.csv\"
+  fetchloom add zenodo:3608990 --select \"*.csv\" --dry-run
 
-on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore";
+on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. --dry-run writes nothing";
 
     pub(super) const REMOVE: &str = "examples:
   fetchloom remove iris
+  fetchloom remove iris --dry-run
   fetchloom remove flowers --json
 
-on disk: edits data.toml and data.lock, and deletes the unchanged files it placed in data/";
+on disk: edits data.toml and data.lock, and deletes the unchanged files it placed in data/. --dry-run writes nothing";
 
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
   fetchloom sync --offline
   fetchloom sync --locked
-  fetchloom sync --force
+  fetchloom sync --force --dry-run
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock
@@ -70,9 +71,10 @@ on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache v
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
   fetchloom cache gc --now
+  fetchloom cache gc --now --dry-run
   fetchloom cache gc --json
 
-on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is. --dry-run deletes nothing";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify
@@ -374,6 +376,9 @@ pub(crate) struct Gc {
     /// today. downloads still running keep their partial files
     #[arg(long, help_heading = "options")]
     pub(crate) now: bool,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// `auth`: which accounts are signed in, or a change to one.
@@ -443,6 +448,15 @@ pub(crate) struct Filter {
     pub(crate) exclude: Vec<String>,
 }
 
+/// `--dry-run`, for the commands that change files.
+#[derive(Clone, Copy, Debug, clap::Args)]
+pub(crate) struct DryRun {
+    /// show what would change on disk without changing it. sources may still be asked what a
+    /// link holds
+    #[arg(short = 'n', long, help_heading = "options")]
+    pub(crate) dry_run: bool,
+}
+
 /// add a dataset, pin it and download it into the data folder
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Add {
@@ -460,6 +474,9 @@ pub(crate) struct Add {
     /// keep zip and tar archives packed, as extract = false in data.toml does
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// remove a dataset and the unchanged files fetchloom placed for it
@@ -468,6 +485,9 @@ pub(crate) struct Remove {
     /// the dataset's name in data.toml
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) name: String,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// place the files pinned in data.lock on this machine
@@ -480,6 +500,9 @@ pub(crate) struct Sync {
     /// fail instead of updating data.lock when it is out of date with data.toml, for CI
     #[arg(long, help_heading = "options")]
     pub(crate) locked: bool,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// bring data.lock in line with data.toml

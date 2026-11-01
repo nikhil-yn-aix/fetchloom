@@ -11,9 +11,9 @@ use tracing::Instrument as _;
 
 use super::args::{self, Add, Remove};
 use super::sync::disk::{self, Survey};
-use super::sync::place::{self, Placement, Seen};
+use super::sync::place::{self, Changes, Placement, Preview, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
-use super::{Context, fetch, open_cache};
+use super::{Context, fetch, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
@@ -25,8 +25,9 @@ use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
 use crate::source::{Listing, Parsed, Reference};
+use crate::units;
 
-/// what a project command did, as `--json` prints it.
+/// what a project command did, or with `--dry-run` would do, as `--json` prints it.
 #[derive(Default, Serialize)]
 pub(super) struct Report {
     project: PathBuf,
@@ -34,11 +35,31 @@ pub(super) struct Report {
     datasets: Vec<String>,
     lock_changed: bool,
     placement: Option<Placement>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dry_run: bool,
+    /// with `--dry-run`, the paths that would change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Changes>,
+}
+
+impl Report {
+    /// what a dry run found: whether data.lock would change and what placing would do.
+    fn dry(project: PathBuf, datasets: Vec<String>, lock_changed: bool, preview: Preview) -> Self {
+        Report {
+            project,
+            datasets,
+            lock_changed,
+            placement: Some(preview.placement),
+            dry_run: true,
+            changes: Some(preview.changes),
+        }
+    }
 }
 
 struct AddProject {
     project: Project,
-    _held: Held,
+    /// none for a dry run, which changes nothing and so needs no hold.
+    _held: Option<Held>,
     text: Option<String>,
     manifest: Manifest,
 }
@@ -51,12 +72,17 @@ struct Addition {
 }
 
 pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
-    let adding = discover_add(context).await?;
+    let dry_run = args.dry.dry_run;
+    let adding = discover_add(context, dry_run).await?;
     let project = &adding.project;
     let manifest = &adding.manifest;
     let net = Arc::new(net(context, manifest));
     let parsed = validate_add(context, manifest, &net, &mut args).await?;
-    let cache = open_cache()?;
+    let cache = if dry_run {
+        peek_cache()?
+    } else {
+        open_cache()?
+    };
     let mut addition = resolve_add(context, &net, &args, &parsed).await?;
     let (old, lock_text) = project.lock_and_text()?.unzip();
     if args.name.is_none()
@@ -70,10 +96,12 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
             &name,
             &addition.entry,
             &addition.listing,
+            dry_run,
         )
         .await;
     }
-    if args.name.is_none() {
+    // a dry run downloads nothing, so it names the dataset from the link alone
+    if args.name.is_none() && !dry_run {
         learn_name(
             context,
             &net,
@@ -87,14 +115,13 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         Some(asked) => asked,
         None => choose_name(&addition.listing, &parsed, manifest)?,
     };
-    let new_manifest = write_add(
-        project,
-        adding.text.as_deref().unwrap_or_default(),
-        &name,
-        &args,
-        &addition,
-    )?;
+    let text = adding.text.as_deref().unwrap_or_default();
+    let (updated, new_manifest) = added(text, &name, &args, &addition)?;
     let work = Loop::new(context, project, net, cache);
+    if dry_run {
+        return preview_add(&work, &new_manifest, old.as_ref(), name, addition.listing).await;
+    }
+    project.write(manifest::FILE, updated.as_bytes())?;
     let before = (adding.text.as_deref(), lock_text.as_deref());
     let (lock_changed, placement) = sync_add(
         &work,
@@ -111,14 +138,19 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         datasets: vec![name],
         lock_changed,
         placement: Some(placement),
+        ..Report::default()
     })
 }
 
-async fn discover_add(context: &Context) -> Result<AddProject, Error> {
+async fn discover_add(context: &Context, dry_run: bool) -> Result<AddProject, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).unwrap_or(Project { root: here });
-    let held = hold(context, &project, "add").await?;
+    let held = if dry_run {
+        None
+    } else {
+        Some(hold(context, &project, "add").await?)
+    };
     let text = if project.manifest_path().is_file() {
         Some(project.manifest()?.0)
     } else {
@@ -190,13 +222,13 @@ async fn resolve_add(
     })
 }
 
-fn write_add(
-    project: &Project,
+/// data.toml with the new dataset, as text and as read.
+fn added(
     text: &str,
     name: &str,
     args: &Add,
     addition: &Addition,
-) -> Result<Manifest, Error> {
+) -> Result<(String, Manifest), Error> {
     let updated = manifest::with_dataset(
         text,
         name,
@@ -206,8 +238,43 @@ fn write_add(
         !args.no_extract,
     )?;
     let manifest = Manifest::parse(&updated)?;
-    project.write(manifest::FILE, updated.as_bytes())?;
-    Ok(manifest)
+    Ok((updated, manifest))
+}
+
+/// `add --dry-run`: what adding the dataset would change, with data.toml as it would be.
+async fn preview_add(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    name: String,
+    listing: Listing,
+) -> Result<Report, Error> {
+    let given = Some((name.clone(), listing));
+    let (lock_changed, preview) = preview_all(work, manifest, old, false, given).await?;
+    let output = &work.context.output;
+    if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
+        output.step(
+            "Would ignore",
+            &format!(
+                "{}/ in .gitignore, since its files come from data.lock",
+                manifest.data_dir
+            ),
+        );
+    }
+    output.step(
+        "Would add",
+        &format!(
+            "{name} to data.toml, its files in {}",
+            plan::folder(manifest, &name)
+        ),
+    );
+    dry_run_done(output, None);
+    Ok(Report::dry(
+        work.project.root.clone(),
+        vec![name],
+        lock_changed,
+        preview,
+    ))
 }
 
 async fn sync_add(
@@ -322,6 +389,7 @@ async fn again(
     name: &str,
     entry: &manifest::Entry,
     listing: &Listing,
+    dry_run: bool,
 ) -> Result<Report, Error> {
     let existing = &manifest.datasets[name];
     let differs = if existing.select != entry.select || existing.exclude != entry.exclude {
@@ -343,6 +411,19 @@ async fn again(
             "change {setting} {name} in data.toml, or pass --as <name> to add it a second time"
         )));
     }
+    if dry_run {
+        let (lock_changed, preview) = preview_all(work, manifest, old, false, None).await?;
+        dry_run_done(
+            &work.context.output,
+            Some(&format!("{name} is already in data.toml")),
+        );
+        return Ok(Report::dry(
+            work.project.root.clone(),
+            Vec::new(),
+            lock_changed,
+            preview,
+        ));
+    }
     let (lock_changed, placement) =
         sync_all(work, manifest, old, &Upgrade::Nothing, false, None, None).await?;
     let contents = if has_files(work, manifest, name)? {
@@ -358,6 +439,7 @@ async fn again(
         datasets: Vec::new(),
         lock_changed,
         placement: Some(placement),
+        ..Report::default()
     })
 }
 
@@ -392,16 +474,35 @@ fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, E
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
     let project = find(&context.output)?;
-    let _held = hold(context, &project, "remove").await?;
+    let dry_run = args.dry.dry_run;
+    let _held = if dry_run {
+        None
+    } else {
+        Some(hold(context, &project, "remove").await?)
+    };
     let (text, manifest) = project.manifest()?;
     known(&manifest, &args.name, "remove")?;
     let updated = manifest::without_dataset(&text, &args.name)?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
-    let cache = open_cache()?;
+    let cache = if dry_run {
+        peek_cache()?
+    } else {
+        open_cache()?
+    };
     let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
     let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
+    if dry_run {
+        let preview = placing.preview_removal();
+        context.output.step(
+            "Would remove",
+            &format!("{} from data.toml and data.lock", args.name),
+        );
+        place::tell_preview(&context.output, &new_manifest, &preview);
+        dry_run_done(&context.output, None);
+        return Ok(Report::dry(project.root, vec![args.name], true, preview));
+    }
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
     let placement = placing.remove_only(&context.output).map_err(|error| {
@@ -416,12 +517,19 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         datasets: vec![args.name],
         lock_changed: true,
         placement: Some(placement),
+        ..Report::default()
     })
 }
 
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let project = find(&context.output)?;
-    let _held = hold(context, &project, "sync").await?;
+    let dry_run = args.dry.dry_run;
+    // a dry run changes nothing, so like `lock --check` it needs no hold
+    let _held = if dry_run {
+        None
+    } else {
+        Some(hold(context, &project, "sync").await?)
+    };
     let (text, manifest) = project.manifest()?;
     if args.locked {
         let Some(lock) = project.lock()? else {
@@ -433,6 +541,9 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         })?;
     }
     let read = project.lock_and_text()?;
+    if dry_run {
+        return preview_sync(context, &project, &manifest, read, args.force).await;
+    }
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
         lock: read
@@ -503,6 +614,35 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     })
 }
 
+/// `sync --dry-run`: what syncing would change, given data.lock as `read`.
+async fn preview_sync(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    read: Option<(Lock, String)>,
+    force: bool,
+) -> Result<Report, Error> {
+    let old = read.map(|(lock, _)| lock);
+    let work = Loop::new(
+        context,
+        project,
+        Arc::new(net(context, manifest)),
+        peek_cache()?,
+    );
+    let (lock_changed, preview) = preview_all(&work, manifest, old.as_ref(), force, None).await?;
+    let nothing = !lock_changed && preview.changes_nothing();
+    dry_run_done(
+        &context.output,
+        nothing.then_some("all pinned files are in place"),
+    );
+    Ok(Report::dry(
+        project.root.clone(),
+        Vec::new(),
+        lock_changed,
+        preview,
+    ))
+}
+
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
     let project = find(&context.output)?;
     // a check changes nothing, so it needs no hold. anything else reads what it changes only
@@ -556,6 +696,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         datasets: moved,
         lock_changed: changed,
         placement: None,
+        ..Report::default()
     })
 }
 
@@ -826,6 +967,55 @@ async fn sync_all(
     work.drop_unpacked(&lock);
     register(work);
     Ok((changed, placement))
+}
+
+/// what [`sync_all`] would do, told as it is found: the lock it would write when that changes,
+/// the downloads and unpacking it would need, then what placing would change. it stops before
+/// anything [`sync_all`] changes: no download, unpacking, lock, state or registration, and cached
+/// objects are read without being sealed or marked. it never takes the settled-sync shortcut.
+async fn preview_all(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    force: bool,
+    given: Option<(String, Listing)>,
+) -> Result<(bool, Preview), Error> {
+    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    survey.look_again(&work.project.root, &work.cache, force)?;
+    let empty = Lock::default();
+    let (lock, jobs) = work
+        .relock_dry(manifest, old.unwrap_or(&empty), &Upgrade::Nothing, given)
+        .await?;
+    let changed = old != Some(&lock);
+    let output = &work.context.output;
+    if changed {
+        engine::tell_lock(output, old, &lock, ("Would lock", "Would remove"));
+    }
+    let preview = work.preview(manifest, &lock, force, survey, jobs)?;
+    for download in &preview.changes.download {
+        let size = download
+            .size
+            .map_or_else(|| "size unknown".to_owned(), units::size);
+        output.step("Would download", &format!("{} · {size}", download.path));
+    }
+    for archive in &preview.changes.unpack {
+        output.step("Would unpack", archive);
+    }
+    if !preview.changes.unpack.is_empty() {
+        output.hint("an archive's files are known once it is unpacked, so they are not counted");
+    }
+    place::tell_preview(output, manifest, &preview);
+    Ok((changed, preview))
+}
+
+/// the last line of every dry run, with what it found when there is nothing to do.
+pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
+    if let Some(found) = nothing_to_do {
+        output.done("Ok", &format!("{found}; dry run, nothing was changed"));
+    } else {
+        output.done("Ok", "dry run, nothing was changed");
+        output.next("run the same command without --dry-run to make these changes");
+    }
 }
 
 /// registers the project with the cache. gc keeps what registered projects need, so a failure

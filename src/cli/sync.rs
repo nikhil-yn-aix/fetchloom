@@ -16,7 +16,7 @@ use url::Url;
 
 use self::disk::Survey;
 use self::draft::Draft;
-use self::place::{Placement, Placing};
+use self::place::{Download, Placement, Placing, Preview};
 use super::Context;
 use super::fetch::{self, Again, Job};
 use crate::cache::Cache;
@@ -124,6 +124,65 @@ impl<'a> Loop<'a> {
         upgrade: &Upgrade,
         given: Option<(String, Listing)>,
     ) -> Result<Lock, Error> {
+        let Drafted { kept, mut drafts } = self.draft(manifest, old, upgrade, given).await?;
+        let mut jobs = Vec::new();
+        let mut slots = Vec::new();
+        for (index, draft) in drafts.iter().enumerate() {
+            for (file, job) in draft.jobs(&self.cache) {
+                slots.push((index, file));
+                jobs.push(job);
+            }
+        }
+        let fetched = self.download(jobs).await?;
+        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
+            if let Some(file) = file {
+                drafts[draft].learn(file, &fetched, &self.cache);
+            }
+        }
+        self.unpack_drafts(&mut drafts).await?;
+        let now = lock::timestamp(SystemTime::now());
+        Ok(settled(
+            old,
+            kept,
+            drafts.into_iter().map(|draft| draft.finish(&now)),
+        ))
+    }
+
+    /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and the
+    /// downloads it would need. a hash only those can learn has a stand-in, so the lock is only
+    /// for planning.
+    pub(super) async fn relock_dry(
+        &self,
+        manifest: &Manifest,
+        old: &Lock,
+        upgrade: &Upgrade,
+        given: Option<(String, Listing)>,
+    ) -> Result<(Lock, Vec<Job>), Error> {
+        let Drafted { kept, mut drafts } = self.draft(manifest, old, upgrade, given).await?;
+        let mut jobs = Vec::new();
+        for draft in &mut drafts {
+            // archives this machine unpacked before are known from their records
+            draft.unknown_archives(&self.cache);
+            jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
+        }
+        let now = lock::timestamp(SystemTime::now());
+        let lock = settled(
+            old,
+            kept,
+            drafts.into_iter().map(|draft| draft.stand_in(&now)),
+        );
+        Ok((lock, jobs))
+    }
+
+    /// datasets whose entry is unchanged, kept as data.lock has them, and drafts of the others,
+    /// resolved and with every hash known without a download.
+    async fn draft(
+        &self,
+        manifest: &Manifest,
+        old: &Lock,
+        upgrade: &Upgrade,
+        given: Option<(String, Listing)>,
+    ) -> Result<Drafted, Error> {
         let mut kept: Vec<Locked> = Vec::new();
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
@@ -150,37 +209,48 @@ impl<'a> Loop<'a> {
                 &self.cache,
             )?);
         }
-        let mut jobs = Vec::new();
-        let mut slots = Vec::new();
-        for (index, draft) in drafts.iter().enumerate() {
-            for (file, job) in draft.jobs(&self.cache) {
-                slots.push((index, file));
-                jobs.push(job);
+        Ok(Drafted { kept, drafts })
+    }
+
+    /// what [`Loop::place`] would do, decided without downloading, unpacking or writing, given
+    /// `jobs` relocking would download first. a download an offline run could not make stops the
+    /// preview as it would stop the run.
+    pub(super) fn preview(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        force: bool,
+        survey: Survey,
+        mut jobs: Vec<Job>,
+    ) -> Result<Preview, Error> {
+        let placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
+        let mut unpack = Vec::new();
+        for (dataset, file) in placing
+            .unknown()
+            .into_iter()
+            .chain(placing.missing_as_is(&self.cache)?)
+        {
+            if file.unpacks_to.is_some() {
+                unpack.push(format!("{dataset}/{}", file.path));
             }
+            jobs.push(job(lock, &dataset, file)?);
         }
-        let fetched = self.download(jobs).await?;
-        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
-            if let Some(file) = file {
-                drafts[draft].learn(file, &fetched, &self.cache);
-            }
-        }
-        self.unpack_drafts(&mut drafts).await?;
-        let now = lock::timestamp(SystemTime::now());
-        let mut datasets = kept;
-        datasets.extend(drafts.into_iter().map(|draft| {
-            let mut locked = draft.finish(&now);
-            // a pin dates from when its data last changed, so resolving the same data again
-            // leaves data.lock as it was
-            if let Some(before) = old.get(&locked.name)
-                && before.resolved == locked.resolved
-                && before.files == locked.files
-            {
-                locked.timestamp.clone_from(&before.timestamp);
-            }
-            locked
-        }));
-        datasets.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(Lock { datasets })
+        let mut seen = BTreeSet::new();
+        jobs.retain(|job| seen.insert(job.label.clone()));
+        let mut seen = BTreeSet::new();
+        unpack.retain(|label| seen.insert(label.clone()));
+        jobs.retain(|job| !in_cache(&self.cache, &job.fetch.expect));
+        self.refuse_offline(&jobs)?;
+        let mut preview = placing.preview();
+        preview.changes.download = jobs
+            .into_iter()
+            .map(|job| Download {
+                path: job.label,
+                size: job.fetch.expect.size,
+            })
+            .collect();
+        preview.changes.unpack = unpack;
+        Ok(preview)
     }
 
     /// writes data.lock when it changed, and says which datasets it pins anew or no longer.
@@ -190,35 +260,7 @@ impl<'a> Loop<'a> {
         }
         let _span = tracing::debug_span!("write_lock").entered();
         self.project.write(lock::FILE, lock.render().as_bytes())?;
-        let output = &self.context.output;
-        let pinned: Vec<&Locked> = lock
-            .datasets
-            .iter()
-            .filter(|dataset| old.and_then(|old| old.get(&dataset.name)) != Some(*dataset))
-            .collect();
-        let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
-        let which = match pinned.as_slice() {
-            [] => None,
-            [only] => Some(only.name.clone()),
-            many => Some(units::count(many.len() as u64, "dataset", "datasets")),
-        };
-        if let Some(which) = which {
-            output.step(
-                "Locked",
-                &format!(
-                    "{which} · {} in {}",
-                    units::count(files as u64, "file", "files"),
-                    lock::FILE
-                ),
-            );
-        }
-        let dropped = old
-            .iter()
-            .flat_map(|old| &old.datasets)
-            .filter(|dataset| lock.get(&dataset.name).is_none());
-        for dataset in dropped {
-            output.step("Removed", &format!("{} from {}", dataset.name, lock::FILE));
-        }
+        tell_lock(&self.context.output, old, lock, ("Locked", "Removed"));
         Ok(true)
     }
 
@@ -293,47 +335,7 @@ impl<'a> Loop<'a> {
         if jobs.is_empty() {
             return Ok(Vec::new());
         }
-        if self.net.offline().enabled() {
-            let missing: Vec<&str> = jobs
-                .iter()
-                .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
-                .map(|job| job.label.as_str())
-                .collect();
-            if !missing.is_empty() {
-                // a new link has no fingerprint yet, so the cache cannot be asked for it
-                let unknown = jobs.iter().any(|job| {
-                    job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch.expect)
-                });
-                if unknown {
-                    let mut error = Error::new(
-                        Kind::OfflineMissing,
-                        "offline, and a new link must be downloaded once to learn its fingerprint",
-                    );
-                    for label in missing.iter().take(5) {
-                        error = error.detail((*label).to_owned());
-                    }
-                    return Err(error.help(format!(
-                        "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
-                        self.net.offline().retry()
-                    )));
-                }
-                let mut error = Error::new(
-                    Kind::OfflineMissing,
-                    format!(
-                        "offline, and {} the lock names {} not in the cache",
-                        units::count(missing.len() as u64, "file", "files"),
-                        if missing.len() == 1 { "is" } else { "are" }
-                    ),
-                );
-                for label in missing.iter().take(5) {
-                    error = error.detail((*label).to_owned());
-                }
-                if missing.len() > 5 {
-                    error = error.detail(format!("and {} more", missing.len() - 5));
-                }
-                return Err(error.help(format!("{} to download them", self.net.offline().retry())));
-            }
-        }
+        self.refuse_offline(&jobs)?;
         let size: u64 = jobs
             .iter()
             .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
@@ -366,6 +368,110 @@ impl<'a> Loop<'a> {
             self.context.output.step("Downloaded", &text);
         }
         Ok(fetched)
+    }
+
+    /// refuses, when offline, the jobs whose bytes the cache lacks.
+    fn refuse_offline(&self, jobs: &[Job]) -> Result<(), Error> {
+        if !self.net.offline().enabled() {
+            return Ok(());
+        }
+        let missing: Vec<&str> = jobs
+            .iter()
+            .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
+            .map(|job| job.label.as_str())
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        // a new link has no fingerprint yet, so the cache cannot be asked for it
+        let unknown = jobs.iter().any(|job| {
+            job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch.expect)
+        });
+        if unknown {
+            let mut error = Error::new(
+                Kind::OfflineMissing,
+                "offline, and a new link must be downloaded once to learn its fingerprint",
+            );
+            for label in missing.iter().take(5) {
+                error = error.detail((*label).to_owned());
+            }
+            return Err(error.help(format!(
+                "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
+                self.net.offline().retry()
+            )));
+        }
+        let mut error = Error::new(
+            Kind::OfflineMissing,
+            format!(
+                "offline, and {} the lock names {} not in the cache",
+                units::count(missing.len() as u64, "file", "files"),
+                if missing.len() == 1 { "is" } else { "are" }
+            ),
+        );
+        for label in missing.iter().take(5) {
+            error = error.detail((*label).to_owned());
+        }
+        if missing.len() > 5 {
+            error = error.detail(format!("and {} more", missing.len() - 5));
+        }
+        Err(error.help(format!("{} to download them", self.net.offline().retry())))
+    }
+}
+
+/// datasets on their way into data.lock.
+struct Drafted {
+    /// entries whose data.toml entry did not change, as data.lock has them.
+    kept: Vec<Locked>,
+    drafts: Vec<Draft>,
+}
+
+/// the lock of `kept` and `drafted` entries, by name. a pin dates from when its data last
+/// changed, so resolving the same data again leaves data.lock as it was.
+fn settled(old: &Lock, kept: Vec<Locked>, drafted: impl Iterator<Item = Locked>) -> Lock {
+    let mut datasets = kept;
+    datasets.extend(drafted.map(|mut locked| {
+        if let Some(before) = old.get(&locked.name)
+            && before.resolved == locked.resolved
+            && before.files == locked.files
+        {
+            locked.timestamp.clone_from(&before.timestamp);
+        }
+        locked
+    }));
+    datasets.sort_by(|a, b| a.name.cmp(&b.name));
+    Lock { datasets }
+}
+
+/// says which datasets `lock` pins anew and which it no longer has, with `verbs` for each, such
+/// as `Locked` and `Removed`.
+pub(super) fn tell_lock(output: &Output, old: Option<&Lock>, lock: &Lock, verbs: (&str, &str)) {
+    let pinned: Vec<&Locked> = lock
+        .datasets
+        .iter()
+        .filter(|dataset| old.and_then(|old| old.get(&dataset.name)) != Some(*dataset))
+        .collect();
+    let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
+    let which = match pinned.as_slice() {
+        [] => None,
+        [only] => Some(only.name.clone()),
+        many => Some(units::count(many.len() as u64, "dataset", "datasets")),
+    };
+    if let Some(which) = which {
+        output.step(
+            verbs.0,
+            &format!(
+                "{which} · {} in {}",
+                units::count(files as u64, "file", "files"),
+                lock::FILE
+            ),
+        );
+    }
+    let dropped = old
+        .iter()
+        .flat_map(|old| &old.datasets)
+        .filter(|dataset| lock.get(&dataset.name).is_none());
+    for dataset in dropped {
+        output.step(verbs.1, &format!("{} from {}", dataset.name, lock::FILE));
     }
 }
 

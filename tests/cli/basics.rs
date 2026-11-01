@@ -228,9 +228,13 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
         .ok_or("scope.md names no options")?;
     let sandbox = Sandbox::new()?;
     for (commands, intro) in [
-        (&["add", "get"][..], "`add` and `get` also take "),
-        (&["add"], "`add` takes "),
-        (&["get"], "`get` takes "),
+        (
+            &[&["add"][..], &["remove"], &["sync"], &["cache", "gc"]][..],
+            "`add`, `remove`, `sync` and `cache gc` also take ",
+        ),
+        (&[&["add"][..], &["get"]], "`add` and `get` also take "),
+        (&[&["add"][..]], "`add` takes "),
+        (&[&["get"][..]], "`get` takes "),
     ] {
         let (_, rest) = options.split_once(intro).ok_or(intro)?;
         let named = rest
@@ -239,12 +243,13 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
             .and_then(|sentence| sentence.split(", and ").next())
             .unwrap_or_default();
         for command in commands {
-            let help = text(&sandbox.run(&[command, "--help"])?.stdout)?;
+            let help = text(&sandbox.run(&[*command, &["--help"]].concat())?.stdout)?;
             for option in named.split('`').skip(1).step_by(2) {
                 let flag = option.split(' ').next().unwrap_or(option);
                 assert!(
                     help.contains(&format!("{flag} ")) || help.contains(&format!("{flag},")),
-                    "scope.md says {command} takes {flag}"
+                    "scope.md says {} takes {flag}",
+                    command.join(" ")
                 );
             }
         }

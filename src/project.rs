@@ -289,6 +289,16 @@ impl Project {
     /// the data folder, made sure to be a real folder inside the project with no link on the way,
     /// so nothing is ever placed or deleted outside it.
     pub(crate) fn data_dir(&self, manifest: &Manifest) -> Result<PathBuf, Error> {
+        self.data_folder(manifest, true)
+    }
+
+    /// where the data folder is, refused as [`Project::data_dir`] refuses it, but with no missing
+    /// folder created, so a plan made from it changes nothing.
+    pub(crate) fn planned_data_dir(&self, manifest: &Manifest) -> Result<PathBuf, Error> {
+        self.data_folder(manifest, false)
+    }
+
+    fn data_folder(&self, manifest: &Manifest, create: bool) -> Result<PathBuf, Error> {
         let mut folder = self.root.clone();
         for part in manifest.data_dir.split('/') {
             folder.push(part);
@@ -308,6 +318,9 @@ impl Project {
                     .help("move that file to keep it, or set data_dir in [project] in data.toml to another folder"));
                 }
                 Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound && !create => {
+                    return Ok(self.root.join(&manifest.data_dir));
+                }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     fs::create_dir(&folder).map_err(|err| {
                         Error::io(format_args!("could not create {}", folder.display()), &err)
@@ -327,12 +340,21 @@ impl Project {
     /// adds the data folder to the .gitignore of the git repository the project is in, unless it is
     /// there. says whether it was added.
     pub(crate) fn ignore_in_git(&self, data_dir: &str) -> Result<bool, Error> {
+        let Some(updated) = self.ignored_in_git(data_dir)? else {
+            return Ok(false);
+        };
+        self.write(".gitignore", updated.as_bytes())?;
+        Ok(true)
+    }
+
+    /// the .gitignore that [`Project::ignore_in_git`] would write, or none when it writes nothing.
+    pub(crate) fn ignored_in_git(&self, data_dir: &str) -> Result<Option<String>, Error> {
         if !self
             .root
             .ancestors()
             .any(|folder| folder.join(".git").exists())
         {
-            return Ok(false);
+            return Ok(None);
         }
         let path = self.root.join(".gitignore");
         let text = match fs::read_to_string(&path) {
@@ -351,7 +373,7 @@ impl Project {
             .contains(&line)
         });
         if present {
-            return Ok(false);
+            return Ok(None);
         }
         let mut updated = text;
         if !updated.is_empty() && !updated.ends_with('\n') {
@@ -359,8 +381,7 @@ impl Project {
         }
         updated.push_str(&entry);
         updated.push('\n');
-        self.write(".gitignore", updated.as_bytes())?;
-        Ok(true)
+        Ok(Some(updated))
     }
 
     /// the .fetchloom folder, which tells git to ignore it the first time it is made.

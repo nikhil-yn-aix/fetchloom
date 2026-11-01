@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::put::Tally;
-use super::{Placement, Reason};
+use super::{Placement, Preview, Reason};
 use crate::output::Output;
 use crate::place::Placer;
 use crate::plan;
@@ -48,6 +48,64 @@ pub(super) fn tell(
     {
         output.warn(&why.copied_because(&manifest.data_dir, "files were"));
     }
+    warn_kept(output, placement);
+    for path in &placement.restored {
+        output.warn(&format!(
+            "{path} is a linked file whose contents changed, so the pinned file was restored"
+        ));
+    }
+}
+
+/// the lines a dry run prints for a placement it only planned: what each dataset would gain or
+/// have replaced, what would be removed, and every file that would be left alone. `-v` names
+/// each file.
+pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Preview) {
+    // sizes stay out: a file whose pin only a download can learn has no size yet
+    let tell_files = |verb: &str, dataset: &str, files: &[String]| {
+        if files.is_empty() {
+            return;
+        }
+        output.step(
+            verb,
+            &format!(
+                "{} · {}",
+                plan::folder(manifest, dataset),
+                units::count(files.len() as u64, "file", "files"),
+            ),
+        );
+        for path in files {
+            output.detail(path);
+        }
+    };
+    for (dataset, planned) in &preview.by_dataset {
+        tell_files("Would place", dataset, &planned.place);
+    }
+    for (dataset, planned) in &preview.by_dataset {
+        tell_files("Would replace", dataset, &planned.replace);
+    }
+    let placement = &preview.placement;
+    if placement.removed > 0 {
+        output.step(
+            "Would remove",
+            &units::count(
+                placement.removed,
+                "file no dataset needs",
+                "files no dataset needs",
+            ),
+        );
+        for path in &preview.changes.remove {
+            output.detail(path);
+        }
+    }
+    warn_kept(output, placement);
+    for path in &placement.restored {
+        output.warn(&format!(
+            "{path} is a linked file whose contents changed, so the pinned file would be restored"
+        ));
+    }
+}
+
+fn warn_kept(output: &Output, placement: &Placement) {
     for kept in &placement.kept {
         let message = match kept.reason {
             Reason::Changed => format!(
@@ -68,10 +126,5 @@ pub(super) fn tell(
             ),
         };
         output.warn(&message);
-    }
-    for path in &placement.restored {
-        output.warn(&format!(
-            "{path} is a linked file whose contents changed, so the pinned file was restored"
-        ));
     }
 }

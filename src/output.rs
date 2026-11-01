@@ -685,6 +685,8 @@ fn verb_color(verb: &str) -> Tone {
             Tone::Warn
         }
         "Failed" => Tone::Fail,
+        // a dry run's plan is work not yet done
+        verb if verb.starts_with("Would ") => Tone::Work,
         // the numbers of a list to choose from
         verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => Tone::Accent,
         _ => Tone::Done,
@@ -936,7 +938,15 @@ mod tests {
                 Done,
             ),
             (
-                &["Downloading", "Unpacking", "Waiting", "Searching"][..],
+                &[
+                    "Downloading",
+                    "Unpacking",
+                    "Waiting",
+                    "Searching",
+                    "Would place",
+                    "Would download",
+                    "Would remove",
+                ][..],
                 Work,
             ),
             (&["1", "12"][..], Accent),

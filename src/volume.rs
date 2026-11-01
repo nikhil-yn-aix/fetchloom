@@ -5,7 +5,7 @@
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// how a volume links, renames and removes files, and whether it can hardlink at all, learned
 /// the first time a removal needs to know.
@@ -18,6 +18,8 @@ pub(crate) struct Volume {
     rename: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
     links: OnceLock<bool>,
+    /// for a volume that only pretends, every existing path a removal named, in order.
+    pretended: Option<Mutex<Vec<PathBuf>>>,
 }
 
 impl Volume {
@@ -28,7 +30,47 @@ impl Volume {
             rename: |from, to| fs::rename(from, to),
             remove_file: |path| fs::remove_file(path),
             links: OnceLock::new(),
+            pretended: None,
         }
+    }
+
+    /// a volume for a dry run: it links, renames and removes nothing, and records each existing
+    /// path a removal names, so the code deciding what to remove runs as it would for real.
+    pub(crate) fn pretend(scratch: PathBuf) -> Volume {
+        Volume {
+            scratch,
+            hard_link: |_, _| Err(io::Error::other("a dry run links nothing")),
+            rename: |_, _| Err(io::Error::other("a dry run renames nothing")),
+            remove_file: |path| fs::symlink_metadata(path).map(|_| ()),
+            links: OnceLock::new(),
+            pretended: Some(Mutex::default()),
+        }
+    }
+
+    /// the paths a pretending volume would have removed, in order. empty for a real volume.
+    pub(crate) fn pretended(&self) -> Vec<PathBuf> {
+        self.pretended.as_ref().map_or_else(Vec::new, |paths| {
+            paths.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        })
+    }
+
+    /// removes the empty folder at `path`.
+    pub(crate) fn remove_folder(&self, path: &Path) -> io::Result<()> {
+        if self.pretended.is_some() {
+            return self.pretend_removal(path);
+        }
+        fs::remove_dir(path)
+    }
+
+    fn pretend_removal(&self, path: &Path) -> io::Result<()> {
+        fs::symlink_metadata(path)?;
+        if let Some(paths) = &self.pretended {
+            paths
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(path.to_path_buf());
+        }
+        Ok(())
     }
 
     pub(crate) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
@@ -90,6 +132,9 @@ impl Volume {
     /// read-only belongs to the file rather than one name, and clearing it could make a
     /// project's placed hardlink of an object writable.
     pub(crate) fn remove(&self, path: &Path) -> io::Result<()> {
+        if self.pretended.is_some() {
+            return self.pretend_removal(path);
+        }
         match (self.remove_file)(path) {
             Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => {
                 self.remove_read_only(path).unwrap_or(Err(refused))
@@ -101,6 +146,9 @@ impl Volume {
     /// removes the file at `path`, which fetchloom recorded as a hardlink of a cached object. its
     /// read-only flag is the object's too, so it is never cleared, whatever the volume.
     pub(crate) fn remove_hardlink(&self, path: &Path) -> io::Result<()> {
+        if self.pretended.is_some() {
+            return self.pretend_removal(path);
+        }
         (self.remove_file)(path)
     }
 
@@ -294,6 +342,7 @@ impl Volume {
                 fs::remove_file(path)
             },
             links: OnceLock::new(),
+            pretended: None,
         }
     }
 

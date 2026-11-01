@@ -81,8 +81,35 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     })
 }
 
-pub(super) fn gc(context: &Context, now: bool) -> Result<Freed, Error> {
-    let cache = open_cache()?;
+/// what `cache gc` freed, or with `--dry-run` would free, as `--json` prints it.
+#[derive(Serialize)]
+pub(super) struct Collected {
+    #[serde(flatten)]
+    freed: Freed,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dry_run: bool,
+    /// with `--dry-run`, every path gc would remove.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Removals>,
+}
+
+#[derive(Serialize)]
+struct Removals {
+    remove: Vec<PathBuf>,
+}
+
+/// frees what no project needs. a dry run sweeps a cache that records each removal instead of
+/// making it, so it decides exactly as a real sweep does.
+pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collected, Error> {
+    let cache = if dry_run {
+        let cache = super::peek_cache()?;
+        if !cache.root().exists() {
+            return Ok(tell_dry_gc(context, Freed::default(), Vec::new()));
+        }
+        cache.pretending()
+    } else {
+        open_cache()?
+    };
     let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
     let grace = if now {
         std::time::Duration::ZERO
@@ -90,17 +117,14 @@ pub(super) fn gc(context: &Context, now: bool) -> Result<Freed, Error> {
         crate::cache::GRACE
     };
     let freed = cache.sweep_with_stop(&needed, SystemTime::now(), grace, &context.stop)?;
+    if dry_run {
+        return Ok(tell_dry_gc(context, freed, cache.pretended()));
+    }
     let output = &context.output;
     for path in &freed.not_removed {
         output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
     }
-    let kept = (freed.kept_objects > 0).then(|| {
-        format!(
-            "{} in {} no project needs, gc frees it once it is a day old, or now with --now",
-            units::size(freed.kept_bytes),
-            units::count(freed.kept_objects, "file", "files")
-        )
-    });
+    let kept = kept(&freed);
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
         match &kept {
             Some(kept) => output.done("Kept", kept),
@@ -109,7 +133,7 @@ pub(super) fn gc(context: &Context, now: bool) -> Result<Freed, Error> {
                 "no cached data files or download leftovers were removed",
             ),
         }
-        return Ok(freed);
+        return Ok(collected(freed));
     }
     if freed.objects > 0 {
         output.step(
@@ -148,7 +172,68 @@ pub(super) fn gc(context: &Context, now: bool) -> Result<Freed, Error> {
             units::count(projects.len() as u64, "project", "projects")
         ),
     );
-    Ok(freed)
+    Ok(collected(freed))
+}
+
+fn collected(freed: Freed) -> Collected {
+    Collected {
+        freed,
+        dry_run: false,
+        changes: None,
+    }
+}
+
+/// the line about unneeded files gc keeps for now, if any.
+fn kept(freed: &Freed) -> Option<String> {
+    (freed.kept_objects > 0).then(|| {
+        format!(
+            "{} in {} no project needs, gc frees it once it is a day old, or now with --now",
+            units::size(freed.kept_bytes),
+            units::count(freed.kept_objects, "file", "files")
+        )
+    })
+}
+
+/// says what a sweep that only pretended would have freed, naming each path with `-v`.
+fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collected {
+    let output = &context.output;
+    for path in &freed.not_removed {
+        output.warn(&format!(
+            "could not read {}; gc would leave it in the cache",
+            path.display()
+        ));
+    }
+    if freed.objects > 0 {
+        output.step(
+            "Would free",
+            &format!(
+                "{} · {} from the cache",
+                units::size(freed.bytes),
+                units::count(freed.objects, "file", "files")
+            ),
+        );
+    }
+    if freed.leftovers > 0 {
+        output.step(
+            "Would remove",
+            &units::count(freed.leftovers, "leftover item", "leftover items"),
+        );
+    }
+    for path in &remove {
+        output.detail(&path.display().to_string());
+    }
+    if let Some(kept) = kept(&freed) {
+        output.step("Would keep", &kept);
+    }
+    super::project::dry_run_done(
+        output,
+        (freed.objects == 0 && freed.leftovers == 0).then_some("nothing to free"),
+    );
+    Collected {
+        freed,
+        dry_run: true,
+        changes: Some(Removals { remove }),
+    }
 }
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
