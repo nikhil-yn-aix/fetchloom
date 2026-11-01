@@ -250,7 +250,7 @@ async fn preview_add(
     listing: Listing,
 ) -> Result<Report, Error> {
     let given = Some((name.clone(), listing));
-    let (lock_changed, preview) = preview_all(work, manifest, old, false, given).await?;
+    let (lock_changed, preview) = preview_all(work, manifest, old, false, given, None).await?;
     let output = &work.context.output;
     if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
         output.step(
@@ -412,7 +412,7 @@ async fn again(
         )));
     }
     if dry_run {
-        let (lock_changed, preview) = preview_all(work, manifest, old, false, None).await?;
+        let (lock_changed, preview) = preview_all(work, manifest, old, false, None, None).await?;
         dry_run_done(
             &work.context.output,
             Some(&format!("{name} is already in data.toml")),
@@ -541,15 +541,15 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         })?;
     }
     let read = project.lock_and_text()?;
-    if dry_run {
-        return preview_sync(context, &project, &manifest, read, args.force).await;
-    }
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
         lock: read
             .as_ref()
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
+    if dry_run {
+        return preview_sync(context, &project, &manifest, read, &seen, args.force).await;
+    }
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(
         context,
@@ -614,12 +614,14 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     })
 }
 
-/// `sync --dry-run`: what syncing would change, given data.lock as `read`.
+/// `sync --dry-run`: what syncing would change, given data.lock as `read` and both files as
+/// `seen`.
 async fn preview_sync(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
     read: Option<(Lock, String)>,
+    seen: &Seen,
     force: bool,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
@@ -629,7 +631,8 @@ async fn preview_sync(
         Arc::new(net(context, manifest)),
         peek_cache()?,
     );
-    let (lock_changed, preview) = preview_all(&work, manifest, old.as_ref(), force, None).await?;
+    let (lock_changed, preview) =
+        preview_all(&work, manifest, old.as_ref(), force, None, Some(seen)).await?;
     let nothing = !lock_changed && preview.changes_nothing();
     dry_run_done(
         &context.output,
@@ -940,7 +943,7 @@ async fn sync_all(
     survey.look_again(&work.project.root, &work.cache, force)?;
     disk::audit(work.project, &survey, &work.cache)?;
     if let Some(seen) = seen
-        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen)?
+        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
     {
         register(work);
         return Ok((false, placement));
@@ -972,16 +975,29 @@ async fn sync_all(
 /// what [`sync_all`] would do, told as it is found: the lock it would write when that changes,
 /// the downloads and unpacking it would need, then what placing would change. it stops before
 /// anything [`sync_all`] changes: no download, unpacking, lock, state or registration, and cached
-/// objects are read without being sealed or marked. it never takes the settled-sync shortcut.
+/// objects are read without being sealed or marked. given `seen`, it takes the settled-sync
+/// shortcut as [`sync_all`] does, so a settled project needs neither the cache nor the network.
 async fn preview_all(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<&Lock>,
     force: bool,
     given: Option<(String, Listing)>,
+    seen: Option<&Seen>,
 ) -> Result<(bool, Preview), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.look_again(&work.project.root, &work.cache, force)?;
+    if let Some(seen) = seen
+        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
+    {
+        return Ok((
+            false,
+            Preview {
+                placement,
+                ..Preview::default()
+            },
+        ));
+    }
     let empty = Lock::default();
     let (lock, jobs) = work
         .relock_dry(manifest, old.unwrap_or(&empty), &Upgrade::Nothing, given)

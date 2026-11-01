@@ -415,12 +415,14 @@ pub(crate) struct Seen {
 /// what a sync with nothing to do placed, found without reading what archives unpack to or
 /// planning: data.toml and data.lock are byte for byte as a sync that left every file they ask
 /// for in place left them, so the state records exactly those files, and each one still looks as
-/// recorded. anything else, or any doubt the survey raised, takes the long way.
+/// recorded. anything else, or any doubt the survey raised, takes the long way. a dry run passes
+/// `make` false so a missing data folder is not created.
 pub(crate) fn untouched(
     project: &Project,
     manifest: &Manifest,
     survey: &Survey,
     seen: &Seen,
+    make: bool,
 ) -> Result<Option<Placement>, Error> {
     let _span = tracing::debug_span!("untouched").entered();
     let state = &survey.state;
@@ -440,7 +442,11 @@ pub(crate) fn untouched(
         return Ok(None);
     }
     // placing refuses a data folder that became a link, and so does this
-    project.data_dir(manifest)?;
+    if make {
+        project.data_dir(manifest)?;
+    } else {
+        project.planned_data_dir(manifest)?;
+    }
     Ok(Some(Placement {
         unchanged: state.files.len() as u64,
         ..Placement::default()

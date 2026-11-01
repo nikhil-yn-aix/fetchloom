@@ -368,3 +368,43 @@ fn a_dry_run_leaves_an_empty_cache_folder_empty() -> Result {
     assert_eq!(other.requests().len(), 0);
     Ok(())
 }
+
+#[test]
+fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip =
+        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"))?;
+    let server = Server::start("/files/dataset.zip", vec![file(&zip, "\"z1\"")])?;
+    added(&sandbox, &server)?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    let cold = sandbox.cache().with_file_name("cold");
+    let project = tree(&sandbox.work())?;
+    for args in [
+        vec!["sync", "--dry-run"],
+        vec!["--offline", "sync", "--dry-run"],
+    ] {
+        let output = sandbox
+            .command(&args)
+            .env("FETCHLOOM_CACHE", &cold)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(
+            stderr, "         Ok all pinned files are in place; dry run, nothing was changed\n",
+            "{args:?}"
+        );
+    }
+    assert!(!cold.exists(), "a dry run creates no cache");
+    assert_eq!(tree(&sandbox.work())?, project);
+    let real = sandbox
+        .command(&["--offline", "sync"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    assert_eq!(
+        text(&real.stderr)?,
+        "         Ok all pinned files are in place, nothing to do\n"
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

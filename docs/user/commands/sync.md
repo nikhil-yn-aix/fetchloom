@@ -74,7 +74,7 @@ Would place data/cows · 1 file
 
 each file it would download is listed with its size, or `size unknown` when only the download tells. a file whose hash only a download can learn counts as one to place. an archive this machine has not unpacked is listed with `Would unpack`, and its members are not counted, since only unpacking lists them. with `--force`, files it would overwrite are listed under `Would replace`; without it, they are named in warnings, as a real sync names them. `-v` names each file.
 
-`--locked` still checks the lock first. offline, a dry run that would need a download fails as the sync would, with exit 20. a dry run takes no project hold, so a sync running at the same time can change what it reports. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+`--locked` still checks the lock first. a project still as a complete sync left it has nothing to do, as a real sync finds, even when the cache was emptied since. offline, a dry run that would need a download fails as the sync would, with exit 20. a dry run takes no project hold, so a sync running at the same time can change what it reports. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 
