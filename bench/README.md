@@ -19,7 +19,7 @@ apt-get install -y \
   openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 python3-venv
 ```
 
-use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner itself imports only the standard library. matplotlib sits in the `render` group, used only by the renderer. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it.
+use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner and the chart renderer import only the standard library. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it.
 
 ## build the measured executable
 
@@ -44,7 +44,7 @@ export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 export TMPDIR=/srv/fl-bench/scratch
 UV_PROJECT_ENVIRONMENT=/opt/fl-bench/venv uv sync --project bench --locked
-uv run --project bench --locked --only-group render python -m unittest discover -s bench -p 'test_*.py'
+python3 -m unittest discover -s bench -p 'test_*.py'
 ```
 
 set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
@@ -90,12 +90,12 @@ the full dataverse TSV/TAB representation difference is reported as a content mi
 ## render and keep results
 
 ```sh
-uv run --project bench --locked --only-group render python bench/render.py /srv/fl-bench/results/full
+python3 bench/render.py /srv/fl-bench/results/full
 mkdir -p bench/results
 cp -a /srv/fl-bench/results/full bench/results/
 ```
 
-rendering writes `docs/dev/performance/benchmarks.md` and transparent SVGs in `docs/assets/bench/`. every chart has a `-dark.svg` variant. `hero-ext4.svg` and `hero-xfs.svg` show lan ratios for a README. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
+rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scenario in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. a card's title states the result, including when another tool wins. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
 
 `meta.json` records the machine, binary and repository versions, seed, random orders, exact commands and package versions. `runs.jsonl` contains metrics, checker failures and exit statuses. command logs retain errors. s7 records both attempts, file-body bytes across them and the second attempt's wall time.
 

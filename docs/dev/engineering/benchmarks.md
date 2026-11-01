@@ -14,7 +14,7 @@ use a dedicated machine with at least 30 GiB free. setup changes namespaces, mou
 
 | goal | command or route |
 |---|---|
-| check runner changes without downloads | `uv run --project bench --locked --only-group render python -m unittest discover -s bench -p 'test_*.py'` |
+| check runner changes without downloads | `python3 -m unittest discover -s bench -p 'test_*.py'` |
 | small lab smoke | `python3 bench/run.py --fetchloom "$benchmark_binary" --quick --profiles lan --fs ext4 --out /srv/fl-bench/results/quick/lab` |
 | small service smoke | `python3 bench/live.py --fetchloom "$benchmark_binary" --quick --out /srv/fl-bench/results/quick/live` |
 | full comparison | [full run commands](../../../bench/README.md#run): ext4 for all scenarios, then xfs for s5 and s6 on lan, then live services |

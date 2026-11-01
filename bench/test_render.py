@@ -1,10 +1,5 @@
-import importlib.util
 import tempfile
 import unittest
-
-# ci runs these through uv with the render group, so they never skip there
-CHARTS = unittest.skipUnless(importlib.util.find_spec("matplotlib"), "needs the render group: uv run --project bench --only-group render")
-
 
 class RenderTests(unittest.TestCase):
     def test_failed_runs_do_not_lower_median(self):
@@ -21,7 +16,6 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(summary["cpu"], 2.25)
         self.assertIsNone(render.summarize([{"status": "failed"}])["median"])
 
-    @CHARTS
     def test_renderer_rejects_mixed_smoke_and_full_conditions(self):
         import json
         from pathlib import Path
@@ -41,7 +35,6 @@ class RenderTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    @CHARTS
     def test_renderer_keeps_text_and_marks_failures(self):
         import json
         from pathlib import Path
@@ -62,6 +55,7 @@ class RenderTests(unittest.TestCase):
             for dark in ("", "-dark"):
                 path = root / "report" / "docs" / "assets" / "bench" / f"s1-lan-ext4{dark}.svg"
                 texts = ET.parse(path).findall(".//{http://www.w3.org/2000/svg}text")
+                self.assertEqual(texts[0].text, "ONE LARGE FILE")
                 self.assertIn("failed", [item.text for item in texts])
                 self.assertIn("2.00 s", [item.text for item in texts])
             page = (root / "report" / "docs" / "dev" / "performance" / "benchmarks.md").read_text()

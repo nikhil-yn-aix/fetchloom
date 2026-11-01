@@ -1,7 +1,7 @@
 [project]
 name = "fetchloom-bench"
 version = "0"
-description = "the python tools the benchmark measures, and the chart renderer"
+description = "the python tools the benchmark measures"
 requires-python = "==3.12.*"
 dependencies = [
     "pooch==1.8.2",
@@ -18,9 +18,6 @@ dependencies = [
     "chardet==5.2.0",
     "hf-xet==1.8.0",
 ]
-
-[dependency-groups]
-render = ["matplotlib==3.10.7"]
 
 [tool.uv]
 package = false
