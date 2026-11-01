@@ -829,8 +829,9 @@ fn dropping_a_server_closes_a_connection_waiting_for_a_request() -> Result {
         .trim_start_matches("http://")
         .trim_end_matches('/');
     let mut connection = TcpStream::connect(address)?;
-    drop(server);
+    // macos refuses socket options once the peer has closed, so set it first
     connection.set_read_timeout(Some(Duration::from_secs(1)))?;
+    drop(server);
     let closed = connection.read(&mut [0]);
     assert!(
         matches!(closed, Ok(0))
