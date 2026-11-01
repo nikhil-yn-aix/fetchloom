@@ -262,7 +262,7 @@ mod tests {
         let help = err.help.unwrap();
         assert!(
             help.contains("https://huggingface.co/datasets/stanfordnlp/no-such-dataset")
-                && help.contains("HF_TOKEN"),
+                && help.contains("fetchloom auth login hf"),
             "{help}"
         );
     }

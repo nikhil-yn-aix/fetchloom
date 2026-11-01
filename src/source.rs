@@ -331,7 +331,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
             Kind::ReferenceInvalid,
             "this link carries a user name or password, which would end up in files and logs",
         )
-        .help("remove the user name and password from the link. for a private dataset, set its source's token, such as HF_TOKEN"));
+        .help("remove the user name and password from the link. for a private dataset, sign in with `fetchloom auth login`"));
     }
     if url.host_str().is_none_or(str::is_empty) {
         return Err(Error::new(

@@ -921,25 +921,30 @@ fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result 
     Ok(())
 }
 #[test]
-fn a_later_link_never_replaces_files_an_earlier_link_placed() -> Result {
+fn links_named_alike_each_get_their_own_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let first = Server::start("/data.csv", vec![file(IRIS, "\"v1\"")])?;
     let second = Server::start("/data.csv", vec![file(WINE, "\"w1\"")])?;
     let output = sandbox.run(&["--json", "get", &first.url, &second.url])?;
-    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    assert!(output.status.success(), "{}", text(&output.stdout)?);
     assert_eq!(
         fs::read(sandbox.work().join("data").join("data.csv"))?,
         IRIS
     );
+    assert_eq!(
+        fs::read(sandbox.work().join("data-2").join("data.csv"))?,
+        WINE
+    );
     let document = json(&output)?;
-    assert_eq!(document["errors"][0]["kind"], "local.not_empty");
-    assert_eq!(document["result"]["items"][0]["status"], "ok");
-    let refused = &document["result"]["items"][1]["error"]["message"];
+    let folders: Vec<String> = document["result"]["items"]
+        .as_array()
+        .ok_or("no items")?
+        .iter()
+        .filter_map(|item| item["folder"].as_str().map(str::to_owned))
+        .collect();
     assert!(
-        refused.as_str().is_some_and(
-            |message| message.ends_with("already holds the files of another link in this run")
-        ),
-        "{refused}"
+        folders[0].ends_with("data") && folders[1].ends_with("data-2"),
+        "{folders:?}"
     );
     Ok(())
 }

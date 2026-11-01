@@ -556,6 +556,12 @@ async fn finish(
         &parsed,
         &unwrapped(&files, &paths),
     );
+    // two links named alike, such as two iris.csv, each get a folder: iris, then iris-2
+    let folder = if chosen.is_some() {
+        folder
+    } else {
+        unclaimed(folder, taken)
+    };
     tell_fetched(context, &paths, &fetched, &files, elapsed);
     vouch(&folder, &paths, &fetched, sha256, taken)?;
     let mut locked: Vec<LockedFile> = files
@@ -649,6 +655,23 @@ fn vouch(
     }
     taken.push(whole);
     Ok(())
+}
+
+/// `folder`, or the first of `folder-2`, `folder-3` and so on that no earlier link of the run
+/// took.
+fn unclaimed(folder: PathBuf, taken: &[PathBuf]) -> PathBuf {
+    let whole = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    if !taken.contains(&whole(&folder)) {
+        return folder;
+    }
+    let name = folder.file_name().map_or_else(
+        || "download".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    (2..=u32::MAX)
+        .map(|number| folder.with_file_name(format!("{name}-{number}")))
+        .find(|candidate| !taken.contains(&whole(candidate)))
+        .unwrap_or(folder)
 }
 
 /// a link as reports show it, a secret in it masked.

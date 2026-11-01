@@ -81,6 +81,24 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     let logout = sandbox.run(&["auth", "logout", "hf", "--json"])?;
     assert!(logout.status.success(), "{}", text(&logout.stderr)?);
     assert!(!token.exists());
+    let again = with_stdin(
+        sandbox.command(&["auth", "login", "hf", "--with-token", "--offline"]),
+        "hf_example\n",
+    )?;
+    assert!(again.status.success());
+    let told = text(&again.stderr)?;
+    assert!(told.contains("Signed in to hugging face"), "{told}");
+    assert!(
+        told.contains(&format!("saved to {}", token.display())),
+        "{told}"
+    );
+    assert!(!told.contains("hf_example"), "{told}");
+    let quiet_logout = sandbox.run(&["auth", "logout", "hf"])?;
+    assert!(
+        text(&quiet_logout.stderr)?.contains("Signed out of hugging face"),
+        "{}",
+        text(&quiet_logout.stderr)?
+    );
     Ok(())
 }
 

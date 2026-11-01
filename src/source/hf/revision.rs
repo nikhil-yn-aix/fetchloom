@@ -42,7 +42,7 @@ impl Repo {
             if err.kind == Kind::AuthRequired {
                 // the hub answers 401 alike for a private repository and for one that does not exist
                 err.help(format!(
-                    "check the name at {}. a private repository needs HF_TOKEN set to a token that can read it",
+                    "check the name at {}. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`",
                     self.page()
                 ))
             } else {

@@ -50,7 +50,7 @@ an unchanged direct URL can return a 304 response, avoiding its file-body downlo
 
 links given together, on the command line or with `-i`, share one run. fetchloom resolves them at once, asks once about the total size when it is large, and downloads all their files together, at most `FETCHLOOM_JOBS` at a time as in a [project sync](../reference/environment.md). each link then gets its own folder, named as it would be alone, in the working folder or inside the `-o` folder. stdout lists each placed folder on its own line, in the order given.
 
-with several links, each must be a link, a DOI or an id; a bare word among them is a usage error. `--select`, `--exclude` and `--no-extract` apply to every link. when two links would fill the same folder, the later one fails with `local.not_empty`, so no link's files replace another's in one run.
+with several links, each must be a link, a DOI or an id; a bare word among them is a usage error. `--select`, `--exclude` and `--no-extract` apply to every link. two links named alike each get a folder: `iris`, then `iris-2`, so no link's files replace another's.
 
 a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a run where the first link was fetched before and the second answers 404:
 

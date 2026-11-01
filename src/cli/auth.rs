@@ -1,4 +1,4 @@
-//! `auth`: which accounts are State in, signing in once with a key shared with each source's own
+//! `auth`: which accounts are signed in, signing in once with a key shared with each source's own
 //! tools, and asking for that key when a download is refused.
 
 use std::io::Read as _;
@@ -38,7 +38,7 @@ pub(super) struct State {
     valid: Option<bool>,
 }
 
-/// what `auth login` Outcome.
+/// what `auth login` saved.
 #[derive(Serialize)]
 pub(super) struct Outcome {
     account: String,
@@ -79,10 +79,10 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                         &format!("{text}; sign in again with `{}`", account.command()),
                     );
                 } else {
-                    output.step("State in", &text);
+                    output.step("Signed in", &text);
                 }
             }
-            None => output.detail(&format!("{name}: not State in")),
+            None => output.detail(&format!("{name}: not signed in")),
         }
         accounts.push(State {
             account: account.id(),
@@ -170,13 +170,13 @@ async fn sign_in(
     )?;
     let place = saved_to.as_ref().map_or_else(
         || "for this command only".to_owned(),
-        |to| format!("Outcome to {to}"),
+        |to| format!("saved to {to}"),
     );
     let who = user
         .as_ref()
         .map_or_else(String::new, |user| format!(" as {user}"));
     output.done(
-        "State in",
+        "Signed in",
         &format!("to {}{who} \u{b7} {place}", title(account)),
     );
     if saved_to.is_some()
@@ -339,6 +339,7 @@ fn save(
                 format!("{secret}\n")
             };
             store::write_private(&path, text.as_bytes()).map_err(failed)?;
+            warn_if_shared(output, &path);
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
@@ -355,6 +356,7 @@ fn save(
                 return Ok(None);
             };
             auth::netrc::save(&path, host, login.unwrap_or_default(), secret).map_err(failed)?;
+            warn_if_shared(output, &path);
             Ok(Some(path.display().to_string()))
         }
         Home::Store => {
@@ -371,7 +373,7 @@ fn save(
                 .join("credentials.json");
             if told {
                 output.warn(&format!(
-                    "this machine has no credential store, so the key is Outcome in {}, readable only by you",
+                    "this machine has no credential store, so the key is saved in {}, readable only by you",
                     file.display()
                 ));
             } else if !agrees(
@@ -390,6 +392,27 @@ fn save(
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
             Ok(Some(file.display().to_string()))
         }
+    }
+}
+
+/// on windows a saved file takes its folder's permissions. the profile keeps other users out, but
+/// a folder elsewhere, such as an `HF_HOME` on another drive, may let them read the key.
+fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
+    if !cfg!(windows) {
+        return;
+    }
+    let inside = auth::env("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .is_some_and(|profile| {
+            path.to_string_lossy()
+                .to_lowercase()
+                .starts_with(&profile.to_string_lossy().to_lowercase())
+        });
+    if !inside {
+        output.warn(&format!(
+            "{} is outside your user folder, so other users of this machine may be able to read it; keep the key in your profile, or limit the folder's permissions",
+            path.display()
+        ));
     }
 }
 
@@ -413,7 +436,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     let account = Account::parse(&logout.account, logout.host.as_deref())?;
     let var = &auth::env;
     let Some(found) = account.find(var) else {
-        output.done("Ok", &format!("no {} key was Outcome", title(&account)));
+        output.done("Ok", &format!("no {} key was saved", title(&account)));
         return Ok(Report::Logout {
             account: account.id(),
             removed_from: None,
@@ -461,7 +484,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
         }
     };
     output.done(
-        "State out",
+        "Signed out",
         &format!("of {} \u{b7} removed from {removed}", title(&account)),
     );
     Ok(Report::Logout {
@@ -498,7 +521,7 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
     }
     if let Some(terms) = &need.terms {
         output.say(&format!(
-            "{:>11} accept the terms at {} while State in",
+            "{:>11} accept the terms at {} while signed in",
             "First",
             output.link(terms)
         ));

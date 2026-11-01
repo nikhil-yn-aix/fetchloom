@@ -133,33 +133,25 @@ fn json<T: serde::Serialize>(value: &T) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// writes `bytes` to `path` through a file beside it, so a crash leaves the old file or the new
-/// one. on unix only the owner may read it; on windows the user's profile folders already keep
-/// other users out.
+/// writes `bytes` to `path` through a new file beside it, so a crash leaves the old file or the
+/// new one. the new file gets a random name and is created, never opened, so nobody who can write
+/// to the folder can plant a file or a link there to read the key or redirect the write. on unix
+/// only the owner may read it; on windows it takes the folder's permissions, which keep other
+/// users out of the profile folders the sources use by default.
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let folder = path
         .parent()
         .ok_or_else(|| io::Error::other("a credential file needs a folder"))?;
     fs::create_dir_all(folder)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let staged = folder.join(format!(
-        ".{}.fetchloom-new",
-        path.file_name()
-            .map_or_else(Default::default, |name| name.to_string_lossy())
-    ));
-    let mut file = options.open(&staged)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&staged, path).inspect_err(|_| {
-        let _ = fs::remove_file(&staged);
-    })
+    // tempfile creates with O_EXCL and, on unix, mode 0600 from the start
+    let mut staged = tempfile::Builder::new()
+        .prefix(".fetchloom-")
+        .suffix(".new")
+        .tempfile_in(folder)?;
+    staged.write_all(bytes)?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|err| err.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -167,6 +159,40 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+
+    #[test]
+    fn a_key_replaces_its_file_with_a_new_private_one() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("token");
+        fs::write(&path, "old").unwrap();
+        // the name the writer once used for its staging file means nothing now
+        fs::write(folder.path().join(".token.fetchloom-new"), "planted").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_private(&path, b"secret\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret\n");
+        assert_eq!(
+            fs::read_to_string(folder.path().join(".token.fetchloom-new")).unwrap(),
+            "planted"
+        );
+        let left: Vec<_> = fs::read_dir(folder.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".fetchloom-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 
     #[test]
     fn a_file_store_saves_lists_and_forgets_one_key_at_a_time() {
