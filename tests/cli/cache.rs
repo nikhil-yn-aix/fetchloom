@@ -345,8 +345,13 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
         .join(&digest[..2])
         .join(&digest[2..]);
     fs::create_dir_all(object.parent().unwrap())?;
-    // a sparse file keeps hashing busy without allocating its payload on disk.
-    fs::File::create(&object)?.set_len(64 * 1024 * 1024 * 1024)?;
+    // a sparse file keeps hashing busy without allocating its payload on disk. hfs+ has no
+    // sparse files and must find room for the whole length, so a smaller one stands in there.
+    let file = fs::File::create(&object)?;
+    if file.set_len(64 * 1024 * 1024 * 1024).is_err() {
+        file.set_len(2 * 1024 * 1024 * 1024)?;
+    }
+    drop(file);
     let mut child = sandbox
         .command(&["cache", "verify"])
         .stdout(Stdio::piped())
