@@ -8,7 +8,7 @@ CI checks the same crate across processor architectures and filesystems that exp
 
 ## test job
 
-one `test` job expands to four required runners, each with a 45-minute timeout. every runner installs the pinned rust toolchain, restores the rust cache, runs clippy with warnings denied and runs all rust tests.
+one `test` job expands to five required runners, each with a 45-minute timeout. every runner installs the pinned rust toolchain, restores the rust cache, runs clippy with warnings denied and runs all rust tests.
 
 | runner | architecture | why it runs |
 |---|---|---|
@@ -16,18 +16,20 @@ one `test` job expands to four required runners, each with a 45-minute timeout. 
 | `windows-latest` | x86_64 windows | windows handles, permissions, path behavior and extra windows filesystems |
 | `ubuntu-24.04-arm` | arm64 linux | native arm64 compilation and behavior before shipping its linux release |
 | `windows-11-arm` | arm64 windows | native arm64 windows behavior before shipping its release |
+| `macos-latest` | arm64 macos | apfs clones, a disk that ignores case and unicode composition, the python helper and an extra hfs+ run |
 
 ## checks within the job
 
 | check | runner | purpose |
 |---|---|---|
 | `cargo fmt --check` | x86_64 linux | one formatting result for platform-independent source |
-| `cargo clippy --all-targets --locked -- -D warnings` | all four | every target and test must satisfy configured lints |
-| `cargo test --locked` | all four | unit, CLI, documentation and short fuzz tests |
+| `cargo clippy --all-targets --locked -- -D warnings` | all five | every target and test must satisfy configured lints |
+| `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
-| `python3 -m unittest discover -s python` | x86_64 linux | subprocess-wrapper arguments and report handling |
+| `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
 | full tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
 | full tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
+| full tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
 
 [deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. the advisory ignore list is empty; changes to exceptions belong with their reasons.
 
@@ -35,7 +37,9 @@ one `test` job expands to four required runners, each with a 45-minute timeout. 
 
 windows creates 4096 MB expandable VHDX images with diskpart and assigns R, X and Y. it points `TMP` and `TEMP` at a folder on each volume and runs `cargo test --locked --no-fail-fast`. runner admin access permits diskpart; normal contributor tests should not require admin access.
 
-linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. arm64 runners run the ordinary full tests, not these extra mount loops.
+linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. arm64 linux and windows runners run the ordinary full tests, not these extra mount loops.
+
+macos makes a 4 GB hfs+ disk image with `hdiutil`, attaches it without showing it in finder and points `TMPDIR` at it. apfs, the default disk, keeps each name in the unicode composition it was given, while hfs+ lists every name decomposed; both ignore case by default. tests that need such a disk return early on a disk that tells the spellings apart.
 
 [building and testing](building-and-testing.md#xfs-loop-mount) gives a focused xfs reproduction. its [WSL gate](building-and-testing.md#wsl-gate) verifies a local branch without a push.
 
@@ -50,6 +54,8 @@ cargo test --locked -- --ignored
 this exercises the ignored live source tests and the larger archive test. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
 
 default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in every workflow.
+
+[mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) runs only through manual dispatch. on `macos-latest` it builds a release executable and runs it as a person would against live zenodo and the search catalogs: `add zenodo:3608990`, `status`, `sync` after deleting `data/`, `get -o`, `search iris --json`, a second project that must clone or hardlink from the shared cache, a project in `~/Library/CloudStorage` that must not hardlink, the default cache in `~/Library/Caches/fetchloom`, `auth --offline` when the build has that command, and the bash and zsh completion scripts. every check runs even after one fails, and the job uploads everything the commands printed as the `mac-e2e-log` artifact.
 
 ## documentation site
 

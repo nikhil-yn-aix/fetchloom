@@ -1,6 +1,6 @@
 # releasing
 
-the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI and crates.io and rebuilds the apt repository on github pages.
+the release workflow packages one executable for linux, windows and macos on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI and crates.io and rebuilds the apt repository on github pages.
 
 no release has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
 
@@ -10,7 +10,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 | job | permissions | work |
 |---|---|---|
-| `build`, four matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build and install a wheel, exercise its executable and python module |
+| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build and install a wheel, exercise its executable and python module |
 | `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
@@ -20,6 +20,10 @@ no release has been published yet. use [source installation](../../user/getting-
 | `windows-11-arm` | `aarch64-pc-windows-msvc` | static C runtime; dumpbin check is skipped with a notice if the arm64 image lacks it |
 | `ubuntu-latest` | `x86_64-unknown-linux-musl` | static musl binary, native dependencies built with musl-gcc; checked with ldd |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | same static-musl checks on native arm64 |
+| `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |
+| `macos-latest` | `aarch64-apple-darwin` | same checks on native arm64 |
+
+`MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it.
 
 build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version` and verify that the python helper reports `project.invalid` outside a project.
 
@@ -40,7 +44,7 @@ the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and
 
 ## artifacts
 
-for the current Cargo version, 0.1.0, the workflow will produce four archives, two debian packages, four wheels, two installers and a checksum file.
+for the current Cargo version, 0.1.0, the workflow will produce six archives, two debian packages, six wheels, two installers and a checksum file.
 
 | artifact | contents |
 |---|---|
@@ -48,11 +52,15 @@ for the current Cargo version, 0.1.0, the workflow will produce four archives, t
 | `fetchloom-0.1.0-aarch64-pc-windows-msvc.zip` | same layout for arm64 windows |
 | `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE and README.md in a matching folder |
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
+| `fetchloom-0.1.0-x86_64-apple-darwin.tar.gz` | same layout for x86_64 macos |
+| `fetchloom-0.1.0-aarch64-apple-darwin.tar.gz` | same layout for arm64 macos |
 | `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, license and notice in `/usr/share/doc/fetchloom` |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |
 | `fetchloom-0.1.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl` | same for arm64 linux |
+| `fetchloom-0.1.0-py3-none-macosx_11_0_x86_64.whl` | x86_64 macos executable and python module |
+| `fetchloom-0.1.0-py3-none-macosx_11_0_arm64.whl` | same for arm64 macos |
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
 
@@ -76,7 +84,7 @@ to exercise build jobs without a tag, temporarily add a branch trigger for `rele
 
 ## installers
 
-the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
+the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and macos and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. on macos it also writes `~/.zshrc`, since zsh, the default shell there, never reads `~/.profile`, and a shell running under rosetta on apple silicon gets the arm64 build. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
 both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
