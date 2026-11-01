@@ -14,8 +14,10 @@ fn listed(fixture: &str) -> (Parsed, Listing) {
 
 fn args(exclude: &[&str]) -> Get {
     Get {
-        link: "drive:folders/12zxlvJtuHFV6awc3AINaNHnfvRttPv0i".to_owned(),
+        links: vec!["drive:folders/12zxlvJtuHFV6awc3AINaNHnfvRttPv0i".to_owned()],
         output: None,
+        input_file: None,
+        sha256: None,
         filter: Filter {
             select: Vec::new(),
             exclude: exclude.iter().map(|value| (*value).to_owned()).collect(),

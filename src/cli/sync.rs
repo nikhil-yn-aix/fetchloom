@@ -387,7 +387,7 @@ pub(super) async fn resolve(
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may
 /// also carry a token, which no progress line should print.
-fn resolves_locally(reference: &Reference) -> bool {
+pub(super) fn resolves_locally(reference: &Reference) -> bool {
     matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }
 

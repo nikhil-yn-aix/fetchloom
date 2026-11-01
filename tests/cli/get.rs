@@ -57,6 +57,16 @@ fn json_describes_the_run_and_nothing_else() -> Result {
         "[method]".into(),
     );
     assert_eq!(method, expected);
+    // the one link's item repeats its folder and files
+    let item = &mut document["result"]["items"][0];
+    assert_eq!(
+        std::mem::replace(&mut item["folder"], "[folder]".into()),
+        folder
+    );
+    assert_eq!(
+        std::mem::replace(&mut item["files"][0]["method"], "[method]".into()),
+        expected
+    );
     let work = &mut document["work"];
     for key in ["reflinks", "hardlinks", "copies"] {
         assert_eq!(work[key], u64::from(key == counter), "{key}");
@@ -679,5 +689,257 @@ fn offline_identifiers_explain_why_lookup_needs_the_internet() -> Result {
             "{stderr}"
         );
     }
+    Ok(())
+}
+
+const WINE: &[u8] = b"alcohol,malic_acid,class\n14.23,1.71,1\n";
+const IRIS_SHA256: &str = "d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d";
+
+/// two links on servers of their own, each serving its file once.
+fn two_files() -> Result<(Server, Server)> {
+    Ok((
+        Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?,
+        Server::start("/wine.csv", vec![file(WINE, "\"w1\"")])?,
+    ))
+}
+
+#[test]
+fn several_links_land_in_folders_of_their_own_inside_the_output() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (iris, wine) = two_files()?;
+    let output = sandbox.run(&["get", &iris.url, &wine.url, "-o", "downloads"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let downloads = sandbox.work().join("downloads");
+    assert_eq!(fs::read(downloads.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read(downloads.join("wine").join("wine.csv"))?, WINE);
+    assert_eq!(
+        text(&output.stdout)?,
+        format!(
+            "{}\n{}\n",
+            downloads.join("iris").display(),
+            downloads.join("wine").display()
+        ),
+        "one folder a line, in the order given"
+    );
+    assert!(stderr.contains("Finished 2 links · 2 files"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn an_input_file_lists_links_and_skips_blank_lines_and_comments() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (iris, wine) = two_files()?;
+    let list = format!(
+        "# measurements to compare\r\n\r\n{}\n   {}   \n# done\n",
+        iris.url, wine.url
+    );
+    fs::write(sandbox.work().join("links.txt"), list)?;
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let items = document["result"]["items"]
+        .as_array()
+        .ok_or("items is not an array")?;
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["reference"], iris.url.as_str());
+    assert_eq!(items[1]["reference"], wine.url.as_str());
+    assert!(items.iter().all(|item| item["status"] == "ok"), "{items:?}");
+    assert_eq!(document["result"]["folder"], serde_json::Value::Null);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("wine").join("wine.csv"))?,
+        WINE
+    );
+    Ok(())
+}
+
+#[test]
+fn a_dash_reads_the_links_from_stdin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (iris, wine) = two_files()?;
+    let mut child = sandbox
+        .command(&["get", "--input-file", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().ok_or("stdin was not piped")?;
+    std::io::Write::write_all(
+        &mut stdin,
+        format!("{}\n{}\n", iris.url, wine.url).as_bytes(),
+    )?;
+    drop(stdin);
+    let output = child.wait_with_output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("wine").join("wine.csv"))?,
+        WINE
+    );
+    Ok(())
+}
+
+#[test]
+fn one_failed_link_leaves_the_others_and_fails_the_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = || reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let gone = || reply("404 Not Found", &[("Content-Length", "0")], b"");
+    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\""), unchanged()])?;
+    let missing = Server::start("/gone.csv", vec![gone(), gone()])?;
+    let wine = Server::start("/wine.csv", vec![file(WINE, "\"w1\"")])?;
+    let output = sandbox.run(&["--json", "get", &iris.url, &missing.url, &wine.url])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("wine").join("wine.csv"))?,
+        WINE
+    );
+    assert!(!sandbox.work().join("gone").exists());
+    let document = json(&output)?;
+    assert_eq!(document["status"], "error");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "reference.unresolved");
+    assert_eq!(error["message"], "1 of 3 links could not be fetched");
+    assert_eq!(error["failures"][0]["file"], missing.url.as_str());
+    assert_eq!(error["failures"][0]["kind"], "reference.unresolved");
+    let items = document["result"]["items"]
+        .as_array()
+        .ok_or("a failed run keeps its items")?;
+    let statuses: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item["status"].as_str())
+        .collect();
+    assert_eq!(statuses, ["ok", "error", "ok"]);
+    assert_eq!(items[1]["error"]["kind"], "reference.unresolved");
+    assert_eq!(items[1]["folder"], serde_json::Value::Null);
+    assert_eq!(
+        items[2]["folder"],
+        sandbox.work().join("wine").display().to_string()
+    );
+    assert_eq!(items[2]["files"][0]["path"], "wine.csv");
+
+    let told = sandbox.run(&["get", &iris.url, &missing.url])?;
+    let stderr = text(&told.stderr)?;
+    assert_eq!(told.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("error: 1 of 2 links could not be fetched"),
+        "{stderr}"
+    );
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+#[test]
+fn a_matching_sha256_lets_the_file_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url, "--sha256", &IRIS_SHA256.to_uppercase()])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
+#[test]
+fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let wrong = "0".repeat(64);
+    let output = sandbox.run(&["--json", "get", &server.url, "--sha256", &wrong])?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "integrity.mismatch");
+    assert_eq!(error["message"], "iris.csv does not match --sha256");
+    assert_eq!(
+        error["details"][0],
+        format!("expected sha256 000000000000, got {}", &IRIS_SHA256[..12])
+    );
+    assert!(!sandbox.work().join("iris").exists());
+    Ok(())
+}
+
+#[test]
+fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (arguments, expected) in [
+        (
+            &["get", "fashion", "mnist"][..],
+            "to search for several words, quote them, as in `fetchloom get \"fashion mnist\"`",
+        ),
+        (
+            &["get", "https://example.org/iris.csv", "iris"],
+            "\"iris\" is not a link, a DOI or an id",
+        ),
+        (
+            &[
+                "get",
+                "https://example.org/iris.csv",
+                "https://example.org/wine.csv",
+                "--sha256",
+                IRIS_SHA256,
+            ],
+            "--sha256 checks one file, and this get has 2 links",
+        ),
+        (
+            &["get", "https://example.org/iris.csv", "--sha256", "abc"],
+            "a SHA-256 is 64 hex digits",
+        ),
+    ] {
+        let output = sandbox.run(arguments)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
+    }
+    fs::write(
+        sandbox.work().join("links.txt"),
+        "https://example.org/iris.csv\nfashion mnist\n",
+    )?;
+    let listed = sandbox.run(&["get", "-i", "links.txt"])?;
+    let stderr = text(&listed.stderr)?;
+    assert_eq!(listed.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("line 2 of links.txt is not a link, a DOI or an id"),
+        "{stderr}"
+    );
+    fs::write(sandbox.work().join("empty.txt"), "# nothing yet\n\n")?;
+    let empty = sandbox.run(&["get", "-i", "empty.txt"])?;
+    assert_eq!(empty.status.code(), Some(2));
+    assert!(text(&empty.stderr)?.contains("empty.txt lists no links"));
+    Ok(())
+}
+#[test]
+fn a_later_link_never_replaces_files_an_earlier_link_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start("/data.csv", vec![file(IRIS, "\"v1\"")])?;
+    let second = Server::start("/data.csv", vec![file(WINE, "\"w1\"")])?;
+    let output = sandbox.run(&["--json", "get", &first.url, &second.url])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("data.csv"))?,
+        IRIS
+    );
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "local.not_empty");
+    assert_eq!(document["result"]["items"][0]["status"], "ok");
+    let refused = &document["result"]["items"][1]["error"]["message"];
+    assert!(
+        refused.as_str().is_some_and(
+            |message| message.ends_with("already holds the files of another link in this run")
+        ),
+        "{refused}"
+    );
     Ok(())
 }

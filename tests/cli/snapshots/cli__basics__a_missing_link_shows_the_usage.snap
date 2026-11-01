@@ -1,7 +1,8 @@
 ---
 source: tests/cli/basics.rs
+assertion_line: 314
 expression: text(&output.stderr)?
 ---
-error: <link> is missing
-  usage: fetchloom get [options] <link>
+error: <link>... is missing
+  usage: fetchloom get [options] <link>...
   help: `fetchloom get --help` says what it takes

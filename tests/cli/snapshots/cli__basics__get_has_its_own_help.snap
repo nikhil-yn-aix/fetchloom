@@ -1,32 +1,35 @@
 ---
 source: tests/cli/basics.rs
+assertion_line: 152
 expression: text(&output.stdout)?
 ---
 fetch something once, without a project
 
-usage: fetchloom get [options] <link>
+usage: fetchloom get [options] <link>...
 
 arguments:
-  <link>  what to download: search words, a link, a DOI, or an id such as zenodo:3608990
+  [link]...  what to download: search words, a link, a DOI, or an id such as zenodo:3608990. several links download together, so search words in quotes go alone
 
 options:
-  -o, --output <dir>    put the download in <dir> instead of a new folder named after it
-      --select <glob>   keep only files matching this pattern, such as "**/*.csv". repeat it for more
-      --exclude <glob>  leave out files matching this pattern. repeat it for more
-      --no-extract      keep zip and tar archives packed instead of unpacking them
-  -q, --quiet           print only the answer and errors
-  -v, --verbose...      say more: -v adds detail and counters, -vv adds debug logs
-      --json            print one JSON document on stdout instead of the story
-      --offline         use only what is already on this machine
-  -y, --yes             approve confirmations, but never choose a dataset for you
-      --color <when>    when to use color [default: auto] [possible values: auto, always, never]
-  -C <dir>              run as if fetchloom started in <dir>
-  -h, --help            print help
+  -o, --output <dir>       put the download in <dir> instead of a new folder named after it. with several links, each gets its own folder inside <dir>
+  -i, --input-file <file>  read links from <file>, one a line, or from stdin for -. blank lines and lines starting with # are skipped
+      --sha256 <hex>       check the file's SHA-256 before placing it. needs one link to one file
+      --select <glob>      keep only files matching this pattern, such as "**/*.csv". repeat it for more
+      --exclude <glob>     leave out files matching this pattern. repeat it for more
+      --no-extract         keep zip and tar archives packed instead of unpacking them
+  -q, --quiet              print only the answer and errors
+  -v, --verbose...         say more: -v adds detail and counters, -vv adds debug logs
+      --json               print one JSON document on stdout instead of the story
+      --offline            use only what is already on this machine
+  -y, --yes                approve confirmations, but never choose a dataset for you
+      --color <when>       when to use color [default: auto] [possible values: auto, always, never]
+  -C <dir>                 run as if fetchloom started in <dir>
+  -h, --help               print help
 
 examples:
   fetchloom get iris
-  fetchloom get zenodo:3608990
   fetchloom get zenodo:3608990 -o flowers
-  fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
+  fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
+  fetchloom get -i links.txt
 
-on disk: writes the output folder through the cache. does not create project files
+on disk: writes one output folder for each link through the cache. does not create project files

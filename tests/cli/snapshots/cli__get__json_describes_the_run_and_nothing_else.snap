@@ -1,6 +1,6 @@
 ---
 source: tests/cli/get.rs
-assertion_line: 62
+assertion_line: 77
 expression: pretty
 ---
 {
@@ -18,7 +18,26 @@ expression: pretty
         "url": "http://127.0.0.1:[port]/records/3608990/files/iris.csv"
       }
     ],
-    "folder": "[folder]"
+    "folder": "[folder]",
+    "items": [
+      {
+        "error": null,
+        "files": [
+          {
+            "method": "[method]",
+            "origin": "network",
+            "path": "iris.csv",
+            "sha256": "d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d",
+            "size": 81,
+            "unpacked_from": null,
+            "url": "http://127.0.0.1:[port]/records/3608990/files/iris.csv"
+          }
+        ],
+        "folder": "[folder]",
+        "reference": "http://127.0.0.1:[port]/records/3608990/files/iris.csv",
+        "status": "ok"
+      }
+    ]
   },
   "schema": 1,
   "status": "ok",

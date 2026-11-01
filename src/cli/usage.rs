@@ -114,17 +114,14 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg)))
         .flatten();
     // `fetchloom add fashion mnist` meant one search, not a link and a stray word
-    let quoted = (err.kind() == ErrorKind::UnknownArgument
-        && matches!(parent, Some("add" | "get")))
-    .then(|| named(ContextKind::InvalidArg))
-    .flatten()
-    .filter(|arg| !arg.starts_with('-'))
-    .map(|_| {
-        let command = parent.unwrap_or("add");
-        format!(
-            "to search for several words, quote them, as in `fetchloom {command} \"fashion mnist\"`"
-        )
-    });
+    let quoted = (err.kind() == ErrorKind::UnknownArgument && parent == Some("add"))
+        .then(|| named(ContextKind::InvalidArg))
+        .flatten()
+        .filter(|arg| !arg.starts_with('-'))
+        .map(|_| {
+            "to search for several words, quote them, as in `fetchloom add \"fashion mnist\"`"
+                .to_owned()
+        });
     let help = if let Some(placement) = placement.or(quoted) {
         placement
     } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
@@ -257,7 +254,7 @@ mod tests {
                 "unexpected argument \"iris\"",
             ),
             (
-                &["fetchloom", "get", "https://example.org/file.csv", "iris"],
+                &["fetchloom", "add", "https://example.org/file.csv", "iris"],
                 "unexpected argument \"iris\"",
             ),
             (

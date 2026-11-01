@@ -216,33 +216,67 @@ pub(super) async fn all(
     cache: &Cache,
     jobs: Vec<Job>,
 ) -> Result<Vec<Fetched>, Error> {
+    let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     // without a batch each download flushes on its own, which is only slower
     let batched = cache.defer_downloads().unwrap_or(false);
-    let fetched = each(context, net, cache, jobs).await;
-    let published = if batched {
+    let results = each(context, net, cache, jobs, false).await;
+    let published = publish(cache, batched);
+    let mut fetched = Vec::with_capacity(labels.len());
+    let mut failed = Vec::new();
+    for (index, result) in results?.into_iter().enumerate() {
+        match result {
+            Ok(found) => fetched.push(found),
+            Err(error) => failed.push((index, error)),
+        }
+    }
+    if let Some(error) = together(&labels, failed) {
+        return Err(error);
+    }
+    published?;
+    Ok(fetched)
+}
+
+/// downloads every job as [`all`] does, but a file that fails keeps its failure to itself while
+/// the others go on, as several unrelated links need. only an interruption, or a failure of the
+/// run itself, stops them all.
+pub(super) async fn apart(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    jobs: Vec<Job>,
+) -> Result<Vec<Result<Fetched, Error>>, Error> {
+    let batched = cache.defer_downloads().unwrap_or(false);
+    let results = each(context, net, cache, jobs, true).await;
+    let published = publish(cache, batched);
+    let results = results?;
+    published?;
+    Ok(results)
+}
+
+fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
+    if batched {
         cache
             .publish_downloads()
             .map_err(|err| Error::io("could not put finished downloads into the cache", &err))
     } else {
         Ok(())
-    };
-    let fetched = fetched?;
-    published?;
-    Ok(fetched)
+    }
 }
 
+/// what each job fetched, or why it failed on its own, in the jobs' order. `apart` keeps every
+/// failure but an interruption with its job.
 async fn each(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     jobs: Vec<Job>,
-) -> Result<Vec<Fetched>, Error> {
+    apart: bool,
+) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
     let alone = count == 1;
     let overall = Arc::new(Overall::new(context, &jobs));
-    let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
-    let mut results: Vec<Option<Fetched>> = std::iter::repeat_with(|| None).take(count).collect();
-    let mut failed = Vec::new();
+    let mut results: Vec<Option<Result<Fetched, Error>>> =
+        std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
     let mut queue = jobs.into_iter().enumerate();
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
@@ -294,13 +328,17 @@ async fn each(
         };
         match joined {
             Ok((index, Ok(fetched))) => {
-                results[index] = Some(fetched);
+                results[index] = Some(Ok(fetched));
                 done += 1;
                 if let Some(bar) = &overall.bar {
                     bar.message("Downloading", format!("{done} of {count} files"));
                 }
             }
-            Ok((index, Err(err))) if on_its_own(&err) => failed.push((index, err)),
+            Ok((index, Err(err)))
+                if on_its_own(&err) || (apart && err.kind != Kind::Interrupted) =>
+            {
+                results[index] = Some(Err(err));
+            }
             Ok((_, Err(err))) => {
                 tasks.abort_all();
                 return Err(err);
@@ -314,14 +352,11 @@ async fn each(
             }
         }
     }
-    if let Some(error) = together(&labels, failed) {
-        return Err(error);
-    }
     Ok(results.into_iter().flatten().collect())
 }
 
 /// how many failed files one error names. the rest are counted.
-const NAMED: usize = 10;
+pub(super) const NAMED: usize = 10;
 
 /// whether a failure concerns its own file only, so the other downloads go on and every such
 /// file is named at the end. a failure of the network, the disk or the person stops them all.
@@ -338,7 +373,7 @@ fn on_its_own(error: &Error) -> bool {
 
 /// one error for the files that failed on their own: the failure itself when it is the only
 /// one, else a line naming each file and what happened to it, in the jobs' order.
-fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error> {
+pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Option<Error> {
     failed.sort_by_key(|(index, _)| *index);
     let failures = failed
         .iter()

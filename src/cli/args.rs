@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
+use crate::digest::Sha256;
 use crate::output::{ColorChoice, Style};
 
 const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
@@ -81,11 +82,11 @@ on disk: marks changed cached files for replacement on the next download. data/ 
 
     pub(super) const GET: &str = "examples:
   fetchloom get iris
-  fetchloom get zenodo:3608990
   fetchloom get zenodo:3608990 -o flowers
-  fetchloom get https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
+  fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
+  fetchloom get -i links.txt
 
-on disk: writes the output folder through the cache. does not create project files";
+on disk: writes one output folder for each link through the cache. does not create project files";
 
     pub(super) const SEARCH: &str = "examples:
   fetchloom search iris
@@ -288,7 +289,7 @@ pub(crate) enum Command {
     Cache(Cache),
 
     /// fetch something once, without a project
-    #[command(override_usage = "fetchloom get [options] <link>", help_template = TEMPLATE, after_help = examples::GET)]
+    #[command(override_usage = "fetchloom get [options] <link>...", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
 
     /// find datasets on hugging face, kaggle and zenodo
@@ -492,13 +493,28 @@ pub(crate) struct Path {
 /// fetch something once, without a project
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Get {
-    /// what to download: search words, a link, a DOI, or an id such as zenodo:3608990
-    #[arg(value_name = "link", help_heading = "arguments")]
-    pub(crate) link: String,
+    /// what to download: search words, a link, a DOI, or an id such as zenodo:3608990. several
+    /// links download together, so search words in quotes go alone
+    #[arg(
+        value_name = "link",
+        required_unless_present = "input_file",
+        help_heading = "arguments"
+    )]
+    pub(crate) links: Vec<String>,
 
-    /// put the download in <dir> instead of a new folder named after it
+    /// put the download in <dir> instead of a new folder named after it. with several links,
+    /// each gets its own folder inside <dir>
     #[arg(short, long, value_name = "dir", help_heading = "options")]
     pub(crate) output: Option<PathBuf>,
+
+    /// read links from <file>, one a line, or from stdin for -. blank lines and lines starting
+    /// with # are skipped
+    #[arg(short, long, value_name = "file", help_heading = "options")]
+    pub(crate) input_file: Option<PathBuf>,
+
+    /// check the file's SHA-256 before placing it. needs one link to one file
+    #[arg(long, value_name = "hex", value_parser = sha256, help_heading = "options")]
+    pub(crate) sha256: Option<Sha256>,
 
     #[command(flatten)]
     pub(crate) filter: Filter,
@@ -506,6 +522,11 @@ pub(crate) struct Get {
     /// keep zip and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+}
+
+/// reads `--sha256`: 64 hex digits, in either case.
+fn sha256(text: &str) -> Result<Sha256, String> {
+    Sha256::from_hex(text.trim()).ok_or_else(|| "a SHA-256 is 64 hex digits".to_owned())
 }
 
 /// explain the ideas behind fetchloom, or one command
