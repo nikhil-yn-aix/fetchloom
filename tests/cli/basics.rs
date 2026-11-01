@@ -127,6 +127,25 @@ fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
 }
 
 #[test]
+fn a_palette_recolors_output_and_a_typo_only_warns() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["help", "concepts", "--color", "always"])
+        .env("FETCHLOOM_COLORS", "accent=magenta:done=teal")
+        .output()?;
+    assert!(output.status.success());
+    let stdout = text(&output.stdout)?;
+    assert!(stdout.contains("\x1b[35m"), "{stdout}");
+    assert!(!stdout.contains("\x1b[36m"), "{stdout}");
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("FETCHLOOM_COLORS: kept the default for done=teal;"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn get_has_its_own_help() -> Result {
     let output = Sandbox::new()?.run(&["get", "--help"])?;
     assert!(output.status.success());

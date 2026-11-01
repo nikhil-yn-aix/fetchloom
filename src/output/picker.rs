@@ -3,7 +3,7 @@
 use anstyle::Style as Paint;
 use console::{Key, Term};
 
-use super::{ACCENT, Style, paint, plain};
+use super::{Style, accent, paint, plain};
 use crate::error::{Error, Kind};
 
 pub(super) fn choose(
@@ -123,7 +123,7 @@ fn row(option: &str, index: usize, cursor: usize, style: Style, width: usize) ->
     let dim = paint(style.color, Paint::new().dimmed());
     if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
-        let cyan = paint(style.color, ACCENT.bold());
+        let cyan = paint(style.color, accent().bold());
         format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}  {rest}")
             .trim_end()
             .to_owned()

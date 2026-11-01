@@ -86,8 +86,8 @@ impl Drop for Bar {
 
 fn style(verb: &'static str, color: bool, unicode: bool, message: &str) -> ProgressStyle {
     let name = super::plain(message).into_owned();
-    let cyan = super::paint(color, super::ACCENT.bold());
-    let heading = format!("{cyan}{verb:>11}{cyan:#}");
+    let tone = super::toned(color, super::Tone::Work);
+    let heading = format!("{tone}{verb:>11}{tone:#}");
     ProgressStyle::with_template("{line}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
         .with_key(
@@ -122,10 +122,10 @@ fn meter(done: u64, total: u64, color: bool) -> String {
         usize::try_from(u128::from(done.min(total)) * 20 / u128::from(total)).unwrap_or(20)
     };
     let (fill, empty) = if color { ("━", "━") } else { ("#", "-") };
-    let cyan = super::paint(color, super::ACCENT);
+    let tone = super::paint(color, super::tinted(super::Tone::Work));
     let dim = super::paint(color, anstyle::Style::new().dimmed());
     format!(
-        "{cyan}{}{cyan:#}{dim}{}{dim:#}",
+        "{tone}{}{tone:#}{dim}{}{dim:#}",
         fill.repeat(filled),
         empty.repeat(20 - filled),
     )

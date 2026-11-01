@@ -236,7 +236,7 @@ pub(crate) fn run() -> ExitCode {
                     .map_or_else(|| "unknown".to_owned(), |root| root.display().to_string())
             );
         }
-        return about(&context, &text, started);
+        return about(&context, "", &text, started);
     }
     if let Some(args::Command::Help(asked)) = &args.command {
         return help::show(&context, &asked.topic, started);
@@ -349,11 +349,11 @@ struct About {
     version: &'static str,
 }
 
-/// prints `text` for a person, or the version in the document `--json` asked for.
-fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
-    context.output.answer(&crate::output::help_text(
-        text,
-        Style::stdout_color(args::color()),
+/// prints `text` for a person, after `banner`, or the version in the document `--json` asked for.
+fn about(context: &Context, banner: &str, text: &str, started: Instant) -> ExitCode {
+    context.output.answer(&format!(
+        "{banner}{}",
+        crate::output::help_text(text, Style::stdout_color(args::color()))
     ));
     let about = About {
         version: env!("CARGO_PKG_VERSION"),
@@ -363,17 +363,22 @@ fn about(context: &Context, text: &str, started: Instant) -> ExitCode {
 
 /// `fetchloom` alone: a short status inside a project, and the welcome outside one.
 fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
-    match project::find() {
-        Ok(project) => {
-            let outcome = blocking(context, move |context| status::brief(context, &project));
-            finish(context, Some("status"), outcome, started)
-        }
-        Err(_) => about(
-            context,
-            &format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO),
-            started,
-        ),
+    if let Ok(project) = project::find() {
+        let outcome = blocking(context, move |context| status::brief(context, &project));
+        return finish(context, Some("status"), outcome, started);
     }
+    let banner = context
+        .output
+        .answer_width()
+        .map_or_else(String::new, |width| {
+            crate::output::wordmark(width, Style::stdout_color(args::color()))
+        });
+    about(
+        context,
+        &banner,
+        &format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO),
+        started,
+    )
 }
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.

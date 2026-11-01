@@ -23,6 +23,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `NO_COLOR` | nonempty value disables automatic color |
 | `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color on a terminal unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
+| `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. an entry it cannot read keeps its default and prints one warning |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |

@@ -23,18 +23,21 @@ command handlers provide facts and completion verbs; `Output` owns formatting, p
 
 ### lines and bars
 
-the palette gives each color one meaning:
+each color has one meaning, named by a `Tone` in [style.rs](../../../src/output/style.rs):
 
-| meaning | rendering |
-|---|---|
-| finished work | green |
-| work in progress and anything the user types | cyan |
-| attention or a difference | yellow |
-| failure | red |
-| subject | bold |
-| supporting facts | dim |
+| tone | meaning | default |
+|---|---|---|
+| `done` | finished work | green |
+| `work` | work in progress and its bars | cyan |
+| `warn` | attention or a difference | yellow |
+| `fail` | failure | red |
+| `accent` | anything the user types, and choice numbers | cyan |
 
-step and completion verbs are bold and right-aligned in 11 columns without status glyphs. the subject before ` · ` is bold and its following facts are dim; a single-word subject is also bold. completed verbs include `Added`, `Fetched`, `Synced` and `Ok`. numbered search choices use cyan.
+subjects are bold and supporting facts are dim. `FETCHLOOM_COLORS` replaces any tone's color for the run. it is read once, when `Output` starts; an entry it cannot read keeps the default and becomes one warning. color code asks for a tone through `toned`, `tinted` or `accent`, never a fixed color.
+
+the welcome outside a project prints the wordmark in the accent when stdout is a terminal wider than 98 columns.
+
+step and completion verbs are bold and right-aligned in 11 columns without status glyphs. the subject before ` · ` is bold and its following facts are dim; a single-word subject is also bold. completed verbs include `Added`, `Fetched`, `Synced` and `Ok`. numbered search choices use the accent.
 
 errors use bold red `error:`, indented dim details and optional bold cyan `help:`; warnings use bold yellow `warning:`. hints are dim, with backticked commands in bold cyan. backticks remain when color is off. welcome and help headings are bold, with commands and options cyan.
 

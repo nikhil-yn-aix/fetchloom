@@ -10,11 +10,12 @@ use std::io::{IsTerminal, Write};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use anstyle::{AnsiColor, Style as Paint};
+use anstyle::Style as Paint;
 use indicatif::MultiProgress;
 use serde::Serialize;
 
 pub(crate) use progress::{Bar, Ticker, Wait};
+use style::Tone;
 pub(crate) use style::{ColorChoice, Style};
 
 use crate::error::Error;
@@ -79,17 +80,25 @@ struct WorkDone {
 impl Output {
     /// `logs` says debug logs share stderr, which bars would garble.
     pub(crate) fn new(style: Style, level: Level, json: bool, logs: bool) -> Output {
+        let unread = style::load_palette();
         // indicatif colors through the console crate, which decides on its own unless told
         console::set_colors_enabled_stderr(style.color);
         let bars = (style.interactive && !json && !logs && level >= Level::Normal)
             .then(MultiProgress::new);
-        Output {
+        let output = Output {
             style,
             level,
             json,
             bars,
             warnings: Mutex::new(Vec::new()),
+        };
+        if !unread.is_empty() {
+            output.warn(&format!(
+                "FETCHLOOM_COLORS: kept the default for {}; entries look like done=green, work=214 or accent=#d787ff",
+                unread.join(", ")
+            ));
         }
+        output
     }
 
     /// a finished step: a right-aligned verb, then the facts.
@@ -102,7 +111,7 @@ impl Output {
     /// a difference found, in the same rhythm as steps but in the warning color.
     pub(crate) fn mark(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            self.line(&verb_line(verb, text, AnsiColor::Yellow, self.style.color));
+            self.line(&verb_line(verb, text, Tone::Warn, self.style.color));
         }
     }
 
@@ -120,10 +129,7 @@ impl Output {
             .unwrap_or_else(PoisonError::into_inner)
             .push(text.to_owned());
         if self.tells(Level::Normal) {
-            let yellow = paint(
-                self.style.color,
-                Paint::new().fg_color(Some(AnsiColor::Yellow.into())).bold(),
-            );
+            let yellow = toned(self.style.color, Tone::Warn);
             self.line(&format!(
                 "{yellow}warning:{yellow:#} {}",
                 accented(&plain(text), Paint::new(), self.style.color)
@@ -134,7 +140,7 @@ impl Output {
     /// the closing line of a run that worked.
     pub(crate) fn done(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            self.line(&verb_line(verb, text, AnsiColor::Green, self.style.color));
+            self.line(&verb_line(verb, text, Tone::Done, self.style.color));
         }
     }
 
@@ -194,8 +200,8 @@ impl Output {
             return;
         }
         let color = self.style.color;
-        let cyan = paint(color, ACCENT.bold());
-        let accent = paint(color, ACCENT);
+        let cyan = paint(color, accent().bold());
+        let accent = paint(color, accent());
         let dim = paint(color, Paint::new().dimmed());
         let typed = plain(typed);
         let title = plain(title);
@@ -294,7 +300,7 @@ impl Output {
         Ticker::start(verb, what, known, move |verb, text| {
             write_line(
                 color,
-                &shown(&verb_line(verb, text, AnsiColor::Cyan, color), unicode),
+                &shown(&verb_line(verb, text, Tone::Work, color), unicode),
             );
         })
     }
@@ -448,11 +454,38 @@ pub(crate) fn help(text: &str, choice: ColorChoice) {
     let _ = writeln!(std::io::stdout().lock(), "{shown}");
 }
 
+/// the name drawn large, 98 columns wide, for the welcome on a wide terminal.
+const WORDMARK: &str = r"
+ ________ _______  _________  ________  ___  ___  ___       ________  ________  _____ ______
+|\  _____\\  ___ \|\___   ___\\   ____\|\  \|\  \|\  \     |\   __  \|\   __  \|\   _ \  _   \
+\ \  \__/\ \   __/\|___ \  \_\ \  \___|\ \  \\\  \ \  \    \ \  \|\  \ \  \|\  \ \  \\\__\ \  \
+ \ \   __\\ \  \_|/__  \ \  \ \ \  \    \ \   __  \ \  \    \ \  \\\  \ \  \\\  \ \  \\|__| \  \
+  \ \  \_| \ \  \_|\ \  \ \  \ \ \  \____\ \  \ \  \ \  \____\ \  \\\  \ \  \\\  \ \  \    \ \  \
+   \ \__\   \ \_______\  \ \__\ \ \_______\ \__\ \__\ \_______\ \_______\ \_______\ \__\    \ \__\
+    \|__|    \|_______|   \|__|  \|_______|\|__|\|__|\|_______|\|_______|\|_______|\|__|     \|__|
+";
+
+/// the wordmark and a blank line, in the accent, when `width` columns can hold it.
+pub(crate) fn wordmark(width: usize, color: bool) -> String {
+    let longest = WORDMARK.lines().map(str::len).max().unwrap_or(0);
+    if width <= longest {
+        return String::new();
+    }
+    let tint = paint(color, accent());
+    WORDMARK
+        .trim_matches('\n')
+        .lines()
+        .map(|line| format!("{tint}{line}{tint:#}\n"))
+        .chain(std::iter::once(String::from("\n")))
+        .collect()
+}
+
 pub(crate) fn help_text(text: &str, color: bool) -> String {
     if !color {
         return text.to_owned();
     }
     let bold = Paint::new().bold();
+    let accent = accent();
     let mut commands = false;
     text.split('\n')
         .map(|line| {
@@ -469,7 +502,7 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
             ] {
                 if let Some(rest) = line.strip_prefix(heading) {
                     let rest = if heading == "usage:" {
-                        format!(" {ACCENT}{}{ACCENT:#}", rest.trim_start())
+                        format!(" {accent}{}{accent:#}", rest.trim_start())
                     } else {
                         accented(rest, Paint::new(), true)
                     };
@@ -480,7 +513,7 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                 if command.starts_with("fetchloom ") {
                     let (command, description) = command.split_once("  ").unwrap_or((command, ""));
                     let gap = if description.is_empty() { "" } else { "  " };
-                    return format!("  {ACCENT}{command}{ACCENT:#}{gap}{description}");
+                    return format!("  {accent}{command}{accent:#}{gap}{description}");
                 }
                 // an option or an argument: its spelling is what a person types
                 if command.trim_start().starts_with(['-', '<']) {
@@ -489,18 +522,18 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                     let (flag, description) = entry.split_once("  ").unwrap_or((entry, ""));
                     let gap = &entry[flag.len()..entry.len() - description.trim_start().len()];
                     return format!(
-                        "  {indent}{ACCENT}{flag}{ACCENT:#}{gap}{}",
+                        "  {indent}{accent}{flag}{accent:#}{gap}{}",
                         description.trim_start()
                     );
                 }
                 if commands {
                     let end = command.find(' ').unwrap_or(command.len());
-                    return format!("  {ACCENT}{}{ACCENT:#}{}", &command[..end], &command[end..]);
+                    return format!("  {accent}{}{accent:#}{}", &command[..end], &command[end..]);
                 }
                 if let Some((name, analogy)) = command.split_once(", ")
                     && matches!(name, "data.toml" | "data.lock" | "the cache" | "sync")
                 {
-                    let style = if name == "sync" { ACCENT } else { bold };
+                    let style = if name == "sync" { accent } else { bold };
                     return format!("  {style}{name}{style:#}, {analogy}");
                 }
             }
@@ -525,23 +558,23 @@ fn paint(color: bool, style: Paint) -> Paint {
 /// the palette: green for what finished, cyan for work under way and for anything a person
 /// types, yellow for what needs attention, red for what failed. a line's subject is bold and its
 /// facts are dim, so color always means the same thing.
-fn verb_color(verb: &str) -> AnsiColor {
+fn verb_color(verb: &str) -> Tone {
     match verb {
         "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" | "Searching" => {
-            AnsiColor::Cyan
+            Tone::Work
         }
         "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Untracked" | "Outdated" => {
-            AnsiColor::Yellow
+            Tone::Warn
         }
-        "Failed" => AnsiColor::Red,
+        "Failed" => Tone::Fail,
         // the numbers of a list to choose from
-        verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => AnsiColor::Cyan,
-        _ => AnsiColor::Green,
+        verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => Tone::Accent,
+        _ => Tone::Done,
     }
 }
 
-fn verb_line(verb: &str, text: &str, tone: AnsiColor, color: bool) -> String {
-    let style = paint(color, Paint::new().fg_color(Some(tone.into())).bold());
+fn verb_line(verb: &str, text: &str, tone: Tone, color: bool) -> String {
+    let style = toned(color, tone);
     format!(
         "{style}{verb:>11}{style:#} {}",
         subject(&plain(text), color)
@@ -549,11 +582,8 @@ fn verb_line(verb: &str, text: &str, tone: AnsiColor, color: bool) -> String {
 }
 
 fn error_text(error: &Error, level: Level, color: bool) -> String {
-    let red = paint(
-        color,
-        Paint::new().fg_color(Some(AnsiColor::Red.into())).bold(),
-    );
-    let cyan = paint(color, ACCENT.bold());
+    let red = toned(color, Tone::Fail);
+    let cyan = paint(color, accent().bold());
     let dim = paint(color, Paint::new().dimmed());
     let mut text = format!(
         "{red}error:{red:#} {}",
@@ -586,12 +616,24 @@ fn hint_line(text: &str, color: bool) -> String {
 
 /// the one color for what a person types, commands and options, wherever they appear. the stream
 /// drops it, like every color, when color is off.
-const ACCENT: Paint = Paint::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
+fn accent() -> Paint {
+    tinted(Tone::Accent)
+}
+
+/// text in the color of `tone`.
+fn tinted(tone: Tone) -> Paint {
+    Paint::new().fg_color(Some(style::color(tone)))
+}
+
+/// bold in the color of `tone`, or plain when color is off.
+fn toned(color: bool, tone: Tone) -> Paint {
+    paint(color, tinted(tone).bold())
+}
 
 /// `text` with each command in backticks in the accent, then back to `around`. the backticks
 /// stay, so a command still stands out without color.
 fn accented(text: &str, around: Paint, color: bool) -> String {
-    let accent = paint(color, ACCENT.bold());
+    let accent = paint(color, accent().bold());
     let mut shown = String::with_capacity(text.len() + 16);
     let mut rest = text;
     while let Some(start) = rest.find('`') {
@@ -698,7 +740,7 @@ mod tests {
                 "         Ok everything matches data.lock",
             ),
         ] {
-            let shown = super::verb_line(verb, text, anstyle::AnsiColor::Green, false);
+            let shown = super::verb_line(verb, text, super::Tone::Done, false);
             assert_eq!(shown, expected);
             assert!(!shown.contains('\u{1b}'));
         }
@@ -706,7 +748,7 @@ mod tests {
             super::verb_line(
                 "Added",
                 "iris, its files are in data/iris",
-                anstyle::AnsiColor::Green,
+                super::Tone::Done,
                 true,
             ),
             "\u{1b}[1m\u{1b}[32m      Added\u{1b}[0m iris, its files are in data/iris"
@@ -714,25 +756,29 @@ mod tests {
     }
 
     #[test]
+    fn the_wordmark_shows_only_where_it_fits() {
+        assert_eq!(super::wordmark(98, false), "");
+        let shown = super::wordmark(100, false);
+        assert_eq!(shown.lines().count(), 8);
+        assert!(shown.ends_with("\\|__|\n\n"));
+        assert!(!shown.contains('\u{1b}'));
+        assert!(super::wordmark(100, true).contains('\u{1b}'));
+    }
+
+    #[test]
     fn step_colors_follow_the_work_being_reported() {
-        use anstyle::AnsiColor::{Cyan, Green, Red, Yellow};
+        use super::Tone::{Accent, Done, Fail, Warn, Work};
 
         for (verbs, expected) in [
             (
                 &["Downloaded", "Unpacked", "Locked", "Placed", "Removed"][..],
-                Green,
+                Done,
             ),
             (
-                &[
-                    "Downloading",
-                    "Unpacking",
-                    "Waiting",
-                    "Searching",
-                    "1",
-                    "12",
-                ][..],
-                Cyan,
+                &["Downloading", "Unpacking", "Waiting", "Searching"][..],
+                Work,
             ),
+            (&["1", "12"][..], Accent),
             (
                 &[
                     "Missing",
@@ -742,9 +788,9 @@ mod tests {
                     "Untracked",
                     "Outdated",
                 ][..],
-                Yellow,
+                Warn,
             ),
-            (&["Failed"][..], Red),
+            (&["Failed"][..], Fail),
         ] {
             for verb in verbs {
                 assert_eq!(super::verb_color(verb), expected, "{verb}");

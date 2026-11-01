@@ -2,6 +2,134 @@
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::sync::OnceLock;
+
+use anstyle::{Ansi256Color, AnsiColor, Color, RgbColor};
+
+/// what a color means. a line's subject is bold and its facts are dim, so a tone always means
+/// the same thing wherever it appears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tone {
+    /// finished work
+    Done,
+    /// work under way, and its bars
+    Work,
+    /// what needs attention
+    Warn,
+    /// what failed
+    Fail,
+    /// what a person types: commands, options, numbers to choose
+    Accent,
+}
+
+/// the color of each tone. `FETCHLOOM_COLORS` changes any of them, as in
+/// `done=green:work=blue:accent=#d787ff`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Palette {
+    done: Color,
+    work: Color,
+    warn: Color,
+    fail: Color,
+    accent: Color,
+}
+
+impl Default for Palette {
+    fn default() -> Palette {
+        Palette {
+            done: AnsiColor::Green.into(),
+            work: AnsiColor::Cyan.into(),
+            warn: AnsiColor::Yellow.into(),
+            fail: AnsiColor::Red.into(),
+            accent: AnsiColor::Cyan.into(),
+        }
+    }
+}
+
+impl Palette {
+    pub(crate) fn color(&self, tone: Tone) -> Color {
+        match tone {
+            Tone::Done => self.done,
+            Tone::Work => self.work,
+            Tone::Warn => self.warn,
+            Tone::Fail => self.fail,
+            Tone::Accent => self.accent,
+        }
+    }
+
+    /// reads `tone=color` entries split by `:`. an entry it cannot read keeps the default and is
+    /// returned, so one typo never costs the rest.
+    pub(crate) fn parse(text: &str) -> (Palette, Vec<String>) {
+        let mut palette = Palette::default();
+        let mut unread = Vec::new();
+        for entry in text.split(':').map(str::trim).filter(|e| !e.is_empty()) {
+            let parsed = entry.split_once('=').and_then(|(tone, color)| {
+                let slot = match tone.trim().to_ascii_lowercase().as_str() {
+                    "done" => &mut palette.done,
+                    "work" => &mut palette.work,
+                    "warn" => &mut palette.warn,
+                    "fail" => &mut palette.fail,
+                    "accent" => &mut palette.accent,
+                    _ => return None,
+                };
+                *slot = parse_color(color.trim())?;
+                Some(())
+            });
+            if parsed.is_none() {
+                unread.push(entry.to_owned());
+            }
+        }
+        (palette, unread)
+    }
+}
+
+/// a color name, `bright-` and a name, a 256-color number, or `#rrggbb`.
+fn parse_color(text: &str) -> Option<Color> {
+    let text = text.to_ascii_lowercase();
+    if let Some(hex) = text.strip_prefix('#') {
+        if hex.len() != 6 {
+            return None;
+        }
+        let value = u32::from_str_radix(hex, 16).ok()?;
+        let [_, r, g, b] = value.to_be_bytes();
+        return Some(RgbColor(r, g, b).into());
+    }
+    if let Ok(number) = text.parse::<u8>() {
+        return Some(Ansi256Color(number).into());
+    }
+    let (bright, name) = match text.strip_prefix("bright-") {
+        Some(name) => (true, name),
+        None => (false, text.as_str()),
+    };
+    let base = match name {
+        "black" => AnsiColor::Black,
+        "red" => AnsiColor::Red,
+        "green" => AnsiColor::Green,
+        "yellow" => AnsiColor::Yellow,
+        "blue" => AnsiColor::Blue,
+        "magenta" => AnsiColor::Magenta,
+        "cyan" => AnsiColor::Cyan,
+        "white" => AnsiColor::White,
+        _ => return None,
+    };
+    Some(if bright { base.bright(true) } else { base }.into())
+}
+
+static PALETTE: OnceLock<Palette> = OnceLock::new();
+
+/// the color of `tone` in the palette this run uses.
+pub(crate) fn color(tone: Tone) -> Color {
+    PALETTE.get().copied().unwrap_or_default().color(tone)
+}
+
+/// reads `FETCHLOOM_COLORS` for this run and returns the entries it could not read.
+pub(crate) fn load_palette() -> Vec<String> {
+    let Some(text) = std::env::var_os("FETCHLOOM_COLORS") else {
+        return Vec::new();
+    };
+    let (palette, unread) = Palette::parse(&text.to_string_lossy());
+    let _ = PALETTE.set(palette);
+    unread
+}
 
 /// when to color output, as `--color` takes it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -189,5 +317,45 @@ mod tests {
         assert!(!wants_unicode(true, &env(&[])));
         assert!(wants_unicode(true, &env(&[("WT_SESSION", "x")])));
         assert!(wants_unicode(true, &env(&[("TERM_PROGRAM", "vscode")])));
+    }
+
+    #[test]
+    fn a_palette_changes_only_the_tones_it_names() {
+        let (palette, unread) = Palette::parse("done=blue : accent=#D787FF:warn=214::");
+        assert_eq!(unread, Vec::<String>::new());
+        assert_eq!(palette.color(Tone::Done), AnsiColor::Blue.into());
+        assert_eq!(
+            palette.color(Tone::Accent),
+            RgbColor(0xd7, 0x87, 0xff).into()
+        );
+        assert_eq!(palette.color(Tone::Warn), Ansi256Color(214).into());
+        assert_eq!(palette.color(Tone::Work), AnsiColor::Cyan.into());
+        assert_eq!(palette.color(Tone::Fail), AnsiColor::Red.into());
+        let (palette, _) = Palette::parse("fail=bright-magenta");
+        assert_eq!(palette.color(Tone::Fail), AnsiColor::BrightMagenta.into());
+    }
+
+    #[test]
+    fn a_palette_keeps_the_default_for_each_entry_it_cannot_read() {
+        let (palette, unread) =
+            Palette::parse("done=teal:shiny=red:work=#12345:accent=256:fail:warn=magenta");
+        assert_eq!(
+            unread,
+            [
+                "done=teal",
+                "shiny=red",
+                "work=#12345",
+                "accent=256",
+                "fail"
+            ]
+        );
+        assert_eq!(palette.color(Tone::Warn), AnsiColor::Magenta.into());
+        assert_eq!(
+            Palette {
+                warn: AnsiColor::Yellow.into(),
+                ..palette
+            },
+            Palette::default()
+        );
     }
 }
