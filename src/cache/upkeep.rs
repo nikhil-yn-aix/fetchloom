@@ -360,6 +360,8 @@ impl Cache {
     }
 }
 
+/// the entries of `folder`, none when it does not exist, as in a cache a dry run left unmade.
+/// a folder that cannot be read is recorded in `unreadable`.
 pub(super) fn scan_entries(
     folder: &Path,
     unreadable: &mut Vec<PathBuf>,
@@ -377,6 +379,10 @@ pub(super) fn scan_entries(
                 }
             }
         }
+        Err(err)
+            if err.kind() == io::ErrorKind::NotFound
+                && fs::symlink_metadata(folder)
+                    .is_err_and(|err| err.kind() == io::ErrorKind::NotFound) => {}
         Err(_) => unreadable.push(folder.to_path_buf()),
     }
     Ok(found)

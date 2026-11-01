@@ -332,3 +332,39 @@ fn add_dry_run_writes_nothing_and_downloads_nothing() -> Result {
     assert_eq!(tree(&sandbox.work())?, project);
     Ok(())
 }
+
+#[test]
+fn a_dry_run_leaves_an_empty_cache_folder_empty() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let other = Server::start("/files/cows.csv", vec![file(b"cow\nbess\n", "\"c1\"")])?;
+    added(&sandbox, &server)?;
+    let empty = sandbox.folder("empty")?;
+    let project = tree(&sandbox.work())?;
+    for args in [
+        vec!["sync", "--dry-run"],
+        vec!["add", other.url.as_str(), "--dry-run"],
+        vec!["remove", "iris", "--dry-run"],
+        vec!["cache", "gc", "--dry-run"],
+        vec!["cache", "gc", "--now", "--dry-run"],
+    ] {
+        let output = sandbox
+            .command(&args)
+            .env("FETCHLOOM_CACHE", &empty)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        assert_eq!(
+            fs::read_dir(&empty)?.count(),
+            0,
+            "{args:?} leaves the cache folder empty"
+        );
+    }
+    assert_eq!(tree(&sandbox.work())?, project);
+    assert_eq!(other.requests().len(), 0);
+    Ok(())
+}

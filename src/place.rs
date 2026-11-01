@@ -498,6 +498,15 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
         }
         fs::symlink_metadata(folder)?
     };
+    found_folder(folder, &metadata, usage)
+}
+
+/// refuses what [`real_folder`] refuses, given what is at `folder`, creating nothing.
+pub(crate) fn found_folder(
+    folder: &Path,
+    metadata: &fs::Metadata,
+    usage: FolderUse,
+) -> io::Result<()> {
     let is_link = metadata.file_type().is_symlink();
     if metadata.is_dir() && !is_link {
         return Ok(());

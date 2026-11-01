@@ -30,7 +30,7 @@ pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
 
 use crate::digest::{self, Md5, Sha256};
-use crate::place::{FolderUse, real_folder};
+use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
@@ -121,14 +121,33 @@ impl Cache {
     }
 
     /// the cache at `root` as it is, with nothing created, for a dry run that only reads it. a
-    /// cache that does not exist yet holds nothing.
-    pub(crate) fn unopened(root: PathBuf) -> Cache {
-        Cache {
+    /// cache or cache folder that does not exist yet holds nothing, and what [`Cache::open`]
+    /// refuses is refused here too.
+    pub(crate) fn unopened(root: PathBuf) -> io::Result<Cache> {
+        match fs::metadata(&root) {
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotADirectory,
+                    format!("{} is a file where the cache should be", root.display()),
+                ));
+            }
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            _ => {}
+        }
+        for folder in FOLDERS {
+            let path = root.join(folder);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => found_folder(&path, &metadata, FolderUse::Cache)?,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             pending: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     /// this cache, with every removal recorded instead of made, so gc can say what it would free.

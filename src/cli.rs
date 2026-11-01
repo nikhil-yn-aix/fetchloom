@@ -177,15 +177,17 @@ fn open_cache() -> Result<Cache, Error> {
     })
 }
 
-/// the cache this machine uses, for a dry run: opened when it exists, and otherwise not created,
-/// standing for an empty cache.
+/// the cache this machine uses, for a dry run: read as it is, with no folder or file created, so
+/// a missing cache or cache folder stands for an empty one.
 fn peek_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
-    if root.exists() {
-        open_cache()
-    } else {
-        Ok(Cache::unopened(root))
-    }
+    Cache::unopened(root.clone()).map_err(|err| {
+        Error::io(
+            format_args!("could not open the cache at {}", root.display()),
+            &err,
+        )
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    })
 }
 
 fn cache_root() -> Result<std::path::PathBuf, Error> {
