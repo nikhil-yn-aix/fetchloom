@@ -10,12 +10,12 @@
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering and settled-run entry | `sync`, `sync_all`, `Seen`, `register` |
-| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Upgrade`, `relock`, `write_lock`, `place`, `pinned` |
+| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering, settled-run entry and dry runs | `sync`, `sync_all`, `preview_all`, `Seen`, `register` |
+| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Upgrade`, `relock`, `relock_dry`, `preview`, `write_lock`, `place`, `pinned` |
 | [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `ToUnpack`, `jobs`, `learn`, `finish`, `filter` |
 | [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs) | scan, racy hashes, aliases and hardlink audit | `Survey`, `hash_racy`, `look_again`, `audit`, `retarget`, `smudge_edited` |
-| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions and state updates | `Placing`, `Placement`, `Action`, `untouched`, `decide`, `apply` |
-| [place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs), [place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell` |
+| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions, previews and state updates | `Placing`, `Placement`, `Preview`, `Changes`, `Action`, `untouched`, `decide`, `apply` |
+| [place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs), [place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell`, `tell_preview` |
 | [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | archive scheduling and packed-object retention | `Unpack`, `unpack_all`, `unpack_drafts`, `unpack_locked`, `drop_archives` |
 
 ## how it works
@@ -63,6 +63,10 @@ unknown archive trees must be learned before destination planning can finish. af
 
 placement rechecks files before destructive work, flushes copied payloads, then writes state. the state captures each file's metadata immediately after placement and the start of the scan, so edits or cache marks arriving during later work remain visible.
 
+### dry run
+
+`--dry-run` splits the run where planning ends and applying begins. `preview_all` in project.rs follows `sync_all` without the settled-sync shortcut: `Loop::relock_dry` drafts entries as `relock` does but gives each hash only a download or unpacking can learn a stand-in that matches no cached object, and returns the download jobs instead of running them. `Loop::preview` builds the same `Placing` and asks `Placing::preview` what `apply` would do, reading cached objects with `Cache::find` so nothing is sealed or marked. `remove` uses `Placing::preview_removal`. `Placing::new` uses `Project::planned_data_dir`, so even a missing data folder is not created; `apply` makes it. `cache gc --dry-run` sweeps through `Cache::pretending`, whose `Volume` records each removal instead of making it, so the sweep code decides once for both runs.
+
 ## invariants and traps
 
 - ordinary sync may have changed `data.lock` when destination planning fails. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes and placements can remain.
@@ -77,6 +81,7 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 |---|---|
 | [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs), [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::` |
 | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs) | `cargo test --locked --test cli project::` |
+| [dry_run.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/dry_run.rs) | `cargo test --locked --test cli dry_run::` |
 | [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
 | [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 

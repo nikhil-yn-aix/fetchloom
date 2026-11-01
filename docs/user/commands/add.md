@@ -6,6 +6,7 @@
 fetchloom add iris
 fetchloom add zenodo:3608990
 fetchloom add zenodo:3608990 --as flowers --select "*.csv"
+fetchloom add zenodo:3608990 --select "*.csv" --dry-run
 ```
 
 ## usage
@@ -20,6 +21,7 @@ fetchloom add [options] <link>
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false` |
+| `-n`, `--dry-run` | show what adding would change, and change nothing on disk |
 
 [global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote several words, as in `fetchloom add "fashion mnist"`. the manifest stores the chosen canonical id, not the search words.
 
@@ -45,6 +47,21 @@ commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rule
 adding an existing reference with identical filters and extraction settings syncs it without another entry. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. if restoration fails, the error supplies recovery steps and the previous contents as JSON strings to decode into the named files. cached downloads and files already placed are not rolled back.
+
+## dry run
+
+`add --dry-run`, or `-n`, prints what adding would do and writes nothing: no `data.toml`, `data.lock`, `.gitignore` or `data/`, no downloads and no new cache. it still resolves the link, so a source may be asked what the link holds. stderr from a git repository with no manifest yet, matching a test snapshot:
+
+```text
+ Would lock iris · 1 file in data.lock
+Would download iris/iris.csv · size unknown
+Would place data/iris · 1 file
+Would ignore data/ in .gitignore, since its files come from data.lock
+  Would add iris to data.toml, its files in data/iris
+         Ok dry run, nothing was changed
+```
+
+the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, and an archive not yet unpacked here is listed with `Would unpack`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 

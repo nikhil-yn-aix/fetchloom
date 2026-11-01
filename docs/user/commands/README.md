@@ -23,7 +23,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add`, `remove`, `sync` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
 
 | option | effect |
 |---|---|
@@ -35,10 +35,11 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 | `-y`, `--yes` | approve confirmations, but never choose a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running |
+| `-n`, `--dry-run` | with `add`, `remove`, `sync` and `cache gc`, show what would change and change nothing on disk; sources may still be asked what a link holds |
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
-all except `--version` apply before or after a subcommand. quiet conflicts with verbosity. help stays text with `--json`. [environment](../reference/environment.md) lists persistent shell settings and color precedence. fetchloom has no config file.
+all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. help stays text with `--json`. [environment](../reference/environment.md) lists persistent shell settings and color precedence. fetchloom has no config file.
 
 ```sh
 fetchloom help concepts

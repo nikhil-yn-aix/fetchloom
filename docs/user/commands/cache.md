@@ -16,7 +16,7 @@ fetchloom cache gc [options]
 fetchloom cache verify [options]
 ```
 
-`cache gc --now` also frees unneeded objects and unpack records less than a day old. [global options](README.md#global-options) apply to all three forms.
+`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](README.md#global-options) apply to all three forms.
 
 stdout excerpt from `fetchloom --help`:
 
@@ -56,6 +56,21 @@ a missing manifest removes a registration. an unreadable registration, manifest 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 
 gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failed paths in `result.not_removed`, alongside the error. close programs holding those paths or fix permissions, then retry. already absent paths do not count as failed removals.
+
+### dry run
+
+```sh
+fetchloom cache gc --now --dry-run
+```
+
+`--dry-run` runs the same sweep with every deletion recorded instead of made, so it applies the same age rules and keeps the same files. the cache, partial downloads and project registrations stay as they are, and a cache that does not exist yet is not created. stderr when one unneeded 32-byte object is in the cache, matching a test:
+
+```text
+ Would free 32 B · 1 file from the cache
+         Ok dry run, nothing was changed
+```
+
+`-v` names each path gc would delete, including the registrations of projects whose `data.toml` is gone. a path it cannot read is named in a warning and does not fail the dry run. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## verify
 

@@ -6,6 +6,7 @@
 fetchloom sync
 fetchloom sync --offline
 fetchloom sync --locked
+fetchloom sync --force --dry-run
 ```
 
 ## usage
@@ -18,6 +19,7 @@ fetchloom sync [options]
 |---|---|
 | `--force` | replace conflicting files at locked paths, including untracked files |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
+| `-n`, `--dry-run` | show what sync would lock, download, place and remove, and change nothing on disk |
 
 [global options](README.md#global-options) also apply.
 
@@ -58,6 +60,21 @@ the kept-shared warning uses this wording, with `<path>` replaced by the affecte
 on windows, a directory listing can still show the recorded size and time after another link changed. a cache change mark then triggers a byte check; if that proves an otherwise unchanged alias damaged, sync repairs it and lists its path in `result.placement.restored`. an unseen change may need the editing project to sync, `cache verify`, or `sync --force` to trigger detection.
 
 if cache registration fails, sync still succeeds with a warning that gc may not keep the project's files. check cache permissions and run sync again.
+
+## dry run
+
+`sync --dry-run`, or `-n`, prints what sync would change and changes nothing on disk: no file downloads, no `data.lock` or state writes, nothing placed or deleted in `data/`, and no cache writes. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds. stderr after a dataset `cows` was added to `data.toml`, matching a test:
+
+```text
+ Would lock cows · 1 file in data.lock
+Would download cows/cows.csv · size unknown
+Would place data/cows · 1 file
+         Ok dry run, nothing was changed
+```
+
+each file it would download is listed with its size, or `size unknown` when only the download tells. a file whose hash only a download can learn counts as one to place. an archive this machine has not unpacked is listed with `Would unpack`, and its members are not counted, since only unpacking lists them. with `--force`, files it would overwrite are listed under `Would replace`; without it, they are named in warnings, as a real sync names them. `-v` names each file.
+
+`--locked` still checks the lock first. offline, a dry run that would need a download fails as the sync would, with exit 20. a dry run takes no project hold, so a sync running at the same time can change what it reports. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 

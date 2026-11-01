@@ -23,7 +23,7 @@ placement protects existing files while turning locked data and cached archive t
 
 ### expand destinations first
 
-`Plan` combines manifest folders, locked files and cached member trees. it is an in-memory destination plan, not a serialized dry-run action list. unknown archive trees are returned separately so sync can unpack them before deciding destinations.
+`Plan` combines manifest folders, locked files and cached member trees. it is an in-memory destination plan; `Placing::preview` turns the actions decided from it into the lists `--dry-run` prints. unknown archive trees are returned separately so sync can unpack them before deciding destinations.
 
 a dataset consisting of one archive can drop a common top-level member folder. an archive beside other files expands beneath its own location. the resulting targets reject overlapping dataset folders, file/folder clashes and folded-name collisions.
 

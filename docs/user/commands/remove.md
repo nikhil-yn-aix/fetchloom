@@ -4,6 +4,7 @@
 
 ```sh
 fetchloom remove iris
+fetchloom remove iris --dry-run
 ```
 
 ## usage
@@ -12,7 +13,11 @@ fetchloom remove iris
 fetchloom remove [options] <name>
 ```
 
-there are no command-specific options. [global options](README.md#global-options) apply. the argument is a dataset name from `data.toml`, not a source reference.
+| option | effect |
+|---|---|
+| `-n`, `--dry-run` | show what removing would change, and change nothing on disk |
+
+[global options](README.md#global-options) also apply. the argument is a dataset name from `data.toml`, not a source reference.
 
 ## what happens
 
@@ -32,6 +37,18 @@ stdout excerpt from `fetchloom --help`:
 removing a table also removes its attached comments and strips leading blank lines. other manifest entries remain. commit the manifest and lock after removal.
 
 if deleting files fails after metadata was written, fix the reported error and run `fetchloom sync` to finish removal. removing a project entry does not immediately clear its bytes from the shared cache; [cache gc](cache.md#gc) handles unneeded objects.
+
+## dry run
+
+`remove --dry-run`, or `-n`, makes the same plan and stops before writing: `data.toml`, `data.lock`, `data/` and the cache stay as they are, and nothing is asked of the network. `-v` names each file it would delete. stderr for a dataset `a` with one placed file, matching a test snapshot:
+
+```text
+Would remove a from data.toml and data.lock
+Would remove 1 file no dataset needs
+         Ok dry run, nothing was changed
+```
+
+edited files that a real removal would keep are named in warnings, as they are without `--dry-run`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 

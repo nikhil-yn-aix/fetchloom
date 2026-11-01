@@ -36,14 +36,14 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 
 | command | result fields |
 |---|---|
-| `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
+| `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `get` | `folder`: absolute path, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, and project-relative `folder`; counts describe locked source files, not archive members |
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
-| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
+| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user` and `valid`; [auth](../commands/auth.md#json) |
 | `auth login`, `auth logout` | `account` with `user` and `saved_to`, or `removed_from` |
 | `help` | `options`: the options every command takes; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
@@ -80,6 +80,30 @@ status lists all differences in JSON. human output limits each file category to 
 `cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` paths; the array length is the failed-path count. human output and JSON `warnings` name those paths. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
+
+## dry runs
+
+`add`, `remove`, `sync` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
+
+for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
+
+| field | entries |
+|---|---|
+| `place` | files that would be placed where nothing is |
+| `replace` | files that would be overwritten, also counted in `placement.replaced` |
+| `remove` | managed files no dataset needs that would be deleted |
+| `download` | files that would be downloaded first, as `{path, size}` with `path` as `<dataset>/<file>` and `size` in bytes, or null when only the download can tell |
+| `unpack` | archives, as `<dataset>/<file>`, that would be unpacked first; their members are not in `place` or the counts |
+
+`result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a test run with the project path shortened:
+
+```json
+{"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
+```
+
+for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes` and `leftovers` count what gc would delete and keep, and `not_removed` lists paths it could not inspect. `changes.remove` lists the absolute path of each object, unpack record, leftover and project registration gc would delete. a gc dry run returns `ok` even when `not_removed` is not empty.
+
+the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks` and `copies` stay 0.
 
 ## search candidates
 
