@@ -146,6 +146,68 @@ fn a_palette_recolors_output_and_a_typo_only_warns() -> Result {
 }
 
 #[test]
+fn help_json_teaches_every_command_in_one_call() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["help", "--json"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let document: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(document["command"], "help");
+    let commands = document["result"]["commands"]
+        .as_array()
+        .ok_or("no commands")?;
+    for name in ["add", "sync", "get", "search", "cache gc", "auth login"] {
+        let command = commands
+            .iter()
+            .find(|command| command["name"] == name)
+            .ok_or(name)?;
+        assert!(
+            command["usage"]
+                .as_str()
+                .is_some_and(|usage| usage.starts_with(&format!("fetchloom {name}"))),
+            "{name}"
+        );
+        assert!(
+            command["examples"]
+                .as_array()
+                .is_some_and(|examples| !examples.is_empty()),
+            "{name}"
+        );
+    }
+    let options = document["result"]["options"]
+        .as_array()
+        .ok_or("no options")?;
+    assert!(options.iter().any(|option| option["name"] == "--json"));
+    let one = serde_json::from_slice::<Value>(&sandbox.run(&["help", "get", "--json"])?.stdout)?;
+    assert_eq!(one["result"]["commands"].as_array().map(Vec::len), Some(1));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
+    Ok(())
+}
+
+#[test]
+fn json_errors_carry_the_command_that_fixes_them() -> Result {
+    let sandbox = Sandbox::new()?;
+    let document: Value = serde_json::from_slice(&sandbox.run(&["--json", "sycn"])?.stdout)?;
+    assert_eq!(document["errors"][0]["fix"], "fetchloom sync");
+    // an agent reads stdout as JSON whatever the terminal says, so no escape code may reach it
+    for args in [
+        &["--json", "--color", "always", "sycn"][..],
+        &["--json", "--color", "always", "auth", "--offline"],
+        &["--json", "--color", "always", "help"],
+    ] {
+        let output = sandbox.run(args)?;
+        assert!(!output.stdout.contains(&0x1b), "{args:?}");
+        serde_json::from_slice::<Value>(&output.stdout)?;
+    }
+    let document: Value = serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
+    assert_eq!(document["errors"][0]["kind"], "project.invalid");
+    assert!(
+        document["errors"][0]["fix"].is_null(),
+        "a command with a placeholder is not runnable"
+    );
+    Ok(())
+}
+
+#[test]
 fn get_has_its_own_help() -> Result {
     let output = Sandbox::new()?.run(&["get", "--help"])?;
     assert!(output.status.success());

@@ -66,8 +66,18 @@ struct Problem<'a> {
     message: &'a str,
     details: &'a [String],
     help: Option<&'a str>,
+    /// the command `help` names, ready to run, for a script or an agent to act on
+    fix: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failures: Option<&'a [crate::error::FileFailure]>,
+}
+
+/// the first `fetchloom` command quoted in `help`, without its backticks.
+fn fix(help: &str) -> Option<&str> {
+    help.split('`')
+        .skip(1)
+        .step_by(2)
+        .find(|quoted| quoted.starts_with("fetchloom ") && !quoted.contains(['<', '>']))
 }
 
 #[derive(Serialize)]
@@ -324,6 +334,11 @@ impl Output {
         self.ask_yes_no(question, false)
     }
 
+    /// whether `--json` asked for one document on stdout.
+    pub(crate) fn json(&self) -> bool {
+        self.json
+    }
+
     /// whether a person can answer a question here: stderr and stdin are terminals, outside CI,
     /// and `--json` was not asked for.
     pub(crate) fn can_ask(&self) -> bool {
@@ -469,6 +484,7 @@ impl Output {
                 message: &error.message,
                 details: &error.details,
                 help: error.help.as_deref(),
+                fix: error.help.as_deref().and_then(fix),
                 failures: (!error.failures.is_empty()).then_some(error.failures.as_slice()),
             }],
         };
@@ -831,6 +847,20 @@ mod tests {
             ),
             "\u{1b}[1m\u{1b}[32m      Added\u{1b}[0m iris, its files are in data/iris"
         );
+    }
+
+    #[test]
+    fn a_fix_is_the_first_runnable_command_in_the_help() {
+        assert_eq!(
+            super::fix("sign in with `fetchloom auth login hf`, then run the same command again"),
+            Some("fetchloom auth login hf")
+        );
+        assert_eq!(
+            super::fix("run `fetchloom add <link>` to start, or `fetchloom search iris`"),
+            Some("fetchloom search iris")
+        );
+        assert_eq!(super::fix("add --yes to approve this download"), None);
+        assert_eq!(super::fix("quote it, as in `\"fashion mnist\"`"), None);
     }
 
     #[test]

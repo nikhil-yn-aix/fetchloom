@@ -1,11 +1,13 @@
 //! `fetchloom help`: the ideas behind fetchloom, or the help of one command. like `--help`, it
-//! prints text for people, even with `--json`.
+//! prints text for people. `fetchloom help --json` instead describes every command, so a script
+//! or an agent learns all of them in one call.
 
 use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::CommandFactory;
 use clap::error::ErrorKind;
+use serde::Serialize;
 
 use super::{Context, args, finish};
 use crate::error::{Error, Kind};
@@ -41,6 +43,23 @@ conflicting files. `fetchloom status` shows what differs.
 /// prints the topic, or the help of the command `topic` names. an unknown topic is a usage error
 /// that names no command, since help is never one.
 pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> ExitCode {
+    if context.output.json() && topic.iter().all(|word| word != "concepts") {
+        let asked = topic.join(" ");
+        let commands: Vec<Described> = described(&args::Args::command(), "")
+            .into_iter()
+            .filter(|command| asked.is_empty() || command.name == asked)
+            .collect();
+        if commands.is_empty() {
+            return finish::<()>(context, None, Err(unknown(topic)), started);
+        }
+        let options = arguments(&args::Args::command(), true);
+        return finish(
+            context,
+            Some("help"),
+            Ok(Tree { options, commands }),
+            started,
+        );
+    }
     if let [only] = topic
         && only == "concepts"
     {
@@ -57,6 +76,112 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
         }
         _ => finish::<()>(context, None, Err(unknown(topic)), started),
     }
+}
+
+/// what `fetchloom help --json` returns.
+#[derive(Serialize)]
+struct Tree {
+    /// the options every command takes
+    options: Vec<Argument>,
+    commands: Vec<Described>,
+}
+
+/// one command as a script needs it: its name, what it does, how to call it and its examples.
+#[derive(Serialize)]
+struct Described {
+    name: String,
+    about: String,
+    usage: String,
+    arguments: Vec<Argument>,
+    examples: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Argument {
+    /// `--select`, `-o`, or `<link>` for a positional argument
+    name: String,
+    short: Option<String>,
+    value: Option<String>,
+    help: String,
+    required: bool,
+    repeats: bool,
+}
+
+/// every command under `command`, depth first, named the way people type them.
+fn described(command: &clap::Command, parent: &str) -> Vec<Described> {
+    let mut found = Vec::new();
+    for inner in command.get_subcommands() {
+        let name = format!("{parent}{}", inner.get_name()).trim().to_owned();
+        let after = inner
+            .get_after_help()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let examples = after
+            .split_once("examples:\n")
+            .map(|(_, rest)| {
+                rest.lines()
+                    .take_while(|line| line.starts_with("  "))
+                    .map(|line| line.trim().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let arguments = arguments(inner, false);
+        found.push(Described {
+            usage: {
+                let usage = inner.clone().render_usage().to_string();
+                usage.trim().trim_start_matches("Usage:").trim().to_owned()
+            },
+            about: inner
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            name: name.clone(),
+            arguments,
+            examples,
+        });
+        found.extend(described(inner, &format!("{name} ")));
+    }
+    found
+}
+
+/// `command`'s own arguments, or with `global` the options every command takes.
+fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
+    command
+        .get_arguments()
+        .filter(|arg| !arg.is_hide_set() && arg.is_global_set() == global)
+        .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version") || global)
+        .map(|arg| {
+            let value = arg
+                .get_value_names()
+                .and_then(|names| names.first())
+                .map(ToString::to_string);
+            let repeats = matches!(
+                arg.get_action(),
+                clap::ArgAction::Append | clap::ArgAction::Count
+            ) || arg
+                .get_num_args()
+                .is_some_and(|range| range.max_values() > 1);
+            Argument {
+                name: arg.get_long().map_or_else(
+                    || {
+                        format!(
+                            "<{}>",
+                            value.clone().unwrap_or_else(|| arg.get_id().to_string())
+                        )
+                    },
+                    |long| format!("--{long}"),
+                ),
+                short: arg.get_short().map(|short| format!("-{short}")),
+                value: arg
+                    .get_long()
+                    .and(value.clone())
+                    .filter(|_| arg.get_action().takes_values()),
+                help: arg.get_help().map(ToString::to_string).unwrap_or_default(),
+                required: arg.is_required_set(),
+                repeats,
+            }
+        })
+        .collect()
 }
 
 /// the error for a topic that is neither `concepts` nor a command, suggesting the closest one.
