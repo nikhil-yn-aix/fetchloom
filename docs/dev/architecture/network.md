@@ -10,17 +10,17 @@
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [net.rs](../../../src/net.rs) | lazy clients, redirect policy and concurrency | `Net`, `Wire`, `Options`, `Credential`, `Offline`, `Splitting`, `Split`, `send`, `send_on` |
-| [api.rs](../../../src/net/api.rs) | bounded metadata responses | `Api`, `Response`, `json`, `text` |
-| [download.rs](../../../src/net/download.rs) | cache hits, resumes, body streaming and expected hashes | `Fetch`, `Expect`, `Fetched`, `Origin`, `Event`, `download` |
-| [download/split.rs](../../../src/net/download/split.rs) | adaptive range scheduling | `Job`, `Board`, `Share`, `Streamed`, `split` |
-| [headers.rs](../../../src/net/headers.rs) | filenames, lengths and version validators | `file_name`, `if_range`, `changed`, `validators`, `range_start`, `range_end` |
-| [failure.rs](../../../src/net/failure.rs) | classifications and retry waits | `Failure`, `Retry`, `classify`, `retry_after` |
-| [pace.rs](../../../src/net/pace.rs) | per-host request quotas | `Limit`, `Paces`, `Hold`, `Ticket`, `admit`, `heard` |
-| [rate.rs](../../../src/net/rate.rs) | shared byte-rate budget | `Rate`, `read`, `throttle` |
-| [address.rs](../../../src/net/address.rs) | typed-host trust, DNS and proxies | `Typed`, `Proxies`, `Resolver`, `is_private` |
-| [shown.rs](../../../src/net/shown.rs) | URL secret recognition and masking | `Shown`, `secret`, `mask_query` |
-| [partial.rs](../../../src/cache/partial.rs), [hashing.rs](../../../src/cache/partial/hashing.rs) | download storage and ordered hash queue | `PartialWriter`, `HashPipe` |
+| [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs) | lazy clients, redirect policy and concurrency | `Net`, `Wire`, `Options`, `Credential`, `Offline`, `Splitting`, `Split`, `send`, `send_on` |
+| [api.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api.rs) | bounded metadata responses | `Api`, `Response`, `json`, `text` |
+| [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | cache hits, resumes, body streaming and expected hashes | `Fetch`, `Expect`, `Fetched`, `Origin`, `Event`, `download` |
+| [download/split.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/split.rs) | adaptive range scheduling | `Job`, `Board`, `Share`, `Streamed`, `split` |
+| [headers.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/headers.rs) | filenames, lengths and version validators | `file_name`, `if_range`, `changed`, `validators`, `range_start`, `range_end` |
+| [failure.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/failure.rs) | classifications and retry waits | `Failure`, `Retry`, `classify`, `retry_after` |
+| [pace.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/pace.rs) | per-host request quotas | `Limit`, `Paces`, `Hold`, `Ticket`, `admit`, `heard` |
+| [rate.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/rate.rs) | shared byte-rate budget | `Rate`, `read`, `throttle` |
+| [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) | typed-host trust, DNS and proxies | `Typed`, `Proxies`, `Resolver`, `is_private` |
+| [shown.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/shown.rs) | URL secret recognition and masking | `Shown`, `secret`, `mask_query` |
+| [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs), [hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | download storage and ordered hash queue | `PartialWriter`, `HashPipe` |
 
 ## how it works
 
@@ -51,7 +51,7 @@ checkpoint messages are FIFO barriers: every earlier chunk is hashed, later chun
 
 ### batch durability
 
-a download must be on disk before it takes its name in the cache, because the cache trusts an object by its name later. flushing each file cost more than downloading many small ones, so on linux 5.8 and later `fetch::all` opens a batch with `Cache::defer_downloads`. each finished download is sealed but keeps its partial name and its claim; `Cache::publish_downloads` then flushes the filesystem once with `syncfs` and links every download in under its hash, on every exit from the batch. a power cut before that flush loses unnamed partial files, never a named object with missing bytes. a second download of the same link in one batch would wait on the first's claim, so `Net::claim` calls `Cache::publish_download_of`, which flushes and names that one download at once. windows, macos and older kernels flush each download on its own. see [deferred.rs](../../../src/cache/deferred.rs) and the [measurement](../performance/measurements.md#observations-and-rejected-experiments).
+a download must be on disk before it takes its name in the cache, because the cache trusts an object by its name later. flushing each file cost more than downloading many small ones, so on linux 5.8 and later `fetch::all` opens a batch with `Cache::defer_downloads`. each finished download is sealed but keeps its partial name and its claim; `Cache::publish_downloads` then flushes the filesystem once with `syncfs` and links every download in under its hash, on every exit from the batch. a power cut before that flush loses unnamed partial files, never a named object with missing bytes. a second download of the same link in one batch would wait on the first's claim, so `Net::claim` calls `Cache::publish_download_of`, which flushes and names that one download at once. windows, macos and older kernels flush each download on its own. see [deferred.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/deferred.rs) and the [measurement](../performance/measurements.md#observations-and-rejected-experiments).
 
 ### the 1 MB/s handover
 
@@ -84,7 +84,7 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 | quota wait | reset within 120 s; at most 10 waits per request before consuming attempts |
 | diversion pages | at most 3, each at most 4 MiB |
 
-408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](../../../src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.unreachable`; excessive requested waits report `network.rate_limited` while retries remain.
+408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.unreachable`; excessive requested waits report `network.rate_limited` while retries remain.
 
 `Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. waits remain cancellable.
 
@@ -106,9 +106,9 @@ redirects are checked hop by hop. credentials attach only to their configured ho
 
 | files | cargo filter |
 |---|---|
-| [download tests](../../../src/net/download/tests.rs), [split tests](../../../src/net/download/split/tests.rs), [pace tests](../../../src/net/pace/tests.rs), [credential tests](../../../src/net/credential_tests.rs) | `cargo test --locked --lib net::` |
-| [hash worker tests](../../../src/cache/partial/hashing/tests.rs), [partial tests](../../../src/cache/partial/tests.rs) | `cargo test --locked --lib cache::partial::` |
-| [split.rs](../../../tests/cli/split.rs), [proxy.rs](../../../tests/cli/proxy.rs), [secrets.rs](../../../tests/cli/secrets.rs), [caps.rs](../../../tests/cli/caps.rs) | `cargo test --locked --test cli split::`; `cargo test --locked --test cli proxy::`; `cargo test --locked --test cli secrets::`; `cargo test --locked --test cli caps::` |
+| [download tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/tests.rs), [split tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/split/tests.rs), [pace tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/pace/tests.rs), [credential tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/credential_tests.rs) | `cargo test --locked --lib net::` |
+| [hash worker tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing/tests.rs), [partial tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/tests.rs) | `cargo test --locked --lib cache::partial::` |
+| [split.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/split.rs), [proxy.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/proxy.rs), [secrets.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/secrets.rs), [caps.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/caps.rs) | `cargo test --locked --test cli split::`; `cargo test --locked --test cli proxy::`; `cargo test --locked --test cli secrets::`; `cargo test --locked --test cli caps::` |
 
 ## related
 

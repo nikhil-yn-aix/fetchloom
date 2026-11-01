@@ -4,7 +4,7 @@ coding agents such as claude code, github copilot, codex and cursor run fetchloo
 
 ## give your agent the skill
 
-[skills/fetchloom](../../skills/fetchloom/SKILL.md) is an [agent skill](https://agentskills.io): a short page an agent loads only when a task needs a dataset. it says which command fits which task, which flags keep a run safe, and how to read a failure. copy the folder where your agent looks:
+[skills/fetchloom](https://github.com/nikhil-yn-aix/fetchloom/blob/main/skills/fetchloom/SKILL.md) is an [agent skill](https://agentskills.io): a short page an agent loads only when a task needs a dataset. it says which command fits which task, which flags keep a run safe, and how to read a failure. copy the folder where your agent looks:
 
 | agent | folder |
 |---|---|

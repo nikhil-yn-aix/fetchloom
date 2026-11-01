@@ -10,15 +10,15 @@ objects are read-only files named by their content digest. the cache owns public
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [cache.rs](../../../src/cache.rs) | root layout, object lookup, URL and MD5 records | `Cache`, `Stored`, `Validators`, `UrlRecord`, `find`, `verify`, `write_hint`, `link_object` |
-| [object.rs](../../../src/cache/object.rs) | staged object sealing and batch durability | `NewObject`, `Sealed`, `Batch`, `seal`, `publish`, `syncfs_reports_errors` |
-| [deferred.rs](../../../src/cache/deferred.rs) | downloads waiting for one batch flush before they take their names | `Finished`, `defer_downloads`, `publish_downloads`, `publish_download_of` |
-| [partial.rs](../../../src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
-| [partial/hashing.rs](../../../src/cache/partial/hashing.rs) | ordered prefix hashing on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
-| [staging.rs](../../../src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
-| [unpacked.rs](../../../src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `unpacked`, `holds_unpacked` |
-| [changed.rs](../../../src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
-| [upkeep.rs](../../../src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `sweep_with_stop`, `verify_with_stop` |
+| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs) | root layout, object lookup, URL and MD5 records | `Cache`, `Stored`, `Validators`, `UrlRecord`, `find`, `verify`, `write_hint`, `link_object` |
+| [object.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/object.rs) | staged object sealing and batch durability | `NewObject`, `Sealed`, `Batch`, `seal`, `publish`, `syncfs_reports_errors` |
+| [deferred.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/deferred.rs) | downloads waiting for one batch flush before they take their names | `Finished`, `defer_downloads`, `publish_downloads`, `publish_download_of` |
+| [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
+| [partial/hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | ordered prefix hashing on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
+| [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
+| [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `unpacked`, `holds_unpacked` |
+| [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
+| [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `sweep_with_stop`, `verify_with_stop` |
 
 ## how it works
 
@@ -79,10 +79,10 @@ archive staging holds an OS lock until publication or discard. the next unpack o
 
 | files | cargo filter |
 |---|---|
-| [cache.rs](../../../src/cache.rs), [link_tests.rs](../../../src/cache/link_tests.rs), [changed.rs](../../../src/cache/changed.rs), [upkeep.rs](../../../src/cache/upkeep.rs) | `cargo test --locked --lib cache::` |
-| [partial tests](../../../src/cache/partial/tests.rs), [hash worker tests](../../../src/cache/partial/hashing/tests.rs) | `cargo test --locked --lib cache::partial::` |
-| [cache.rs](../../../tests/cli/cache.rs), [concurrent.rs](../../../tests/cli/concurrent.rs) | `cargo test --locked --test cli cache::`; `cargo test --locked --test cli concurrent::` |
-| [placing.rs](../../../tests/cli/placing.rs), [recovery.rs](../../../tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
+| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs), [link_tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/link_tests.rs), [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs), [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | `cargo test --locked --lib cache::` |
+| [partial tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/tests.rs), [hash worker tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing/tests.rs) | `cargo test --locked --lib cache::partial::` |
+| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/cache.rs), [concurrent.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/concurrent.rs) | `cargo test --locked --test cli cache::`; `cargo test --locked --test cli concurrent::` |
+| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
 
 ## related
 

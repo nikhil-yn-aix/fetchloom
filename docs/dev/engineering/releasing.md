@@ -6,7 +6,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 ## workflow
 
-[Cargo.toml](../../../Cargo.toml) owns the version; [pyproject.toml](../../../pyproject.toml) reads it dynamically. [release.yml](../../../.github/workflows/release.yml) runs on tags matching `v*.*.*` and rejects a tag that disagrees with Cargo. default permissions are empty; each job requests only what it needs.
+[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) owns the version; [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) reads it dynamically. [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) runs on tags matching `v*.*.*` and rejects a tag that disagrees with Cargo. default permissions are empty; each job requests only what it needs.
 
 | job | permissions | work |
 |---|---|---|
@@ -23,7 +23,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version` and verify that the python helper reports `project.invalid` outside a project.
 
-[publish.yml](../../../.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
+[publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
 
 | job | needs | work |
 |---|---|---|
@@ -71,7 +71,7 @@ to exercise build jobs without a tag, temporarily add a branch trigger for `rele
 
 ## installers
 
-the planned release will include [install.sh](../../../install.sh), which detects x86_64 or arm64 linux and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. [install.ps1](../../../install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
+the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
 both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
@@ -117,4 +117,4 @@ try {
 
 stop the local server with ctrl-c when finished and remove only the test folders you created. also test a deliberately wrong checksum: installation must fail before replacing the installed executable.
 
-contributions and distributions use [Apache-2.0](../../../LICENSE). include [NOTICE](../../../NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions.md#apache-20) explains the license boundary.
+contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). include [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions.md#apache-20) explains the license boundary.

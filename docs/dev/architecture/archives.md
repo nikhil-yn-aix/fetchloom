@@ -10,14 +10,14 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [archive.rs](../../../src/archive.rs) | archive selection, limits and entry points | `Packed`, `Limits`, `Unpacked`, `by_name`, `stem`, `unpack`, `unpack_cached` |
-| [detect.rs](../../../src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
-| [guard.rs](../../../src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
-| [names.rs](../../../src/archive/names.rs) | normalized paths and collision tracking | `Named`, `Names`, `add` |
-| [zip.rs](../../../src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
-| [tar.rs](../../../src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
-| [store.rs](../../../src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
-| [cli/sync/unpack.rs](../../../src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
+| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits and entry points | `Packed`, `Limits`, `Unpacked`, `by_name`, `stem`, `unpack`, `unpack_cached` |
+| [detect.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
+| [guard.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
+| [names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | normalized paths and collision tracking | `Named`, `Names`, `add` |
+| [zip.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
+| [tar.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
+| [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
+| [cli/sync/unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
 
 ## how it works
 
@@ -76,9 +76,9 @@ when a locked tree differs, the sync layer first checks whether the packed objec
 
 | files | cargo filter |
 |---|---|
-| [tests.rs](../../../src/archive/tests.rs), [samples.rs](../../../src/archive/samples.rs), [store.rs](../../../src/archive/store.rs), [archive fixtures](../../../tests/fixtures/archives) | `cargo test --locked --lib archive::` |
-| [unpack.rs](../../../src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::unpack::` |
-| [archives.rs](../../../tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
+| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
+| [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::unpack::` |
+| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 
 ## related
 

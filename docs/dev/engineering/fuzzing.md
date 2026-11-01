@@ -6,12 +6,12 @@ bolero exercises five parsers inside their modules without exposing a separate p
 
 | test target | source | property |
 |---|---|---|
-| `archive::names::tests::fuzz_member_names` | [archive/names.rs](../../../src/archive/names.rs) | accepted member names obey path and collision rules |
-| `project::lock::canonical::tests::fuzz_lock_reader` | [project/lock/canonical.rs](../../../src/project/lock/canonical.rs) | the fast lock reader agrees with validated lock parsing |
-| `project::manifest::tests::fuzz_manifest` | [project/manifest.rs](../../../src/project/manifest.rs) | accepted manifests keep their invariants through dataset edits |
-| `source::drive::folder::tests::fuzz_drive_pages` | [source/drive/folder.rs](../../../src/source/drive/folder.rs) | folder and download-page parsing remains safe for arbitrary text |
-| `net::headers::tests::fuzz_response_headers` | [net/headers.rs](../../../src/net/headers.rs) | response headers and suggested filenames remain valid when accepted |
-| `source::bucket::xml::tests::fuzz_object_listings` | [source/bucket/xml.rs](../../../src/source/bucket/xml.rs) | the S3 XML reader never panics, and accepted elements have valid names |
+| `archive::names::tests::fuzz_member_names` | [archive/names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | accepted member names obey path and collision rules |
+| `project::lock::canonical::tests::fuzz_lock_reader` | [project/lock/canonical.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/canonical.rs) | the fast lock reader agrees with validated lock parsing |
+| `project::manifest::tests::fuzz_manifest` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | accepted manifests keep their invariants through dataset edits |
+| `source::drive::folder::tests::fuzz_drive_pages` | [source/drive/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/drive/folder.rs) | folder and download-page parsing remains safe for arbitrary text |
+| `net::headers::tests::fuzz_response_headers` | [net/headers.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/headers.rs) | response headers and suggested filenames remain valid when accepted |
+| `source::bucket::xml::tests::fuzz_object_listings` | [source/bucket/xml.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/bucket/xml.rs) | the S3 XML reader never panics, and accepted elements have valid names |
 
 all targets must avoid panics. where a writer exists, round trips must preserve the accepted value. the test body remains beside the parser so a minimized failing input can become a nearby regression case.
 
@@ -36,7 +36,7 @@ mkdir -p .fuzz/manifest .fuzz/manifest-crashes
 cargo bolero test --toolchain nightly -T 10min --corpus-dir .fuzz/manifest --crashes-dir .fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
 ```
 
-[Cargo.toml](../../../Cargo.toml) defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source, which git ignores. the explicit `.fuzz` folder is local run data; do not stage it.
+[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source, which git ignores. the explicit `.fuzz` folder is local run data; do not stage it.
 
 when a crash appears, preserve the input, minimize it, and add a deterministic regression test that fails before fixing the parser. run that test and the parser's module after the fix, then repeat the fuzz target. keep only inputs needed to explain and reproduce the behavior.
 

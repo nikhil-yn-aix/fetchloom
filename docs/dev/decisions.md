@@ -64,5 +64,5 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 
 | what | why | contract |
 |---|---|---|
-| use Apache-2.0 | permit use, modification and redistribution with explicit patent terms | [LICENSE](../../LICENSE) |
-| distribute NOTICE | preserve attribution and the project-name notice; the license grants no trademark rights beyond describing origin | [NOTICE](../../NOTICE) |
+| use Apache-2.0 | permit use, modification and redistribution with explicit patent terms | [LICENSE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE) |
+| distribute NOTICE | preserve attribution and the project-name notice; the license grants no trademark rights beyond describing origin | [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE) |

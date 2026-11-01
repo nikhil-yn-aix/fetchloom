@@ -75,18 +75,18 @@ relocking can download and unpack before it writes `data.lock`, because unknown 
 
 | type | home | meaning |
 |---|---|---|
-| `Context` | [cli.rs](../../../src/cli.rs) | command settings, output, counters and stop signal |
-| `Project`, `Held` | [project.rs](../../../src/project.rs) | project root and mutation-lock lifetime |
-| `Manifest`, `Entry` | [project/manifest.rs](../../../src/project/manifest.rs) | requested datasets and selection rules |
-| `Lock`, `Locked`, `LockedFile` | [project/lock.rs](../../../src/project/lock.rs) | resolved datasets and immutable byte pins |
-| `State`, `Placed`, `Look`, `Synced` | [project/state.rs](../../../src/project/state.rs) | placed files, their size and time, and the last sync's input hashes |
-| `Loop`, `Draft`, `Survey`, `Placing` | [sync.rs](../../../src/cli/sync.rs), [draft.rs](../../../src/cli/sync/draft.rs), [disk.rs](../../../src/cli/sync/disk.rs), [place.rs](../../../src/cli/sync/place.rs) | orchestration, learned pins, disk observations and placement decisions |
-| `Reference`, `Listing`, `Remote` | [source.rs](../../../src/source.rs) | source identity, resolved listing and downloadable file |
-| `Net`, `Fetch`, `Fetched` | [net.rs](../../../src/net.rs), [download.rs](../../../src/net/download.rs) | HTTP policy, transfer request and checked result |
-| `Cache`, `PartialWriter`, `HashPipe` | [cache.rs](../../../src/cache.rs), [partial.rs](../../../src/cache/partial.rs), [hashing.rs](../../../src/cache/partial/hashing.rs) | stored objects, unfinished writes and ordered prefix hashing |
-| `Packed`, `Limits`, `Unpacked` | [archive.rs](../../../src/archive.rs) | archive selection, expansion bounds and member tree |
-| `Plan`, `Target`, `Placer`, `Method` | [plan.rs](../../../src/plan.rs), [place.rs](../../../src/place.rs) | destinations and operations that fill them |
-| `Output`, `Work`, `Error`, `Stop` | [output.rs](../../../src/output.rs), [work.rs](../../../src/work.rs), [error.rs](../../../src/error.rs), [stop.rs](../../../src/stop.rs) | rendering, counters, classified errors and cancellation |
+| `Context` | [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs) | command settings, output, counters and stop signal |
+| `Project`, `Held` | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs) | project root and mutation-lock lifetime |
+| `Manifest`, `Entry` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | requested datasets and selection rules |
+| `Lock`, `Locked`, `LockedFile` | [project/lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | resolved datasets and immutable byte pins |
+| `State`, `Placed`, `Look`, `Synced` | [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | placed files, their size and time, and the last sync's input hashes |
+| `Loop`, `Draft`, `Survey`, `Placing` | [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs), [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | orchestration, learned pins, disk observations and placement decisions |
+| `Reference`, `Listing`, `Remote` | [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | source identity, resolved listing and downloadable file |
+| `Net`, `Fetch`, `Fetched` | [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs), [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | HTTP policy, transfer request and checked result |
+| `Cache`, `PartialWriter`, `HashPipe` | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs), [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs), [hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | stored objects, unfinished writes and ordered prefix hashing |
+| `Packed`, `Limits`, `Unpacked` | [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, expansion bounds and member tree |
+| `Plan`, `Target`, `Placer`, `Method` | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs), [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | destinations and operations that fill them |
+| `Output`, `Work`, `Error`, `Stop` | [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs), [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs), [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | rendering, counters, classified errors and cancellation |
 
 ## components
 

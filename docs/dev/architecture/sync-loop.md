@@ -10,13 +10,13 @@
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [cli/project.rs](../../../src/cli/project.rs) | command ordering and settled-run entry | `sync`, `sync_all`, `Seen`, `register` |
-| [cli/sync.rs](../../../src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Upgrade`, `relock`, `write_lock`, `place`, `pinned` |
-| [draft.rs](../../../src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `ToUnpack`, `jobs`, `learn`, `finish`, `filter` |
-| [disk.rs](../../../src/cli/sync/disk.rs) | scan, racy hashes, aliases and hardlink audit | `Survey`, `hash_racy`, `look_again`, `audit`, `retarget`, `smudge_edited` |
-| [place.rs](../../../src/cli/sync/place.rs) | actions and state updates | `Placing`, `Placement`, `Action`, `untouched`, `decide`, `apply` |
-| [place/put.rs](../../../src/cli/sync/place/put.rs), [place/tell.rs](../../../src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell` |
-| [unpack.rs](../../../src/cli/sync/unpack.rs) | archive scheduling and packed-object retention | `Unpack`, `unpack_all`, `unpack_drafts`, `unpack_locked`, `drop_archives` |
+| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering and settled-run entry | `sync`, `sync_all`, `Seen`, `register` |
+| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Upgrade`, `relock`, `write_lock`, `place`, `pinned` |
+| [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `ToUnpack`, `jobs`, `learn`, `finish`, `filter` |
+| [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs) | scan, racy hashes, aliases and hardlink audit | `Survey`, `hash_racy`, `look_again`, `audit`, `retarget`, `smudge_edited` |
+| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions and state updates | `Placing`, `Placement`, `Action`, `untouched`, `decide`, `apply` |
+| [place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs), [place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell` |
+| [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | archive scheduling and packed-object retention | `Unpack`, `unpack_all`, `unpack_drafts`, `unpack_locked`, `drop_archives` |
 
 ## how it works
 
@@ -75,10 +75,10 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 
 | files | cargo filter |
 |---|---|
-| [sync.rs](../../../src/cli/sync.rs), [draft.rs](../../../src/cli/sync/draft.rs), [disk.rs](../../../src/cli/sync/disk.rs), [unpack.rs](../../../src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::` |
-| [project.rs](../../../tests/cli/project.rs) | `cargo test --locked --test cli project::` |
-| [placing.rs](../../../tests/cli/placing.rs), [recovery.rs](../../../tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
-| [archives.rs](../../../tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
+| [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs), [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::` |
+| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs) | `cargo test --locked --test cli project::` |
+| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
+| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 
 ## related
 

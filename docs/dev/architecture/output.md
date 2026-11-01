@@ -10,20 +10,20 @@ command handlers provide facts and completion verbs; `Output` owns formatting, p
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [output.rs](../../../src/output.rs) | human lines, prompts, errors and JSON | `Output`, `Level`, `Document`, `Problem`, `step`, `done`, `warn`, `answer`, `document`, `verb_line` |
-| [output/progress.rs](../../../src/output/progress.rs) | byte bars, waiting and item progress | `Bar`, `Wait`, `Ticker`, `start`, `advance`, `sized` |
-| [output/style.rs](../../../src/output/style.rs) | terminal and color decisions | `Style`, `ColorChoice`, `detect`, `stdout_color` |
-| [output/picker.rs](../../../src/output/picker.rs) | dataset-choice drawing and key handling | `choose`, `selection_key`, `row` |
-| [work.rs](../../../src/work.rs) | atomic work counters and snapshots | `Work`, `Counts`, `add`, `counts` |
-| [error.rs](../../../src/error.rs) | stable kinds and structured explanations | `Error`, `Kind`, `FileFailure`, `exit_code`, `with_result` |
-| [cli/logs.rs](../../../src/cli/logs.rs) | debug output and timeline recording | `Logs`, `start`, `on_stderr` |
-| [units.rs](../../../src/units.rs) | sizes, rates, durations and clipping | `size`, `rate`, `speed`, `duration`, `count`, `clip` |
+| [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs) | human lines, prompts, errors and JSON | `Output`, `Level`, `Document`, `Problem`, `step`, `done`, `warn`, `answer`, `document`, `verb_line` |
+| [output/progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/progress.rs) | byte bars, waiting and item progress | `Bar`, `Wait`, `Ticker`, `start`, `advance`, `sized` |
+| [output/style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) | terminal and color decisions | `Style`, `ColorChoice`, `detect`, `stdout_color` |
+| [output/picker.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/picker.rs) | dataset-choice drawing and key handling | `choose`, `selection_key`, `row` |
+| [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs) | atomic work counters and snapshots | `Work`, `Counts`, `add`, `counts` |
+| [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | stable kinds and structured explanations | `Error`, `Kind`, `FileFailure`, `exit_code`, `with_result` |
+| [cli/logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs) | debug output and timeline recording | `Logs`, `start`, `on_stderr` |
+| [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | sizes, rates, durations and clipping | `size`, `rate`, `speed`, `duration`, `count`, `clip` |
 
 ## how it works
 
 ### lines and bars
 
-each color has one meaning, named by a `Tone` in [style.rs](../../../src/output/style.rs):
+each color has one meaning, named by a `Tone` in [style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs):
 
 | tone | meaning | default |
 |---|---|---|
@@ -81,10 +81,10 @@ JSON is one completed document, not a stream of progress events. it holds schema
 
 | files | cargo filter |
 |---|---|
-| [output.rs](../../../src/output.rs), [progress.rs](../../../src/output/progress.rs), [style.rs](../../../src/output/style.rs) | `cargo test --locked --lib output::` |
-| [logs.rs](../../../src/cli/logs.rs), [error.rs](../../../src/error.rs), [units.rs](../../../src/units.rs) | `cargo test --locked --lib cli::logs::`; `cargo test --locked --lib error::`; `cargo test --locked --lib units::` |
-| [progress.rs](../../../tests/cli/progress.rs), [hints.rs](../../../tests/cli/hints.rs), [basics.rs](../../../tests/cli/basics.rs) | `cargo test --locked --test cli progress::`; `cargo test --locked --test cli hints::`; `cargo test --locked --test cli basics::` |
-| [get.rs](../../../tests/cli/get.rs), [snapshots](../../../tests/cli/snapshots) | `cargo test --locked --test cli get::` |
+| [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs), [progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/progress.rs), [style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) | `cargo test --locked --lib output::` |
+| [logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs), [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | `cargo test --locked --lib cli::logs::`; `cargo test --locked --lib error::`; `cargo test --locked --lib units::` |
+| [progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/progress.rs), [hints.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/hints.rs), [basics.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/basics.rs) | `cargo test --locked --test cli progress::`; `cargo test --locked --test cli hints::`; `cargo test --locked --test cli basics::` |
+| [get.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/get.rs), [snapshots](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/cli/snapshots) | `cargo test --locked --test cli get::` |
 
 ## related
 

@@ -2,7 +2,7 @@
 
 the benchmark suite compares the time and resources needed to retrieve checked research files.
 
-[bench/](../../../bench/README.md) implements the suite; [running benchmarks](../engineering/benchmarks.md) gives the contributor route.
+[bench/](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md) implements the suite; [running benchmarks](../engineering/benchmarks.md) gives the contributor route.
 
 ## what it answers
 
@@ -71,7 +71,7 @@ live runs fetch real public datasets, 5 interleaved rounds each with empty cache
 
 the hugging face and kaggle clients do not accept the supplied expected SHA-256 as a download option. their timed commands check it after download, following the same rule as curl and wget.
 
-datahugger receives the explicit dataverse landing URL and an identified `fetchloom-benchmark/1 datahugger/0.13` User-Agent. [bench access notes](../../../bench/README.md#run) record the DOI-parser and default-User-Agent refusals that motivated this wrapper. the timed call uses `checksum=True` and `unzip=False`, and its exact wrapper is recorded.
+datahugger receives the explicit dataverse landing URL and an identified `fetchloom-benchmark/1 datahugger/0.13` User-Agent. [bench access notes](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run) record the DOI-parser and default-User-Agent refusals that motivated this wrapper. the timed call uses `checksum=True` and `unzip=False`, and its exact wrapper is recorded.
 
 native cache metadata and generated checksum reports are not dataset payloads; their creation still counts toward time and disk.
 
@@ -90,7 +90,7 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 | far | 150 ms | 1% | 50 Mbit/s | 4 MiB | 50 |
 | poor | 300 ms | 3% | 10 Mbit/s | 1 MiB | 20 |
 
-ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the published xfs comparison runs only s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](../../../bench/README.md#run).
+ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the published xfs comparison runs only s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
 
 ## platforms
 

@@ -10,15 +10,15 @@ these modules contain small value types and policies used by more than one compo
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [digest.rs](../../../src/digest.rs) | typed digests and incremental hashing | `Sha256`, `Md5`, `Hasher`, `from_hex`, `of_reader`, `sha256` |
-| [name.rs](../../../src/name.rs) | suggested names, path checks and alias folding | `sanitize`, `dataset_name`, `title_name`, `reference_name`, `escapes`, `metadata`, `unstorable`, `fold`, `closest` |
-| [glob.rs](../../../src/glob.rs) | checked whole-path selection patterns | `Glob`, `new`, `matches`, `is_top_level_only` |
-| [units.rs](../../../src/units.rs) | human sizes, rates, durations and clipping | `size`, `rate`, `speed`, `duration`, `count`, `clip` |
-| [volume.rs](../../../src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
-| [threads.rs](../../../src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
-| [error.rs](../../../src/error.rs) | stable failure kinds and explanations | `Kind`, `Error`, `FileFailure`, `name`, `exit_code`, `advice` |
-| [stop.rs](../../../src/stop.rs) | shared cancellation | `Stop`, `ask`, `asked`, `is_asked`, `check` |
-| [work.rs](../../../src/work.rs) | atomic counters independent of output | `Work`, `Counts`, `add`, `counts` |
+| [digest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/digest.rs) | typed digests and incremental hashing | `Sha256`, `Md5`, `Hasher`, `from_hex`, `of_reader`, `sha256` |
+| [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs) | suggested names, path checks and alias folding | `sanitize`, `dataset_name`, `title_name`, `reference_name`, `escapes`, `metadata`, `unstorable`, `fold`, `closest` |
+| [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs) | checked whole-path selection patterns | `Glob`, `new`, `matches`, `is_top_level_only` |
+| [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | human sizes, rates, durations and clipping | `size`, `rate`, `speed`, `duration`, `count`, `clip` |
+| [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
+| [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
+| [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | stable failure kinds and explanations | `Kind`, `Error`, `FileFailure`, `name`, `exit_code`, `advice` |
+| [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | shared cancellation | `Stop`, `ask`, `asked`, `is_asked`, `check` |
+| [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs) | atomic counters independent of output | `Work`, `Counts`, `add`, `counts` |
 
 ## how it works
 
@@ -65,9 +65,9 @@ linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLO
 
 | files | cargo filter |
 |---|---|
-| [digest.rs](../../../src/digest.rs), [name.rs](../../../src/name.rs), [glob.rs](../../../src/glob.rs), [units.rs](../../../src/units.rs) | `cargo test --locked --lib digest::`; `cargo test --locked --lib name::`; `cargo test --locked --lib glob::`; `cargo test --locked --lib units::` |
-| [volume.rs](../../../src/volume.rs), [threads.rs](../../../src/threads.rs), [error.rs](../../../src/error.rs) | `cargo test --locked --lib volume::`; `cargo test --locked --lib threads::`; `cargo test --locked --lib error::` |
-| [caps.rs](../../../tests/cli/caps.rs), [unattended.rs](../../../tests/cli/unattended.rs), [placing.rs](../../../tests/cli/placing.rs) | `cargo test --locked --test cli caps::`; `cargo test --locked --test cli unattended::`; `cargo test --locked --test cli placing::` |
+| [digest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/digest.rs), [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs), [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs), [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | `cargo test --locked --lib digest::`; `cargo test --locked --lib name::`; `cargo test --locked --lib glob::`; `cargo test --locked --lib units::` |
+| [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs), [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | `cargo test --locked --lib volume::`; `cargo test --locked --lib threads::`; `cargo test --locked --lib error::` |
+| [caps.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/caps.rs), [unattended.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/unattended.rs), [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs) | `cargo test --locked --test cli caps::`; `cargo test --locked --test cli unattended::`; `cargo test --locked --test cli placing::` |
 
 ## related
 

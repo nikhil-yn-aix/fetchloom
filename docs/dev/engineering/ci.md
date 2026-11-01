@@ -4,7 +4,7 @@ CI checks the same crate across processor architectures and filesystems that exp
 
 ## triggers and permissions
 
-[ci.yml](../../../.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: test` and `if: always()`. it passes only when the matrix result is `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
+[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: test` and `if: always()`. it passes only when the matrix result is `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
 
 ## test job
 
@@ -29,7 +29,7 @@ one `test` job expands to four required runners, each with a 45-minute timeout. 
 | full tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
 | full tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
 
-[deny.toml](../../../deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. the advisory ignore list is empty; changes to exceptions belong with their reasons.
+[deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. the advisory ignore list is empty; changes to exceptions belong with their reasons.
 
 ## filesystem runs
 
@@ -41,7 +41,7 @@ linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop
 
 ## live-source checks
 
-[live.yml](../../../.github/workflows/live.yml) runs every monday at 04:17 UTC and through manual dispatch. its linux x86_64 and windows x86_64 jobs run:
+[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) runs every monday at 04:17 UTC and through manual dispatch. its linux x86_64 and windows x86_64 jobs run:
 
 ```sh
 cargo test --locked -- --ignored

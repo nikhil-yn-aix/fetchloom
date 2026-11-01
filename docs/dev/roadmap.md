@@ -11,5 +11,5 @@ pending work concerns remaining performance costs and publishing tested releases
 ## publishing
 
 1. check that a source install from the default branch builds the release. exercise binaries, installers and wheels with the maintainer and two or three researchers on real projects before publishing 0.1.0 through the [release workflow](engineering/releasing.md).
-2. after the first crates.io release, replace the `CARGO_REGISTRY_TOKEN` secret with crates.io trusted publishing for [publish.yml](../../.github/workflows/publish.yml).
+2. after the first crates.io release, replace the `CARGO_REGISTRY_TOKEN` secret with crates.io trusted publishing for [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml).
 3. sign the windows binaries. defender's ransomware rule blocked an unsigned release executable on a managed windows machine.

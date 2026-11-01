@@ -20,7 +20,7 @@ use release builds and keep cache state, filesystem, machine load, run counts an
 
 elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. [benchmark design](benchmark-design.md) describes the implemented linux suite. reproduce the named workload and record the conditions before treating an old timing as a baseline.
 
-[Cargo.toml](../../../Cargo.toml) sets fat LTO, one codegen unit, abort-on-panic and stripped symbols for release builds. [historical observations](measurements.md#observations-and-rejected-experiments) record the LTO and allocator experiments.
+[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) sets fat LTO, one codegen unit, abort-on-panic and stripped symbols for release builds. [historical observations](measurements.md#observations-and-rejected-experiments) record the LTO and allocator experiments.
 
 ## pages
 
