@@ -36,9 +36,8 @@ pub(crate) struct Survey {
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
-    /// whether hashing found files as new as the state, so a state written now settles the
-    /// unchanged ones for later runs and smudges the edited ones, or a record moved to another
-    /// spelling of its path.
+    /// whether hashing found files as new as the state unchanged, so a state written now settles
+    /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
 }
 
@@ -103,10 +102,9 @@ impl Survey {
             Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == **sha256)
         });
         for ((path, _), unchanged) in racy.into_iter().zip(unchanged) {
-            // a smudged state keeps an edit from looking racy again, where a later change mark
-            // would take it for an edit made through another project
-            self.needs_writing = true;
-            if !unchanged {
+            if unchanged {
+                self.needs_writing = true;
+            } else {
                 self.edited.insert(path.clone());
             }
         }
@@ -173,8 +171,7 @@ impl Survey {
     /// folder's listing keeps the old size and time of a hardlink changed through another name, so
     /// the mark is the only sign of an edit made through another project. the link may also name
     /// an older copy of the object than the one that changed, so only hashing settles it. a mark
-    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down. a
-    /// link hashing already found edited counts the same, as only a coarse clock made it racy.
+    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down.
     pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
         let changed = cache.changed();
         if changed.is_empty() {
@@ -189,6 +186,7 @@ impl Survey {
                         cache::may_follow(*found, placed.look.modified.max(placed.checked))
                     })
                     && self.disk.get(*path) == Some(&placed.look)
+                    && !self.edited.contains(*path)
             })
             .map(|(path, _)| path.clone())
             .collect()
@@ -197,11 +195,7 @@ impl Survey {
     /// hashes the files a mark puts in doubt, separating changed links from intact ones.
     /// an unreadable file stops the check.
     pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) -> Result<(), Error> {
-        let (edited, doubted): (Vec<String>, Vec<String>) = self
-            .doubted(cache)
-            .into_iter()
-            .partition(|path| self.edited.contains(path));
-        self.elsewhere.extend(edited);
+        let doubted = self.doubted(cache);
         if doubted.is_empty() {
             return Ok(());
         }
@@ -604,29 +598,6 @@ mod tests {
                 "{seconds}"
             );
         }
-    }
-
-    #[test]
-    fn a_racy_edit_of_a_marked_link_is_an_edit_made_elsewhere() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
-        fs::create_dir(project.root.join("data")).unwrap();
-        fs::write(project.root.join("data/file"), b"edited").unwrap();
-        let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
-        let placed = record(&project.root, "data/file", b"placed", Method::Hardlink);
-        let sha256 = placed.sha256;
-        survey.state.files.insert("data/file".to_owned(), placed);
-        survey.hash_racy(&project.root, 0);
-        assert_eq!(survey.edited, HashSet::from(["data/file".to_owned()]));
-        survey.check_doubted(&project.root, &cache).unwrap();
-        assert!(survey.elsewhere.is_empty(), "no mark, so the edit stays");
-        cache.mark_changed(&sha256).unwrap();
-        survey.check_doubted(&project.root, &cache).unwrap();
-        assert_eq!(survey.elsewhere, HashSet::from(["data/file".to_owned()]));
-        assert!(survey.vouched.is_empty());
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default
