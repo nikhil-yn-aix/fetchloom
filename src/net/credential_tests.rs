@@ -30,7 +30,7 @@ fn net() -> Net {
         Options {
             offline: crate::net::Offline::No,
             jobs: 1,
-            credentials: crate::source::credentials(&var),
+            credentials: crate::auth::credentials(&var),
             split: crate::net::Splitting::WhenSlow,
         },
         Arc::default(),
@@ -158,7 +158,7 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
 #[test]
 fn a_bare_dataverse_token_has_no_host_to_send_it_to() {
     let var = |name: &str| (name == "DATAVERSE_TOKEN").then(|| OsString::from("unscoped-test"));
-    assert!(crate::source::credentials(&var).is_empty());
+    assert!(crate::auth::credentials(&var).is_empty());
 }
 
 #[test]

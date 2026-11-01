@@ -183,12 +183,25 @@ impl Version {
             .filter(|file| file.restricted)
             .map(|file| format!("\"{}\"", file.path()))
             .collect();
-        if !restricted.is_empty() {
+        // a key for this installation may be allowed the files; if not, their downloads are
+        // refused and say so
+        let host = dataset
+            .host
+            .split(':')
+            .next()
+            .unwrap_or(&dataset.host)
+            .to_ascii_lowercase();
+        let account = crate::auth::Account::Dataverse(host);
+        if !restricted.is_empty() && account.find(&crate::auth::env).is_none() {
+            let command = account.command();
             return Err(Error::new(
                 Kind::AuthRequired,
                 format!("{dataset} restricts access to {}", restricted.join(", ")),
             )
-            .help("request a public copy of the listed files from the dataset's owner"));
+            .help(format!(
+                "if you have access, sign in with `{command}` and run the same command again; otherwise request access on the dataset's page, or exclude those files with --exclude"
+            ))
+            .needs(account, None));
         }
         Ok(())
     }

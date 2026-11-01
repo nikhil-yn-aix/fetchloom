@@ -6,10 +6,10 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, Var, malformed};
+use super::{Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
-use crate::net::{Api, Credential};
+use crate::net::Api;
 
 /// a zenodo record. a record id names exactly one version.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,12 +73,18 @@ impl Record {
         }
         match answer.metadata.access_right.as_str() {
             "open" => (),
+            // zenodo lists a restricted record's files only to an account allowed to read them
+            "restricted" | "embargoed" | "closed" if !answer.files.is_empty() => (),
             "restricted" | "embargoed" | "closed" => {
+                let page = format!("https://zenodo.org/records/{}", answer.id);
                 return Err(Error::new(
                     Kind::AuthRequired,
                     format!("{self} is {}", answer.metadata.access_right),
                 )
-                .help("open the record on zenodo.org to check its access conditions"));
+                .help(format!(
+                    "request access at {page}, then sign in with `fetchloom auth login zenodo` and run the same command again"
+                ))
+                .needs(crate::auth::Account::Zenodo, Some(page)));
             }
             _ => return Err(self.invalid("the access condition is not recognized")),
         }
@@ -169,21 +175,6 @@ impl fmt::Display for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "zenodo:{}", self.id)
     }
-}
-
-/// `ZENODO_TOKEN`, for restricted records.
-pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    let token = var("ZENODO_TOKEN")
-        .and_then(|token| token.into_string().ok())
-        .filter(|token| !token.trim().is_empty());
-    token
-        .map(|token| Credential {
-            host: "zenodo.org",
-            header: "authorization",
-            value: format!("Bearer {}", token.trim()),
-        })
-        .into_iter()
-        .collect()
 }
 
 #[cfg(test)]
@@ -297,11 +288,28 @@ mod tests {
 
     #[test]
     fn embargoed_records_explain_the_access_condition() {
-        let body = changed(|value| value["metadata"]["access_right"] = "embargoed".into());
+        let body = changed(|value| {
+            value["metadata"]["access_right"] = "embargoed".into();
+            value["files"] = serde_json::json!([]);
+        });
         let recorded = Recorded::default().on(IRIS, 200, body);
         let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
         assert!(error.message.contains("embargoed"));
+        let need = error.need.unwrap();
+        assert_eq!(need.account, crate::auth::Account::Zenodo);
+        assert_eq!(
+            need.terms.as_deref(),
+            Some("https://zenodo.org/records/3608990")
+        );
+    }
+
+    #[test]
+    fn a_restricted_record_listed_for_this_account_downloads() {
+        let body = changed(|value| value["metadata"]["access_right"] = "restricted".into());
+        let recorded = Recorded::default().on(IRIS, 200, body);
+        let listing = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap();
+        assert_eq!(listing.files.len(), 1);
     }
 
     #[test]

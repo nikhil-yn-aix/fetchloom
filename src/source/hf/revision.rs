@@ -86,9 +86,10 @@ impl Repo {
                     format!("{self} requires permission to download its files"),
                 )
                 .help(format!(
-                    "request access and accept the terms at {} while signed in, then set HF_TOKEN to a token from https://huggingface.co/settings/tokens",
+                    "request access and accept the terms at {} while signed in, then sign in here with `fetchloom auth login hf`",
                     self.page()
-                ));
+                ))
+                .needs(crate::auth::Account::HuggingFace, Some(self.page()));
                 Err(match response.json::<Refusal>() {
                     Ok(refusal) => error.detail(format!("huggingface.co says: {}", refusal.error)),
                     Err(_) => error,

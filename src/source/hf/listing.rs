@@ -286,8 +286,14 @@ mod tests {
         let help = err.help.unwrap();
         assert!(
             help.contains("https://huggingface.co/meta-llama/Llama-2-7b ")
-                && help.contains("HF_TOKEN"),
+                && help.contains("fetchloom auth login hf"),
             "{help}"
+        );
+        let need = err.need.unwrap();
+        assert_eq!(need.account, crate::auth::Account::HuggingFace);
+        assert_eq!(
+            need.terms.as_deref(),
+            Some("https://huggingface.co/meta-llama/Llama-2-7b")
         );
         assert_eq!(recorded.asked().len(), 2, "nothing is listed before access");
     }
@@ -354,7 +360,7 @@ mod tests {
         assert_eq!(error.kind, Kind::AuthRequired);
         let help = error.help.unwrap();
         assert!(help.contains("https://huggingface.co/datasets/bigcode/the-stack"));
-        assert!(help.contains("HF_TOKEN"));
+        assert!(help.contains("fetchloom auth login hf"));
         assert_eq!(recorded.asked(), [revision, access]);
     }
 }

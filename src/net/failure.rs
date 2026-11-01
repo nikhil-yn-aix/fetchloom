@@ -135,11 +135,30 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             format!("{} has nothing at {} ({code})", host(url), Shown(url)),
         )
         .help("check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml"),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Error::new(
-            Kind::AuthRequired,
-            format!("{} refused access to {} ({code})", host(url), Shown(url)),
-        )
-        .help("check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            let host = host(url).to_ascii_lowercase();
+            // a server that asks for a username and password takes the login a person saves
+            // for its host, as curl and wget would send from .netrc
+            let asks_login = headers
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.trim_start().to_ascii_lowercase().starts_with("basic"));
+            let account = crate::auth::Account::from_host(&host)
+                .or_else(|| asks_login.then(|| crate::auth::Account::Login(host.clone())));
+            let error = Error::new(
+                Kind::AuthRequired,
+                format!("{host} refused access to {} ({code})", Shown(url)),
+            );
+            match account {
+                Some(account) => {
+                    let command = account.command();
+                    error
+                        .help(format!("if it needs an account, sign in with `{command}`, then run the same command again"))
+                        .needs(account, None)
+                }
+                None => error.help("check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"),
+            }
+        }
         _ => Error::new(
             Kind::NetworkStatus,
             format!("{} answered {code} for {}", host(url), Shown(url)),

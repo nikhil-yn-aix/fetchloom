@@ -129,9 +129,10 @@ impl fmt::Display for Dataset {
 pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
     token::find(var)
         .map(|value| Credential {
-            host: HOST,
+            host: HOST.to_owned(),
             header: "authorization",
             value,
+            every_hop: false,
         })
         .into_iter()
         .collect()
@@ -225,7 +226,7 @@ mod tests {
         };
         assert_eq!(
             (
-                credential.host,
+                credential.host.as_str(),
                 credential.header,
                 credential.value.as_str()
             ),

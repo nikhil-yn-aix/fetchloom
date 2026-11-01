@@ -39,9 +39,12 @@ const PER_HOST: usize = 4;
 
 /// a token from where its source keeps it, sent only to its own host and only over https.
 pub(crate) struct Credential {
-    pub(crate) host: &'static str,
+    pub(crate) host: String,
     pub(crate) header: &'static str,
     pub(crate) value: String,
+    /// sent on every hop that reaches its host, as curl sends a `.netrc` login, rather than only
+    /// before a redirect leaves the first origin. only a login a person tied to a host gets this.
+    pub(crate) every_hop: bool,
 }
 
 /// something the person watching should hear about while the network works.
@@ -135,7 +138,7 @@ pub(crate) struct Net {
     wire: OnceLock<Result<Wire, Error>>,
     offline: Offline,
     typed: address::Typed,
-    credentials: Vec<(&'static str, HeaderName, HeaderValue)>,
+    credentials: Vec<(String, HeaderName, HeaderValue, bool)>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -189,7 +192,10 @@ impl Wire {
             .connect_timeout(CONNECT)
             .dns_resolver(Arc::new(address::Resolver::new(typed.clone(), offline)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
-            .redirect(reqwest::redirect::Policy::none());
+            .redirect(reqwest::redirect::Policy::none())
+            // earthdata's archives sign a person in through a redirect to urs.earthdata.nasa.gov,
+            // which hands back a cookie the archive then asks for. cookies live for this run only
+            .cookie_store(true);
         let builder = if apart { builder.http1_only() } else { builder };
         builder.build().map_err(|err| {
             Error::new(
@@ -220,7 +226,7 @@ impl Net {
                 let name = HeaderName::from_static(credential.header);
                 let mut value = HeaderValue::from_str(&credential.value).ok()?;
                 value.set_sensitive(true);
-                Some((credential.host, name, value))
+                Some((credential.host, name, value, credential.every_hop))
             })
             .collect();
         Net {
@@ -355,12 +361,9 @@ impl Net {
     ) -> reqwest::RequestBuilder {
         let mut request = client.get(url.clone());
         let secure = url.scheme() == "https" && url.port_or_known_default() == Some(443);
-        if credentials
-            && secure
-            && let Some(host) = url.host_str()
-        {
-            for (owner, name, value) in &self.credentials {
-                if host.eq_ignore_ascii_case(owner) {
+        if secure && let Some(host) = url.host_str() {
+            for (owner, name, value, every_hop) in &self.credentials {
+                if (credentials || *every_hop) && host.eq_ignore_ascii_case(owner) {
                     request = request.header(name.clone(), value.clone());
                 }
             }

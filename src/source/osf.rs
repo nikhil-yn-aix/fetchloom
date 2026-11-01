@@ -8,9 +8,9 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, Var, malformed};
+use super::{Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
-use crate::net::{Api, Credential, Expired};
+use crate::net::{Api, Expired};
 
 /// first path segments on osf.io that are pages, not ids.
 const PAGES: [&str; 12] = [
@@ -199,21 +199,6 @@ impl fmt::Display for Node {
     }
 }
 
-/// `OSF_TOKEN`, for private projects.
-pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    let token = var("OSF_TOKEN")
-        .and_then(|token| token.into_string().ok())
-        .filter(|token| !token.trim().is_empty());
-    token
-        .map(|token| Credential {
-            host: "api.osf.io",
-            header: "authorization",
-            value: format!("Bearer {}", token.trim()),
-        })
-        .into_iter()
-        .collect()
-}
-
 /// OSF redirects can expire while a slow first connection reaches its storage provider.
 pub(super) fn expiry_check(url: &Url) -> Option<Expired> {
     (url.scheme() == "https"
@@ -229,7 +214,6 @@ fn expired(text: &str) -> bool {
         && text.contains("<Message>Request has expired. X-Amz-Date = ")
         && text.contains(", X-Amz-Expires = ")
 }
-
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

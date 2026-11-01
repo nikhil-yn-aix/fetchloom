@@ -6,10 +6,10 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, Var, malformed};
+use super::{Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
-use crate::net::{Api, Credential};
+use crate::net::Api;
 
 /// a figshare article, at a version or at its newest one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,21 +269,6 @@ impl fmt::Display for Article {
         }
         Ok(())
     }
-}
-
-/// `FIGSHARE_TOKEN`, for private articles.
-pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    let token = var("FIGSHARE_TOKEN")
-        .and_then(|token| token.into_string().ok())
-        .filter(|token| !token.trim().is_empty());
-    token
-        .map(|token| Credential {
-            host: "api.figshare.com",
-            header: "authorization",
-            value: format!("token {}", token.trim()),
-        })
-        .into_iter()
-        .collect()
 }
 
 #[cfg(test)]

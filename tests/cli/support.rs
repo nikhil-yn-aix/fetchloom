@@ -145,7 +145,9 @@ impl Sandbox {
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("APPDATA", &home)
-            .env("LOCALAPPDATA", &home);
+            .env("LOCALAPPDATA", &home)
+            // a test never reads or writes the credential store of the machine running it
+            .env("FETCHLOOM_KEYRING", "0");
         command
     }
 
@@ -258,11 +260,12 @@ fn leaks(name: &str) -> bool {
         || name.starts_with("ONEDRIVE")
         || name.starts_with("KAGGLE_")
         || name.starts_with("HF_")
+        || name.starts_with("DATAVERSE_")
         || name.ends_with("_PROXY")
         || name.ends_with("_TOKEN")
         || matches!(
             name.as_str(),
-            "NO_COLOR" | "CLICOLOR_FORCE" | "XDG_CACHE_HOME" | "XDG_CONFIG_HOME"
+            "NO_COLOR" | "CLICOLOR_FORCE" | "XDG_CACHE_HOME" | "XDG_CONFIG_HOME" | "NETRC"
         )
 }
 

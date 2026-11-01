@@ -321,16 +321,28 @@ impl Output {
 
     /// asks a yes or no question on the terminal. none when nobody can answer, as in CI or a pipe.
     pub(crate) fn confirm(&self, question: &str) -> Result<Option<bool>, Error> {
-        if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
+        self.ask_yes_no(question, false)
+    }
+
+    /// whether a person can answer a question here: stderr and stdin are terminals, outside CI,
+    /// and `--json` was not asked for.
+    pub(crate) fn can_ask(&self) -> bool {
+        !self.json && self.style.interactive && std::io::stdin().is_terminal()
+    }
+
+    /// a yes or no question whose enter key means `default`, or none when nobody can answer.
+    pub(crate) fn ask_yes_no(&self, question: &str, default: bool) -> Result<Option<bool>, Error> {
+        if !self.can_ask() {
             return Ok(None);
         }
         let ask = || {
             let terminal = console::Term::stderr();
-            let _ = terminal.write_str(&format!("{question} [y/N] "));
+            let choices = if default { "[Y/n]" } else { "[y/N]" };
+            let _ = terminal.write_str(&format!("{question} {choices} "));
             // read ctrl-c as a key on both platforms instead of leaving a blocking read
             // waiting after the signal handler asks network tasks to stop.
             let answer = loop {
-                match confirmation_key(terminal.read_key_raw()) {
+                match confirmation_key(terminal.read_key_raw(), default) {
                     Ok(None) => {}
                     answer => break answer,
                 }
@@ -345,6 +357,54 @@ impl Output {
         match &self.bars {
             Some(bars) => bars.suspend(ask),
             None => ask(),
+        }
+    }
+
+    /// asks for a line of text, such as a username, or returns none when nobody can answer.
+    /// with `hidden`, nothing typed or pasted shows, as for a key or a password.
+    pub(crate) fn ask_text(&self, prompt: &str, hidden: bool) -> Result<Option<String>, Error> {
+        if !self.can_ask() {
+            return Ok(None);
+        }
+        let ask = || {
+            let terminal = console::Term::stderr();
+            let tone = paint(self.style.color, accent().bold());
+            let _ = terminal.write_str(&format!("{tone}{prompt:>11}{tone:#} "));
+            let read = if hidden {
+                terminal.read_secure_line()
+            } else {
+                terminal.read_line()
+            };
+            match read {
+                Ok(text) => Ok(Some(text.trim().to_owned())),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                    Err(Error::new(crate::error::Kind::Interrupted, "stopped"))
+                }
+                Err(err) => Err(Error::io("could not read from the terminal", &err)),
+            }
+        };
+        match &self.bars {
+            Some(bars) => bars.suspend(ask),
+            None => ask(),
+        }
+    }
+
+    /// a line fetchloom wrote itself, such as sign-in steps holding [`Output::link`]s. text from
+    /// elsewhere goes through the other methods, which escape control characters.
+    pub(crate) fn say(&self, text: &str) {
+        if self.tells(Level::Normal) {
+            self.line(text);
+        }
+    }
+
+    /// `url` as a link a person can click where the terminal supports it, always showing the
+    /// address itself, so it can be copied anywhere.
+    pub(crate) fn link(&self, url: &str) -> String {
+        let url = plain(url);
+        if self.style.links {
+            format!("\u{1b}]8;;{url}\u{1b}\\{url}\u{1b}]8;;\u{1b}\\")
+        } else {
+            url.into_owned()
         }
     }
 
@@ -693,7 +753,10 @@ fn write_line(color: bool, text: &str) {
     let _ = writeln!(err, "{text}");
 }
 
-fn confirmation_key(key: std::io::Result<console::Key>) -> Result<Option<bool>, Error> {
+fn confirmation_key(
+    key: std::io::Result<console::Key>,
+    default: bool,
+) -> Result<Option<bool>, Error> {
     let key = match key {
         Ok(key) => key,
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => console::Key::CtrlC,
@@ -702,7 +765,8 @@ fn confirmation_key(key: std::io::Result<console::Key>) -> Result<Option<bool>, 
     match key {
         console::Key::CtrlC => Err(Error::new(crate::error::Kind::Interrupted, "stopped")),
         console::Key::Char('y' | 'Y') => Ok(Some(true)),
-        console::Key::Char('n' | 'N') | console::Key::Enter => Ok(Some(false)),
+        console::Key::Char('n' | 'N') => Ok(Some(false)),
+        console::Key::Enter => Ok(Some(default)),
         _ => Ok(None),
     }
 }
@@ -882,7 +946,7 @@ mod tests {
             Ok(console::Key::CtrlC),
             Err(std::io::ErrorKind::Interrupted.into()),
         ] {
-            let error = super::confirmation_key(key).unwrap_err();
+            let error = super::confirmation_key(key, false).unwrap_err();
             assert_eq!(error.kind, crate::error::Kind::Interrupted);
             assert_eq!(error.kind.exit_code(), 130);
             assert_eq!(error.message, "stopped");
@@ -899,10 +963,10 @@ mod tests {
             (console::Key::Enter, Some(false)),
             (console::Key::Unknown, None),
         ] {
-            assert_eq!(super::confirmation_key(Ok(key)).unwrap(), answer);
+            assert_eq!(super::confirmation_key(Ok(key), false).unwrap(), answer);
         }
         assert_eq!(
-            super::confirmation_key(Err(std::io::ErrorKind::UnexpectedEof.into())).unwrap(),
+            super::confirmation_key(Err(std::io::ErrorKind::UnexpectedEof.into()), false).unwrap(),
             Some(false)
         );
     }
@@ -955,6 +1019,7 @@ mod tests {
                 unicode: true,
                 interactive: false,
                 watched,
+                links: false,
             };
             Output::new(style, level, json, false).shows_next()
         };

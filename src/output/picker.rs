@@ -147,6 +147,7 @@ mod tests {
             unicode,
             interactive: true,
             watched: true,
+            links: false,
         }
     }
 

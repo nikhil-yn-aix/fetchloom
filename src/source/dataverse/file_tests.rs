@@ -232,7 +232,18 @@ fn a_restricted_file_answered_with_success_is_still_refused() {
             .message
             .contains("BF-Rapport MAP Prudence R 1juin 2010.pdf")
     );
-    assert!(error.help.unwrap().contains("dataset's owner"));
+    assert!(
+        error
+            .help
+            .unwrap()
+            .contains("fetchloom auth login dataverse")
+    );
+    assert_eq!(
+        error.need.map(|need| need.account),
+        Some(crate::auth::Account::Dataverse(
+            "dataverse.harvard.edu".into()
+        ))
+    );
 }
 
 #[test]

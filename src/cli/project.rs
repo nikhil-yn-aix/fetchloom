@@ -1082,6 +1082,7 @@ mod tests {
             unicode: false,
             interactive: false,
             watched: false,
+            links: false,
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
         (dir, project, context)

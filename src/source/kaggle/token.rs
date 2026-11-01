@@ -23,7 +23,7 @@ pub(super) fn find(var: Var<'_>) -> Option<String> {
     let (username, key) = legacy_key(var)?;
     Some(format!(
         "Basic {}",
-        base64(format!("{username}:{key}").as_bytes())
+        crate::source::base64(format!("{username}:{key}").as_bytes())
     ))
 }
 
@@ -82,29 +82,6 @@ fn read(path: &Path) -> Option<String> {
 fn clean(text: &str) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
-}
-
-/// standard base64 with padding, which basic authentication sends.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let [a, b, c] = [0, 1, 2].map(|at| chunk.get(at).copied().unwrap_or(0));
-        let sextets = [
-            a >> 2,
-            ((a & 0b11) << 4) | (b >> 4),
-            ((b & 0b1111) << 2) | (c >> 6),
-            c & 0b11_1111,
-        ];
-        for (at, sextet) in sextets.into_iter().enumerate() {
-            text.push(if at <= chunk.len() {
-                char::from(ALPHABET[usize::from(sextet)])
-            } else {
-                '='
-            });
-        }
-    }
-    text
 }
 
 #[cfg(test)]
@@ -239,8 +216,8 @@ mod tests {
             ("foobar", "Zm9vYmFy"),
         ];
         for (text, encoded) in cases {
-            assert_eq!(base64(text.as_bytes()), encoded, "{text}");
+            assert_eq!(crate::source::base64(text.as_bytes()), encoded, "{text}");
         }
-        assert_eq!(base64(&[0xff, 0xfe, 0xfd]), "//79");
+        assert_eq!(crate::source::base64(&[0xff, 0xfe, 0xfd]), "//79");
     }
 }

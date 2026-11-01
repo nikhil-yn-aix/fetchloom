@@ -1,6 +1,7 @@
 //! the command line: read the arguments, run the command, return the exit code.
 
 mod args;
+mod auth;
 mod cache;
 mod fetch;
 mod get;
@@ -25,7 +26,6 @@ use crate::cache::Cache;
 use crate::error::{Error, Kind};
 use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
-use crate::source;
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -50,6 +50,9 @@ struct Context {
     split: net::Splitting,
     work: Arc<Work>,
     stop: Arc<Stop>,
+    /// the account a failed command needed, kept so a person at the terminal can sign in and
+    /// run it again.
+    needed: std::sync::Mutex<Option<crate::auth::Need>>,
 }
 
 impl Context {
@@ -65,12 +68,18 @@ impl Context {
             split: net::Splitting::WhenSlow,
             work: Arc::default(),
             stop: Arc::default(),
+            needed: std::sync::Mutex::default(),
         }
     }
 
     /// the network, with credentials from where each source keeps them, and retries reported as
     /// warnings.
     fn net(&self) -> Net {
+        self.net_with(crate::auth::credentials(&crate::auth::env))
+    }
+
+    /// the network with only `credentials`, as checking one key needs.
+    fn net_with(&self, credentials: Vec<net::Credential>) -> Net {
         let output = self.output.clone();
         let notify: net::Notify = Arc::new(move |notice| match notice {
             Notice::Retrying { reason, wait, next } => {
@@ -90,7 +99,7 @@ impl Context {
         let options = net::Options {
             offline: self.offline,
             jobs: self.jobs,
-            credentials: source::credentials(&|name| std::env::var_os(name)),
+            credentials,
             split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify).with_rate(self.rate.clone())
@@ -274,10 +283,24 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     };
     let entered = runtime.enter();
     let context = Arc::new(context);
-    let outcome = match command {
+    let mut outcome = match command.clone() {
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),
     };
+    // refused for want of an account, with a person at the terminal: offer to sign in, then run
+    // the command once more with the new key
+    let needed = context
+        .needed
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let (Some(need), Some(command)) = (needed, command) {
+        match block_on(&context, auth::offer(&context, &need)) {
+            Ok(true) => outcome = dispatch(&context, command, Instant::now()),
+            Ok(false) => {}
+            Err(error) => context.output.error(&error),
+        }
+    }
     drop(entered);
     // status is read-only, so an interrupted scan need not delay process exit.
     runtime.shutdown_background();
@@ -337,6 +360,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Search(args) => {
             let outcome = block_on(context, search::run(context, &args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Auth(args) => {
+            let outcome = block_on(context, auth::run(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Help(asked) => help::show(context, &asked.topic, started),
@@ -488,6 +515,14 @@ fn finish<T: Serialize>(
         .document(command, outcome.as_ref(), counts, elapsed);
     if let Err(error) = &outcome {
         context.output.error(error);
+        if let Some(need) = &error.need
+            && context.output.can_ask()
+        {
+            *context
+                .needed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((**need).clone());
+        }
     }
     // a run that did no work, such as `--version`, has no counters worth a line
     if command.is_some() || counts != crate::work::Counts::default() {

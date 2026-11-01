@@ -3,7 +3,6 @@
 
 mod listing;
 mod revision;
-mod token;
 mod tree;
 
 use std::fmt;
@@ -11,9 +10,8 @@ use std::fmt;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Var, malformed};
+use super::malformed;
 use crate::error::Error;
-use crate::net::Credential;
 
 /// first path segments on huggingface.co that are pages, not model repositories.
 const PAGES: [&str; 24] = [
@@ -163,41 +161,5 @@ impl fmt::Display for Repo {
             write!(f, "@{revision}")?;
         }
         Ok(())
-    }
-}
-
-/// a hugging face token, sent to huggingface.co as a bearer token.
-pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    token::find(var)
-        .map(|token| Credential {
-            host: "huggingface.co",
-            header: "authorization",
-            value: format!("Bearer {token}"),
-        })
-        .into_iter()
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-
-    use super::*;
-
-    #[test]
-    fn the_token_goes_to_huggingface_co_as_a_bearer_token() {
-        let var = |name: &str| (name == "HF_TOKEN").then(|| OsString::from("hf_abc"));
-        let found = credentials(&var);
-        let [credential] = found.as_slice() else {
-            panic!("{} credentials", found.len());
-        };
-        assert_eq!(
-            (
-                credential.host,
-                credential.header,
-                credential.value.as_str()
-            ),
-            ("huggingface.co", "authorization", "Bearer hf_abc")
-        );
     }
 }

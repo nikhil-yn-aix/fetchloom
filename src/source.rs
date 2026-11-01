@@ -246,15 +246,32 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
     }
 }
 
-/// every credential found where its source keeps it.
-pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    let mut found = Vec::new();
-    found.extend(zenodo::credentials(var));
-    found.extend(figshare::credentials(var));
-    found.extend(osf::credentials(var));
-    found.extend(hf::credentials(var));
-    found.extend(kaggle::credentials(var));
-    found
+/// kaggle's key, as an api token or a legacy key, found where the kaggle tools keep it.
+pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
+    kaggle::credentials(var)
+}
+
+/// standard base64 with padding, which basic authentication sends.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let [a, b, c] = [0, 1, 2].map(|at| chunk.get(at).copied().unwrap_or(0));
+        let sextets = [
+            a >> 2,
+            ((a & 0b11) << 4) | (b >> 4),
+            ((b & 0b1111) << 2) | (c >> 6),
+            c & 0b11_1111,
+        ];
+        for (at, sextet) in sextets.into_iter().enumerate() {
+            text.push(if at <= chunk.len() {
+                char::from(ALPHABET[usize::from(sextet)])
+            } else {
+                '='
+            });
+        }
+    }
+    text
 }
 
 pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
@@ -448,25 +465,27 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
         200..=299 => response.json(),
         404 | 410 => Err(Error::new(Kind::ReferenceUnresolved, format!("{reference} does not exist, or is not public"))
             .help("check the id in a browser, then fix it on the command line or as ref in data.toml. a dataset that was removed cannot be fetched")),
-        401 | 403 => Err(Error::new(Kind::AuthRequired, format!("{} refused access to {reference}", net::host(&response.url)))
-            .help(format!("if the dataset is private or restricted, {}, then run the same command again", token_for(net::host(&response.url))))),
+        401 | 403 => Err(refused(net::host(&response.url), &reference)),
         status => Err(Error::new(Kind::NetworkStatus, format!("{} answered {status} for {reference}", net::host(&response.url)))),
     }
 }
 
-/// how to give a token to the source at `host`, in the variable fetchloom reads for it.
-fn token_for(host: &str) -> &'static str {
-    let host = host.trim_start_matches("www.").trim_start_matches("api.");
-    match host {
-        "zenodo.org" => "set ZENODO_TOKEN",
-        "figshare.com" => "set FIGSHARE_TOKEN",
-        "osf.io" => "set OSF_TOKEN",
-        "huggingface.co" | "hf.co" => "set HF_TOKEN",
-        "kaggle.com" => "set KAGGLE_API_TOKEN",
-        _ => "set its source's token, such as HF_TOKEN or ZENODO_TOKEN",
+/// a refusal from the source at `host`, naming the account that could lift it.
+pub(crate) fn refused(host: &str, reference: &str) -> Error {
+    let error = Error::new(
+        Kind::AuthRequired,
+        format!("{host} refused access to {reference}"),
+    );
+    match crate::auth::Account::from_host(host) {
+        Some(account) => error
+            .help(format!(
+                "if the dataset is private or restricted, sign in with `{}`, then run the same command again",
+                account.command()
+            ))
+            .needs(account, None),
+        None => error.help("if the dataset is private or restricted, ask its owner for a public link"),
     }
 }
-
 fn unknown(text: &str) -> Error {
     let text = net::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
@@ -488,13 +507,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_refusal_names_the_token_its_source_reads() {
-        assert_eq!(token_for("zenodo.org"), "set ZENODO_TOKEN");
-        assert_eq!(token_for("api.figshare.com"), "set FIGSHARE_TOKEN");
-        assert_eq!(token_for("api.osf.io"), "set OSF_TOKEN");
-        assert_eq!(token_for("huggingface.co"), "set HF_TOKEN");
-        assert_eq!(token_for("www.kaggle.com"), "set KAGGLE_API_TOKEN");
-        assert!(token_for("example.org").contains("such as HF_TOKEN"));
+    fn a_refusal_names_the_account_that_lifts_it() {
+        use crate::auth::Account;
+        for (host, account, command) in [
+            ("zenodo.org", Account::Zenodo, "fetchloom auth login zenodo"),
+            (
+                "api.figshare.com",
+                Account::Figshare,
+                "fetchloom auth login figshare",
+            ),
+            ("api.osf.io", Account::Osf, "fetchloom auth login osf"),
+            (
+                "huggingface.co",
+                Account::HuggingFace,
+                "fetchloom auth login hf",
+            ),
+            (
+                "www.kaggle.com",
+                Account::Kaggle,
+                "fetchloom auth login kaggle",
+            ),
+        ] {
+            let error = refused(host, "x");
+            assert_eq!(error.need.map(|need| need.account), Some(account), "{host}");
+            assert!(error.help.unwrap_or_default().contains(command), "{host}");
+        }
+        let unknown = refused("example.org", "x");
+        assert!(unknown.need.is_none());
+        assert!(unknown.help.unwrap_or_default().contains("public link"));
     }
 
     fn parse(text: &str) -> Parsed {

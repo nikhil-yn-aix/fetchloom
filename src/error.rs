@@ -95,6 +95,8 @@ pub(crate) struct Error {
     /// a command's partial result, kept beside the error. boxed, since most errors carry none
     pub(crate) result: Option<Box<serde_json::Value>>,
     pub(crate) failures: Vec<FileFailure>,
+    /// the account that would let the request through, so a person can sign in and retry.
+    pub(crate) need: Option<Box<crate::auth::Need>>,
 }
 
 impl Error {
@@ -105,6 +107,7 @@ impl Error {
             details: Vec::new(),
             result: None,
             failures: Vec::new(),
+            need: None,
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
                     .to_owned()
@@ -129,6 +132,13 @@ impl Error {
 
     pub(crate) fn detail(mut self, line: impl Into<String>) -> Error {
         self.details.push(line.into());
+        self
+    }
+
+    /// marks the error as a refusal `account` could lift, after accepting `terms` where a source
+    /// asks for that too.
+    pub(crate) fn needs(mut self, account: crate::auth::Account, terms: Option<String>) -> Error {
+        self.need = Some(Box::new(crate::auth::Need { account, terms }));
         self
     }
 

@@ -154,6 +154,8 @@ pub(crate) struct Style {
     /// stdout and stderr are both terminals, so a person reads the answer and the story, and no
     /// script does.
     pub(crate) watched: bool,
+    /// the terminal turns OSC 8 sequences into links a person can click.
+    pub(crate) links: bool,
 }
 
 impl Style {
@@ -165,6 +167,7 @@ impl Style {
             unicode: wants_unicode(terminal, &var),
             interactive: is_interactive(terminal, &var),
             watched: terminal && std::io::stdout().is_terminal(),
+            links: is_interactive(terminal, &var) && makes_links(&var),
         }
     }
 
@@ -209,6 +212,25 @@ fn wants_color(
         return false;
     }
     terminal
+}
+
+/// terminals known to draw OSC 8 links. there is no way to ask a terminal, so anything else,
+/// including a multiplexer that may drop the sequence, gets the plain address.
+fn makes_links(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    if var("TMUX").is_some() || var("STY").is_some() {
+        return false;
+    }
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    let vte = var("VTE_VERSION")
+        .and_then(|value| value.to_str().and_then(|text| text.parse::<u32>().ok()))
+        .is_some_and(|version| version >= 5000);
+    var("WT_SESSION").is_some()
+        || ["vscode", "iTerm.app", "WezTerm", "ghostty"]
+            .iter()
+            .any(|name| program == *name)
+        || vte
+        || var("KONSOLE_VERSION").is_some()
+        || var("TERM").is_some_and(|term| term == "xterm-kitty")
 }
 
 fn wants_unicode(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {

@@ -309,6 +309,7 @@ mod tests {
                 unicode: false,
                 interactive: false,
                 watched: false,
+                links: false,
             },
             Level::Quiet,
             false,

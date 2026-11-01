@@ -94,6 +94,29 @@ on disk: writes the output folder through the cache. does not create project fil
 
 on disk: nothing. prints canonical references without downloading a dataset";
 
+    pub(super) const AUTH: &str = "examples:
+  fetchloom auth
+  fetchloom auth login hf
+  fetchloom auth logout zenodo
+
+on disk: a key is saved where the source's own tools read it, so one key works in all of them";
+
+    pub(super) const LOGIN: &str = "examples:
+  fetchloom auth login hf
+  fetchloom auth login dataverse --host demo.dataverse.org
+  fetchloom auth login earthdata
+  fetchloom auth login hf --with-token
+
+on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in
+.netrc for curl and wget too, and other keys in the system's credential store. asks before saving.
+--with-token reads the key from stdin, as in `echo $HF_TOKEN | fetchloom auth login hf --with-token`";
+
+    pub(super) const LOGOUT: &str = "examples:
+  fetchloom auth logout zenodo
+  fetchloom auth logout hf
+
+on disk: removes the saved key. asks first when other tools read it too";
+
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
   fetchloom help add
@@ -184,7 +207,7 @@ pub(super) fn color() -> ColorChoice {
 }
 
 /// options every command takes.
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a yes or no on the command line"
@@ -230,7 +253,7 @@ pub(crate) struct Global {
     pub(crate) directory: Option<PathBuf>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub(crate) enum Command {
     /// add a dataset, pin it and download it into the data folder
     #[command(override_usage = "fetchloom add [options] <link>", help_template = TEMPLATE, after_help = examples::ADD)]
@@ -272,6 +295,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
     Search(Search),
 
+    /// sign in to sources for private and gated data, with one key shared with their own tools
+    #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
+    Auth(Auth),
+
     /// explain the ideas behind fetchloom, or one command
     #[command(override_usage = "fetchloom help [topic]", help_template = TEMPLATE, after_help = examples::HELP)]
     Help(Help),
@@ -297,19 +324,26 @@ impl Command {
             }) => "cache verify",
             Command::Get(_) => "get",
             Command::Search(_) => "search",
+            Command::Auth(Auth { action: None }) => "auth",
+            Command::Auth(Auth {
+                action: Some(AuthAction::Login(_)),
+            }) => "auth login",
+            Command::Auth(Auth {
+                action: Some(AuthAction::Logout(_)),
+            }) => "auth logout",
             Command::Help(_) => "help",
         }
     }
 }
 
 /// show the cache, free what no project needs, or check every file in it
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Cache {
     #[command(subcommand)]
     pub(crate) action: Option<CacheAction>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub(crate) enum CacheAction {
     /// free what no project needs, once it is a day old
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
@@ -321,7 +355,7 @@ pub(crate) enum CacheAction {
 }
 
 /// options of `cache gc`.
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Gc {
     /// also free files no project needs that are less than a day old, such as a `get` from
     /// today. downloads still running keep their partial files
@@ -329,8 +363,55 @@ pub(crate) struct Gc {
     pub(crate) now: bool,
 }
 
+/// `auth`: which accounts are signed in, or a change to one.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Auth {
+    #[command(subcommand)]
+    pub(crate) action: Option<AuthAction>,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub(crate) enum AuthAction {
+    /// sign in once; the key also works in the source's own tools
+    #[command(override_usage = "fetchloom auth login [options] <account>", help_template = TEMPLATE, after_help = examples::LOGIN)]
+    Login(Login),
+
+    /// remove a key fetchloom or the source's tools saved
+    #[command(override_usage = "fetchloom auth logout [options] <account>", help_template = TEMPLATE, after_help = examples::LOGOUT)]
+    Logout(Logout),
+}
+
+/// options of `auth login`.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Login {
+    /// hf, kaggle, zenodo, figshare, osf, dataverse, earthdata, physionet or a host name
+    #[arg(value_name = "account", help_heading = "arguments")]
+    pub(crate) account: String,
+
+    /// the dataverse installation, such as demo.dataverse.org. harvard's is the default
+    #[arg(long, value_name = "host", help_heading = "options")]
+    pub(crate) host: Option<String>,
+
+    /// read the key from stdin instead of asking, for scripts and CI. a login reads
+    /// `username:password`
+    #[arg(long, help_heading = "options")]
+    pub(crate) with_token: bool,
+}
+
+/// options of `auth logout`.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Logout {
+    /// the account, as `auth login` takes it
+    #[arg(value_name = "account", help_heading = "arguments")]
+    pub(crate) account: String,
+
+    /// the dataverse installation
+    #[arg(long, value_name = "host", help_heading = "options")]
+    pub(crate) host: Option<String>,
+}
+
 /// words to look up in public dataset catalogs.
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Search {
     /// dataset names or keywords, with or without quotes
     #[arg(value_name = "words", required = true, num_args = 1.., help_heading = "arguments")]
@@ -338,7 +419,7 @@ pub(crate) struct Search {
 }
 
 /// which files of a dataset to keep, for `add` and `get`.
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Filter {
     /// keep only files matching this pattern, such as "**/*.csv". repeat it for more
     #[arg(long, value_name = "glob", help_heading = "options")]
@@ -350,7 +431,7 @@ pub(crate) struct Filter {
 }
 
 /// add a dataset, pin it and download it into the data folder
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Add {
     /// search words, a link, a DOI, or an id such as zenodo:3608990
     #[arg(value_name = "link", help_heading = "arguments")]
@@ -369,7 +450,7 @@ pub(crate) struct Add {
 }
 
 /// remove a dataset and the unchanged files fetchloom placed for it
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Remove {
     /// the dataset's name in data.toml
     #[arg(value_name = "name", help_heading = "arguments")]
@@ -377,7 +458,7 @@ pub(crate) struct Remove {
 }
 
 /// place the files pinned in data.lock on this machine
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Sync {
     /// replace conflicting files at locked paths, including untracked files
     #[arg(long, help_heading = "options")]
@@ -389,7 +470,7 @@ pub(crate) struct Sync {
 }
 
 /// bring data.lock in line with data.toml
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Lock {
     /// check sources again, keeping explicitly pinned versions
     #[arg(long, value_name = "name", num_args = 0.., help_heading = "options")]
@@ -401,7 +482,7 @@ pub(crate) struct Lock {
 }
 
 /// print where a dataset or a file in it is
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Path {
     /// a dataset's name, or a file inside it as name/path
     #[arg(value_name = "name", help_heading = "arguments")]
@@ -409,7 +490,7 @@ pub(crate) struct Path {
 }
 
 /// fetch something once, without a project
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Get {
     /// what to download: search words, a link, a DOI, or an id such as zenodo:3608990
     #[arg(value_name = "link", help_heading = "arguments")]
@@ -428,7 +509,7 @@ pub(crate) struct Get {
 }
 
 /// explain the ideas behind fetchloom, or one command
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Help {
     /// concepts, or a command such as add or cache gc
     #[arg(value_name = "topic", help_heading = "arguments")]
