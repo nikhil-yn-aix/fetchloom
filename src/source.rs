@@ -268,6 +268,11 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
 }
 
+/// a source's own error for a download it refused, when it says more than the status.
+pub(crate) fn refused_download(url: &Url) -> Option<Error> {
+    kaggle::refused_download(url)
+}
+
 impl Remote {
     /// the size the downloaded bytes must have: the listed size, unless the source may send the
     /// file wrapped in a zip.

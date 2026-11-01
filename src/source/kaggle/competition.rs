@@ -18,6 +18,10 @@ use crate::source::{Listing, MOST_FILES, Reference, Remote};
 /// pages.
 const PAGE: usize = 200;
 
+/// the largest file downloaded to ask whether the account may download any. a competition whose
+/// files are all larger learns it from the downloads themselves.
+const PROBE: u64 = 4 * 1024 * 1024;
+
 /// a kaggle competition, by the name in its kaggle.com link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Competition {
@@ -35,7 +39,8 @@ struct About {
     title: String,
     #[serde(default)]
     license_name: String,
-    /// whether the account asking accepted the rules. kaggle sends `false` without an account.
+    /// whether the account accepted the rules. `false` also for one that needs no entry, as
+    /// titanic, and for no account at all.
     user_has_entered: Option<bool>,
 }
 
@@ -103,10 +108,18 @@ impl Competition {
         let about = self.about(api).await?;
         let named = self.named(&about.reference)?;
         let files = named.files(api).await?;
-        // kaggle refuses the downloads of an account that has not accepted the rules, so stop
-        // before them
-        if about.user_has_entered == Some(false) {
-            return Err(named.rules(None));
+        // kaggle lists the files of a competition whose rules the account has not accepted and
+        // marks no competition as needing them, so one small download asks before all of them
+        if about.user_has_entered == Some(false)
+            && let Some(smallest) = files
+                .iter()
+                .min_by_key(|file| file.size.unwrap_or(u64::MAX))
+                .filter(|file| file.size.is_some_and(|size| size <= PROBE))
+        {
+            let response = api.get(&smallest.url).await?;
+            if response.status == 403 {
+                return Err(named.rules(Some(&response)));
+            }
         }
         Ok(Listing {
             unavailable: Vec::new(),
@@ -258,6 +271,16 @@ pub(in crate::source) fn may_wrap(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some(HOST)
         && url.path().starts_with("/v1/competitions/data/download/")
+}
+
+/// the error for a refused competition download, which kaggle answers with 403 until the
+/// account accepts the rules.
+pub(in crate::source) fn refused_download(url: &Url) -> Option<Error> {
+    if !may_wrap(url) {
+        return None;
+    }
+    let slug = url.path_segments()?.nth(4)?;
+    Some(Competition::parse(slug).ok()?.rules(None))
 }
 
 /// a competition name, which becomes a segment of API URLs: `.` and `..` would move them.
@@ -517,14 +540,31 @@ mod tests {
             block_on(competition("titanic").resolve(&refused)).unwrap_err(),
             true,
         );
-        // an account that has not entered may still see the list, but not download the files
-        let listed = Recorded::default()
-            .fixture(&about("titanic"), "kaggle/titanic-competition.json")
-            .fixture(&files("titanic"), "kaggle/titanic-files.json");
+        // kaggle lists files to an account that has not entered, and titanic needs no entry at
+        // all, so one download of the smallest file decides
+        let listed = || {
+            Recorded::default()
+                .fixture(&about("titanic"), "kaggle/titanic-competition.json")
+                .fixture(&files("titanic"), "kaggle/titanic-files.json")
+        };
+        let smallest = download("gender_submission.csv").to_string();
+        let allowed = listed().on(&smallest, 200, b"PassengerId,Survived\n".to_vec());
+        assert!(block_on(competition("titanic").resolve(&allowed)).is_ok());
+        let refused = listed().on(
+            &smallest,
+            403,
+            fixture_bytes("kaggle/rules-not-accepted.json"),
+        );
         check(
-            block_on(competition("titanic").resolve(&listed)).unwrap_err(),
+            block_on(competition("titanic").resolve(&refused)).unwrap_err(),
+            true,
+        );
+        check(
+            super::refused_download(&download("train.csv")).unwrap(),
             false,
         );
+        let dataset = Url::parse("https://api.kaggle.com/v1/datasets/download/uciml/iris").unwrap();
+        assert!(super::refused_download(&dataset).is_none());
     }
 
     #[test]
@@ -588,7 +628,9 @@ mod tests {
                 listing.files
             );
         }
-        assert_eq!(work.counts().requests, 2);
+        // about, the file list, and one small download, since titanic reports the account as
+        // not entered though it needs no entry
+        assert_eq!(work.counts().requests, 3);
         let train = listing
             .files
             .iter()

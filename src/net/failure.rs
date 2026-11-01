@@ -129,6 +129,11 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             retry_after: retry_after(headers),
         };
     }
+    if status == StatusCode::FORBIDDEN
+        && let Some(error) = crate::source::refused_download(url)
+    {
+        return Failure::Final(error);
+    }
     let error = match status {
         StatusCode::NOT_FOUND | StatusCode::GONE => Error::new(
             Kind::ReferenceUnresolved,

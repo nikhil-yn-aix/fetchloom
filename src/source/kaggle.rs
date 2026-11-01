@@ -10,7 +10,7 @@ use std::fmt;
 use url::Url;
 
 pub(crate) use self::competition::Competition;
-pub(super) use self::competition::may_wrap;
+pub(super) use self::competition::{may_wrap, refused_download};
 use super::{Reference, Var, malformed};
 use crate::error::Error;
 use crate::net::Credential;

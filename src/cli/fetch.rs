@@ -403,6 +403,17 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
         });
     }
     let (_, first) = failed.first()?;
+    // one refusal for every file, as a competition whose rules are not accepted gives, reads
+    // best said once, and it keeps the account the sign-in offer needs
+    if failed
+        .iter()
+        .all(|(_, error)| error.message == first.message && error.help == first.help)
+    {
+        let count = failed.len();
+        let (_, mut error) = failed.swap_remove(0);
+        error.failures = failures;
+        return Some(error.detail(format!("the same for all {count} files")));
+    }
     let shared_help = failed
         .iter()
         .all(|(_, error)| error.help == first.help)
@@ -413,9 +424,23 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
         format!("{} files could not be downloaded", failed.len()),
     );
     error.failures = failures;
-    for (index, failure) in failed.iter().take(NAMED) {
-        let label = labels.get(*index).map_or("", String::as_str);
-        error = error.detail(if failure.message.starts_with(label) {
+    error.need = failed.iter().find_map(|(_, error)| error.need.clone());
+    // files that failed the same way share one line, in the order the first of each failed
+    let mut groups: Vec<(&Error, Vec<usize>)> = Vec::new();
+    for (index, failure) in &failed {
+        match groups
+            .iter_mut()
+            .find(|(seen, _)| seen.message == failure.message && seen.help == failure.help)
+        {
+            Some((_, indexes)) => indexes.push(*index),
+            None => groups.push((failure, vec![*index])),
+        }
+    }
+    for (failure, indexes) in groups.iter().take(NAMED) {
+        let label = labels.get(indexes[0]).map_or("", String::as_str);
+        error = error.detail(if indexes.len() > 1 {
+            format!("{} files: {}", indexes.len(), failure.message)
+        } else if failure.message.starts_with(label) {
             failure.message.clone()
         } else {
             format!("{label}: {}", failure.message)
@@ -426,8 +451,12 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
             error = error.detail(format!("help: {help}"));
         }
     }
-    if failed.len() > NAMED {
-        error = error.detail(format!("and {} more", failed.len() - NAMED));
+    if groups.len() > NAMED {
+        let rest: usize = groups[NAMED..]
+            .iter()
+            .map(|(_, indexes)| indexes.len())
+            .sum();
+        error = error.detail(format!("and {rest} more"));
     }
     Some(error.help(shared_help.unwrap_or_else(|| {
         "downloaded files stay in the cache. fix the errors above, then run the same command again"

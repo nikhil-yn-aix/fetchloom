@@ -20,13 +20,13 @@ selection patterns match source paths. [manifest patterns](../reference/data-tom
 
 use `kaggle:competitions/` followed by the name in the competition's link, such as `kaggle:competitions/titanic`. links under `kaggle.com/competitions/` and `kaggle.com/c/` work too, and `?select=` in a data page link picks that file.
 
-kaggle sends competition data only to a signed-in account that accepted the competition's rules:
+kaggle sends competition data only to a signed-in account, and for most competitions only after it accepted the rules. getting-started ones such as titanic need no rules accepted:
 
 1. sign in with `fetchloom auth login kaggle`, or keep the kaggle credentials described below.
-2. open `https://www.kaggle.com/competitions/<name>/rules` while signed in to kaggle and accept the rules. kaggle may ask you to verify a phone number first.
+2. open `https://www.kaggle.com/competitions/<name>/rules` while signed in to kaggle and accept the rules if the page asks. kaggle may ask you to verify a phone number first.
 3. run the fetchloom command again.
 
-without an account kaggle answers 401 and fetchloom stops with `auth.required` and the sign-in command. an account that has not accepted the rules stops with `auth.required` and the rules page. fetchloom cannot accept rules for you.
+without an account kaggle answers 401 and fetchloom stops with `auth.required` and the sign-in command. kaggle lists the files of a competition whose rules the account has not accepted, so fetchloom downloads the smallest one first to ask; a refusal stops with `auth.required` and the rules page before any other download. fetchloom cannot accept rules for you.
 
 a competition has no versions. fetchloom lists its data files with the sizes kaggle states, downloads each file on its own through the kaggle API, and pins the SHA-256 and size of the bytes. the listed sizes are shown but not checked, since kaggle may send a file zipped. `resolved` records `kaggle:competitions/<name>` without a version, so if the organizers change the data, `sync` from `data.lock` stops at the SHA-256 check instead of placing the new bytes.
 
