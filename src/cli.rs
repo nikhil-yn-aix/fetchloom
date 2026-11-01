@@ -3,6 +3,7 @@
 mod args;
 mod auth;
 mod cache;
+mod completions;
 mod fetch;
 mod get;
 mod help;
@@ -250,6 +251,11 @@ pub(crate) fn run() -> ExitCode {
     if let Some(args::Command::Help(asked)) = &args.command {
         return help::show(&context, &asked.topic, started);
     }
+    // a shell profile loads the script on every start, so no setting fetchloom reads for its
+    // work may stop it
+    if let Some(args::Command::Completions(asked)) = &args.command {
+        return completions::print(&context, asked.shell, started);
+    }
     let name = args.command.as_ref().map(args::Command::name);
     let _command = tracing::debug_span!("command", name).entered();
     if let Some(folder) = &global.directory
@@ -366,6 +372,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = block_on(context, auth::run(context, args));
             finish(context, name, outcome, started)
         }
+        args::Command::Completions(asked) => completions::print(context, asked.shell, started),
         args::Command::Help(asked) => help::show(context, &asked.topic, started),
     }
 }

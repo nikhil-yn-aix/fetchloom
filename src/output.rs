@@ -249,6 +249,11 @@ impl Output {
         self.line(line.trim_end());
     }
 
+    /// whether `--json` asked for one document on stdout instead of text.
+    pub(crate) fn is_json(&self) -> bool {
+        self.json
+    }
+
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
         if !self.json {

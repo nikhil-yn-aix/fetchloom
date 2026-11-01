@@ -124,6 +124,13 @@ on disk: removes the saved key. asks first when other tools read it too";
   fetchloom help cache gc
 
 on disk: nothing";
+
+    pub(super) const COMPLETIONS: &str = "examples:
+  fetchloom completions bash
+  fetchloom completions zsh
+  fetchloom completions powershell
+
+on disk: nothing. it prints the script on stdout for your shell's profile or completions folder";
 }
 
 /// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
@@ -299,6 +306,9 @@ pub(crate) enum Command {
     /// sign in to sources for private and gated data
     #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
     Auth(Auth),
+    /// print a script that lets a shell complete fetchloom's commands and options
+    #[command(override_usage = "fetchloom completions [options] <shell>", help_template = TEMPLATE, after_help = examples::COMPLETIONS)]
+    Completions(Completions),
 
     /// explain the ideas behind fetchloom, or one command
     #[command(override_usage = "fetchloom help [topic]", help_template = TEMPLATE, after_help = examples::HELP)]
@@ -332,6 +342,7 @@ impl Command {
             Command::Auth(Auth {
                 action: Some(AuthAction::Logout(_)),
             }) => "auth logout",
+            Command::Completions(_) => "completions",
             Command::Help(_) => "help",
         }
     }
@@ -527,6 +538,14 @@ pub(crate) struct Get {
 /// reads `--sha256`: 64 hex digits, in either case.
 fn sha256(text: &str) -> Result<Sha256, String> {
     Sha256::from_hex(text.trim()).ok_or_else(|| "a SHA-256 is 64 hex digits".to_owned())
+}
+
+/// the shell a completion script is for.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Completions {
+    /// the shell that loads the script
+    #[arg(value_name = "shell", value_enum, help_heading = "arguments")]
+    pub(crate) shell: clap_complete::Shell,
 }
 
 /// explain the ideas behind fetchloom, or one command
