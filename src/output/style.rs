@@ -255,7 +255,7 @@ impl Style {
             color: wants_color(choice, terminal, &var),
             unicode: wants_unicode(terminal, &var),
             interactive: is_interactive(terminal, &var),
-            watched: terminal && std::io::stdout().is_terminal(),
+            watched: terminal && std::io::stdout().is_terminal() && !by_agent(&var),
             links: is_interactive(terminal, &var) && makes_links(&var),
         }
     }
@@ -273,7 +273,33 @@ impl Style {
 }
 
 fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
-    terminal && var("CI").is_none_or(|v| v.is_empty()) && var("TERM").is_none_or(|v| v != "dumb")
+    terminal
+        && var("CI").is_none_or(|v| v.is_empty())
+        && var("TERM").is_none_or(|v| v != "dumb")
+        && !by_agent(var)
+}
+
+/// variables coding agents set on the commands they run, often in a real terminal where a
+/// question would wait for an answer nobody gives. ones also set in a person's own terminal,
+/// such as cursor's trace id, are left out.
+const AGENT_VARIABLES: [&str; 10] = [
+    "AI_AGENT",
+    "VSCODE_AGENT",
+    "CLAUDECODE",
+    "CODEX_SANDBOX",
+    "CODEX_THREAD_ID",
+    "GEMINI_CLI",
+    "CURSOR_AGENT",
+    "OPENCODE",
+    "AUGMENT_AGENT",
+    "ANTIGRAVITY_AGENT",
+];
+
+/// whether a coding agent runs this command, which then gets no questions, colors or animation.
+pub(crate) fn by_agent(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    AGENT_VARIABLES.iter().any(|name| {
+        var(name).is_some_and(|value| !value.is_empty() && value != "0" && value != "false")
+    })
 }
 
 fn wants_color(
@@ -297,7 +323,7 @@ fn wants_color(
     if non_empty("CLICOLOR_FORCE") && !is("CLICOLOR_FORCE", "0") {
         return true;
     }
-    if is("CLICOLOR", "0") || is("TERM", "dumb") || non_empty("CI") {
+    if is("CLICOLOR", "0") || is("TERM", "dumb") || non_empty("CI") || by_agent(var) {
         return false;
     }
     terminal
@@ -420,6 +446,19 @@ mod tests {
         assert!(!is_interactive(false, &env(&[])));
         assert!(!is_interactive(true, &env(&[("CI", "true")])));
         assert!(!is_interactive(true, &env(&[("TERM", "dumb")])));
+    }
+
+    #[test]
+    fn a_coding_agent_gets_no_questions_colors_or_animation() {
+        for name in ["VSCODE_AGENT", "CLAUDECODE", "AI_AGENT", "CODEX_SANDBOX"] {
+            assert!(!is_interactive(true, &env(&[(name, "1")])), "{name}");
+            assert!(
+                !wants_color(ColorChoice::Auto, true, &env(&[(name, "1")])),
+                "{name}"
+            );
+        }
+        assert!(is_interactive(true, &env(&[("CLAUDECODE", "0")])));
+        assert!(is_interactive(true, &env(&[("CURSOR_TRACE_ID", "x")])));
     }
 
     #[cfg(windows)]

@@ -279,6 +279,17 @@ fn leaks(name: &str) -> bool {
                 | "CONEMUANSI"
                 | "VTE_VERSION"
                 | "KONSOLE_VERSION"
+                // set when a coding agent runs the tests, which would turn questions off
+                | "AI_AGENT"
+                | "VSCODE_AGENT"
+                | "CLAUDECODE"
+                | "CODEX_SANDBOX"
+                | "CODEX_THREAD_ID"
+                | "GEMINI_CLI"
+                | "CURSOR_AGENT"
+                | "OPENCODE"
+                | "AUGMENT_AGENT"
+                | "ANTIGRAVITY_AGENT"
         )
 }
 

@@ -26,6 +26,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. an entry it cannot read keeps its default and prints one warning |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
+| `AI_AGENT`, `VSCODE_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `ANTIGRAVITY_AGENT` | a value other than `0` or `false` marks a coding agent's command: no questions, automatic color or animated progress, as under `CI` |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
 
 [terminal output](../../dev/architecture/output.md#terminal-capabilities) owns color precedence, stream detection and unicode fallbacks.
