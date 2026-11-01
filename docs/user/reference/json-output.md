@@ -13,7 +13,7 @@ fetchloom --json status
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `auth`, `auth login`, `auth logout`, `help`, or null |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
@@ -22,6 +22,7 @@ fetchloom --json status
 | `errors[].message` | summary string |
 | `errors[].details` | array of supporting strings |
 | `errors[].help` | string or null |
+| `errors[].fix` | the first runnable `fetchloom` command that `help` names, without placeholders, or null. an agent or script can run it as the next step |
 | `errors[].failures` | present for file download failures and for `get` runs of several links: every failed file or link, in job or command line order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 
@@ -43,6 +44,9 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup |
+| `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user` and `valid`; [auth](../commands/auth.md#json) |
+| `auth login`, `auth logout` | `account` with `user` and `saved_to`, or `removed_from` |
+| `help` | `options`: the options every command takes; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: paths whose contents, metadata or directory entries could not be read |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.

@@ -18,6 +18,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [remove](commands/remove.md) | remove an entry without discarding edited files |
 | [get](commands/get.md) | fetch data once without project files |
 | [cache](commands/cache.md) | inspect, collect or verify cached bytes |
+| [auth](commands/auth.md) | sign in for private, restricted or gated data with one key |
 | [sources](sources/README.md) | compare accepted references, pins, credentials and limits |
 | [URLs and DOIs](sources/urls-and-dois.md) | fetch a direct link or resolve a persistent handle |
 | [zenodo](sources/zenodo.md) | choose records or individual record files |
@@ -25,7 +26,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [dataverse](sources/dataverse.md) | use public dataset or file versions |
 | [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
 | [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
-| [kaggle](sources/kaggle.md) | use dataset versions and existing kaggle credentials |
+| [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
 | [google drive](sources/google-drive.md) | use shared files or folders and exclude google docs |
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |
 | [data.toml](reference/data-toml.md) | edit datasets, paths and selection patterns |
@@ -36,6 +37,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [cache folder](reference/cache-folder.md) | inspect shared cache objects and indexes |
 | [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |
+| [AI agents](agents.md) | let a coding agent find and fetch data safely |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |
 | [troubleshooting](troubleshooting.md) | match a symptom to its cause and fix |
 | [limits](limits.md) | check what fetchloom does not do |

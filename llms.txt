@@ -19,6 +19,7 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 - [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
 - [get](docs/user/commands/get.md): one-off downloads and existing-folder rules
 - [cache](docs/user/commands/cache.md): inspection, garbage collection and verification
+- [auth](docs/user/commands/auth.md): signing in once, with keys shared with each source's own tools
 - [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each family
 - [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules and patterns
 - [data.lock](docs/user/reference/data-lock.md): lock fields, source records and hash encodings
@@ -28,6 +29,8 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 - [cache folder](docs/user/reference/cache-folder.md): shared cache layout and indexes
 - [project folder](docs/user/reference/project-folder.md): owner records and placement state
 - [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
+- [AI agents](docs/user/agents.md): the agent skill, JSON contract and why there is no MCP server
+- [agent skill](skills/fetchloom/SKILL.md): which command fits which task, safe flags and reading failures
 - [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders and long paths
 - [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
 - [limits](docs/user/limits.md): excluded workflows and reproducibility boundaries
