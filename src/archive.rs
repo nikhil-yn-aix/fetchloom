@@ -52,6 +52,21 @@ pub(crate) fn by_name(path: &str) -> Option<Packed> {
         .map(|(format, _)| Packed::Unsupported(format))
 }
 
+/// whether the bytes the cache holds under `digest` are a zip of the one file `path` names, as a
+/// source sends a file it wrapped: `train.csv` as `train.csv.zip`. once their own bytes are
+/// dropped, what this machine unpacked them to answers.
+pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if let Some(members) = cache.unpacked(digest, None) {
+        return matches!(members.as_slice(), [only] if only.path == name);
+    }
+    let Some(object) = cache.find(digest, None) else {
+        return false;
+    };
+    matches!(detect(&object), Ok(Detected::Archive(Format::Zip)))
+        && zip::sole_member(&object).as_deref() == Some(name)
+}
+
 /// an archive's file name without its archive ending: `train` for `train.tar.gz`.
 pub(crate) fn stem(name: &str) -> &str {
     let lower = name.to_ascii_lowercase();

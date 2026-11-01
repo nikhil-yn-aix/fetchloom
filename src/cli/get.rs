@@ -435,7 +435,13 @@ fn prepare(
     let extract = !args.no_extract;
     let (names, foreseen) = foresee(cache, &files, extract);
     check(
-        &folder_for(chosen, parent, &listing, &parsed, &names),
+        &folder_for(
+            chosen,
+            parent,
+            &listing,
+            &parsed,
+            &unwrapped(&files, &names),
+        ),
         foreseen.as_deref(),
     )?;
     let jobs: Vec<Job> = files
@@ -535,19 +541,20 @@ async fn finish(
     let paths: Vec<String> = files
         .iter()
         .zip(&fetched)
-        .map(
-            |(remote, fetched)| match fetched.name.as_deref().and_then(name::sanitize) {
+        .map(|(remote, fetched)| {
+            let path = match fetched.name.as_deref().and_then(name::sanitize) {
                 Some(given) if remote.named_by_server => given,
                 _ => remote.path.clone(),
-            },
-        )
+            };
+            fetch::wrapped(cache, remote, path, &fetched.digest)
+        })
         .collect();
     let folder = folder_for(
         chosen.as_deref(),
         parent.as_deref(),
         &listing,
         &parsed,
-        &paths,
+        &unwrapped(&files, &paths),
     );
     tell_fetched(context, &paths, &fetched, &files, elapsed);
     vouch(&folder, &paths, &fetched, sha256, taken)?;
@@ -737,6 +744,12 @@ fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Opti
             Some(given) if remote.named_by_server => given,
             _ => remote.path.clone(),
         };
+        // a file its source sent wrapped in a zip is that zip again, so its unpacked files can
+        // stand for it
+        let name = match known(cache, remote, record.as_ref()) {
+            Some((digest, _)) => fetch::wrapped(cache, remote, name, &digest),
+            None => name,
+        };
         if extract && archive::by_name(&name) == Some(Packed::Archive) {
             let members = known(cache, remote, record.as_ref())
                 .and_then(|(digest, _)| cache.unpacked(&digest, None));
@@ -912,6 +925,22 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     let mut entry = alone.datasets["get"].clone();
     entry.lines.clear();
     engine::filter(&parsed.reference.shown(), &entry, listing)
+}
+
+/// the names to call a folder after: a file its source wrapped in a zip by its listed name, so
+/// the folder is the same whether or not kaggle wrapped it.
+fn unwrapped(files: &[Remote], names: &[String]) -> Vec<String> {
+    files
+        .iter()
+        .zip(names)
+        .map(|(remote, name)| {
+            if crate::source::may_wrap(&remote.url) {
+                remote.path.clone()
+            } else {
+                name.clone()
+            }
+        })
+        .collect()
 }
 
 /// where the files go: the folder asked for, else one named after the file or the dataset,

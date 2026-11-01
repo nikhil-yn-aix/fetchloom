@@ -321,3 +321,31 @@ fn a_stem_drops_the_archive_ending() {
     assert_eq!(super::stem(".zip"), ".zip");
     assert_eq!(super::stem("notes.txt"), "notes.txt");
 }
+
+#[test]
+fn a_zip_of_one_file_wraps_only_that_file() {
+    let scratch = Scratch::new();
+    let cache = &scratch.cache;
+    let stored = |bytes: &[u8]| crate::cache::tests::store(cache, bytes).digest;
+    let wrapped = stored(&zip_of(&[("train.csv", b"a,b\n1,2\n")]));
+    assert!(super::wraps(cache, &wrapped, "train.csv"));
+    assert!(super::wraps(cache, &wrapped, "folder/train.csv"));
+    assert!(!super::wraps(cache, &wrapped, "test.csv"));
+    let two = stored(&zip_of(&[("train.csv", b"a\n"), ("more.csv", b"b\n")]));
+    assert!(!super::wraps(cache, &two, "train.csv"));
+    let folder = stored(&zip_of(&[("train.csv/", b"")]));
+    assert!(!super::wraps(cache, &folder, "train.csv"));
+    let plain = stored(b"a,b\n1,2\n");
+    assert!(!super::wraps(cache, &plain, "train.csv"));
+
+    // once unpacked and dropped, the record of what the zip held answers
+    let size = std::fs::metadata(cache.find(&wrapped, None).unwrap())
+        .unwrap()
+        .len();
+    super::unpack_cached(cache, &wrapped, size, None, &|_| false, None)
+        .unwrap()
+        .unwrap();
+    cache.drop_object(&wrapped).unwrap();
+    assert!(super::wraps(cache, &wrapped, "train.csv"));
+    assert!(!super::wraps(cache, &wrapped, "test.csv"));
+}

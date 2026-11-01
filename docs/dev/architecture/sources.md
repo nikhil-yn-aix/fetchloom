@@ -10,7 +10,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [source.rs](../../../src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `refused` |
+| [source.rs](../../../src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `may_wrap`, `refused` |
 | [search.rs](../../../src/source/search.rs), [search/tests.rs](../../../src/source/search/tests.rs) | public catalog queries and interleaved candidates | `Candidate`, `Search`, `search`, `is_search` |
 | [recorded.rs](../../../src/source/recorded.rs) | in-memory answers for adapter tests | `Recorded`, `on`, `fixture`, `next`, `asked`, `block_on` |
 | [doi.rs](../../../src/source/doi.rs) | handle resolution and destination routing | `Doi`, `locate` |
@@ -44,7 +44,7 @@ DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's h
 
 listings accept at most 100,000 files per dataset before selection; OSF's walk also counts folders. pagination is handled in the adapter and each page is parsed once. this cap does not bound total project size or the number of members inside archives.
 
-`fetch_plan` adds download-page handlers for drive and dropbox and expired-storage-link recognition for OSF. stable source URLs stay in the lock; redirected storage URLs and credentials do not become pins.
+`fetch_plan` adds download-page handlers for drive and dropbox and expired-storage-link recognition for OSF. stable source URLs stay in the lock; redirected storage URLs and credentials do not become pins. `may_wrap` names the links whose file may arrive as a zip of itself, kaggle competition files: `Remote::expected_size` then checks no listed size, and `cli::fetch::wrapped` renames a file whose bytes are a zip of only that file to `<path>.zip`, so draft and `get` unpack it through the archive path and the lock records it with `unpacks_to`.
 
 ### add an adapter
 

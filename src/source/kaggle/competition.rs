@@ -176,7 +176,8 @@ impl Competition {
         Ok(url)
     }
 
-    /// one data file, downloaded on its own.
+    /// one data file, downloaded on its own. its size is the file's, which a zip kaggle wraps it
+    /// in does not have, so it informs and is not checked.
     fn remote(&self, file: File) -> Result<Remote, Error> {
         let mut url = self.api("data/download")?;
         url.path_segments_mut()
@@ -249,6 +250,14 @@ impl Competition {
         )
         .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
     }
+}
+
+/// whether `url` downloads a competition file, which kaggle may send as a zip of that one file
+/// when it is large: competition downloads have no `raw=true`.
+pub(in crate::source) fn may_wrap(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some(HOST)
+        && url.path().starts_with("/v1/competitions/data/download/")
 }
 
 /// a competition name, which becomes a segment of API URLs: `.` and `..` would move them.
@@ -361,6 +370,13 @@ mod tests {
             ]
         );
         assert_eq!(recorded.asked(), [about("titanic"), files("titanic")]);
+        // kaggle may send any of them zipped, so the sizes are not checked against the bytes
+        assert!(
+            listing
+                .files
+                .iter()
+                .all(|file| file.expected_size().is_none())
+        );
         let again = block_on(listing.resolved.resolve(&recorded)).unwrap();
         assert_eq!(again.files, listing.files);
     }

@@ -28,7 +28,9 @@ kaggle sends competition data only to a signed-in account that accepted the comp
 
 without an account kaggle answers 401 and fetchloom stops with `auth.required` and the sign-in command. an account that has not accepted the rules stops with `auth.required` and the rules page. fetchloom cannot accept rules for you.
 
-a competition has no versions. fetchloom lists its data files with the sizes kaggle states, downloads each file on its own through the kaggle API, and pins the SHA-256 and size of the bytes. `resolved` records `kaggle:competitions/<name>` without a version, so if the organizers change the data, `sync` from `data.lock` stops at the SHA-256 check instead of placing the new bytes.
+a competition has no versions. fetchloom lists its data files with the sizes kaggle states, downloads each file on its own through the kaggle API, and pins the SHA-256 and size of the bytes. the listed sizes are shown but not checked, since kaggle may send a file zipped. `resolved` records `kaggle:competitions/<name>` without a version, so if the organizers change the data, `sync` from `data.lock` stops at the SHA-256 check instead of placing the new bytes.
+
+competition downloads have no `raw=true` option, and [kaggle's CLI](https://github.com/Kaggle/kaggle-api/blob/v2.2.5/src/kaggle/api/kaggle_api_extended.py) notes that kaggle sends a large file as a zip of that one file, `train.csv` as `train.csv.zip`. when the downloaded bytes are a zip whose only member has the requested file's name, fetchloom records the file in `data.lock` as `train.csv.zip` with the zip's SHA-256, and unpacks it as it unpacks any archive: `unpacks_to` pins the tree that holds the CSV's own SHA-256 and size. `data/<name>/train.csv` is then the CSV itself, and a later `sync` places the same bytes from the lock. with `extract = false` or `--no-extract`, the file stays packed as `train.csv.zip`.
 
 ## credentials
 
@@ -42,7 +44,5 @@ public dataset downloads need no token. competitions and other access use existi
 credentials stay out of the manifest, lock, logs and JSON output.
 
 ## limits
-
-competition downloads have no `raw=true` option. [kaggle's CLI](https://github.com/Kaggle/kaggle-api/blob/v2.2.5/src/kaggle/api/kaggle_api_extended.py) notes that kaggle can send a large file as a zip of that one file, `train.csv` as `train.csv.zip`. such a download does not match the listed size, and fetchloom refuses it with `integrity.mismatch`.
 
 follow [offline preparation](../concepts.md#offline) before disconnecting.

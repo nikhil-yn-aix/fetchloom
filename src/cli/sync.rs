@@ -161,7 +161,7 @@ impl<'a> Loop<'a> {
         let fetched = self.download(jobs).await?;
         for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
             if let Some(file) = file {
-                drafts[draft].learn(file, &fetched);
+                drafts[draft].learn(file, &fetched, &self.cache);
             }
         }
         self.unpack_drafts(&mut drafts).await?;

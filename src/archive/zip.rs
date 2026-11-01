@@ -139,6 +139,21 @@ fn repeated_name(archive: &Path, directory: u64) -> Option<String> {
     }
 }
 
+/// the name of the one entry a zip holds, when it holds exactly one and that one is a file.
+pub(super) fn sole_member(archive: &Path) -> Option<String> {
+    let file = BufReader::new(File::open(archive).ok()?);
+    let zip = ZipArchive::new(file).ok()?;
+    if zip.len() != 1 {
+        return None;
+    }
+    let entry = zip.by_index_data(0).ok()?;
+    if is_folder(&entry) {
+        return None;
+    }
+    let name = name(&entry).ok()?;
+    Some(name.trim_start_matches("./").to_owned())
+}
+
 /// the archive file, buffered, and counting every byte read for the ratio check. a seek that
 /// lands inside the buffer keeps it, since every member means a jump from its header to its data.
 struct Source<'m> {

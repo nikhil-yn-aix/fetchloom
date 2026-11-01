@@ -281,6 +281,7 @@ mod tests {
             recorded.asked(),
             [view("uciml/iris"), files("uciml/iris", 2)]
         );
+        assert_eq!(listing.files[0].expected_size(), Some(5107), "raw=true");
     }
 
     #[test]

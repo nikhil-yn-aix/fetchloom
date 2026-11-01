@@ -249,6 +249,21 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
     }
 }
 
+/// whether the source behind `url` may send the file wrapped in a zip of its own, `train.csv` as
+/// `train.csv.zip`, as kaggle does with large competition files. such a file unpacks once its
+/// bytes show the wrapper, and its listed size is no expectation for them.
+pub(crate) fn may_wrap(url: &Url) -> bool {
+    kaggle::may_wrap(url)
+}
+
+impl Remote {
+    /// the size the downloaded bytes must have: the listed size, unless the source may send the
+    /// file wrapped in a zip.
+    pub(crate) fn expected_size(&self) -> Option<u64> {
+        self.size.filter(|_| !may_wrap(&self.url))
+    }
+}
+
 /// kaggle's key, as an api token or a legacy key, found where the kaggle tools keep it.
 pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
     kaggle::credentials(var)

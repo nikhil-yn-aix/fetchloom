@@ -13,6 +13,7 @@ pub(super) use self::again::Again;
 use super::Context;
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
 use crate::net::{Event, Expect, Fetch, Fetched, Net};
 use crate::output::{Bar, Output, Ticker};
@@ -37,7 +38,7 @@ pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
             expect: Expect {
                 sha256: remote.sha256,
                 md5: remote.md5,
-                size: remote.size,
+                size: remote.expected_size(),
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
             unpack: extract && archive::by_name(name) == Some(Packed::Archive),
@@ -47,6 +48,16 @@ pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
         dataset: None,
         again: None,
     }
+}
+
+/// the path a listed file takes once its bytes are known: `path` with `.zip` added when its
+/// source sent it as a zip of that one file, so it unpacks as any archive does and data.lock
+/// names what its bytes are, else `path` as it is.
+pub(super) fn wrapped(cache: &Cache, remote: &Remote, path: String, bytes: &Sha256) -> String {
+    let wraps = source::may_wrap(&remote.url)
+        && archive::by_name(&path).is_none()
+        && archive::wraps(cache, bytes, &path);
+    if wraps { format!("{path}.zip") } else { path }
 }
 
 /// how all the downloads of one call go together: a bar for them all on a terminal when there

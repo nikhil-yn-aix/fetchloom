@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use super::super::fetch::Job;
+use super::super::fetch::{self, Job};
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -71,10 +71,9 @@ impl Draft {
                         .map(|file| (file.sha256, file.size))
                         .or_else(|| stated(cache, &remote)),
                 };
-                let path = match earlier {
-                    Some(file) if remote.named_by_server => file.path.clone(),
-                    _ => remote.path.clone(),
-                };
+                // carried over, a file keeps the path data.lock gave it: a name its server gave,
+                // or the zip its source wrapped it in
+                let path = earlier.map_or_else(|| remote.path.clone(), |file| file.path.clone());
                 // the same bytes unpack to the same files, while the dataset still unpacks and
                 // the name says archive. an upgrade pins what this machine's unpacking recorded
                 // for them instead, so a tree another version of fetchloom pinned can be
@@ -121,7 +120,7 @@ impl Draft {
                     Expect {
                         sha256: remote.sha256,
                         md5: remote.md5,
-                        size: remote.size,
+                        size: remote.expected_size(),
                     },
                     true,
                 ),
@@ -158,8 +157,9 @@ impl Draft {
         jobs
     }
 
-    /// records what the bytes of file `index` turned out to be.
-    pub(super) fn learn(&mut self, index: usize, fetched: &Fetched) {
+    /// records what the bytes of file `index` turned out to be, and the zip they are when their
+    /// source wrapped the file in one.
+    pub(super) fn learn(&mut self, index: usize, fetched: &Fetched, cache: &Cache) {
         let file = &mut self.files[index];
         file.known = Some((fetched.digest, fetched.size));
         if file.remote.named_by_server
@@ -167,6 +167,8 @@ impl Draft {
         {
             file.path = given;
         }
+        let path = std::mem::take(&mut file.path);
+        file.path = fetch::wrapped(cache, &file.remote, path, &fetched.digest);
     }
 
     /// the archives that must be unpacked to learn what they unpack to. an archive this machine
@@ -259,13 +261,15 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
 }
 
 /// the file data.lock already pins for this remote file, when it is the same file: the same
-/// link, and the same path unless the server names the file.
+/// link, and the same path unless the server names the file or its source wrapped it in a zip.
+/// a listed size says nothing about the zip.
 fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
     let url = remote.url.as_str();
     locked.files.iter().find(|file| {
+        let wrapped = source::may_wrap(&remote.url) && file.path == format!("{}.zip", remote.path);
         file.url == url
-            && (remote.named_by_server || file.path == remote.path)
-            && remote.size.is_none_or(|size| size == file.size)
+            && (remote.named_by_server || file.path == remote.path || wrapped)
+            && (wrapped || remote.size.is_none_or(|size| size == file.size))
             && remote.sha256.is_none_or(|sha256| sha256 == file.sha256)
             && remote
                 .md5
@@ -665,12 +669,145 @@ mod tests {
                 name: Some("other.txt".to_owned()),
                 origin: crate::net::Origin::Network,
             },
+            &cache,
         );
         let locked = draft.finish("2026-10-29T00:00:00Z");
         assert_eq!(locked.files.len(), 1);
         assert_eq!(locked.files[0].path, "file.txt");
         assert_eq!(locked.files[0].size, 4);
         assert_eq!(locked.files[0].sha256, stored.digest);
+    }
+
+    /// what kaggle's zip of train.csv in `kaggle/train.csv.zip` holds.
+    const TRAIN: &[u8] = b"PassengerId,Survived,Pclass\n1,0,3\n2,1,1\n3,1,3\n";
+
+    const KAGGLE: &str = "https://api.kaggle.com/v1/competitions";
+
+    /// titanic listed for an account that accepted its rules, with the sizes of the files
+    /// themselves for the bytes these tests use, as kaggle lists them.
+    fn titanic() -> Listing {
+        use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+
+        let json = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&fixture_bytes(name)).unwrap()
+        };
+        let mut about = json("kaggle/titanic-competition.json");
+        about["userHasEntered"] = true.into();
+        let mut files = json("kaggle/titanic-files.json");
+        files["files"][1]["totalBytes"] = fixture_bytes("kaggle/test.csv").len().into();
+        files["files"][2]["totalBytes"] = TRAIN.len().into();
+        let recorded = Recorded::default()
+            .on(
+                &format!("{KAGGLE}/get/titanic"),
+                200,
+                serde_json::to_vec(&about).unwrap(),
+            )
+            .on(
+                &format!("{KAGGLE}/data/list/titanic?pageSize=200"),
+                200,
+                serde_json::to_vec(&files).unwrap(),
+            );
+        let reference = Reference::parse("kaggle:competitions/titanic")
+            .unwrap()
+            .reference;
+        block_on(reference.resolve(&recorded)).unwrap()
+    }
+
+    /// where a dataset's locked files land, each as its path, hash and size.
+    fn placed(cache: &Cache, files: &[LockedFile]) -> Vec<(String, Sha256, u64)> {
+        let mut planned = crate::plan::Plan::default();
+        let members = |file: &LockedFile| cache.unpacked(&file.sha256, file.unpacks_to.as_ref());
+        crate::plan::expand(
+            &mut planned,
+            "titanic",
+            "data/titanic",
+            false,
+            files,
+            &members,
+        );
+        assert_eq!(planned.unknown.len(), 0, "every archive's files are known");
+        planned
+            .targets
+            .iter()
+            .map(|target| (target.path.clone(), target.sha256, target.size))
+            .collect()
+    }
+
+    #[test]
+    fn a_competition_file_sent_wrapped_in_a_zip_unpacks_and_syncs_again_alike() {
+        use crate::source::recorded::fixture_bytes;
+
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.titanic]\nref = \"kaggle:competitions/titanic\"\nselect = [\"t*.csv\"]\n",
+        )
+        .unwrap();
+        let entry = &manifest.datasets["titanic"];
+
+        let mut draft = Draft::new("titanic", entry, titanic(), None, false, &cache).unwrap();
+        let jobs = draft.jobs(&cache);
+        let labels: Vec<&str> = jobs.iter().map(|(_, job)| job.label.as_str()).collect();
+        assert_eq!(labels, ["titanic/test.csv", "titanic/train.csv"]);
+        assert!(
+            jobs.iter().all(|(_, job)| job.fetch.expect.size.is_none()),
+            "a listed size is no expectation for bytes kaggle may zip"
+        );
+        let indexes: Vec<usize> = jobs.iter().map(|(index, _)| index.unwrap()).collect();
+        // kaggle sent test.csv as it is and train.csv as a zip of it
+        let plain = store(&cache, &fixture_bytes("kaggle/test.csv"));
+        let wrapped = store(&cache, &fixture_bytes("kaggle/train.csv.zip"));
+        for (index, stored) in indexes.into_iter().zip([&plain, &wrapped]) {
+            let fetched = Fetched {
+                digest: stored.digest,
+                size: stored.size,
+                name: None,
+                origin: crate::net::Origin::Network,
+            };
+            draft.learn(index, &fetched, &cache);
+        }
+        for todo in draft.unknown_archives(&cache) {
+            let unpacked =
+                archive::unpack_cached(&cache, &todo.archive, todo.size, None, &|_| false, None)
+                    .unwrap()
+                    .unwrap();
+            draft.unpacked(todo.file, Some(unpacked.tree));
+        }
+        let locked = draft.finish("2026-11-01T00:00:00Z");
+        let pinned: Vec<(&str, Sha256, bool)> = locked
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.sha256, file.unpacks_to.is_some()))
+            .collect();
+        assert_eq!(
+            pinned,
+            [
+                ("test.csv", plain.digest, false),
+                ("train.csv.zip", wrapped.digest, true),
+            ]
+        );
+        assert_eq!(
+            locked.files[1].url,
+            format!("{KAGGLE}/data/download/titanic/train.csv")
+        );
+        let expected = vec![
+            ("data/titanic/test.csv".to_owned(), plain.digest, plain.size),
+            (
+                "data/titanic/train.csv".to_owned(),
+                digest::sha256(TRAIN),
+                TRAIN.len() as u64,
+            ),
+        ];
+        assert_eq!(placed(&cache, &locked.files), expected);
+        assert!(cache.find(&digest::sha256(TRAIN), None).is_some());
+
+        // a sync once the zip's own bytes are dropped, and a relock from data.lock, need no
+        // download and pin the same
+        cache.drop_object(&wrapped.digest).unwrap();
+        assert_eq!(placed(&cache, &locked.files), expected);
+        let again = Draft::new("titanic", entry, titanic(), Some(&locked), false, &cache).unwrap();
+        assert_eq!(again.jobs(&cache).len(), 0, "nothing to download");
+        assert_eq!(again.finish("2026-11-01T00:00:00Z").files, locked.files);
     }
 }
 
