@@ -41,9 +41,9 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
     let Some(paths) = paths else {
         return Ok(());
     };
-    let tops: std::collections::HashSet<&str> = paths
+    let tops: std::collections::HashSet<_> = paths
         .iter()
-        .map(|path| path.split('/').next().unwrap_or(path))
+        .map(|path| crate::name::as_disk_sees(path.split('/').next().unwrap_or(path)))
         .collect();
     let mut others: Vec<String> = fs::read_dir(folder)
         .map_err(|err| local(folder, &err))?
@@ -53,7 +53,7 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
                 || !crate::place::is_copy_temporary(&entry.file_name().to_string_lossy())
         })
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| !tops.contains(name.as_str()))
+        .filter(|name| !tops.contains(&crate::name::as_disk_sees(name)))
         .collect();
     if others.is_empty() {
         return Ok(());

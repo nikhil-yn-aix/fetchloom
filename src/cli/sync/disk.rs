@@ -111,9 +111,16 @@ impl Survey {
     }
 
     /// carries a placed record to a wanted alias before decisions or removals can treat the
-    /// two spellings as separate files. edits and doubts still belong to that same file.
+    /// two spellings as separate files. edits and doubts still belong to that same file. a file
+    /// nothing recorded is carried only when its listed name differs in unicode composition
+    /// alone, as hfs+ lists every name decomposed, so it is the target's own file and never
+    /// both missing and extra.
     pub(crate) fn retarget(&mut self, root: &Path, targets: &[Target]) {
-        if self.state.files.is_empty() {
+        // an alias of another composition needs a name beyond ascii on one side
+        if self.state.files.is_empty()
+            && self.disk.keys().all(|path| path.is_ascii())
+            && targets.iter().all(|target| target.path.is_ascii())
+        {
             return;
         }
         let missing: Vec<&String> = targets
@@ -125,23 +132,26 @@ impl Survey {
             if self.state.files.contains_key(path) {
                 continue;
             }
-            let Some(record) = self.state.files.get(&previous).cloned() else {
+            let record = self.state.files.get(&previous).cloned();
+            if record.is_none() && !name::same_composed(path, &previous) {
                 continue;
-            };
+            }
             let Some(look) = self.disk.remove(&previous) else {
                 continue;
             };
             self.disk.insert(path.clone(), look);
-            self.state.files.remove(&previous);
-            self.state.files.insert(path.clone(), record);
-            for paths in [&mut self.edited, &mut self.elsewhere, &mut self.vouched] {
-                if paths.remove(&previous) {
-                    paths.insert(path.clone());
+            if let Some(record) = record {
+                self.state.files.remove(&previous);
+                self.state.files.insert(path.clone(), record);
+                for paths in [&mut self.edited, &mut self.elsewhere, &mut self.vouched] {
+                    if paths.remove(&previous) {
+                        paths.insert(path.clone());
+                    }
                 }
+                self.needs_writing = true;
             }
             let listed = self.listed.remove(&previous).unwrap_or(previous);
             self.listed.insert(path.clone(), listed);
-            self.needs_writing = true;
         }
     }
 
@@ -252,7 +262,7 @@ fn aliases<'a>(
     disk: &HashMap<String, Look>,
     missing: &[&'a String],
 ) -> Vec<(&'a String, String)> {
-    if missing.is_empty() {
+    if missing.is_empty() || disk.is_empty() {
         return Vec::new();
     }
     let _span = tracing::debug_span!("aliases", files = missing.len()).entered();
@@ -388,6 +398,10 @@ mod tests {
         for name in [composed, decomposed] {
             fs::create_dir_all(root.join("data").join(name)).unwrap();
             fs::write(root.join("data").join(name).join("a.txt"), name).unwrap();
+        }
+        // apfs and hfs+ see both spellings as one name, which leaves one folder
+        if fs::read_dir(root.join("data")).unwrap().count() < 2 {
+            return;
         }
         let mut listings = Listings::new();
         for name in [composed, decomposed] {
@@ -549,7 +563,7 @@ mod tests {
         assert_eq!(survey.elsewhere.len(), 0);
     }
 
-    #[cfg(windows)]
+    // runs where the disk ignores case, as windows and macos disks do by default
     #[test]
     fn alias_retargeting_carries_edits_and_the_original_listed_spelling() {
         use crate::project::lock::LockedFile;
@@ -604,6 +618,72 @@ mod tests {
             assert_eq!(paths, &HashSet::from(["data/A.txt".to_owned()]));
         }
         assert!(survey.needs_writing);
+    }
+
+    fn target<'a>(locked: &'a crate::project::lock::LockedFile, path: &str) -> Target<'a> {
+        Target {
+            dataset: "set".to_owned(),
+            path: path.to_owned(),
+            sha256: locked.sha256,
+            size: locked.size,
+            copy: false,
+            locked,
+        }
+    }
+
+    fn locked(path: &str, bytes: &[u8]) -> crate::project::lock::LockedFile {
+        crate::project::lock::LockedFile {
+            path: path.to_owned(),
+            size: bytes.len() as u64,
+            sha256: crate::digest::sha256(bytes),
+            md5: None,
+            url: "https://example.org/a".to_owned(),
+            unpacks_to: None,
+        }
+    }
+
+    // runs where the disk sees composed and decomposed unicode as one name, as macos disks do
+    #[test]
+    fn a_name_listed_in_another_composition_is_the_targets_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
+        if !project.root.join("data/caf\u{e9}.txt").is_file() {
+            return;
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let listed = survey.disk.keys().next().unwrap().clone();
+        let locked = locked("caf\u{e9}.txt", b"a");
+        survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
+        assert_eq!(
+            survey.disk.keys().collect::<Vec<_>>(),
+            ["data/caf\u{e9}.txt"]
+        );
+        assert_eq!(survey.listed["data/caf\u{e9}.txt"], listed);
+        assert!(survey.state.files.is_empty());
+        assert!(!survey.needs_writing);
+    }
+
+    // runs where the disk ignores case, as windows and macos disks do by default
+    #[test]
+    fn a_name_listed_in_another_case_stays_apart_until_a_record_joins_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/A.txt"), b"a").unwrap();
+        if !project.root.join("data/a.txt").is_file() {
+            return;
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let locked = locked("a.txt", b"a");
+        survey.retarget(&project.root, &[target(&locked, "data/a.txt")]);
+        assert_eq!(survey.disk.keys().collect::<Vec<_>>(), ["data/A.txt"]);
+        assert!(survey.listed.is_empty());
     }
 
     #[cfg(unix)]

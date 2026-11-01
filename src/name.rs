@@ -317,6 +317,30 @@ pub(crate) fn fold(path: &str) -> String {
         .to_lowercase()
 }
 
+/// whether `a` and `b` differ at most in how their unicode is composed, as `café` written with
+/// one character or with an `e` and a combining accent. apfs and hfs+ see both as one name, and
+/// hfs+ lists every name decomposed whatever spelling made it.
+pub(crate) fn same_composed(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.is_ascii() && b.is_ascii() {
+        return false;
+    }
+    let nfc = ComposingNormalizerBorrowed::new_nfc();
+    nfc.normalize(a) == nfc.normalize(b)
+}
+
+/// `name` as this machine's disks tell names apart: composed on macos, whose filesystems see
+/// composed and decomposed unicode as one name, and unchanged elsewhere.
+pub(crate) fn as_disk_sees(name: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(target_os = "macos") && !name.is_ascii() {
+        ComposingNormalizerBorrowed::new_nfc().normalize(name)
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
 fn shorten(name: &str) -> String {
     if name.len() <= LONGEST {
         return name.to_owned();
@@ -579,5 +603,24 @@ mod tests {
             nearest("iris.csv", ["b.txt", "iris.tsv", "a.csv"], 2),
             ["iris.tsv", "a.csv"]
         );
+    }
+
+    #[test]
+    fn compositions_of_one_name_are_the_same_name() {
+        assert!(same_composed("caf\u{e9}", "cafe\u{301}"));
+        assert!(
+            same_composed("\u{212a}", "K"),
+            "the kelvin sign composes to K"
+        );
+        assert!(same_composed("iris", "iris"));
+        assert!(!same_composed("Caf\u{e9}", "cafe\u{301}"));
+        assert!(!same_composed("a", "b"));
+        let seen = as_disk_sees("cafe\u{301}");
+        if cfg!(target_os = "macos") {
+            assert_eq!(seen, "caf\u{e9}");
+        } else {
+            assert_eq!(seen, "cafe\u{301}");
+        }
+        assert_eq!(as_disk_sees("iris"), "iris");
     }
 }
