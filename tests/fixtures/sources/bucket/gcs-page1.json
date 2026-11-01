@@ -1,0 +1,29 @@
+{
+  "nextPageToken": "ClNiaWdxdWVyeS91cy1zdGF0ZXMvMjAyMS0wNy0wMlQxNjowNDo0OF83MDM0NC9hbGxfbmFtZXNwYWNlcy9raW5kX3VzLXN0YXRlcy9vdXRwdXQtMA==",
+  "items": [
+    {
+      "name": "bigquery/us-states/",
+      "generation": "1516921096657526",
+      "size": "0",
+      "md5Hash": "1B2M2Y8AsgTpgAmY7PhCfg=="
+    },
+    {
+      "name": "bigquery/us-states/2021-07-02T16:04:48_70344/2021-07-02T16:04:48_70344.overall_export_metadata",
+      "generation": "1625246960472434",
+      "size": "116",
+      "md5Hash": "upfBewFSlvnN3ecTWMrHTg=="
+    },
+    {
+      "name": "bigquery/us-states/2021-07-02T16:04:48_70344/all_namespaces/kind_us-states/all_namespaces_kind_us-states.export_metadata",
+      "generation": "1625246960497738",
+      "size": "114",
+      "md5Hash": "6s6F6jPkLpQfH3vppSxUrw=="
+    },
+    {
+      "name": "bigquery/us-states/2021-07-02T16:04:48_70344/all_namespaces/kind_us-states/output-0",
+      "generation": "1625246960468411",
+      "size": "32768",
+      "md5Hash": "Niw0L9cuc/Zb3V3dcVpewQ=="
+    }
+  ]
+}

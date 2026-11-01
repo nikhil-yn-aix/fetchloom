@@ -25,9 +25,21 @@ impl Recorded {
             status,
             url: parsed.clone(),
             next: None,
+            region: None,
             body: body.into(),
         };
         self.answers.insert(parsed.to_string(), response);
+        self
+    }
+
+    /// says the answer for `url` named the region its S3 bucket lives in.
+    pub(crate) fn region(mut self, url: &str, region: &str) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before its region"));
+        answer.region = Some(region.to_owned());
         self
     }
 

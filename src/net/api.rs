@@ -30,6 +30,9 @@ pub(crate) struct Response {
     pub(crate) url: Url,
     /// the `rel="next"` target of a `Link` header, for listings sent in pages.
     pub(crate) next: Option<Url>,
+    /// the `x-amz-bucket-region` header, which names where an S3 bucket lives when a request
+    /// reached the wrong region.
+    pub(crate) region: Option<String>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -110,6 +113,7 @@ impl Net {
         let next = text(header::LINK)
             .and_then(|value| next_link(&value))
             .and_then(|link| response.url().join(&link).ok());
+        let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let final_url = response.url().clone();
         let mut body = BytesMut::new();
         loop {
@@ -152,6 +156,7 @@ impl Net {
             status: status.as_u16(),
             url: final_url,
             next,
+            region,
             body: body.to_vec(),
         })
     }
@@ -166,7 +171,35 @@ fn test_endpoint(url: &Url) -> Option<Url> {
         "zenodo.org" => "FETCHLOOM_TEST_ZENODO_API",
         _ => return None,
     };
-    let mut local = Url::parse(&std::env::var(variable).ok()?).ok()?;
+    let mut local = local_test_server(variable)?;
+    local.set_path(url.path());
+    local.set_query(url.query());
+    local.set_fragment(None);
+    Some(local)
+}
+
+/// local object storage for CLI tests, listings and object bytes alike: a request to an S3 or
+/// cloud storage host goes to `/<host><path>` on the test server instead. release builds never
+/// read this override.
+#[cfg(debug_assertions)]
+pub(super) fn test_bucket(url: &Url) -> Option<Url> {
+    let host = url.host_str()?;
+    let storage = host.ends_with(".amazonaws.com")
+        || host == "storage.googleapis.com"
+        || host.ends_with(".storage.googleapis.com");
+    if !storage {
+        return None;
+    }
+    let mut local = local_test_server("FETCHLOOM_TEST_BUCKETS")?;
+    local.set_path(&format!("/{host}{}", url.path()));
+    local.set_query(url.query());
+    local.set_fragment(None);
+    Some(local)
+}
+
+#[cfg(debug_assertions)]
+fn local_test_server(variable: &str) -> Option<Url> {
+    let local = Url::parse(&std::env::var(variable).ok()?).ok()?;
     if local.scheme() != "http"
         || local.host_str() != Some("127.0.0.1")
         || !local.username().is_empty()
@@ -174,9 +207,6 @@ fn test_endpoint(url: &Url) -> Option<Url> {
     {
         return None;
     }
-    local.set_path(url.path());
-    local.set_query(url.query());
-    local.set_fragment(None);
     Some(local)
 }
 

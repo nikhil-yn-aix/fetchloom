@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>AccessDenied</Code><Message>Anonymous users cannot invoke requests against Requester Pays buckets. Please authenticate.</Message><RequestId>JYFK145B2DZMG64F</RequestId><HostId>ohz5pSy0zqBZWYkcdZwb6qGo82FpDLLk29sWwIsIt0fnWa54LXBok+pVEnpmA9fSxfW5qt+LY8Q=</HostId></Error>

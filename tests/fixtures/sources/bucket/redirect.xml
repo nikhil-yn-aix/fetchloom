@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>PermanentRedirect</Code><Message>The bucket you are attempting to access must be addressed using the specified endpoint. Please send all future requests to this endpoint.</Message><Endpoint>sentinel-cogs.s3.amazonaws.com</Endpoint><Bucket>sentinel-cogs</Bucket><RequestId>DKV50ZS9DGFQ8F1A</RequestId><HostId>/WdBfhUL1s0rscXghEbUDj/IQ2//bHzYYJD9ylI3Zi6z7lO65C/Ry/TwzqroSJqZPsZOkGrEbRs=</HostId></Error>

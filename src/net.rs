@@ -307,6 +307,15 @@ impl Net {
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
+        #[cfg(debug_assertions)]
+        let local = api::test_bucket(url);
+        #[cfg(debug_assertions)]
+        let url = if let Some(local) = &local {
+            self.typed(local);
+            local
+        } else {
+            url
+        };
         let wire = self.wire().map_err(Failure::Final)?;
         let client = wire.lane(lane).map_err(Failure::Final)?;
         let mut hop = url.clone();

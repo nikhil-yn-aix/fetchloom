@@ -1,0 +1,46 @@
+{
+  "items": [
+    {
+      "name": "bigquery/us-states/us-states-by-date-no-header.csv",
+      "generation": "1580141373029409",
+      "size": "1222",
+      "md5Hash": "b9x+3S55msztiea62WeVvg=="
+    },
+    {
+      "name": "bigquery/us-states/us-states-by-date.csv",
+      "generation": "1579906318022264",
+      "size": "1243",
+      "md5Hash": "rsdx3XZ0YKSxr/3Ly052Zg=="
+    },
+    {
+      "name": "bigquery/us-states/us-states.avro",
+      "generation": "1520359465502686",
+      "size": "971",
+      "md5Hash": "Ld8y7sJO40U+M9PLnHfaGQ=="
+    },
+    {
+      "name": "bigquery/us-states/us-states.csv",
+      "generation": "1520271655416517",
+      "size": "688",
+      "md5Hash": "E3lXMfORe5m4VnthJ2ox7g=="
+    },
+    {
+      "name": "bigquery/us-states/us-states.json",
+      "generation": "1516921124750071",
+      "size": "2023",
+      "md5Hash": "rtrdHwgl7n0oLdIC8CP1aA=="
+    },
+    {
+      "name": "bigquery/us-states/us-states.orc",
+      "generation": "1524771764627673",
+      "size": "726",
+      "md5Hash": "3CptFUlPYlQm3U3MNHoNhA=="
+    },
+    {
+      "name": "bigquery/us-states/us-states.parquet",
+      "generation": "1521224133512605",
+      "size": "1849",
+      "md5Hash": "Fb04S56M/lMAU4l0uG5NJQ=="
+    }
+  ]
+}

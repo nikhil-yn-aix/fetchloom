@@ -1,6 +1,7 @@
 //! sources: where datasets live, how a person names one, and how each lists its files. a source
 //! never downloads file bodies. it says what to download and how to check it.
 
+mod bucket;
 mod dataverse;
 mod doi;
 mod drive;
@@ -47,6 +48,7 @@ pub(crate) enum Reference {
     KaggleCompetition(kaggle::Competition),
     Drive(drive::Item),
     Dropbox(dropbox::Link),
+    Bucket(bucket::Prefix),
 }
 
 /// a reference, and the one file inside it when a pasted link pointed at a single file.
@@ -127,6 +129,14 @@ impl Reference {
             "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
             "kaggle" => whole(kaggle::parse(rest)?),
             "drive" => whole(Reference::Drive(drive::Item::parse(rest)?)),
+            "s3" => whole(Reference::Bucket(bucket::Prefix::parse(
+                bucket::Store::S3,
+                rest,
+            )?)),
+            "gs" => whole(Reference::Bucket(bucket::Prefix::parse(
+                bucket::Store::Gcs,
+                rest,
+            )?)),
             _ => Err(unknown(text)),
         }
     }
@@ -214,6 +224,7 @@ impl Reference {
             Reference::KaggleCompetition(competition) => competition.resolve(api).await,
             Reference::Drive(item) => item.resolve(api).await,
             Reference::Dropbox(link) => Ok(link.listing()),
+            Reference::Bucket(prefix) => prefix.resolve(api).await,
         }
     }
 }
@@ -232,6 +243,7 @@ impl fmt::Display for Reference {
             Reference::KaggleCompetition(competition) => write!(f, "{competition}"),
             Reference::Drive(item) => write!(f, "{item}"),
             Reference::Dropbox(link) => write!(f, "{link}"),
+            Reference::Bucket(prefix) => write!(f, "{prefix}"),
         }
     }
 }
@@ -347,7 +359,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
         })
         .or_else(|| kaggle::from_link(&url))
         .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
-        .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)));
+        .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)))
+        .or_else(|| {
+            bucket::Prefix::from_link(&url).map(|prefix| (Reference::Bucket(prefix), None))
+        });
     let Some((reference, file)) = routed else {
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
@@ -758,6 +773,7 @@ mod tests {
                 status,
                 url: url.clone(),
                 next: None,
+                region: None,
                 body: b"not json".to_vec(),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

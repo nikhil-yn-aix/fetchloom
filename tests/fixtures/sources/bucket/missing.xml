@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>fetchloom-no-such-bucket-8d1f2</BucketName><RequestId>MVMGC88CVHEZ7BCR</RequestId><HostId>oYsmImePcAdtztPyVGUMxxv3Kvae+c5lIXlJn8anfojK9jBrgaFCjIkPzWf5zKOG3DTSCrmd0hbnboTQI3pwobuHEKzO0mZy</HostId></Error>
